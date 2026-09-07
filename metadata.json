@@ -1,0 +1,6 @@
+{
+  "name": "Karkas",
+  "description": "A minimalist, gesture-driven to-do interface for life and projects with dynamic custom tabs and AI assistant.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

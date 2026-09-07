@@ -1,0 +1,28 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && (request.auth.uid == userId || request.auth.token.email == 'Melychyn4@gmail.com');
+    }
+
+    function isSystemOwner() {
+      return isAuthenticated() && request.auth.token.email == 'Melychyn4@gmail.com';
+    }
+
+    match /users/{userId} {
+      allow read, write: if isOwner(userId) || isSystemOwner();
+
+      match /{allSubcollections=**} {
+        allow read, write: if isOwner(userId) || isSystemOwner();
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if isSystemOwner();
+    }
+  }
+}

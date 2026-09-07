@@ -1,0 +1,53 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Unbounded', 'Syne', sans-serif;
+  --font-display: 'Unbounded', 'Syne', sans-serif;
+}
+
+:root {
+  font-family: 'Unbounded', 'Syne', -apple-system, BlinkMacSystemFont, sans-serif;
+  color-scheme: dark;
+}
+
+body {
+  background-color: #030303;
+  color: #ededed;
+  font-family: 'Unbounded', 'Syne', sans-serif;
+  letter-spacing: -0.01em;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+/* Custom minimal scrollbar */
+::-webkit-scrollbar {
+  width: 3px;
+  height: 3px;
+}
+::-webkit-scrollbar-track {
+  background: #080808;
+}
+::-webkit-scrollbar-thumb {
+  background: #27272a;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46;
+}
+
+/* Electron Window Drag Utilities */
+.app-drag-region {
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.app-no-drag,
+.app-no-drag button,
+.app-no-drag input,
+.app-no-drag select,
+.app-no-drag a,
+.app-no-drag [role="button"],
+button.app-no-drag,
+input.app-no-drag {
+  -webkit-app-region: no-drag !important;
+  pointer-events: auto !important;
+}

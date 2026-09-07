@@ -1,0 +1,58 @@
+{
+  "entities": {
+    "UserAppState": {
+      "title": "UserAppState",
+      "description": "User's synchronized task management state, tabs, deleted archive, and preferences.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the user."
+        },
+        "email": {
+          "type": "string",
+          "description": "Email address of the authenticated Google user."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User display name from Google."
+        },
+        "photoURL": {
+          "type": "string",
+          "description": "Avatar URL."
+        },
+        "tasks": {
+          "type": "array",
+          "description": "Active tasks."
+        },
+        "tabs": {
+          "type": "array",
+          "description": "Custom tabs."
+        },
+        "deletedTasks": {
+          "type": "array",
+          "description": "Deleted tasks archive."
+        },
+        "settings": {
+          "type": "object",
+          "description": "User preferences such as sound, fire animation, language."
+        },
+        "updatedAt": {
+          "type": "number",
+          "description": "Timestamp of last synchronization."
+        }
+      },
+      "required": ["userId", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserAppState",
+      "description": "Private root document for each user state, accessible only by the owner."
+    },
+    "/users/{userId}/data/{documentId}": {
+      "schema": "UserAppState",
+      "description": "Subcollection for user backups and snapshots."
+    }
+  }
+}

@@ -1,0 +1,1637 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { PSTask, DeletedTask, TaskTab, FilterMode, WorkflowStats, TaskStepItem } from './types';
+import { TaskCard } from './components/TaskCard';
+import { DashboardView } from './components/DashboardView';
+import { HistoryView } from './components/HistoryView';
+import { TopWorkflowMatrix } from './components/TopWorkflowMatrix';
+import { QuickAddDrawer } from './components/QuickAddDrawer';
+import { AIAssistantSheet } from './components/AIAssistantSheet';
+import { ManageTabsModal } from './components/ManageTabsModal';
+import { FireParticlesBackground } from './components/FireParticlesBackground';
+import { sound } from './utils/audio';
+import {
+  Language,
+  TRANSLATIONS,
+  DEFAULT_TABS_UK,
+  DEFAULT_TABS_EN,
+  INITIAL_LIFE_TASKS_UK,
+  INITIAL_LIFE_TASKS_EN,
+  getRandomTabColor,
+} from './utils/i18n';
+import { SquareCode, Trash, Plus, RotateCcw, CheckCircle, Flame, RefreshCw } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import { AIIcon, AIIconId, getSavedAIIconId } from './components/AIIconTemplates';
+import { 
+  auth, 
+  loginWithGoogle, 
+  logoutUser, 
+  saveUserCloudData, 
+  fetchUserCloudData, 
+  subscribeToUserCloudData,
+  UserCloudState 
+} from './services/firebase';
+import { onAuthStateChanged, User } from 'firebase/auth';
+import { AccountModal } from './components/AccountModal';
+import { UpdateModal } from './components/UpdateModal';
+
+const STORAGE_KEY = 'life_todo_tasks_v2';
+const DELETED_STORAGE_KEY = 'karkas_deleted_tasks_v2';
+const TABS_KEY = 'life_todo_tabs_v2';
+const LANG_KEY = 'todo_app_lang';
+const AI_ICON_KEY = 'karkas_ai_icon_variant';
+const FIRE_ENABLED_KEY = 'karkas_fire_enabled';
+const LAST_SYNC_KEY = 'karkas_last_sync_time';
+const AUTO_SYNC_KEY = 'karkas_auto_sync_enabled';
+
+const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+
+function sanitizeTasksTimerSafeguard(taskList: PSTask[]): PSTask[] {
+  const now = Date.now();
+  const todayStr = new Date(now).toDateString();
+  return taskList.map((t) => {
+    if (t.timerRunning && t.timerStartedAt) {
+      const elapsedMs = now - t.timerStartedAt;
+      const startedDateStr = new Date(t.timerStartedAt).toDateString();
+      if (elapsedMs > TWO_HOURS_MS || startedDateStr !== todayStr) {
+        // Forgot to turn off timer! Auto-pause and cap session time at max 2 hours (7200s)
+        const cappedSeconds = Math.min(Math.floor(elapsedMs / 1000), 7200);
+        return {
+          ...t,
+          timeSpentSeconds: (t.timeSpentSeconds || 0) + cappedSeconds,
+          timerRunning: false,
+          timerStartedAt: undefined,
+          autoPausedOverdue: true,
+        };
+      }
+    }
+    return t;
+  });
+}
+
+export default function App() {
+  // Language state: defaults to Ukrainian ('uk')
+  const [lang, setLang] = useState<Language>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const savedLang = localStorage.getItem(LANG_KEY) as Language;
+        if (savedLang === 'uk' || savedLang === 'en') return savedLang;
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    return 'uk';
+  });
+
+  const t = TRANSLATIONS[lang];
+
+  // Tabs state: supports adding, deleting, and renaming tabs
+  const [tabs, setTabs] = useState<TaskTab[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem(TABS_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            // Ensure all tabs have a color
+            return parsed.map((tab: TaskTab, idx: number) => ({
+              ...tab,
+              color: tab.color || getRandomTabColor(parsed.slice(0, idx)),
+            }));
+          }
+        }
+      } catch (e) {
+        console.error('Failed to load tabs from localStorage', e);
+      }
+    }
+    return DEFAULT_TABS_UK;
+  });
+
+  // Load tasks from localStorage or initialize with curated life tasks
+  const [tasks, setTasks] = useState<PSTask[]>(() => {
+    let loaded: PSTask[] = INITIAL_LIFE_TASKS_UK;
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            loaded = parsed.map((t: PSTask) => {
+              if (t.phase === 'DASHBOARD' || t.phase === 'ALL') {
+                return { ...t, phase: 'focus' };
+              }
+              return t;
+            });
+          }
+        } else {
+          // Check legacy key
+          const legacy = localStorage.getItem('ps_todo_tasks_v1');
+          if (legacy) {
+            const parsedLegacy = JSON.parse(legacy);
+            if (Array.isArray(parsedLegacy) && parsedLegacy.length > 0) {
+              loaded = parsedLegacy.map((t: PSTask) => {
+                if (t.phase === 'DASHBOARD' || t.phase === 'ALL') {
+                  return { ...t, phase: 'focus' };
+                }
+                return t;
+              });
+            }
+          }
+        }
+      } catch (e) {
+        console.error('Failed to load tasks from localStorage', e);
+      }
+    }
+    return sanitizeTasksTimerSafeguard(loaded);
+  });
+
+  // Periodic safeguard check for forgotten running timers (e.g., left running overnight)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTasks((prev) => {
+        let hasChanges = false;
+        const now = Date.now();
+        const todayStr = new Date(now).toDateString();
+        const updated = prev.map((t) => {
+          if (t.timerRunning && t.timerStartedAt) {
+            const elapsedMs = now - t.timerStartedAt;
+            const startedDateStr = new Date(t.timerStartedAt).toDateString();
+            if (elapsedMs > TWO_HOURS_MS || startedDateStr !== todayStr) {
+              hasChanges = true;
+              const cappedSeconds = Math.min(Math.floor(elapsedMs / 1000), 7200);
+              return {
+                ...t,
+                timeSpentSeconds: (t.timeSpentSeconds || 0) + cappedSeconds,
+                timerRunning: false,
+                timerStartedAt: undefined,
+                autoPausedOverdue: true,
+              };
+            }
+          }
+          return t;
+        });
+        return hasChanges ? updated : prev;
+      });
+    }, 60000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const [activeFilter, setActiveFilter] = useState<FilterMode>('ALL');
+  const [selectedPhase, setSelectedPhase] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      const hash = window.location.hash;
+      if (hash === '#dashboard') return 'DASHBOARD';
+      if (hash === '#history') return 'HISTORY';
+    }
+    return 'ALL';
+  });
+  const [isAddOpen, setIsAddOpen] = useState(false);
+  const [isAIOpen, setIsAIOpen] = useState(false);
+  const [isManageTabsOpen, setIsManageTabsOpen] = useState(false);
+  const [isAccountOpen, setIsAccountOpen] = useState(false);
+  const [isUpdateOpen, setIsUpdateOpen] = useState(false);
+  const [aiIconVariant, setAiIconVariant] = useState<AIIconId>(() => {
+    return getSavedAIIconId();
+  });
+  const [aiPromptSeed, setAiPromptSeed] = useState('');
+  const [breakingDownTaskId, setBreakingDownTaskId] = useState<string | null>(null);
+  const [isWindowMinimized, setIsWindowMinimized] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // Sync fullscreen state with browser fullscreen changes
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
+  }, []);
+
+  // Global Keyboard Shortcuts (Escape to dismiss modals, sheets, or unminimize)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (isAIOpen) {
+          setIsAIOpen(false);
+        } else if (isAccountOpen) {
+          setIsAccountOpen(false);
+        } else if (isManageTabsOpen) {
+          setIsManageTabsOpen(false);
+        } else if (isAddOpen) {
+          setIsAddOpen(false);
+        } else if (isWindowMinimized) {
+          setIsWindowMinimized(false);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isAIOpen, isAccountOpen, isManageTabsOpen, isAddOpen, isWindowMinimized]);
+
+  const handleToggleFullscreen = () => {
+    sound.tick(500);
+    if (!document.fullscreenElement) {
+      if (document.documentElement.requestFullscreen) {
+        document.documentElement.requestFullscreen().catch(() => {
+          setIsFullscreen((prev) => !prev);
+        });
+      } else {
+        setIsFullscreen((prev) => !prev);
+      }
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {
+          setIsFullscreen(false);
+        });
+      } else {
+        setIsFullscreen(false);
+      }
+    }
+  };
+
+  const handleMinimizeWindow = () => {
+    sound.tick(400);
+    setIsWindowMinimized(true);
+  };
+
+  const handleCloseWindow = () => {
+    sound.tick(300);
+    setIsWindowMinimized(true);
+  };
+
+  // Auto-break down a specific task via AI
+  const handleAIBreakdownTask = async (taskId: string) => {
+    const targetTask = tasks.find((t) => t.id === taskId);
+    if (!targetTask || breakingDownTaskId) return;
+
+    setBreakingDownTaskId(taskId);
+    sound.activate();
+
+    try {
+      const activeTasks = tasks.filter((t) => !t.done);
+      const completedTasks = tasks.filter((t) => t.done);
+
+      const res = await fetch('/api/ai/breakdown-task', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskId: targetTask.id,
+          title: targetTask.title,
+          note: targetTask.note,
+          currentSteps: targetTask.stepList?.map((s) => s.title) || [],
+          lang,
+          fullAppContext: {
+            activeTasks: activeTasks.map((t) => ({ title: t.title, phase: t.phase, priority: t.priority })),
+            completedTasks: completedTasks.map((t) => ({ title: t.title, phase: t.phase })),
+            deletedTasks: deletedTasks.slice(0, 10).map((t) => ({ title: t.title })),
+            tabs: tabs.map((tb) => ({ id: tb.id, name: tb.name })),
+            stats,
+          },
+        }),
+      });
+
+      if (!res.ok) throw new Error('API breakdown failed');
+      const data = await res.json();
+      const rawSteps = Array.isArray(data.stepList) ? data.stepList : Array.isArray(data.steps) ? data.steps : [];
+
+      if (rawSteps.length > 0) {
+        const newStepItems: TaskStepItem[] = rawSteps.map((st: any, idx: number) => ({
+          id: st.id || `s-${taskId}-${Date.now()}-${idx}`,
+          title: typeof st === 'string' ? st : st.title || `Крок ${idx + 1}`,
+          done: false,
+        }));
+
+        setTasks((prev) =>
+          prev.map((t) => {
+            if (t.id === taskId) {
+              return {
+                ...t,
+                stepList: newStepItems,
+                steps: newStepItems.length,
+                currentStep: 0,
+                done: false,
+                note: data.note || t.note,
+              };
+            }
+            return t;
+          })
+        );
+        sound.activate();
+      }
+    } catch (err) {
+      console.error('Task breakdown error:', err);
+    } finally {
+      setBreakingDownTaskId(null);
+    }
+  };
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [recentlyDeleted, setRecentlyDeleted] = useState<PSTask | null>(null);
+
+  // Auto-dismiss "Task deleted" undo toast after 10 seconds
+  useEffect(() => {
+    if (!recentlyDeleted) return;
+    const timer = setTimeout(() => {
+      setRecentlyDeleted(null);
+    }, 10000);
+    return () => clearTimeout(timer);
+  }, [recentlyDeleted]);
+
+  // Google Cloud Auth & Sync state
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [lastSyncTime, setLastSyncTime] = useState<number | null>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem(LAST_SYNC_KEY);
+      return saved ? Number(saved) : null;
+    }
+    return null;
+  });
+  const [autoSyncEnabled, setAutoSyncEnabled] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem(AUTO_SYNC_KEY);
+        if (saved !== null) return saved === 'true';
+      } catch (e) {
+        console.error('Failed to load auto sync state', e);
+      }
+    }
+    return true;
+  });
+  const [cloudData, setCloudData] = useState<UserCloudState | null>(null);
+
+  // Keep track of the timestamp of our own local saves to avoid loop flickering in real-time listeners
+  const lastLocalSaveTimeRef = React.useRef<number>(0);
+
+  // Fire particles background toggle state
+  const [fireEnabled, setFireEnabled] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem(FIRE_ENABLED_KEY);
+        if (saved !== null) return saved === 'true';
+      } catch (e) {
+        console.error('Failed to load fire animation state', e);
+      }
+    }
+    return true;
+  });
+
+  // Sync fireEnabled with localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem(FIRE_ENABLED_KEY, String(fireEnabled));
+    } catch (e) {
+      console.error('Failed to save fire animation state', e);
+    }
+  }, [fireEnabled]);
+
+  // Deleted tasks archive state
+  const [deletedTasks, setDeletedTasks] = useState<DeletedTask[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem(DELETED_STORAGE_KEY);
+        if (saved) return JSON.parse(saved);
+      } catch (e) {
+        console.error('Failed to load deleted tasks from localStorage', e);
+      }
+    }
+    return [];
+  });
+
+  // Sync tasks with localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+    } catch (e) {
+      console.error('Failed to save tasks to localStorage', e);
+    }
+  }, [tasks]);
+
+  // Sync deletedTasks with localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem(DELETED_STORAGE_KEY, JSON.stringify(deletedTasks));
+    } catch (e) {
+      console.error('Failed to save deleted tasks to localStorage', e);
+    }
+  }, [deletedTasks]);
+
+  // Sync tabs with localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem(TABS_KEY, JSON.stringify(tabs));
+    } catch (e) {
+      console.error('Failed to save tabs to localStorage', e);
+    }
+  }, [tabs]);
+
+  // Sync lang with localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem(LANG_KEY, lang);
+    } catch (e) {
+      console.error('Failed to save lang to localStorage', e);
+    }
+  }, [lang]);
+
+  // Hash synchronization for Dashboard and History views
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      if (selectedPhase === 'DASHBOARD') {
+        window.location.hash = '#dashboard';
+      } else if (selectedPhase === 'HISTORY') {
+        window.location.hash = '#history';
+      } else if (window.location.hash === '#dashboard' || window.location.hash === '#history') {
+        history.replaceState(null, '', window.location.pathname);
+      }
+    }
+  }, [selectedPhase]);
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hash = window.location.hash;
+      if (hash === '#dashboard') setSelectedPhase('DASHBOARD');
+      else if (hash === '#history') setSelectedPhase('HISTORY');
+      else if (selectedPhase === 'DASHBOARD' || selectedPhase === 'HISTORY') setSelectedPhase('ALL');
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, [selectedPhase]);
+
+  // Monitor Firebase Auth State and synchronize upon initial sign-in
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      setCurrentUser(user);
+      if (user) {
+        try {
+          setIsSyncing(true);
+          const data = await fetchUserCloudData(user.uid);
+          if (data) {
+            setCloudData(data);
+            // If local tasks are empty or default templates, auto-restore from cloud
+            const isLocalDefault =
+              tasks.length <= 6 &&
+              (JSON.stringify(tasks) === JSON.stringify(INITIAL_LIFE_TASKS_UK) ||
+                JSON.stringify(tasks) === JSON.stringify(INITIAL_LIFE_TASKS_EN));
+
+            if (isLocalDefault && data.tasks && data.tasks.length > 0) {
+              setTasks(data.tasks);
+              if (data.tabs && data.tabs.length > 0) setTabs(data.tabs);
+              if (data.deletedTasks) setDeletedTasks(data.deletedTasks);
+              if (data.settings) {
+                if (typeof data.settings.soundEnabled === 'boolean') {
+                  setSoundEnabled(data.settings.soundEnabled);
+                  sound.enabled = data.settings.soundEnabled;
+                }
+                if (typeof data.settings.fireEnabled === 'boolean') {
+                  setFireEnabled(data.settings.fireEnabled);
+                }
+                if (data.settings.lang === 'uk' || data.settings.lang === 'en') {
+                  setLang(data.settings.lang as Language);
+                }
+                if (data.settings.aiIconVariant) {
+                  setAiIconVariant(data.settings.aiIconVariant as AIIconId);
+                }
+              }
+            }
+            if (data.updatedAt) {
+              setLastSyncTime(data.updatedAt);
+              localStorage.setItem(LAST_SYNC_KEY, String(data.updatedAt));
+            }
+          } else {
+            // First time login on this Google account: save local state to cloud immediately
+            await saveUserCloudData(user.uid, {
+              tasks,
+              tabs,
+              deletedTasks,
+              settings: {
+                soundEnabled,
+                fireEnabled,
+                lang,
+                aiIconVariant,
+              },
+            });
+            const now = Date.now();
+            setLastSyncTime(now);
+            localStorage.setItem(LAST_SYNC_KEY, String(now));
+          }
+        } catch (err) {
+          console.error('Error fetching cloud data on auth change:', err);
+        } finally {
+          setIsSyncing(false);
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Real-time listener for user cloud state (sync across tabs/windows)
+  useEffect(() => {
+    if (!currentUser || !autoSyncEnabled) return;
+
+    const unsubscribe = subscribeToUserCloudData(
+      currentUser.uid,
+      (remoteData) => {
+        if (!remoteData) return;
+        setCloudData(remoteData);
+
+        // Only apply remote changes if they originated after our last local save
+        const remoteUpdatedAt = remoteData.updatedAt || 0;
+        const isRemoteNewer = remoteUpdatedAt > (lastLocalSaveTimeRef.current + 1000);
+
+        if (isRemoteNewer) {
+          if (remoteData.tasks) setTasks(remoteData.tasks);
+          if (remoteData.tabs) setTabs(remoteData.tabs);
+          if (remoteData.deletedTasks) setDeletedTasks(remoteData.deletedTasks);
+          if (remoteData.settings) {
+            if (typeof remoteData.settings.soundEnabled === 'boolean') {
+              setSoundEnabled(remoteData.settings.soundEnabled);
+              sound.enabled = remoteData.settings.soundEnabled;
+            }
+            if (typeof remoteData.settings.fireEnabled === 'boolean') {
+              setFireEnabled(remoteData.settings.fireEnabled);
+            }
+            if (remoteData.settings.lang === 'uk' || remoteData.settings.lang === 'en') {
+              setLang(remoteData.settings.lang as Language);
+            }
+            if (remoteData.settings.aiIconVariant) {
+              setAiIconVariant(remoteData.settings.aiIconVariant as AIIconId);
+            }
+          }
+          if (remoteUpdatedAt) {
+            setLastSyncTime(remoteUpdatedAt);
+            localStorage.setItem(LAST_SYNC_KEY, String(remoteUpdatedAt));
+          }
+        }
+      },
+      (err) => {
+        console.warn('Real-time sync listener notice:', err);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [currentUser, autoSyncEnabled]);
+
+  // Push local changes to Firestore with rapid debounce when auto-sync is enabled
+  const autoSyncTimerRef = React.useRef<NodeJS.Timeout | null>(null);
+  const isInitialMountRef = React.useRef<boolean>(true);
+
+  const performAutoSave = React.useCallback(async () => {
+    if (!currentUser || !autoSyncEnabled) return;
+    try {
+      setIsSyncing(true);
+      const now = Date.now();
+      lastLocalSaveTimeRef.current = now;
+      await saveUserCloudData(currentUser.uid, {
+        tasks,
+        tabs,
+        deletedTasks,
+        settings: {
+          soundEnabled,
+          fireEnabled,
+          lang,
+          aiIconVariant,
+        },
+      });
+      setLastSyncTime(now);
+      localStorage.setItem(LAST_SYNC_KEY, String(now));
+    } catch (err) {
+      console.error('Auto sync error:', err);
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [currentUser, autoSyncEnabled, tasks, tabs, deletedTasks, soundEnabled, fireEnabled, lang, aiIconVariant]);
+
+  useEffect(() => {
+    if (isInitialMountRef.current) {
+      isInitialMountRef.current = false;
+      return;
+    }
+    if (!currentUser || !autoSyncEnabled) return;
+
+    if (autoSyncTimerRef.current) clearTimeout(autoSyncTimerRef.current);
+    autoSyncTimerRef.current = setTimeout(() => {
+      performAutoSave();
+    }, 800);
+
+    return () => {
+      if (autoSyncTimerRef.current) clearTimeout(autoSyncTimerRef.current);
+    };
+  }, [currentUser, autoSyncEnabled, tasks, tabs, deletedTasks, soundEnabled, fireEnabled, lang, aiIconVariant, performAutoSave]);
+
+  // Flush save on page hide / unload so nothing is lost
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden' && currentUser && autoSyncEnabled) {
+        performAutoSave();
+      }
+    };
+    const handleBeforeUnload = () => {
+      if (currentUser && autoSyncEnabled) {
+        performAutoSave();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [currentUser, autoSyncEnabled, performAutoSave]);
+
+  const handleToggleAutoSync = () => {
+    const next = !autoSyncEnabled;
+    setAutoSyncEnabled(next);
+    try {
+      localStorage.setItem(AUTO_SYNC_KEY, String(next));
+    } catch (e) {
+      console.error('Failed to save auto sync state', e);
+    }
+    if (next && currentUser) {
+      performAutoSave();
+    }
+  };
+
+  const handleLoginWithGoogle = async () => {
+    const user = await loginWithGoogle();
+    setCurrentUser(user);
+    const data = await fetchUserCloudData(user.uid);
+    if (data) {
+      setCloudData(data);
+      if (data.tasks && data.tasks.length > 0) {
+        setTasks(data.tasks);
+        if (data.tabs && data.tabs.length > 0) setTabs(data.tabs);
+        if (data.deletedTasks) setDeletedTasks(data.deletedTasks);
+        if (data.settings) {
+          if (typeof data.settings.soundEnabled === 'boolean') {
+            setSoundEnabled(data.settings.soundEnabled);
+            sound.enabled = data.settings.soundEnabled;
+          }
+          if (typeof data.settings.fireEnabled === 'boolean') {
+            setFireEnabled(data.settings.fireEnabled);
+          }
+          if (data.settings.lang === 'uk' || data.settings.lang === 'en') {
+            setLang(data.settings.lang as Language);
+          }
+          if (data.settings.aiIconVariant) {
+            setAiIconVariant(data.settings.aiIconVariant as AIIconId);
+          }
+        }
+      }
+      if (data.updatedAt) {
+        setLastSyncTime(data.updatedAt);
+        localStorage.setItem(LAST_SYNC_KEY, String(data.updatedAt));
+      }
+    } else {
+      // First backup
+      await saveUserCloudData(user.uid, {
+        tasks,
+        tabs,
+        deletedTasks,
+        settings: {
+          soundEnabled,
+          fireEnabled,
+          lang,
+          aiIconVariant,
+        },
+      });
+      const now = Date.now();
+      setLastSyncTime(now);
+      localStorage.setItem(LAST_SYNC_KEY, String(now));
+    }
+  };
+
+  const handleLogout = async () => {
+    await logoutUser();
+    setCurrentUser(null);
+    setCloudData(null);
+  };
+
+  const handleSyncNow = async () => {
+    if (!currentUser) return;
+    setIsSyncing(true);
+    try {
+      await saveUserCloudData(currentUser.uid, {
+        tasks,
+        tabs,
+        deletedTasks,
+        settings: {
+          soundEnabled,
+          fireEnabled,
+          lang,
+          aiIconVariant,
+        },
+      });
+      const now = Date.now();
+      setLastSyncTime(now);
+      localStorage.setItem(LAST_SYNC_KEY, String(now));
+      const freshData = await fetchUserCloudData(currentUser.uid);
+      if (freshData) setCloudData(freshData);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleRestoreFromCloud = async () => {
+    if (!currentUser) return;
+    setIsSyncing(true);
+    try {
+      const data = await fetchUserCloudData(currentUser.uid);
+      if (data) {
+        setCloudData(data);
+        if (data.tasks) setTasks(data.tasks);
+        if (data.tabs) setTabs(data.tabs);
+        if (data.deletedTasks) setDeletedTasks(data.deletedTasks);
+        if (data.settings) {
+          if (typeof data.settings.soundEnabled === 'boolean') {
+            setSoundEnabled(data.settings.soundEnabled);
+            sound.enabled = data.settings.soundEnabled;
+          }
+          if (typeof data.settings.fireEnabled === 'boolean') {
+            setFireEnabled(data.settings.fireEnabled);
+          }
+          if (data.settings.lang === 'uk' || data.settings.lang === 'en') {
+            setLang(data.settings.lang as Language);
+          }
+          if (data.settings.aiIconVariant) {
+            setAiIconVariant(data.settings.aiIconVariant as AIIconId);
+          }
+        }
+        if (data.updatedAt) {
+          setLastSyncTime(data.updatedAt);
+          localStorage.setItem(LAST_SYNC_KEY, String(data.updatedAt));
+        }
+      }
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleToggleLang = () => {
+    const nextLang: Language = lang === 'uk' ? 'en' : 'uk';
+    setLang(nextLang);
+    sound.tick(650);
+  };
+
+  // Compute live stats per tab
+  const stats: WorkflowStats = useMemo(() => {
+    const total = tasks.length;
+    const completed = tasks.filter((t) => t.done).length;
+    const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+    const phaseCounts: Record<string, number> = {};
+    tabs.forEach((tb) => {
+      phaseCounts[tb.id] = 0;
+    });
+
+    tasks.forEach((t) => {
+      phaseCounts[t.phase] = (phaseCounts[t.phase] || 0) + 1;
+    });
+
+    return { total, completed, percent, phaseCounts };
+  }, [tasks, tabs]);
+
+  // Filtered & Sorted Tasks (Pinned on top, then by priority, then creation)
+  const filteredTasks = useMemo(() => {
+    return tasks
+      .filter((t) => {
+        if (activeFilter === 'ACTIVE' && t.done) return false;
+        if (activeFilter === 'DONE' && !t.done) return false;
+        if (selectedPhase !== 'ALL' && selectedPhase !== 'DASHBOARD' && t.phase !== selectedPhase) return false;
+        return true;
+      })
+      .sort((a, b) => {
+        // Pinned first
+        if (a.pinned && !b.pinned) return -1;
+        if (!a.pinned && b.pinned) return 1;
+        // Incomplete first
+        if (!a.done && b.done) return -1;
+        if (a.done && !b.done) return 1;
+        // Priority (1 is high, 2 standard, 3 low)
+        if (a.priority !== b.priority) return a.priority - b.priority;
+        return b.createdAt - a.createdAt;
+      });
+  }, [tasks, activeFilter, selectedPhase]);
+
+  // Tab management handlers
+  const handleAddTab = (name: string, customColor?: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const baseId = trimmed.toLowerCase().replace(/[^a-zа-яіїєґ0-9]+/gi, '_');
+    const id = baseId.length > 0 ? `${baseId}_${Date.now().toString(36).slice(-3)}` : `tab_${Date.now()}`;
+    const color = customColor || getRandomTabColor(tabs);
+    const newTab: TaskTab = { id, name: trimmed, color };
+    setTabs((prev) => [...prev, newTab]);
+    setSelectedPhase(id);
+  };
+
+  const handleDeleteTab = (tabId: string) => {
+    if (tabs.length <= 1) return;
+    const remaining = tabs.filter((tb) => tb.id !== tabId);
+    setTabs(remaining);
+
+    if (selectedPhase === tabId) {
+      setSelectedPhase('ALL');
+    }
+
+    // Safely migrate tasks from deleted tab to the first remaining tab
+    const fallbackTabId = remaining[0]?.id || 'focus';
+    setTasks((prev) =>
+      prev.map((t) => (t.phase === tabId ? { ...t, phase: fallbackTabId } : t))
+    );
+  };
+
+  const handleSetPresetTabs = (preset: TaskTab[]) => {
+    setTabs(preset);
+    if (selectedPhase !== 'ALL' && !preset.some((tb) => tb.id === selectedPhase)) {
+      setSelectedPhase('ALL');
+    }
+  };
+
+  // Task Actions
+  const handleToggleDone = (id: string) => {
+    setTasks((prev) =>
+      prev.map((t) => {
+        if (t.id === id) {
+          const nextDone = !t.done;
+          const updatedStepList = t.stepList
+            ? t.stepList.map((s) => ({ ...s, done: nextDone }))
+            : undefined;
+
+          // If completing task while timer is running, bank the elapsed time
+          let updatedTimeSpent = t.timeSpentSeconds || 0;
+          if (nextDone && t.timerRunning && t.timerStartedAt) {
+            const elapsed = Math.floor((Date.now() - t.timerStartedAt) / 1000);
+            updatedTimeSpent += Math.max(0, elapsed);
+          }
+
+          return {
+            ...t,
+            done: nextDone,
+            stepList: updatedStepList,
+            currentStep: nextDone ? t.steps : Math.min(t.currentStep, t.steps - 1),
+            completedAt: nextDone ? Date.now() : undefined,
+            timeSpentSeconds: updatedTimeSpent,
+            timerRunning: nextDone ? false : t.timerRunning,
+            timerStartedAt: nextDone ? undefined : t.timerStartedAt,
+          };
+        }
+        return t;
+      })
+    );
+  };
+
+  const handleToggleTimer = (id: string) => {
+    setTasks((prev) =>
+      prev.map((t) => {
+        if (t.id === id) {
+          const isCurrentlyRunning = !!t.timerRunning;
+          if (isCurrentlyRunning) {
+            // Pause timer and bank elapsed seconds
+            const sessionElapsed = t.timerStartedAt ? Math.floor((Date.now() - t.timerStartedAt) / 1000) : 0;
+            const newTotal = (t.timeSpentSeconds || 0) + Math.max(0, sessionElapsed);
+            sound.tick(400);
+            return {
+              ...t,
+              timeSpentSeconds: newTotal,
+              timerRunning: false,
+              timerStartedAt: undefined,
+            };
+          } else {
+            // Start / resume timer
+            sound.tick(650);
+            return {
+              ...t,
+              timerRunning: true,
+              timerStartedAt: Date.now(),
+            };
+          }
+        }
+        return t;
+      })
+    );
+  };
+
+  const handleResetTimer = (id: string) => {
+    sound.tick(300);
+    setTasks((prev) =>
+      prev.map((t) => {
+        if (t.id === id) {
+          return {
+            ...t,
+            timeSpentSeconds: 0,
+            timerRunning: false,
+            timerStartedAt: undefined,
+          };
+        }
+        return t;
+      })
+    );
+  };
+
+  const handleUpdateTimeSpent = (id: string, newTotalSeconds: number) => {
+    sound.tick(500);
+    setTasks((prev) =>
+      prev.map((t) => {
+        if (t.id === id) {
+          return {
+            ...t,
+            timeSpentSeconds: Math.max(0, newTotalSeconds),
+            autoPausedOverdue: false,
+          };
+        }
+        return t;
+      })
+    );
+  };
+
+  const handleUpdateStep = (id: string, step: number) => {
+    setTasks((prev) =>
+      prev.map((t) => {
+        if (t.id === id) {
+          const nextDone = step >= t.steps;
+          const updatedStepList = t.stepList
+            ? t.stepList.map((s, idx) => ({ ...s, done: idx < step }))
+            : undefined;
+
+          return {
+            ...t,
+            currentStep: step,
+            stepList: updatedStepList,
+            done: nextDone,
+            completedAt: nextDone ? (t.completedAt || Date.now()) : undefined,
+          };
+        }
+        return t;
+      })
+    );
+  };
+
+  const handleToggleStepItem = (taskId: string, stepIndex: number) => {
+    setTasks((prev) =>
+      prev.map((t) => {
+        if (t.id === taskId) {
+          const defaultCount = Math.max(1, t.steps || 1);
+          // If task doesn't have custom stepList yet, create from count
+          const currentList =
+            t.stepList && t.stepList.length > 0
+              ? [...t.stepList]
+              : Array.from({ length: defaultCount }, (_, idx) => ({
+                  id: `s-${t.id}-${idx}`,
+                  title: `${lang === 'uk' ? 'Крок' : 'Step'} ${idx + 1}`,
+                  done: idx < t.currentStep,
+                }));
+
+          while (stepIndex >= currentList.length) {
+            const idx = currentList.length;
+            currentList.push({
+              id: `s-${t.id}-${idx}-${Date.now()}`,
+              title: `${lang === 'uk' ? 'Крок' : 'Step'} ${idx + 1}`,
+              done: false,
+            });
+          }
+
+          const updatedStepList = currentList.map((item, idx) =>
+            idx === stepIndex ? { ...item, done: !item.done } : item
+          );
+          const completedCount = updatedStepList.filter((s) => s.done).length;
+          const isAllDone = completedCount === updatedStepList.length && updatedStepList.length > 0;
+
+          return {
+            ...t,
+            stepList: updatedStepList,
+            steps: updatedStepList.length,
+            currentStep: completedCount,
+            done: isAllDone,
+          };
+        }
+        return t;
+      })
+    );
+  };
+
+  const handleAddStepItem = (taskId: string, stepTitle: string) => {
+    setTasks((prev) =>
+      prev.map((t) => {
+        if (t.id === taskId) {
+          const currentList = t.stepList || [];
+          const newStepItem = {
+            id: `s-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+            title: stepTitle,
+            done: false,
+          };
+          const nextList = [...currentList, newStepItem];
+          return {
+            ...t,
+            stepList: nextList,
+            steps: nextList.length,
+            done: false,
+          };
+        }
+        return t;
+      })
+    );
+  };
+
+  const handleDeleteStepItem = (taskId: string, stepIndex: number) => {
+    setTasks((prev) =>
+      prev.map((t) => {
+        if (t.id === taskId && t.stepList) {
+          const nextList = t.stepList.filter((_, idx) => idx !== stepIndex);
+          const completedCount = nextList.filter((s) => s.done).length;
+          const isAllDone = nextList.length > 0 && completedCount === nextList.length;
+
+          return {
+            ...t,
+            stepList: nextList,
+            steps: Math.max(1, nextList.length),
+            currentStep: completedCount,
+            done: isAllDone,
+          };
+        }
+        return t;
+      })
+    );
+  };
+
+  const handleCyclePriority = (id: string) => {
+    setTasks((prev) =>
+      prev.map((t) => {
+        if (t.id === id) {
+          const nextPri: 1 | 2 | 3 = t.priority === 1 ? 2 : t.priority === 2 ? 3 : 1;
+          return { ...t, priority: nextPri };
+        }
+        return t;
+      })
+    );
+  };
+
+  const handleCyclePhase = (id: string) => {
+    if (tabs.length === 0) return;
+    setTasks((prev) =>
+      prev.map((t) => {
+        if (t.id === id) {
+          const activeIds = tabs.map((tb) => tb.id);
+          const curIdx = activeIds.indexOf(t.phase);
+          const nextPhase = curIdx >= 0 ? activeIds[(curIdx + 1) % activeIds.length] : activeIds[0];
+          return { ...t, phase: nextPhase };
+        }
+        return t;
+      })
+    );
+  };
+
+  const handleTogglePin = (id: string) => {
+    setTasks((prev) =>
+      prev.map((t) => {
+        if (t.id === id) {
+          return { ...t, pinned: !t.pinned };
+        }
+        return t;
+      })
+    );
+  };
+
+  const handleDelete = (id: string) => {
+    const taskToDelete = tasks.find((t) => t.id === id);
+    if (taskToDelete) {
+      setRecentlyDeleted(taskToDelete);
+      const deletedItem: DeletedTask = {
+        ...taskToDelete,
+        deletedAt: Date.now(),
+      };
+      setDeletedTasks((prev) => [deletedItem, ...prev.filter((d) => d.id !== id)]);
+    }
+    setTasks((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  const handleUndoDelete = () => {
+    if (recentlyDeleted) {
+      sound.activate();
+      setTasks((prev) => [recentlyDeleted, ...prev]);
+      setDeletedTasks((prev) => prev.filter((d) => d.id !== recentlyDeleted.id));
+      setRecentlyDeleted(null);
+    }
+  };
+
+  const handleRestoreDeletedTask = (task: DeletedTask) => {
+    sound.activate();
+    const { deletedAt, ...restTask } = task;
+    setTasks((prev) => [restTask, ...prev]);
+    setDeletedTasks((prev) => prev.filter((d) => d.id !== task.id));
+  };
+
+  const handlePermanentDeleteTask = (id: string) => {
+    sound.tick(300);
+    setDeletedTasks((prev) => prev.filter((d) => d.id !== id));
+  };
+
+  const handleClearDeletedHistory = () => {
+    sound.tick(250);
+    setDeletedTasks([]);
+  };
+
+  const handleAddTask = (newTask: {
+    title: string;
+    phase: string;
+    priority: 1 | 2 | 3;
+    steps: number;
+    stepList?: { id: string; title: string; done: boolean }[];
+    note?: string;
+  }) => {
+    let effectivePhase = newTask.phase;
+    if (
+      effectivePhase === 'DASHBOARD' ||
+      effectivePhase === 'ALL' ||
+      !tabs.some((tb) => tb.id === effectivePhase)
+    ) {
+      effectivePhase = tabs[0]?.id || 'focus';
+    }
+
+    const task: PSTask = {
+      id: `task-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      ...newTask,
+      phase: effectivePhase,
+      currentStep: 0,
+      done: false,
+      pinned: false,
+      createdAt: Date.now(),
+    };
+    setTasks((prev) => [task, ...prev]);
+  };
+
+  const handleInjectAITasks = (
+    newTasks: Omit<PSTask, 'id' | 'currentStep' | 'done' | 'pinned' | 'createdAt'>[]
+  ) => {
+    const items: PSTask[] = newTasks.map((t, i) => {
+      let phase = t.phase;
+      if (phase === 'DASHBOARD' || phase === 'ALL' || !tabs.some((tb) => tb.id === phase)) {
+        phase = tabs[0]?.id || 'focus';
+      }
+      const stepCount = t.stepList && t.stepList.length > 0 ? t.stepList.length : (t.steps || 1);
+      return {
+        ...t,
+        phase,
+        steps: stepCount,
+        stepList: t.stepList,
+        id: `task-${Date.now()}-${i}-${Math.random().toString(36).substr(2, 4)}`,
+        currentStep: 0,
+        done: false,
+        pinned: false,
+        createdAt: Date.now() + i,
+      };
+    });
+    setTasks((prev) => [...items, ...prev]);
+  };
+
+  const handleClearCompleted = () => {
+    sound.tick(350);
+    const completedToArchive: DeletedTask[] = tasks
+      .filter((t) => t.done)
+      .map((t) => ({ ...t, deletedAt: Date.now() }));
+    if (completedToArchive.length > 0) {
+      setDeletedTasks((prev) => [...completedToArchive, ...prev]);
+    }
+    setTasks((prev) => prev.filter((t) => !t.done));
+  };
+
+  const handleResetDefaults = () => {
+    sound.activate();
+    setTabs(lang === 'uk' ? DEFAULT_TABS_UK : DEFAULT_TABS_EN);
+    setTasks(lang === 'uk' ? INITIAL_LIFE_TASKS_UK : INITIAL_LIFE_TASKS_EN);
+    setSelectedPhase('ALL');
+  };
+
+  const handleToggleSound = () => {
+    sound.enabled = !soundEnabled;
+    setSoundEnabled(!soundEnabled);
+  };
+
+  return (
+    <div className="min-h-screen bg-[#030303] text-[#f4f4f5] flex flex-col selection:bg-white selection:text-black relative overflow-x-hidden">
+      {/* Dynamic Fire Embers & Sparks Background */}
+      <FireParticlesBackground enabled={fireEnabled} />
+
+      {/* Top Header & Interactive Dynamic Tab Matrix with Windows Titlebar */}
+      <TopWorkflowMatrix
+        stats={stats}
+        tabs={tabs}
+        activeFilter={activeFilter}
+        selectedPhase={selectedPhase}
+        soundEnabled={soundEnabled}
+        isAddOpen={isAddOpen}
+        lang={lang}
+        aiIconVariant={aiIconVariant}
+        historyCount={tasks.filter((t) => t.done).length + deletedTasks.length}
+        user={currentUser}
+        isSyncing={isSyncing}
+        autoSyncEnabled={autoSyncEnabled}
+        isMinimized={isWindowMinimized}
+        isFullscreen={isFullscreen}
+        onMinimize={handleMinimizeWindow}
+        onToggleFullscreen={handleToggleFullscreen}
+        onCloseWindow={handleCloseWindow}
+        onToggleSound={handleToggleSound}
+        onToggleLang={handleToggleLang}
+        onSetFilter={setActiveFilter}
+        onSelectPhase={setSelectedPhase}
+        onToggleAdd={() => setIsAddOpen((prev) => !prev)}
+        onOpenAI={() => {
+          setAiPromptSeed('');
+          setIsAIOpen(true);
+        }}
+        onAddTab={handleAddTab}
+        onDeleteTab={handleDeleteTab}
+        onOpenManageTabs={() => setIsManageTabsOpen(true)}
+        onOpenAccount={() => setIsAccountOpen(true)}
+      />
+
+      {/* Minimized Window Taskbar Floating Notification */}
+      {isWindowMinimized && (
+        <div
+          id="win-minimized-taskbar-banner"
+          className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-[#0d0d12]/95 border border-neutral-700 shadow-2xl px-4 py-2 flex items-center gap-3 backdrop-blur-md animate-in fade-in slide-in-from-bottom-3 duration-200"
+        >
+          <div className="grid grid-cols-2 gap-[1.5px] w-3 h-3 text-neutral-300">
+            <div className="w-1.5 h-1.5 bg-neutral-300 rounded-[0.5px]" />
+            <div className="w-1.5 h-1.5 bg-neutral-300 rounded-[0.5px]" />
+            <div className="w-1.5 h-1.5 bg-neutral-300 rounded-[0.5px]" />
+            <div className="w-1.5 h-1.5 bg-neutral-300 rounded-[0.5px]" />
+          </div>
+          <span className="text-xs font-mono text-neutral-300">
+            {t.winTitlebar?.minimizedNotice || 'KARKAS window is minimized. Click to restore.'}
+          </span>
+          <button
+            id="win-restore-taskbar-btn"
+            onClick={() => {
+              sound.tick(600);
+              setIsWindowMinimized(false);
+            }}
+            className="px-2.5 py-1 bg-white text-black font-mono font-extrabold text-[10px] tracking-wider hover:bg-neutral-200 transition-colors uppercase cursor-pointer"
+          >
+            {t.winTitlebar?.restoreBtn || 'RESTORE WINDOW'}
+          </button>
+        </div>
+      )}
+
+      {/* Quick Add Pull-Down Drawer with Dynamic Tabs */}
+      <QuickAddDrawer
+        isOpen={isAddOpen}
+        lang={lang}
+        tabs={tabs}
+        selectedPhase={selectedPhase}
+        onClose={() => setIsAddOpen(false)}
+        onAddTask={handleAddTask}
+        onOpenAIWithPrompt={(prompt) => {
+          setAiPromptSeed(prompt);
+          setIsAIOpen(true);
+        }}
+      />
+
+      {/* Main Content Area */}
+      <main className="flex-1 max-w-3xl w-full mx-auto px-4 sm:px-6 py-4 pb-28 relative z-10">
+        {selectedPhase === 'DASHBOARD' ? (
+          <DashboardView
+            tasks={tasks}
+            deletedTasks={deletedTasks}
+            tabs={tabs}
+            stats={stats}
+            lang={lang}
+            aiIconVariant={aiIconVariant}
+            onSelectTab={(tabId) => setSelectedPhase(tabId)}
+            onToggleDone={handleToggleDone}
+            onOpenAI={(prompt) => {
+              if (prompt) setAiPromptSeed(prompt);
+              setIsAIOpen(true);
+            }}
+            onOpenAdd={() => setIsAddOpen(true)}
+            onOpenManageTabs={() => setIsManageTabsOpen(true)}
+            onAddTask={handleAddTask}
+          />
+        ) : selectedPhase === 'HISTORY' ? (
+          <HistoryView
+            tasks={tasks}
+            deletedTasks={deletedTasks}
+            tabs={tabs}
+            lang={lang}
+            onBackToTasks={() => setSelectedPhase('ALL')}
+            onToggleDone={handleToggleDone}
+            onRestoreDeleted={handleRestoreDeletedTask}
+            onPermanentDelete={handlePermanentDeleteTask}
+            onClearDeleted={handleClearDeletedHistory}
+          />
+        ) : (
+          <>
+            {/* Gestures Navigation Legend Bar */}
+            <div className="flex items-center justify-between py-1.5 px-3 mb-2 bg-[#09090b] border border-neutral-900 text-[10px] font-mono text-neutral-400">
+              <div className="flex items-center gap-3">
+                <span>{t.gesturesLegend.swipeLeft}</span>
+                <span className="text-neutral-700">|</span>
+                <span>{t.gesturesLegend.swipeRight}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span>{t.gesturesLegend.tapScrubber}</span>
+              </div>
+            </div>
+
+            {/* Empty State */}
+            {filteredTasks.length === 0 && (
+              <div className="py-16 text-center border border-dashed border-neutral-800 bg-[#08080a] p-8 my-4 animate-in fade-in duration-200">
+                <div className="w-8 h-8 mx-auto mb-3 border border-neutral-700 flex items-center justify-center text-neutral-400">
+                  <CheckCircle className="w-4 h-4 text-neutral-400" />
+                </div>
+                <h2 className="text-sm font-extrabold uppercase tracking-wider text-neutral-200 mb-1">
+                  {activeFilter === 'DONE'
+                    ? t.emptyDoneTitle
+                    : activeFilter === 'ACTIVE' && stats.total > 0 && stats.completed === stats.total
+                    ? t.emptyActiveTitle
+                    : t.emptyQueueTitle}
+                </h2>
+                <p className="text-xs text-neutral-400 font-mono max-w-sm mx-auto mb-4">
+                  {activeFilter === 'DONE'
+                    ? t.emptyDoneDesc
+                    : activeFilter === 'ACTIVE' && stats.total > 0 && stats.completed === stats.total
+                    ? t.emptyActiveDesc
+                    : t.emptyQueueDesc}
+                </p>
+                <div className="flex items-center justify-center gap-2 flex-wrap">
+                  {activeFilter !== 'ALL' && (
+                    <button
+                      id="empty-show-all-filter-btn"
+                      onClick={() => {
+                        sound.tick(600);
+                        setActiveFilter('ALL');
+                      }}
+                      className="px-3.5 py-1.5 bg-neutral-800 border border-neutral-600 text-white font-bold text-xs font-mono tracking-wider hover:bg-neutral-700 transition-colors"
+                    >
+                      {t.showAllTasks}
+                    </button>
+                  )}
+                  {selectedPhase !== 'ALL' && (
+                    <button
+                      id="empty-show-all-phase-btn"
+                      onClick={() => {
+                        sound.tick(600);
+                        setSelectedPhase('ALL');
+                      }}
+                      className="px-3.5 py-1.5 bg-neutral-900 border border-neutral-700 text-neutral-300 font-bold text-xs font-mono tracking-wider hover:text-white hover:border-neutral-500 transition-colors"
+                    >
+                      {t.phases.ALL} ({stats.total})
+                    </button>
+                  )}
+                  <button
+                    id="empty-add-btn"
+                    onClick={() => setIsAddOpen(true)}
+                    className="px-3.5 py-1.5 bg-white text-black font-extrabold text-xs font-mono tracking-wider hover:bg-neutral-200 transition-colors"
+                  >
+                    {t.injectNewOp}
+                  </button>
+                  <button
+                    id="empty-reset-btn"
+                    onClick={handleResetDefaults}
+                    className="px-3.5 py-1.5 bg-neutral-900 border border-neutral-700 text-neutral-300 font-bold text-xs font-mono tracking-wider hover:text-white hover:border-white transition-colors flex items-center gap-1"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    <span>{t.restorePresets}</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Tasks List */}
+            <div className="flex flex-col">
+              <AnimatePresence initial={false}>
+                {filteredTasks.map((task, index) => (
+                  <motion.div
+                    key={task.id}
+                    layout
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, x: -100, transition: { duration: 0.18 } }}
+                    transition={{ duration: 0.2 }}
+                  >
+                    <TaskCard
+                      task={task}
+                      index={index}
+                      lang={lang}
+                      tabs={tabs}
+                      onToggleDone={handleToggleDone}
+                      onUpdateStep={handleUpdateStep}
+                      onCyclePriority={handleCyclePriority}
+                      onCyclePhase={handleCyclePhase}
+                      onTogglePin={handleTogglePin}
+                      onDelete={handleDelete}
+                      onToggleStepItem={handleToggleStepItem}
+                      onAddStepItem={handleAddStepItem}
+                      onDeleteStepItem={handleDeleteStepItem}
+                      onAIBreakdown={handleAIBreakdownTask}
+                      isBreakingDown={breakingDownTaskId === task.id}
+                      onToggleTimer={handleToggleTimer}
+                      onResetTimer={handleResetTimer}
+                      onUpdateTimeSpent={handleUpdateTimeSpent}
+                      onAskAIAboutTask={(taskTitle) => {
+                        const prompt =
+                          lang === 'uk'
+                            ? `Як найкраще розпланувати та виконати задачу: "${taskTitle}"?`
+                            : `How to best plan and execute task: "${taskTitle}"?`;
+                        setAiPromptSeed(prompt);
+                        setIsAIOpen(true);
+                      }}
+                    />
+                  </motion.div>
+                ))}
+              </AnimatePresence>
+            </div>
+          </>
+        )}
+
+        {/* Undo Toast if item was deleted */}
+        <AnimatePresence>
+          {recentlyDeleted && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 20, transition: { duration: 0.15 } }}
+              className="fixed bottom-20 left-1/2 -translate-x-1/2 z-40 bg-neutral-900 border border-neutral-700 px-4 py-2.5 flex items-center gap-3 shadow-2xl text-xs font-mono"
+            >
+              <span className="text-neutral-300">
+                {t.opRemoved} "{recentlyDeleted.title.slice(0, 26)}{recentlyDeleted.title.length > 26 ? '...' : ''}"
+              </span>
+              <button
+                id="undo-delete-btn"
+                onClick={handleUndoDelete}
+                className="text-white font-extrabold underline hover:text-neutral-300 cursor-pointer"
+              >
+                {t.undo}
+              </button>
+              <button
+                type="button"
+                onClick={() => setRecentlyDeleted(null)}
+                className="text-neutral-500 hover:text-white ml-1 font-bold text-xs p-0.5 cursor-pointer transition-colors"
+                title={lang === 'uk' ? 'Закрити' : 'Close'}
+              >
+                ✕
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </main>
+
+      {/* Bottom-Left Corner: Fire Animation Toggle Button */}
+      <div className="fixed bottom-2.5 left-3 sm:left-4 z-40 flex items-center app-no-drag">
+        <button
+          id="toggle-fire-animation-btn"
+          type="button"
+          onClick={() => {
+            sound.tick(fireEnabled ? 350 : 650);
+            setFireEnabled((prev) => !prev);
+          }}
+          title={
+            fireEnabled
+              ? (lang === 'uk' ? 'Вимкнути анімацію вогню' : 'Turn off fire animation')
+              : (lang === 'uk' ? 'Увімкнути анімацію вогню' : 'Turn on fire animation')
+          }
+          className={`px-2 py-1 border transition-all cursor-pointer flex items-center gap-1.5 text-[10px] font-mono tracking-wider uppercase backdrop-blur-md shadow-md ${
+            fireEnabled
+              ? 'border-neutral-700 bg-neutral-900/95 text-neutral-200 hover:border-white hover:text-white'
+              : 'border-neutral-800 bg-[#08080a]/95 text-neutral-500 hover:text-neutral-300 hover:border-neutral-700'
+          }`}
+        >
+          <div className="relative w-3.5 h-3.5 flex items-center justify-center shrink-0">
+            <Flame className={`w-3.5 h-3.5 transition-colors ${fireEnabled ? 'text-white' : 'text-neutral-600'}`} />
+            {!fireEnabled && (
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <div className="w-4 h-[1.5px] bg-red-500 rotate-45" />
+              </div>
+            )}
+          </div>
+          <span className="hidden sm:inline font-bold">
+            {fireEnabled ? t.fireOn : t.fireOff}
+          </span>
+        </button>
+      </div>
+
+      {/* Bottom-Right Corner: System Update Trigger Button */}
+      <div className="fixed bottom-2.5 right-3 sm:right-4 z-40 flex items-center app-no-drag">
+        <button
+          id="toggle-update-modal-btn"
+          type="button"
+          onClick={() => {
+            sound.tick(600);
+            setIsUpdateOpen(true);
+          }}
+          title={lang === 'uk' ? 'Центр оновлень (v1.1.1)' : 'System update center (v1.1.1)'}
+          className="px-2 py-1 border border-neutral-800 bg-[#08080a]/95 text-neutral-400 hover:text-white hover:border-neutral-600 transition-all cursor-pointer flex items-center gap-1.5 text-[10px] font-mono tracking-wider uppercase backdrop-blur-md shadow-md"
+        >
+          <RefreshCw className="w-3.5 h-3.5 text-emerald-400" />
+          <span className="hidden sm:inline font-bold">
+            v1.1.1
+          </span>
+        </button>
+      </div>
+
+      {/* Floating Street-style Bottom Action Strip */}
+      <footer className="fixed bottom-0 left-0 right-0 z-30 bg-[#060608]/95 backdrop-blur-md border-t border-neutral-800/80 px-4 py-2.5 app-drag-region">
+        <div className="max-w-3xl mx-auto flex items-center justify-between pl-11 sm:pl-28 md:pl-0 app-drag-region">
+          {/* Left: Quick Filter Status */}
+          <div className="flex items-center gap-2 text-[10px] font-mono text-neutral-400 app-drag-region">
+            <span className="text-neutral-200 font-bold">
+              {filteredTasks.length} {t.shownCount}
+            </span>
+            {tasks.some((t) => t.done) && (
+              <button
+                id="clear-completed-bottom-btn"
+                onClick={handleClearCompleted}
+                className="hover:text-rose-400 transition-colors flex items-center gap-1 border-l border-neutral-800 pl-2 app-no-drag"
+              >
+                <Trash className="w-3 h-3" />
+                <span>{t.purgeDelivered}</span>
+              </button>
+            )}
+          </div>
+
+          {/* Center: Main AI Summon Pill */}
+          <button
+            id="bottom-summon-ai-btn"
+            onClick={() => {
+              sound.activate();
+              setAiPromptSeed('');
+              setIsAIOpen(true);
+            }}
+            className="flex items-center gap-2 px-3.5 py-1.5 bg-neutral-900 border border-neutral-700 hover:border-white text-white font-mono text-xs font-bold tracking-wider transition-all active:scale-95 app-no-drag"
+          >
+            <AIIcon id={aiIconVariant} className="w-3.5 h-3.5 text-neutral-300" />
+            <span>{t.swipeUpAI}</span>
+          </button>
+
+          {/* Right: Quick Add Button */}
+          <button
+            id="bottom-quick-add-btn"
+            onClick={() => {
+              sound.tick(600);
+              setIsAddOpen((prev) => !prev);
+            }}
+            className="flex items-center gap-1 px-3 py-1.5 bg-white text-black font-extrabold font-mono text-xs tracking-wider hover:bg-neutral-200 transition-all active:scale-95 app-no-drag"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>{t.addOp}</span>
+          </button>
+        </div>
+      </footer>
+
+      {/* AI Assistant HUD Sheet */}
+      <AIAssistantSheet
+        isOpen={isAIOpen}
+        lang={lang}
+        tabs={tabs}
+        onClose={() => setIsAIOpen(false)}
+        currentTasks={tasks}
+        deletedTasks={deletedTasks}
+        stats={stats}
+        initialPrompt={aiPromptSeed}
+        aiIconVariant={aiIconVariant}
+        onInjectTasks={handleInjectAITasks}
+      />
+
+      {/* Manage Tabs Modal */}
+      <ManageTabsModal
+        isOpen={isManageTabsOpen}
+        tabs={tabs}
+        lang={lang}
+        onClose={() => setIsManageTabsOpen(false)}
+        onAddTab={handleAddTab}
+        onDeleteTab={handleDeleteTab}
+        onSetPresetTabs={handleSetPresetTabs}
+        tabCounts={stats.phaseCounts}
+      />
+
+      {/* Google Account & Cloud Backup Modal */}
+      <AccountModal
+        isOpen={isAccountOpen}
+        lang={lang}
+        user={currentUser}
+        cloudData={cloudData}
+        isSyncing={isSyncing}
+        lastSyncTime={lastSyncTime}
+        autoSyncEnabled={autoSyncEnabled}
+        onClose={() => setIsAccountOpen(false)}
+        onLoginWithGoogle={handleLoginWithGoogle}
+        onLogout={handleLogout}
+        onSyncNow={handleSyncNow}
+        onRestoreFromCloud={handleRestoreFromCloud}
+        onToggleAutoSync={handleToggleAutoSync}
+      />
+
+      {/* System Update Modal */}
+      <UpdateModal
+        isOpen={isUpdateOpen}
+        onClose={() => setIsUpdateOpen(false)}
+        lang={lang}
+        currentVersion="1.1.1"
+      />
+    </div>
+  );
+}

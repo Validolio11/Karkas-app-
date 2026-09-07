@@ -18,7 +18,7 @@ import {
   INITIAL_LIFE_TASKS_EN,
   getRandomTabColor,
 } from './utils/i18n';
-import { SquareCode, Trash, Plus, RotateCcw, CheckCircle, Flame, RefreshCw } from 'lucide-react';
+import { SquareCode, Trash, Plus, RotateCcw, CheckCircle, Flame, RefreshCw, Search, X, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AIIcon, AIIconId, getSavedAIIconId } from './components/AIIconTemplates';
 import { 
@@ -196,6 +196,10 @@ export default function App() {
   const [breakingDownTaskId, setBreakingDownTaskId] = useState<string | null>(null);
   const [isWindowMinimized, setIsWindowMinimized] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [tabToDeleteConfirm, setTabToDeleteConfirm] = useState<TaskTab | null>(null);
+  const [showGesturesLegend, setShowGesturesLegend] = useState(() => localStorage.getItem('karkas_show_gestures_legend') !== 'false');
+  const searchInputRef = React.useRef<HTMLInputElement | null>(null);
 
   // Sync fullscreen state with browser fullscreen changes
   useEffect(() => {
@@ -208,28 +212,54 @@ export default function App() {
     };
   }, []);
 
-  // Global Keyboard Shortcuts (Escape to dismiss modals, sheets, or unminimize)
+  // Global Keyboard Shortcuts (Escape, Ctrl+N, Ctrl+Shift+F, '/')
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const targetTag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+      const isInputFocused =
+        targetTag === 'input' || targetTag === 'textarea' || (e.target as HTMLElement)?.isContentEditable;
+
       if (e.key === 'Escape') {
-        if (isAIOpen) {
-          setIsAIOpen(false);
-        } else if (isAccountOpen) {
-          setIsAccountOpen(false);
-        } else if (isManageTabsOpen) {
-          setIsManageTabsOpen(false);
-        } else if (isAddOpen) {
-          setIsAddOpen(false);
-        } else if (isWindowMinimized) {
-          setIsWindowMinimized(false);
-        }
+        if (isAIOpen) setIsAIOpen(false);
+        else if (isAccountOpen) setIsAccountOpen(false);
+        else if (isManageTabsOpen) setIsManageTabsOpen(false);
+        else if (isUpdateOpen) setIsUpdateOpen(false);
+        else if (isAddOpen) setIsAddOpen(false);
+        else if (isWindowMinimized) setIsWindowMinimized(false);
+        else if (searchQuery) setSearchQuery('');
+        return;
+      }
+
+      // Ctrl + Shift + F / Cmd + Shift + F -> Toggle Fire Animation
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        sound.tick(600);
+        setFireEnabled((prev) => !prev);
+        return;
+      }
+
+      // Ctrl + N / Cmd + N -> Open Quick Add Drawer
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        sound.tick(600);
+        setIsAddOpen(true);
+        return;
+      }
+
+      // '/' (Slash) -> Focus Search Input
+      if (e.key === '/' && !isInputFocused) {
+        e.preventDefault();
+        sound.tick(500);
+        searchInputRef.current?.focus();
+        return;
       }
     };
+
     window.addEventListener('keydown', handleKeyDown);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isAIOpen, isAccountOpen, isManageTabsOpen, isAddOpen, isWindowMinimized]);
+  }, [isAIOpen, isAccountOpen, isManageTabsOpen, isUpdateOpen, isAddOpen, isWindowMinimized, searchQuery]);
 
   const handleToggleFullscreen = () => {
     sound.tick(500);
@@ -400,13 +430,16 @@ export default function App() {
     return [];
   });
 
-  // Sync tasks with localStorage
+  // Sync tasks with localStorage (debounced for maximum performance)
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
-    } catch (e) {
-      console.error('Failed to save tasks to localStorage', e);
-    }
+    const handler = setTimeout(() => {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+      } catch (e) {
+        console.error('Failed to save tasks to localStorage', e);
+      }
+    }, 300);
+    return () => clearTimeout(handler);
   }, [tasks]);
 
   // Sync deletedTasks with localStorage
@@ -794,16 +827,26 @@ export default function App() {
     return { total, completed, percent, phaseCounts };
   }, [tasks, tabs]);
 
-  // Filtered & Sorted Tasks (Pinned on top, then by priority, then creation)
+  // Filtered & Sorted Tasks (Running timers & Pinned on top, then by search, priority, creation)
   const filteredTasks = useMemo(() => {
     return tasks
       .filter((t) => {
         if (activeFilter === 'ACTIVE' && t.done) return false;
         if (activeFilter === 'DONE' && !t.done) return false;
         if (selectedPhase !== 'ALL' && selectedPhase !== 'DASHBOARD' && t.phase !== selectedPhase) return false;
+        if (searchQuery.trim()) {
+          const q = searchQuery.toLowerCase().trim();
+          const titleMatch = t.title.toLowerCase().includes(q);
+          const noteMatch = t.note ? t.note.toLowerCase().includes(q) : false;
+          const stepMatch = t.stepList ? t.stepList.some((s) => s.title.toLowerCase().includes(q)) : false;
+          return titleMatch || noteMatch || stepMatch;
+        }
         return true;
       })
       .sort((a, b) => {
+        // Active timer running tasks pinned on very top!
+        if (a.timerRunning && !b.timerRunning) return -1;
+        if (!a.timerRunning && b.timerRunning) return 1;
         // Pinned first
         if (a.pinned && !b.pinned) return -1;
         if (!a.pinned && b.pinned) return 1;
@@ -814,7 +857,17 @@ export default function App() {
         if (a.priority !== b.priority) return a.priority - b.priority;
         return b.createdAt - a.createdAt;
       });
-  }, [tasks, activeFilter, selectedPhase]);
+  }, [tasks, activeFilter, selectedPhase, searchQuery]);
+
+  // Edit Task Title and Note
+  const handleEditTask = (id: string, updatedTitle: string, updatedNote?: string) => {
+    sound.activate();
+    setTasks((prev) =>
+      prev.map((t) =>
+        t.id === id ? { ...t, title: updatedTitle.trim(), note: updatedNote?.trim() || undefined } : t
+      )
+    );
+  };
 
   // Tab management handlers
   const handleAddTab = (name: string, customColor?: string) => {
@@ -830,6 +883,16 @@ export default function App() {
 
   const handleDeleteTab = (tabId: string) => {
     if (tabs.length <= 1) return;
+    const tabToDel = tabs.find((tb) => tb.id === tabId);
+    if (tabToDel) {
+      sound.tick(400);
+      setTabToDeleteConfirm(tabToDel);
+    }
+  };
+
+  const handleConfirmDeleteTab = () => {
+    if (!tabToDeleteConfirm || tabs.length <= 1) return;
+    const tabId = tabToDeleteConfirm.id;
     const remaining = tabs.filter((tb) => tb.id !== tabId);
     setTabs(remaining);
 
@@ -842,6 +905,9 @@ export default function App() {
     setTasks((prev) =>
       prev.map((t) => (t.phase === tabId ? { ...t, phase: fallbackTabId } : t))
     );
+
+    sound.tick(300);
+    setTabToDeleteConfirm(null);
   };
 
   const handleSetPresetTabs = (preset: TaskTab[]) => {
@@ -1325,17 +1391,65 @@ export default function App() {
           />
         ) : (
           <>
-            {/* Gestures Navigation Legend Bar */}
-            <div className="flex items-center justify-between py-1.5 px-3 mb-2 bg-[#09090b] border border-neutral-900 text-[10px] font-mono text-neutral-400">
-              <div className="flex items-center gap-3">
-                <span>{t.gesturesLegend.swipeLeft}</span>
-                <span className="text-neutral-700">|</span>
-                <span>{t.gesturesLegend.swipeRight}</span>
+            {/* Search Input Bar with Hotkeys Badge */}
+            <div className="mb-3 flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="w-3.5 h-3.5 text-neutral-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  ref={searchInputRef}
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder={
+                    lang === 'uk'
+                      ? 'Пошук завдань... (Натисніть "/" або Ctrl+N)'
+                      : 'Search tasks... (Press "/" or Ctrl+N)'
+                  }
+                  className="w-full pl-9 pr-8 py-2 bg-[#09090d] border border-neutral-800 text-neutral-200 placeholder-neutral-500 text-xs font-mono focus:outline-none focus:border-neutral-500 transition-colors shadow-inner"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-neutral-500 hover:text-white p-0.5 cursor-pointer"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
               </div>
-              <div className="flex items-center gap-2">
-                <span>{t.gesturesLegend.tapScrubber}</span>
+              <div className="hidden sm:flex items-center gap-1.5 text-[9px] font-mono text-neutral-400 bg-[#0a0a0d] border border-neutral-800 px-2.5 py-2 shrink-0">
+                <span className="px-1 bg-neutral-800 border border-neutral-700 text-neutral-200 font-bold">/</span>
+                <span>{lang === 'uk' ? 'Пошук' : 'Search'}</span>
+                <span className="mx-0.5 text-neutral-700">|</span>
+                <span className="px-1 bg-neutral-800 border border-neutral-700 text-neutral-200 font-bold">Ctrl+N</span>
+                <span>{lang === 'uk' ? 'Створити' : 'New'}</span>
               </div>
             </div>
+
+            {/* Gestures Navigation Legend Bar (Dismissible) */}
+            {showGesturesLegend && (
+              <div className="flex items-center justify-between py-1 px-3 mb-2 bg-[#09090b] border border-neutral-900 text-[10px] font-mono text-neutral-400 animate-in fade-in duration-200">
+                <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+                  <span>{t.gesturesLegend.swipeLeft}</span>
+                  <span className="text-neutral-700">|</span>
+                  <span>{t.gesturesLegend.swipeRight}</span>
+                  <span className="text-neutral-700 hidden sm:inline">|</span>
+                  <span className="hidden sm:inline">{t.gesturesLegend.tapScrubber}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    sound.tick(300);
+                    setShowGesturesLegend(false);
+                    localStorage.setItem('karkas_show_gestures_legend', 'false');
+                  }}
+                  title={lang === 'uk' ? 'Сховати підказки' : 'Hide shortcuts legend'}
+                  className="p-0.5 text-neutral-500 hover:text-white transition-colors cursor-pointer shrink-0 ml-2"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+            )}
 
             {/* Empty State */}
             {filteredTasks.length === 0 && (
@@ -1344,20 +1458,33 @@ export default function App() {
                   <CheckCircle className="w-4 h-4 text-neutral-400" />
                 </div>
                 <h2 className="text-sm font-extrabold uppercase tracking-wider text-neutral-200 mb-1">
-                  {activeFilter === 'DONE'
+                  {searchQuery
+                    ? (lang === 'uk' ? 'Завдань не знайдено' : 'No tasks found')
+                    : activeFilter === 'DONE'
                     ? t.emptyDoneTitle
                     : activeFilter === 'ACTIVE' && stats.total > 0 && stats.completed === stats.total
                     ? t.emptyActiveTitle
                     : t.emptyQueueTitle}
                 </h2>
                 <p className="text-xs text-neutral-400 font-mono max-w-sm mx-auto mb-4">
-                  {activeFilter === 'DONE'
+                  {searchQuery
+                    ? (lang === 'uk' ? `За запитом "${searchQuery}" нічого не знайдено` : `No tasks matching "${searchQuery}"`)
+                    : activeFilter === 'DONE'
                     ? t.emptyDoneDesc
                     : activeFilter === 'ACTIVE' && stats.total > 0 && stats.completed === stats.total
                     ? t.emptyActiveDesc
                     : t.emptyQueueDesc}
                 </p>
                 <div className="flex items-center justify-center gap-2 flex-wrap">
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchQuery('')}
+                      className="px-3.5 py-1.5 bg-neutral-800 border border-neutral-600 text-white font-bold text-xs font-mono tracking-wider hover:bg-neutral-700 transition-colors"
+                    >
+                      {lang === 'uk' ? 'Очистити пошук' : 'Clear search'}
+                    </button>
+                  )}
                   {activeFilter !== 'ALL' && (
                     <button
                       id="empty-show-all-filter-btn"
@@ -1389,14 +1516,6 @@ export default function App() {
                   >
                     {t.injectNewOp}
                   </button>
-                  <button
-                    id="empty-reset-btn"
-                    onClick={handleResetDefaults}
-                    className="px-3.5 py-1.5 bg-neutral-900 border border-neutral-700 text-neutral-300 font-bold text-xs font-mono tracking-wider hover:text-white hover:border-white transition-colors flex items-center gap-1"
-                  >
-                    <RotateCcw className="w-3 h-3" />
-                    <span>{t.restorePresets}</span>
-                  </button>
                 </div>
               </div>
             )}
@@ -1424,6 +1543,7 @@ export default function App() {
                       onCyclePhase={handleCyclePhase}
                       onTogglePin={handleTogglePin}
                       onDelete={handleDelete}
+                      onEditTask={handleEditTask}
                       onToggleStepItem={handleToggleStepItem}
                       onAddStepItem={handleAddStepItem}
                       onDeleteStepItem={handleDeleteStepItem}
@@ -1481,7 +1601,7 @@ export default function App() {
       </main>
 
       {/* Bottom-Left Corner: Fire Animation Toggle Button */}
-      <div className="fixed bottom-2.5 left-3 sm:left-4 z-40 flex items-center app-no-drag">
+      <div className="fixed bottom-2.5 left-3 sm:left-4 z-50 flex items-center app-no-drag pointer-events-auto">
         <button
           id="toggle-fire-animation-btn"
           type="button"
@@ -1494,7 +1614,7 @@ export default function App() {
               ? (lang === 'uk' ? 'Вимкнути анімацію вогню' : 'Turn off fire animation')
               : (lang === 'uk' ? 'Увімкнути анімацію вогню' : 'Turn on fire animation')
           }
-          className={`px-2 py-1 border transition-all cursor-pointer flex items-center gap-1.5 text-[10px] font-mono tracking-wider uppercase backdrop-blur-md shadow-md ${
+          className={`px-2 py-1 border transition-all cursor-pointer flex items-center gap-1.5 text-[10px] font-mono tracking-wider uppercase backdrop-blur-md shadow-md app-no-drag pointer-events-auto ${
             fireEnabled
               ? 'border-neutral-700 bg-neutral-900/95 text-neutral-200 hover:border-white hover:text-white'
               : 'border-neutral-800 bg-[#08080a]/95 text-neutral-500 hover:text-neutral-300 hover:border-neutral-700'
@@ -1515,7 +1635,7 @@ export default function App() {
       </div>
 
       {/* Bottom-Right Corner: System Update Trigger Button */}
-      <div className="fixed bottom-2.5 right-3 sm:right-4 z-40 flex items-center app-no-drag">
+      <div className="fixed bottom-2.5 right-3 sm:right-4 z-50 flex items-center app-no-drag pointer-events-auto">
         <button
           id="toggle-update-modal-btn"
           type="button"
@@ -1524,7 +1644,7 @@ export default function App() {
             setIsUpdateOpen(true);
           }}
           title={lang === 'uk' ? 'Центр оновлень (v1.1.1)' : 'System update center (v1.1.1)'}
-          className="px-2 py-1 border border-neutral-800 bg-[#08080a]/95 text-neutral-400 hover:text-white hover:border-neutral-600 transition-all cursor-pointer flex items-center gap-1.5 text-[10px] font-mono tracking-wider uppercase backdrop-blur-md shadow-md"
+          className="px-2 py-1 border border-neutral-800 bg-[#08080a]/95 text-neutral-400 hover:text-white hover:border-neutral-600 transition-all cursor-pointer flex items-center gap-1.5 text-[10px] font-mono tracking-wider uppercase backdrop-blur-md shadow-md app-no-drag pointer-events-auto"
         >
           <RefreshCw className="w-3.5 h-3.5 text-emerald-400" />
           <span className="hidden sm:inline font-bold">
@@ -1534,10 +1654,10 @@ export default function App() {
       </div>
 
       {/* Floating Street-style Bottom Action Strip */}
-      <footer className="fixed bottom-0 left-0 right-0 z-30 bg-[#060608]/95 backdrop-blur-md border-t border-neutral-800/80 px-4 py-2.5 app-drag-region">
-        <div className="max-w-3xl mx-auto flex items-center justify-between pl-11 sm:pl-28 md:pl-0 app-drag-region">
+      <footer className="fixed bottom-0 left-0 right-0 z-30 bg-[#060608]/95 backdrop-blur-md border-t border-neutral-800/80 px-4 py-2.5 app-no-drag pointer-events-auto">
+        <div className="max-w-3xl mx-auto flex items-center justify-between pl-11 sm:pl-28 md:pl-0 app-no-drag">
           {/* Left: Quick Filter Status */}
-          <div className="flex items-center gap-2 text-[10px] font-mono text-neutral-400 app-drag-region">
+          <div className="flex items-center gap-2 text-[10px] font-mono text-neutral-400 app-no-drag">
             <span className="text-neutral-200 font-bold">
               {filteredTasks.length} {t.shownCount}
             </span>
@@ -1630,8 +1750,108 @@ export default function App() {
         isOpen={isUpdateOpen}
         onClose={() => setIsUpdateOpen(false)}
         lang={lang}
-        currentVersion="1.1.1"
+        currentVersion="1.1.4"
       />
+
+      {/* Tab Deletion Confirmation Safeguard Modal */}
+      <AnimatePresence>
+        {tabToDeleteConfirm && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.96 }}
+              className="w-full max-w-md bg-[#0c0c0e] border border-neutral-800 shadow-2xl p-5 sm:p-6 flex flex-col gap-4 text-neutral-100 font-mono"
+            >
+              <div className="flex items-center justify-between border-b border-neutral-800/80 pb-3">
+                <div className="flex items-center gap-2">
+                  <Trash className="w-4 h-4 text-red-400 shrink-0" />
+                  <h3 className="text-xs font-bold tracking-wider uppercase text-neutral-200">
+                    {(t as any).tabDeleteModal?.title || (lang === 'uk' ? 'ПІДТВЕРДЖЕННЯ ВИДАЛЕННЯ ВКЛАДКИ' : 'CONFIRM TAB DELETION')}
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    sound.tick(400);
+                    setTabToDeleteConfirm(null);
+                  }}
+                  className="p-1 text-neutral-400 hover:text-white transition-colors cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="space-y-3 text-xs leading-relaxed text-neutral-300">
+                <p>
+                  {lang === 'uk' ? 'Ви дійсно хочете видалити вкладку' : 'Are you sure you want to delete tab'}{' '}
+                  <span className="text-white font-bold bg-[#141418] px-2 py-0.5 border border-neutral-700">
+                    "{tabToDeleteConfirm.name}"
+                  </span>
+                  ?
+                </p>
+
+                {(() => {
+                  const count = stats.phaseCounts[tabToDeleteConfirm.id] || 0;
+                  const remaining = tabs.filter((tb) => tb.id !== tabToDeleteConfirm.id);
+                  const fallbackTab = remaining[0];
+                  const fallbackName = fallbackTab ? ((t.phases as any)[fallbackTab.id] || fallbackTab.name) : '';
+
+                  if (count > 0) {
+                    return (
+                      <div className="p-3 bg-[#111116] border border-neutral-800 text-neutral-300 text-xs leading-normal flex flex-col gap-1.5">
+                        <span className="font-bold flex items-center gap-1.5 text-neutral-200">
+                          <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-amber-500" />
+                          <span>
+                            {lang === 'uk'
+                              ? `У цій вкладці є ${count} завдань`
+                              : `There are ${count} tasks in this tab`}
+                          </span>
+                        </span>
+                        <p className="text-[11px] text-neutral-400">
+                          {lang === 'uk'
+                            ? `При видаленні всі завдання збережуться та автоматично перенесуться у вкладку "${fallbackName}".`
+                            : `All tasks will be preserved and automatically moved to "${fallbackName}".`}
+                        </p>
+                      </div>
+                    );
+                  }
+                  return (
+                    <p className="text-neutral-400 text-xs bg-[#111116] p-2.5 border border-neutral-800">
+                      {lang === 'uk' ? 'У цій вкладці зараз немає завдань.' : 'There are no tasks in this tab.'}
+                    </p>
+                  );
+                })()}
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-neutral-800/80">
+                <button
+                  type="button"
+                  onClick={() => {
+                    sound.tick(400);
+                    setTabToDeleteConfirm(null);
+                  }}
+                  className="px-4 py-2 bg-[#121216] border border-neutral-700 text-neutral-300 font-bold text-xs hover:border-white hover:text-white transition-all cursor-pointer"
+                >
+                  {(t as any).tabDeleteModal?.cancel || (lang === 'uk' ? 'СКАСУВАТИ' : 'CANCEL')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleConfirmDeleteTab();
+                  }}
+                  className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white font-extrabold text-xs tracking-wider transition-all cursor-pointer shadow-md flex items-center gap-1.5"
+                >
+                  <Trash className="w-3.5 h-3.5" />
+                  <span>
+                    {(t as any).tabDeleteModal?.confirmDelete || (lang === 'uk' ? 'ВИДАЛИТИ ВКЛАДКУ' : 'DELETE TAB')}
+                  </span>
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

@@ -132,7 +132,7 @@ interface DashboardViewProps {
   }) => void;
 }
 
-export const DashboardView: React.FC<DashboardViewProps> = ({
+const DashboardViewComponent: React.FC<DashboardViewProps> = ({
   tasks,
   deletedTasks = [],
   tabs,
@@ -1261,3 +1261,5 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     </div>
   );
 };
+
+export const DashboardView = React.memo(DashboardViewComponent);

@@ -36,7 +36,7 @@ interface TopWorkflowMatrixProps {
   onOpenAccount: () => void;
 }
 
-export const TopWorkflowMatrix: React.FC<TopWorkflowMatrixProps> = ({
+const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
   stats,
   tabs,
   activeFilter,
@@ -175,11 +175,11 @@ export const TopWorkflowMatrix: React.FC<TopWorkflowMatrixProps> = ({
             ) : (
               <Cloud className={`w-3 h-3 ${user ? (autoSyncEnabled ? 'text-emerald-400' : 'text-neutral-300') : 'text-neutral-400'}`} />
             )}
-            <span className="hidden md:inline">
+            <span className="hidden sm:inline">
               {isSyncing
                 ? t.account.syncing
                 : user
-                ? user.displayName?.split(' ')[0] || t.account.accountLabel
+                ? user.displayName?.split(' ')[0] || user.email?.split('@')[0] || t.account.accountLabel
                 : t.account.accountLabel}
             </span>
             {user && !isSyncing && (
@@ -376,69 +376,42 @@ export const TopWorkflowMatrix: React.FC<TopWorkflowMatrixProps> = ({
               </span>
             </button>
 
-            {/* Dynamic User Tabs (With direct ✕ delete button) */}
+            {/* Dynamic User Tabs */}
             {tabs.map((tab) => {
               const count = stats.phaseCounts[tab.id] || 0;
               const isSelected = selectedPhase === tab.id;
               const tabDisplayName = (t.phases as any)[tab.id] || tab.name;
-              const canDelete = tabs.length > 1;
 
               return (
-                <div
+                <button
                   key={tab.id}
+                  id={`tab-btn-${tab.id}`}
+                  onClick={() => {
+                    sound.tick(600);
+                    onSelectPhase(tab.id);
+                  }}
                   style={
                     isSelected && tab.color
                       ? { borderBottomColor: tab.color, borderBottomWidth: '2px' }
                       : undefined
                   }
-                  className={`group flex items-center border whitespace-nowrap transition-all ${
+                  className={`flex items-center gap-1.5 text-[10px] font-mono tracking-wider px-2.5 py-1 border whitespace-nowrap transition-all shrink-0 cursor-pointer ${
                     isSelected
-                      ? 'border-white bg-neutral-100 text-black font-extrabold shadow-sm'
-                      : 'border-neutral-800 bg-[#09090b] text-neutral-400 hover:text-white hover:border-neutral-600'
+                      ? 'border-white bg-white text-black font-extrabold shadow-sm'
+                      : 'border-neutral-800 bg-[#09090b] text-neutral-300 hover:text-white hover:border-neutral-600'
                   }`}
                 >
-                  {/* Tab selector button */}
-                  <button
-                    id={`tab-btn-${tab.id}`}
-                    onClick={() => {
-                      sound.tick(600);
-                      onSelectPhase(tab.id);
-                    }}
-                    className="flex items-center gap-1.5 text-[10px] font-mono tracking-wider pl-2 pr-1.5 py-1"
-                  >
-                    {tab.color && (
-                      <span
-                        className="w-1.5 h-1.5 shrink-0 shadow-sm"
-                        style={{ backgroundColor: tab.color }}
-                      />
-                    )}
-                    <span>{tabDisplayName}</span>
-                    <span className={`text-[9px] font-mono ${isSelected ? 'text-black font-bold' : 'text-neutral-500'}`}>
-                      {count}
-                    </span>
-                  </button>
-
-                  {/* Quick Delete '✕' Button on the tab */}
-                  {canDelete && (
-                    <button
-                      type="button"
-                      id={`delete-tab-btn-${tab.id}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        sound.tick(350);
-                        onDeleteTab(tab.id);
-                      }}
-                      title={`${t.deleteTab}: ${tabDisplayName}`}
-                      className={`px-1 py-1 mr-0.5 rounded-none transition-colors opacity-70 group-hover:opacity-100 ${
-                        isSelected
-                          ? 'text-neutral-700 hover:text-red-600 hover:bg-neutral-200'
-                          : 'text-neutral-500 hover:text-red-400 hover:bg-neutral-800'
-                      }`}
-                    >
-                      <X className="w-2.5 h-2.5" />
-                    </button>
+                  {tab.color && (
+                    <span
+                      className="w-1.5 h-1.5 shrink-0 shadow-sm"
+                      style={{ backgroundColor: tab.color }}
+                    />
                   )}
-                </div>
+                  <span>{tabDisplayName}</span>
+                  <span className={`text-[9px] font-mono ${isSelected ? 'text-black font-bold' : 'text-neutral-500'}`}>
+                    {count}
+                  </span>
+                </button>
               );
             })}
 
@@ -550,3 +523,5 @@ export const TopWorkflowMatrix: React.FC<TopWorkflowMatrixProps> = ({
     </header>
   );
 };
+
+export const TopWorkflowMatrix = React.memo(TopWorkflowMatrixComponent);

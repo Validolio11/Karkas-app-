@@ -276,7 +276,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                 onClose();
               }
             }}
-            className="relative z-10 w-full max-w-2xl bg-[#09090c] border-t border-x border-neutral-700 max-h-[88vh] flex flex-col shadow-2xl"
+            className="relative z-10 w-full max-w-2xl bg-[#0c0c0e] border-t border-x border-neutral-800 max-h-[88vh] flex flex-col shadow-2xl font-mono"
           >
             {/* Drag Handle */}
             <div className="w-full flex items-center justify-center pt-2.5 pb-1 cursor-grab active:cursor-grabbing">
@@ -284,15 +284,11 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
             </div>
 
             {/* Header */}
-            <div className="flex items-center justify-between px-4 sm:px-5 py-2.5 border-b border-neutral-800">
-              <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3 border-b border-neutral-800">
+              <div className="flex items-center gap-2">
                 <AIIcon id={aiIconVariant} className="w-4 h-4 text-white" />
-                <span className="text-xs sm:text-sm font-extrabold uppercase tracking-wider font-mono text-white">
+                <span className="text-xs sm:text-sm font-bold uppercase tracking-wider font-mono text-white">
                   {t.aiSheet.header}
-                </span>
-                <span className="text-[9px] font-mono px-1.5 py-0.5 bg-emerald-950/40 border border-emerald-800/80 text-emerald-300 font-bold flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  {t.aiSheet.online}
                 </span>
               </div>
               <button
@@ -304,39 +300,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
               </button>
             </div>
 
-            {/* Live App Context Bar */}
-            <div className="px-4 sm:px-5 py-2 bg-black/60 border-b border-neutral-800/80 flex items-center justify-between gap-2 text-[10px] font-mono text-neutral-400 overflow-x-auto">
-              <div className="flex items-center gap-2 shrink-0">
-                <Activity className="w-3.5 h-3.5 text-white" />
-                <span className="text-neutral-200 font-bold">
-                  {t.aiSheet.fullContextTitle}
-                </span>
-              </div>
-              <div className="flex items-center gap-3 text-[9px] text-neutral-400 shrink-0 font-mono">
-                <span>
-                  <strong className="text-white">{activeCount}</strong> {lang === 'uk' ? 'активних' : 'active'}
-                </span>
-                <span>•</span>
-                <span>
-                  <strong className="text-white">{completedCount}</strong> {lang === 'uk' ? 'виконано' : 'done'}
-                </span>
-                <span>•</span>
-                <span>
-                  <strong className="text-white">{tabs.length}</strong> {lang === 'uk' ? 'вкладок' : 'tabs'}
-                </span>
-                {deletedCount > 0 && (
-                  <>
-                    <span>•</span>
-                    <span>
-                      <strong className="text-white">{deletedCount}</strong> {lang === 'uk' ? 'архів' : 'archived'}
-                    </span>
-                  </>
-                )}
-              </div>
-            </div>
-
             {/* Action Modes Selector */}
-            <div className="grid grid-cols-3 gap-1 px-4 sm:px-5 pt-3 pb-1 border-b border-neutral-800/50">
+            <div className="grid grid-cols-3 gap-1 px-4 sm:px-5 pt-3 pb-2 border-b border-neutral-800">
               <button
                 id="ai-mode-breakdown-btn"
                 type="button"
@@ -344,10 +309,10 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   sound.tick(500);
                   setMode('breakdown');
                 }}
-                className={`py-2 px-2 text-[10px] sm:text-xs font-mono font-bold tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 ${
+                className={`py-1.5 px-2 text-[10px] sm:text-xs font-mono font-bold tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
                   mode === 'breakdown'
-                    ? 'bg-white text-black border-white shadow-sm'
-                    : 'bg-[#101014] text-neutral-400 border-neutral-800 hover:text-neutral-200 hover:border-neutral-700'
+                    ? 'bg-white text-black border-white'
+                    : 'bg-[#08080a] text-neutral-400 border-neutral-800 hover:text-white hover:border-neutral-700'
                 }`}
               >
                 <ListTree className="w-3.5 h-3.5 shrink-0" />
@@ -362,10 +327,10 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   setMode('analyze');
                   handleGenerate(prompt, 'analyze');
                 }}
-                className={`py-2 px-2 text-[10px] sm:text-xs font-mono font-bold tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 ${
+                className={`py-1.5 px-2 text-[10px] sm:text-xs font-mono font-bold tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
                   mode === 'analyze'
-                    ? 'bg-white text-black border-white shadow-sm'
-                    : 'bg-[#101014] text-neutral-400 border-neutral-800 hover:text-neutral-200 hover:border-neutral-700'
+                    ? 'bg-white text-black border-white'
+                    : 'bg-[#08080a] text-neutral-400 border-neutral-800 hover:text-white hover:border-neutral-700'
                 }`}
               >
                 <Sparkles className="w-3.5 h-3.5 shrink-0" />
@@ -379,10 +344,10 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   sound.tick(600);
                   setMode('generate');
                 }}
-                className={`py-2 px-2 text-[10px] sm:text-xs font-mono font-bold tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 ${
+                className={`py-1.5 px-2 text-[10px] sm:text-xs font-mono font-bold tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
                   mode === 'generate'
-                    ? 'bg-white text-black border-white shadow-sm'
-                    : 'bg-[#101014] text-neutral-400 border-neutral-800 hover:text-neutral-200 hover:border-neutral-700'
+                    ? 'bg-white text-black border-white'
+                    : 'bg-[#08080a] text-neutral-400 border-neutral-800 hover:text-white hover:border-neutral-700'
                 }`}
               >
                 <Layers className="w-3.5 h-3.5 shrink-0" />
@@ -406,46 +371,12 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                         setPrompt(preset);
                         handleGenerate(preset);
                       }}
-                      className="text-xs font-mono text-left px-2.5 py-1.5 bg-[#121214] border border-neutral-800 text-neutral-300 hover:border-white hover:text-white transition-all"
+                      className="text-[11px] font-mono text-left px-2 py-1 bg-[#08080a] border border-neutral-800 text-neutral-400 hover:border-neutral-600 hover:text-neutral-200 transition-colors cursor-pointer"
                     >
                       + {preset}
                     </button>
                   ))}
                 </div>
-              </div>
-
-              {/* Custom Prompt Input */}
-              <div className="flex items-center gap-2">
-                <input
-                  id="ai-prompt-input"
-                  type="text"
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleGenerate();
-                  }}
-                  placeholder={
-                    mode === 'analyze'
-                      ? (lang === 'uk' ? 'Уточніть фокус аналізу (напр. пріоритети на сьогодні, перевірити дедлайни)...' : 'Refine audit focus (e.g. today priorities, bottlenecks)...')
-                      : t.aiSheet.inputPlaceholder
-                  }
-                  className="flex-1 bg-[#101014] border border-neutral-600 text-white placeholder:text-neutral-400 placeholder:font-normal placeholder:normal-case px-3.5 py-2.5 text-xs sm:text-sm font-sans focus:outline-none focus:border-white focus:ring-1 focus:ring-white transition-all shadow-inner"
-                />
-                <button
-                  id="ai-generate-submit-btn"
-                  onClick={() => handleGenerate()}
-                  disabled={loading || (mode !== 'analyze' && !prompt.trim())}
-                  className="px-4 py-2.5 bg-white text-black font-extrabold text-xs font-mono tracking-wider hover:bg-neutral-200 disabled:opacity-40 transition-all flex items-center gap-1.5"
-                >
-                  {loading ? (
-                    <span className="animate-pulse">{t.aiSheet.thinking}</span>
-                  ) : (
-                    <>
-                      <span>{t.aiSheet.execute}</span>
-                      <CornerDownLeft className="w-3.5 h-3.5" />
-                    </>
-                  )}
-                </button>
               </div>
 
               {/* Response Section */}
@@ -597,6 +528,40 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   )}
                 </div>
               )}
+            </div>
+
+            {/* Custom Prompt Input at the bottom of the sheet */}
+            <div className="px-4 sm:px-5 py-3 bg-[#08080a] border-t border-neutral-800 flex items-center gap-2">
+              <input
+                id="ai-prompt-input"
+                type="text"
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleGenerate();
+                }}
+                placeholder={
+                  mode === 'analyze'
+                    ? (lang === 'uk' ? 'Уточніть фокус аналізу (напр. пріоритети на сьогодні, перевірити дедлайни)...' : 'Refine audit focus (e.g. today priorities, bottlenecks)...')
+                    : t.aiSheet.inputPlaceholder
+                }
+                className="flex-1 bg-[#050507] border border-neutral-800 text-white placeholder:text-neutral-500 text-xs font-mono px-3.5 py-2.5 focus:outline-none focus:border-white transition-colors"
+              />
+              <button
+                id="ai-generate-submit-btn"
+                onClick={() => handleGenerate()}
+                disabled={loading || (mode !== 'analyze' && !prompt.trim())}
+                className="px-4 py-2.5 bg-white text-black font-bold text-xs font-mono uppercase tracking-wider hover:bg-neutral-200 disabled:opacity-40 transition-all flex items-center gap-1.5 cursor-pointer shrink-0"
+              >
+                {loading ? (
+                  <span>...</span>
+                ) : (
+                  <>
+                    <span>{t.aiSheet.execute}</span>
+                    <CornerDownLeft className="w-3.5 h-3.5" />
+                  </>
+                )}
+              </button>
             </div>
 
             {/* Bottom Footer Hint */}

@@ -36,7 +36,7 @@ function createWindow() {
   });
 
   ipcMain.on('window-close', () => {
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+    app.quit();
   });
 
   const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;

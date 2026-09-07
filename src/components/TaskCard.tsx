@@ -20,6 +20,7 @@ import {
   Timer,
   Clock,
   AlertTriangle,
+  Pencil,
 } from 'lucide-react';
 
 interface TaskCardProps {
@@ -33,6 +34,7 @@ interface TaskCardProps {
   onCyclePhase: (id: string) => void;
   onTogglePin: (id: string) => void;
   onDelete: (id: string) => void;
+  onEditTask?: (taskId: string, updatedTitle: string, updatedNote?: string) => void;
   onAskAIAboutTask: (taskTitle: string) => void;
   onToggleStepItem?: (taskId: string, stepIndex: number) => void;
   onAddStepItem?: (taskId: string, stepTitle: string) => void;
@@ -88,7 +90,7 @@ const KNOWN_PHASE_COLORS: Record<string, { bg: string; text: string; border: str
   EXPORT: { bg: 'bg-zinc-950', text: 'text-rose-300', border: 'border-rose-800/60' },
 };
 
-export const TaskCard: React.FC<TaskCardProps> = ({
+const TaskCardComponent: React.FC<TaskCardProps> = ({
   task,
   index,
   lang,
@@ -99,6 +101,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
   onCyclePhase,
   onTogglePin,
   onDelete,
+  onEditTask,
   onAskAIAboutTask,
   onToggleStepItem,
   onAddStepItem,
@@ -114,6 +117,9 @@ export const TaskCard: React.FC<TaskCardProps> = ({
   const [isExpanded, setIsExpanded] = useState(false);
   const [isAddingStep, setIsAddingStep] = useState(false);
   const [newStepText, setNewStepText] = useState('');
+  const [isEditingTask, setIsEditingTask] = useState(false);
+  const [editTitleText, setEditTitleText] = useState(task.title);
+  const [editNoteText, setEditNoteText] = useState(task.note || '');
   const [isEditingTime, setIsEditingTime] = useState(false);
   const [editHours, setEditHours] = useState(0);
   const [editMinutes, setEditMinutes] = useState(0);
@@ -246,10 +252,19 @@ export const TaskCard: React.FC<TaskCardProps> = ({
         dragConstraints={{ left: -100, right: 100 }}
         dragElastic={0.2}
         onDragEnd={handleDragEnd}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          sound.tick(500);
+          setEditTitleText(task.title);
+          setEditNoteText(task.note || '');
+          setIsEditingTask(true);
+        }}
         style={{ x, rotate: x.get() < 0 ? rotateLeft : rotateRight }}
         whileTap={{ cursor: 'grabbing' }}
-        className={`relative z-10 bg-[#0c0c0d] border transition-colors duration-200 p-3.5 sm:p-4 cursor-grab ${
-          task.done
+        className={`relative z-10 bg-[#0c0c0d] border transition-all duration-200 p-3.5 sm:p-4 cursor-grab ${
+          task.timerRunning
+            ? 'border-emerald-500/90 shadow-[0_0_20px_rgba(52,211,153,0.3)] ring-1 ring-emerald-500/50 animate-pulse'
+            : task.done
             ? 'border-neutral-800/80 bg-[#080808]/90 opacity-70'
             : task.pinned
             ? 'border-neutral-500 shadow-[0_0_15px_rgba(255,255,255,0.05)]'
@@ -474,6 +489,23 @@ export const TaskCard: React.FC<TaskCardProps> = ({
                 )}
               </div>
 
+              {/* Edit Task Text */}
+              <button
+                id={`task-edit-btn-${task.id}`}
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  sound.tick(500);
+                  setEditTitleText(task.title);
+                  setEditNoteText(task.note || '');
+                  setIsEditingTask((prev) => !prev);
+                }}
+                title={lang === 'uk' ? 'Редагувати текст завдання (або ПКМ)' : 'Edit task text (or right-click)'}
+                className="p-1 text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+              </button>
+
               {/* Ask AI about this task */}
               <button
                 id={`task-ai-btn-${task.id}`}
@@ -506,25 +538,78 @@ export const TaskCard: React.FC<TaskCardProps> = ({
 
           {/* Task Title & Notes */}
           <div className="relative">
-            <h3
-              onClick={() => {
-                sound.slice();
-                onToggleDone(task.id);
-              }}
-              className={`text-sm sm:text-base font-bold tracking-tight cursor-pointer leading-snug transition-all ${
-                task.done
-                  ? 'line-through text-neutral-500 decoration-neutral-600 decoration-2'
-                  : 'text-neutral-100 hover:text-white'
-              }`}
-            >
-              {task.title}
-            </h3>
+            {isEditingTask ? (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (editTitleText.trim() && onEditTask) {
+                    onEditTask(task.id, editTitleText, editNoteText);
+                  }
+                  setIsEditingTask(false);
+                }}
+                onClick={(e) => e.stopPropagation()}
+                className="flex flex-col gap-2 p-2 bg-[#08080a] border border-neutral-700 my-1 z-30"
+              >
+                <div className="text-[10px] font-mono text-neutral-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <Pencil className="w-3 h-3 text-emerald-400" />
+                  <span>{lang === 'uk' ? 'Редагування завдання' : 'Edit Task'}</span>
+                </div>
+                <input
+                  type="text"
+                  value={editTitleText}
+                  onChange={(e) => setEditTitleText(e.target.value)}
+                  placeholder={lang === 'uk' ? 'Назва завдання...' : 'Task title...'}
+                  autoFocus
+                  className="w-full px-2.5 py-1.5 bg-[#0d0d12] border border-neutral-700 text-white text-xs font-mono focus:outline-none focus:border-white transition-colors"
+                />
+                <input
+                  type="text"
+                  value={editNoteText}
+                  onChange={(e) => setEditNoteText(e.target.value)}
+                  placeholder={lang === 'uk' ? 'Нотатка (необов\'язково)...' : 'Note (optional)...'}
+                  className="w-full px-2.5 py-1.5 bg-[#0d0d12] border border-neutral-800 text-neutral-300 text-xs font-mono focus:outline-none focus:border-neutral-600 transition-colors"
+                />
+                <div className="flex items-center justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setIsEditingTask(false)}
+                    className="px-2.5 py-1 bg-neutral-800 border border-neutral-700 text-neutral-300 text-[10px] font-mono font-bold hover:bg-neutral-700 transition-colors flex items-center gap-1 cursor-pointer"
+                  >
+                    <X className="w-3 h-3" />
+                    <span>{lang === 'uk' ? 'Скасувати' : 'Cancel'}</span>
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-2.5 py-1 bg-emerald-500 text-black text-[10px] font-mono font-extrabold hover:bg-emerald-400 transition-colors flex items-center gap-1 cursor-pointer"
+                  >
+                    <Check className="w-3 h-3" />
+                    <span>{lang === 'uk' ? 'Зберегти' : 'Save'}</span>
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <>
+                <h3
+                  onClick={() => {
+                    sound.slice();
+                    onToggleDone(task.id);
+                  }}
+                  className={`text-sm sm:text-base font-bold tracking-tight cursor-pointer leading-snug transition-all ${
+                    task.done
+                      ? 'line-through text-neutral-500 decoration-neutral-600 decoration-2'
+                      : 'text-neutral-100 hover:text-white'
+                  }`}
+                >
+                  {task.title}
+                </h3>
 
-            {task.note && (
-              <div className="flex items-center gap-1 mt-1 text-[11px] font-mono text-neutral-400">
-                <span className="text-neutral-600 font-bold">//</span>
-                <span>{task.note}</span>
-              </div>
+                {task.note && (
+                  <div className="flex items-center gap-1 mt-1 text-[11px] font-mono text-neutral-400">
+                    <span className="text-neutral-600 font-bold">//</span>
+                    <span>{task.note}</span>
+                  </div>
+                )}
+              </>
             )}
 
             {task.autoPausedOverdue && (
@@ -1019,3 +1104,5 @@ export const TaskCard: React.FC<TaskCardProps> = ({
     </div>
   );
 };
+
+export const TaskCard = React.memo(TaskCardComponent);

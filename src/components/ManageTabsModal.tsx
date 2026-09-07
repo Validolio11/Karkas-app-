@@ -68,13 +68,13 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
           initial={{ opacity: 0, scale: 0.96 }}
           animate={{ opacity: 1, scale: 1 }}
           exit={{ opacity: 0, scale: 0.96 }}
-          className="w-full max-w-lg bg-[#0d0d11] border border-neutral-800 shadow-2xl p-5 sm:p-6 flex flex-col gap-4 text-neutral-100"
+          className="w-full max-w-lg bg-[#0c0c0e] border border-neutral-800 shadow-2xl p-5 sm:p-6 flex flex-col gap-4 text-neutral-100 font-mono"
         >
           {/* Header */}
           <div className="flex items-center justify-between border-b border-neutral-800/80 pb-3">
             <div className="flex items-center gap-2">
               <FolderKanban className="w-4 h-4 text-white" />
-              <h2 className="text-sm font-bold tracking-wider font-mono uppercase">
+              <h2 className="text-xs font-bold tracking-wider uppercase text-neutral-200">
                 {t.tabsModal.title}
               </h2>
             </div>
@@ -83,13 +83,13 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
                 sound.tick(400);
                 onClose();
               }}
-              className="p-1 text-neutral-400 hover:text-white transition-colors"
+              className="p-1 text-neutral-400 hover:text-white transition-colors cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>
           </div>
 
-          <p className="text-xs text-neutral-400 leading-relaxed">
+          <p className="text-xs text-neutral-400 leading-relaxed font-mono">
             {t.tabsModal.desc}
           </p>
 
@@ -102,7 +102,7 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
                 id="tab-color-shuffle-btn"
                 onClick={handleRollRandomColor}
                 title={lang === 'uk' ? 'Випадковий колір вкладки (клік — новий колір)' : 'Random tab color (click to roll new)'}
-                className="w-9 h-9 shrink-0 bg-[#101014] border border-neutral-700 hover:border-white transition-all flex items-center justify-center relative group cursor-pointer"
+                className="w-9 h-9 shrink-0 bg-[#08080a] border border-neutral-700 hover:border-white transition-all flex items-center justify-center relative group cursor-pointer"
               >
                 {/* Square Color Swatch */}
                 <span
@@ -122,14 +122,14 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
                   onChange={(e) => setNewTabName(e.target.value)}
                   placeholder={t.tabsModal.inputPlaceholder}
                   maxLength={24}
-                  className="w-full bg-[#101014] border border-neutral-700 px-3 py-2 text-xs font-mono text-white placeholder:text-neutral-400 placeholder:font-normal focus:outline-none focus:border-white focus:ring-1 focus:ring-white transition-all"
+                  className="w-full bg-[#08080a] border border-neutral-700 px-3 py-2 text-xs font-mono text-white placeholder:text-neutral-500 placeholder:font-normal focus:outline-none focus:border-white transition-all"
                 />
               </div>
 
               <button
                 type="submit"
                 disabled={!newTabName.trim()}
-                className="px-4 py-2 bg-white text-black font-mono font-bold text-xs hover:bg-neutral-200 disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center gap-1.5 shrink-0"
+                className="px-4 py-2 bg-white text-black font-mono font-bold text-xs hover:bg-neutral-200 disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center gap-1.5 shrink-0 cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>{t.tabsModal.addBtn}</span>
@@ -150,7 +150,7 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
                 return (
                   <div
                     key={tab.id}
-                    className="flex items-center justify-between px-3 py-2 bg-neutral-900/80 border border-neutral-800 hover:border-neutral-700 transition-colors"
+                    className="flex items-center justify-between px-3 py-2 bg-[#08080a] border border-neutral-800/90 hover:border-neutral-700 transition-colors"
                   >
                     <div className="flex items-center gap-2.5">
                       <span
@@ -173,9 +173,9 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
                         onDeleteTab(tab.id);
                       }}
                       title={canDelete ? t.deleteTab : t.tabsModal.cantDeleteLast}
-                      className={`p-1.5 text-xs font-mono transition-colors flex items-center gap-1 ${
+                      className={`p-1.5 text-xs font-mono transition-colors flex items-center gap-1 cursor-pointer ${
                         canDelete
-                          ? 'text-neutral-500 hover:text-red-400 hover:bg-red-950/20'
+                          ? 'text-neutral-400 hover:text-red-400 hover:bg-red-950/20'
                           : 'text-neutral-700 cursor-not-allowed'
                       }`}
                     >
@@ -196,7 +196,7 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
                 sound.tick(650);
                 onSetPresetTabs(lang === 'uk' ? DEFAULT_TABS_UK : DEFAULT_TABS_EN);
               }}
-              className="flex-1 py-2 px-3 bg-neutral-900 border border-neutral-800 hover:border-neutral-600 text-left transition-colors"
+              className="flex-1 py-2 px-3 bg-[#08080a] border border-neutral-800 hover:border-neutral-600 text-left transition-colors cursor-pointer"
             >
               <div className="flex items-center gap-1.5 text-[11px] font-mono font-bold text-neutral-200">
                 <SquareCode className="w-3.5 h-3.5 text-emerald-400 fill-emerald-400/20" />
@@ -210,7 +210,7 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
                 sound.tick(650);
                 onSetPresetTabs(lang === 'uk' ? CREATIVE_TABS_UK : CREATIVE_TABS_EN);
               }}
-              className="flex-1 py-2 px-3 bg-neutral-900 border border-neutral-800 hover:border-neutral-600 text-left transition-colors"
+              className="flex-1 py-2 px-3 bg-[#08080a] border border-neutral-800 hover:border-neutral-600 text-left transition-colors cursor-pointer"
             >
               <div className="flex items-center gap-1.5 text-[11px] font-mono font-bold text-neutral-400 hover:text-neutral-200">
                 <span>{t.tabsModal.resetCreative}</span>
@@ -225,7 +225,7 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
               sound.tick(400);
               onClose();
             }}
-            className="w-full py-2 bg-white text-black font-mono font-bold text-xs tracking-wider uppercase hover:bg-neutral-200 transition-colors"
+            className="w-full py-2 bg-white text-black font-mono font-bold text-xs tracking-wider uppercase hover:bg-neutral-200 transition-colors cursor-pointer"
           >
             {t.tabsModal.close}
           </button>

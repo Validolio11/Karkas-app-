@@ -31,7 +31,7 @@ interface HistoryViewProps {
 
 type HistoryTabFilter = 'ALL' | 'COMPLETED' | 'DELETED';
 
-export const HistoryView: React.FC<HistoryViewProps> = ({
+const HistoryViewComponent: React.FC<HistoryViewProps> = ({
   tasks,
   deletedTasks,
   tabs,
@@ -513,3 +513,5 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
     </div>
   );
 };
+
+export const HistoryView = React.memo(HistoryViewComponent);

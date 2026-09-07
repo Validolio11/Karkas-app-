@@ -138,7 +138,7 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
           animate={{ height: 'auto', opacity: 1 }}
           exit={{ height: 0, opacity: 0 }}
           transition={{ duration: 0.22, ease: 'easeOut' }}
-          className="overflow-hidden bg-[#09090b] border-b border-neutral-800"
+          className="overflow-hidden bg-[#0c0c0e] border-b border-neutral-800 font-mono"
         >
           <form onSubmit={handleSubmit} className="p-4 sm:p-5 max-w-3xl mx-auto flex flex-col gap-3">
             {/* Title Input */}
@@ -150,13 +150,13 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder={t.quickAdd.titlePlaceholder}
-                className="flex-1 bg-[#101014] border border-neutral-700 text-white placeholder:text-neutral-400 placeholder:font-normal placeholder:normal-case px-3.5 py-2.5 text-sm font-medium tracking-normal focus:outline-none focus:border-white focus:ring-1 focus:ring-white transition-colors"
+                className="flex-1 bg-[#08080a] border border-neutral-700 text-white placeholder:text-neutral-500 placeholder:font-normal placeholder:normal-case px-3.5 py-2.5 text-xs font-mono tracking-normal focus:outline-none focus:border-white transition-colors"
               />
               <button
                 type="button"
                 id="quick-add-close-btn"
                 onClick={onClose}
-                className="p-2.5 border border-neutral-800 text-neutral-400 hover:text-white hover:border-neutral-600 transition-colors"
+                className="p-2.5 border border-neutral-800 text-neutral-400 hover:text-white hover:border-neutral-600 transition-colors cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -170,7 +170,7 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
                 placeholder={t.quickAdd.notePlaceholder}
-                className="w-full bg-[#101014] border border-neutral-800 text-neutral-200 placeholder:text-neutral-500 placeholder:font-normal px-3.5 py-2 text-xs font-mono focus:outline-none focus:border-neutral-400 transition-colors"
+                className="w-full bg-[#08080a] border border-neutral-800 text-neutral-200 placeholder:text-neutral-500 placeholder:font-normal px-3.5 py-2 text-xs font-mono focus:outline-none focus:border-neutral-400 transition-colors"
               />
             </div>
 
@@ -352,7 +352,7 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
                   type="button"
                   id="quick-add-ai-generate-btn"
                   onClick={handleAskAI}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-neutral-900 border border-neutral-700 text-xs font-mono text-neutral-300 hover:text-white hover:border-white transition-colors"
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-[#08080a] border border-neutral-800 text-xs font-mono text-neutral-400 hover:text-white hover:border-neutral-600 transition-colors cursor-pointer"
                 >
                   <SquareCode className="w-3.5 h-3.5 text-neutral-300" />
                   <span>{t.quickAdd.aiBreakdown}</span>

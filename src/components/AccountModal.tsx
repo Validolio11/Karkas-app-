@@ -74,9 +74,23 @@ export const AccountModal: React.FC<AccountModalProps> = ({
       let errMsg = err?.message || (lang === 'uk' ? 'Не вдалося увійти через Google. Спробуйте ще раз.' : 'Failed to sign in with Google.');
       if (err?.code === 'auth/unauthorized-domain' || err?.message?.includes('unauthorized-domain')) {
         const domain = window.location.hostname || 'localhost';
-        errMsg = lang === 'uk' 
-          ? `Помилка домену (${domain}). У Firebase Console -> Authentication -> Settings -> Authorized domains додайте домен "${domain}" та "localhost".`
-          : `Unauthorized domain (${domain}). Please add "${domain}" and "localhost" to Firebase Console -> Authentication -> Settings -> Authorized domains.`;
+        if (domain.includes('run.app')) {
+          errMsg = lang === 'uk'
+            ? `Помилка домену (${domain}). У Firebase Console -> Authentication -> Settings -> Authorized domains натисніть "Add domain" та додайте "run.app" або повний домен "${domain}".`
+            : `Unauthorized domain (${domain}). In Firebase Console -> Authentication -> Settings -> Authorized domains, click "Add domain" and add "run.app" or "${domain}".`;
+        } else {
+          errMsg = lang === 'uk' 
+            ? `Помилка домену (${domain}). У Firebase Console -> Authentication -> Settings -> Authorized domains перевірте наявність доменів "${domain}", "localhost" та "127.0.0.1".`
+            : `Unauthorized domain (${domain}). In Firebase Console -> Authentication -> Settings -> Authorized domains, verify "${domain}", "localhost", and "127.0.0.1" are added.`;
+        }
+      } else if (err?.code === 'auth/operation-not-allowed' || err?.message?.includes('operation-not-allowed')) {
+        errMsg = lang === 'uk'
+          ? `Увага! Спосіб входу через Google вимкнено. У Firebase Console -> Authentication -> Sign-in method увімкніть "Google" і збережіть.`
+          : `Google Sign-in disabled. In Firebase Console -> Authentication -> Sign-in method, enable "Google".`;
+      } else if (err?.code === 'auth/popup-blocked' || err?.message?.includes('popup-blocked')) {
+        errMsg = lang === 'uk'
+          ? `Браузер заблокував випливаюче вікно. Дозвольте вспливаючі вікна (popups) у налаштуваннях браузера або відкрийте додаток у новій вкладці.`
+          : `Popup blocked by browser. Please allow popups in your browser settings or open in a new tab.`;
       }
       setFeedbackMsg({
         type: 'error',
@@ -168,7 +182,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
         initial={{ opacity: 0, scale: 0.95, y: 10 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 10 }}
-        className="relative z-10 w-full max-w-md bg-[#09090b] border border-neutral-800 text-neutral-100 shadow-2xl overflow-hidden"
+        className="relative z-10 w-full max-w-md bg-[#0c0c0e] border border-neutral-800 text-neutral-100 shadow-2xl overflow-hidden font-mono"
       >
         {/* Top Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-neutral-800 bg-[#0c0c0e]">
@@ -228,18 +242,18 @@ export const AccountModal: React.FC<AccountModalProps> = ({
                   {user.photoURL ? (
                     <img
                       src={user.photoURL}
-                      alt={user.displayName || 'Google User'}
+                      alt={user.displayName || user.email?.split('@')[0] || 'User'}
                       className="w-10 h-10 rounded-full border border-neutral-700 object-cover"
                       referrerPolicy="no-referrer"
                     />
                   ) : (
                     <div className="w-10 h-10 rounded-full bg-neutral-800 border border-neutral-700 flex items-center justify-center text-sm font-bold font-mono text-white">
-                      {(user.displayName || user.email || 'U')[0].toUpperCase()}
+                      {(user.displayName || user.email?.split('@')[0] || 'U')[0].toUpperCase()}
                     </div>
                   )}
                   <div className="overflow-hidden">
                     <p className="text-xs font-bold text-white truncate">
-                      {user.displayName || 'Google User'}
+                      {user.displayName || (user.email ? user.email.split('@')[0] : 'User')}
                     </p>
                     <p className="text-[10px] font-mono text-neutral-400 truncate">
                       {user.email}

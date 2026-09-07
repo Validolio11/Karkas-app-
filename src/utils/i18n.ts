@@ -83,6 +83,14 @@ export const TRANSLATIONS = {
     manageTabs: 'НАЛАШТУВАТИ ВКЛАДКИ',
     tabNamePlaceholder: 'Назва вкладки...',
     deleteTab: 'Видалити вкладку',
+    tabDeleteModal: {
+      title: 'ПІДТВЕРДЖЕННЯ ВИДАЛЕННЯ ВКЛАДКИ',
+      confirmQuestion: 'Ви дійсно хочете видалити вкладку',
+      taskWarning: 'У цій вкладці є {count} завдань. При видаленні вони будуть збережені та перенесені у вкладку "{fallback}".',
+      emptyNotice: 'У цій вкладці немає завдань.',
+      cancel: 'СКАСУВАТИ',
+      confirmDelete: 'ВИДАЛИТИ ВКЛАДКУ',
+    },
     timer: {
       timeSpent: 'Витрачено часу',
       start: 'Старт',
@@ -355,6 +363,14 @@ export const TRANSLATIONS = {
     manageTabs: 'MANAGE TABS',
     tabNamePlaceholder: 'Tab name...',
     deleteTab: 'Delete tab',
+    tabDeleteModal: {
+      title: 'CONFIRM TAB DELETION',
+      confirmQuestion: 'Are you sure you want to delete tab',
+      taskWarning: 'There are {count} tasks in this tab. They will be preserved and automatically moved to "{fallback}".',
+      emptyNotice: 'There are no tasks in this tab.',
+      cancel: 'CANCEL',
+      confirmDelete: 'DELETE TAB',
+    },
     timer: {
       timeSpent: 'Time spent',
       start: 'Start',

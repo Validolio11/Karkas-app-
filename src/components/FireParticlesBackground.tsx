@@ -109,6 +109,12 @@ export const FireParticlesBackground: React.FC<FireParticlesBackgroundProps> = (
     let lastTime = performance.now();
 
     const render = (time: number) => {
+      // Skip rendering if tab is hidden in background
+      if (document.visibilityState === 'hidden') {
+        animationFrameId = requestAnimationFrame(render);
+        return;
+      }
+
       // Adapt smoothly to high refresh rate (120Hz+) screens using time delta
       const dt = Math.min((time - lastTime) / 1000 * 60, 3.0);
       lastTime = time;

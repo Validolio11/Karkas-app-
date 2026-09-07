@@ -17,6 +17,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
 }) => {
   const [checking, setChecking] = useState(false);
   const [status, setStatus] = useState<'idle' | 'upToDate' | 'found' | 'error'>('idle');
+  const [latestRelease, setLatestRelease] = useState<{ tag_name: string; html_url: string; body?: string } | null>(null);
   const [lastCheckTime, setLastCheckTime] = useState<string | null>(null);
 
   if (!isOpen) return null;
@@ -27,26 +28,45 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
     sound.tick(600);
     setChecking(true);
     setStatus('idle');
+    setLatestRelease(null);
 
-    // Simulate checking remote repository / release endpoint
-    await new Promise((resolve) => setTimeout(resolve, 1400));
-
-    sound.activate();
-    setChecking(false);
-    setStatus('upToDate');
-    const now = new Date();
-    setLastCheckTime(
-      now.toLocaleTimeString(isUk ? 'uk-UA' : 'en-US', {
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-      })
-    );
+    try {
+      const res = await fetch('https://api.github.com/repos/Validolio11/Karkas-app/releases/latest');
+      if (res.ok) {
+        const data = await res.json();
+        const latestTag = (data.tag_name || '').replace(/^v/, '');
+        setLatestRelease(data);
+        
+        if (latestTag && latestTag !== currentVersion) {
+          setStatus('found');
+        } else {
+          setStatus('upToDate');
+        }
+      } else {
+        // Fallback if no releases created on GitHub yet
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        setStatus('upToDate');
+      }
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      setStatus('upToDate');
+    } finally {
+      sound.activate();
+      setChecking(false);
+      const now = new Date();
+      setLastCheckTime(
+        now.toLocaleTimeString(isUk ? 'uk-UA' : 'en-US', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        })
+      );
+    }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fade-in">
-      <div className="relative w-full max-w-md bg-[#0b0b0e] border border-neutral-800 shadow-2xl p-5 font-mono text-neutral-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fade-in app-no-drag">
+      <div className="relative w-full max-w-md bg-[#0c0c0e] border border-neutral-800 shadow-2xl p-5 font-mono text-neutral-200">
         {/* Header */}
         <div className="flex items-center justify-between pb-3 border-b border-neutral-800 mb-4">
           <div className="flex items-center gap-2">
@@ -93,6 +113,29 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
                 <p className="text-[10px] text-neutral-500 mt-0.5">
                   {isUk ? 'Зʼєднання з сервером релізів KARKAS' : 'Connecting to KARKAS release channel'}
                 </p>
+              </div>
+            </div>
+          ) : status === 'found' && latestRelease ? (
+            <div className="flex items-start gap-3">
+              <Download className="w-5 h-5 text-amber-400 shrink-0 mt-0.5 animate-bounce" />
+              <div>
+                <p className="font-bold text-amber-300">
+                  {isUk ? `Доступне оновлення ${latestRelease.tag_name}!` : `New update available: ${latestRelease.tag_name}!`}
+                </p>
+                <p className="text-[10px] text-neutral-400 mt-1 leading-relaxed">
+                  {isUk
+                    ? 'Знайдено нову версію системи на GitHub. Натисніть кнопку завантаження нижче.'
+                    : 'Found a new version on GitHub. Click the download button below.'}
+                </p>
+                <a
+                  href={latestRelease.html_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 mt-2 px-2.5 py-1 bg-amber-500 hover:bg-amber-400 text-black font-extrabold text-[10px] uppercase transition-colors"
+                >
+                  <Download className="w-3 h-3" />
+                  <span>{isUk ? 'Завантажити з GitHub' : 'Download from GitHub'}</span>
+                </a>
               </div>
             </div>
           ) : status === 'upToDate' ? (

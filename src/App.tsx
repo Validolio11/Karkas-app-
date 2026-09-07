@@ -1756,7 +1756,7 @@ export default function App() {
         isOpen={isUpdateOpen}
         onClose={() => setIsUpdateOpen(false)}
         lang={lang}
-        currentVersion="1.1.5"
+        currentVersion="1.1.6"
       />
 
       {/* Tab Deletion Confirmation Safeguard Modal */}

@@ -106,6 +106,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
 
         const domainsToRecommend = Array.from(new Set([
           'localhost',
+          'localhost:14141',
           '127.0.0.1',
           'run.app',
           'europe-west2.run.app',

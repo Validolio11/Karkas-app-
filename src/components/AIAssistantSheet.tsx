@@ -56,6 +56,73 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   const [response, setResponse] = useState<AIResponse | null>(null);
   const [injectedIds, setInjectedIds] = useState<number[]>([]);
 
+  // Custom API Key & Model States
+  const [showApiSettings, setShowApiSettings] = useState(false);
+  const [customKey, setCustomKey] = useState(() => localStorage.getItem('karkas_custom_api_key') || '');
+  const [customModel, setCustomModel] = useState(() => localStorage.getItem('karkas_custom_model') || 'gemini-3.8-flash');
+  const [customEnabled, setCustomEnabled] = useState(() => localStorage.getItem('karkas_custom_ai_enabled') === 'true');
+  const [availableModels, setAvailableModels] = useState<string[]>(() => {
+    try {
+      const stored = localStorage.getItem('karkas_available_models');
+      return stored ? JSON.parse(stored) : ['gemini-3.8-flash', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite'];
+    } catch {
+      return ['gemini-3.8-flash', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite'];
+    }
+  });
+  const [testingKey, setTestingKey] = useState(false);
+  const [testError, setTestError] = useState<string | null>(null);
+  const [testSuccess, setTestSuccess] = useState(false);
+
+  const saveApiSettings = (key: string, model: string, enabled: boolean, modelsList: string[]) => {
+    localStorage.setItem('karkas_custom_api_key', key);
+    localStorage.setItem('karkas_custom_model', model);
+    localStorage.setItem('karkas_custom_ai_enabled', enabled ? 'true' : 'false');
+    localStorage.setItem('karkas_available_models', JSON.stringify(modelsList));
+  };
+
+  const handleTestKey = async () => {
+    if (!customKey.trim()) {
+      setTestError(lang === 'uk' ? 'Введіть API ключ' : 'Please enter an API key');
+      return;
+    }
+    setTestingKey(true);
+    setTestError(null);
+    setTestSuccess(false);
+    sound.tick(500);
+
+    try {
+      const res = await fetch('/api/ai/verify-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: customKey.trim() }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || 'Invalid API Key');
+      }
+
+      const data = await res.json();
+      if (data.success && Array.isArray(data.models)) {
+        setAvailableModels(data.models);
+        const modelToSet = data.models.includes(customModel) ? customModel : data.models[0] || 'gemini-3.8-flash';
+        setCustomModel(modelToSet);
+        setTestSuccess(true);
+        setCustomEnabled(true);
+        saveApiSettings(customKey.trim(), modelToSet, true, data.models);
+        sound.activate();
+      } else {
+        throw new Error('Could not parse models list');
+      }
+    } catch (err: any) {
+      console.error('API key test error:', err);
+      setTestError(err.message || (lang === 'uk' ? 'Помилка перевірки ключа' : 'Failed to verify API Key'));
+      sound.tick(250);
+    } finally {
+      setTestingKey(false);
+    }
+  };
+
   const activeCount = currentTasks.filter((t) => !t.done).length;
   const completedCount = currentTasks.filter((t) => t.done).length;
   const deletedCount = deletedTasks.length;
@@ -84,6 +151,10 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     const doneList = currentTasks.filter((t) => t.done);
 
     try {
+      const customKey = localStorage.getItem('karkas_custom_api_key') || '';
+      const customModel = localStorage.getItem('karkas_custom_model') || '';
+      const customEnabled = localStorage.getItem('karkas_custom_ai_enabled') === 'true';
+
       const res = await fetch('/api/ai/assist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -93,6 +164,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
           lang,
           tabs: tabs.map((tb) => tb.id),
           currentTasks,
+          customApiKey: customEnabled ? customKey : undefined,
+          selectedModel: customEnabled ? customModel : undefined,
           fullAppContext: {
             activeTasks: activeList.map((t) => ({
               title: t.title,
@@ -357,6 +430,115 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
 
             {/* Content Container (Scrollable) */}
             <div className="flex-1 overflow-y-auto p-4 sm:p-5 flex flex-col gap-4">
+              
+              {/* Dynamic Custom API Settings Panel */}
+              <div className="border border-neutral-800 bg-[#0c0c0e]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    sound.tick(400);
+                    setShowApiSettings(!showApiSettings);
+                  }}
+                  className="w-full flex items-center justify-between px-3.5 py-2.5 text-[11px] font-mono font-bold uppercase tracking-wider text-neutral-400 hover:text-white transition-colors cursor-pointer"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className={`w-1.5 h-1.5 rounded-full ${customEnabled && customKey ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-neutral-600'}`} />
+                    <span>{lang === 'uk' ? '🔌 Налаштування власного API' : '🔌 Custom API Setup'}</span>
+                  </div>
+                  <span className="text-[10px] text-neutral-500">
+                    {showApiSettings ? '▲' : '▼'}
+                  </span>
+                </button>
+                
+                {showApiSettings && (
+                  <div className="px-3.5 pb-4 pt-1 border-t border-neutral-900/60 flex flex-col gap-3">
+                    <div className="space-y-1">
+                      <label className="block text-[9px] font-mono text-neutral-500 uppercase tracking-widest">
+                        {lang === 'uk' ? 'Ключ Gemini API' : 'Gemini API Key'}
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="password"
+                          value={customKey}
+                          onChange={(e) => {
+                            setCustomKey(e.target.value);
+                            setTestSuccess(false);
+                          }}
+                          placeholder="AIzaSy..."
+                          className="flex-1 bg-[#050507] border border-neutral-800 text-white placeholder:text-neutral-700 text-xs font-mono px-3 py-2 focus:outline-none focus:border-white transition-colors"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleTestKey}
+                          disabled={testingKey || !customKey.trim()}
+                          className="px-3 py-2 bg-neutral-900 border border-neutral-800 hover:border-neutral-600 text-neutral-300 text-[10px] font-mono font-bold uppercase hover:text-white transition-all cursor-pointer disabled:opacity-40"
+                        >
+                          {testingKey ? '...' : (lang === 'uk' ? 'Визначити моделі' : 'Detect Models')}
+                        </button>
+                      </div>
+                    </div>
+
+                    {testError && (
+                      <div className="text-[10px] font-mono text-red-400 bg-red-950/20 border border-red-900/50 p-2">
+                        ⚠️ {testError}
+                      </div>
+                    )}
+
+                    {testSuccess && (
+                      <div className="text-[10px] font-mono text-emerald-400 bg-emerald-950/10 border border-emerald-900/30 p-2">
+                        ✓ {lang === 'uk' ? 'Ключ перевірено! Знайдено моделей: ' : 'Key verified! Found models: '}{availableModels.length}
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <label className="block text-[9px] font-mono text-neutral-500 uppercase tracking-widest">
+                          {lang === 'uk' ? 'Вибір Моделі' : 'Select Model'}
+                        </label>
+                        <select
+                          value={customModel}
+                          onChange={(e) => {
+                            const model = e.target.value;
+                            setCustomModel(model);
+                            saveApiSettings(customKey, model, customEnabled, availableModels);
+                            sound.tick(400);
+                          }}
+                          className="w-full bg-[#050507] border border-neutral-800 text-white text-xs font-mono px-2 py-2 focus:outline-none focus:border-white cursor-pointer"
+                        >
+                          {availableModels.map((m) => (
+                            <option key={m} value={m}>{m}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="block text-[9px] font-mono text-neutral-500 uppercase tracking-widest">
+                          {lang === 'uk' ? 'Статус ключа' : 'Status Mode'}
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nextEnabled = !customEnabled;
+                            setCustomEnabled(nextEnabled);
+                            saveApiSettings(customKey, customModel, nextEnabled, availableModels);
+                            sound.activate();
+                          }}
+                          className={`w-full py-2 text-xs font-mono font-bold uppercase tracking-wider text-center border transition-all cursor-pointer ${
+                            customEnabled && customKey
+                              ? 'bg-emerald-950/20 text-emerald-400 border-emerald-800 hover:border-emerald-600'
+                              : 'bg-neutral-900/40 text-neutral-500 border-neutral-800 hover:border-neutral-700'
+                          }`}
+                        >
+                          {customEnabled && customKey 
+                            ? (lang === 'uk' ? 'Активний' : 'Active') 
+                            : (lang === 'uk' ? 'Вимкнено' : 'Inactive')}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Presets Chips */}
               <div>
                 <div className="text-[10px] font-mono uppercase tracking-widest text-neutral-400 mb-2">

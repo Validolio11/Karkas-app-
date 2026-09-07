@@ -3,6 +3,7 @@ import { User } from 'firebase/auth';
 import { Language, TRANSLATIONS } from '../utils/i18n';
 import { sound } from '../utils/audio';
 import { UserCloudState } from '../services/firebase';
+import firebaseConfig from '../../firebase-applet-config.json';
 import { 
   X, 
   Cloud, 
@@ -17,6 +18,32 @@ import {
   History
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+
+const CopyableDomain: React.FC<{ domain: string; lang: string }> = ({ domain, lang }) => {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(domain);
+      setCopied(true);
+      sound.activate();
+      setTimeout(() => setCopied(false), 2000);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+  return (
+    <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 bg-black border border-neutral-800 text-[11px] font-mono hover:border-neutral-700 transition-colors">
+      <span className="text-neutral-300 truncate select-all">{domain}</span>
+      <button
+        type="button"
+        onClick={handleCopy}
+        className="text-[9px] uppercase font-bold tracking-wider px-2 py-0.5 border border-neutral-800 bg-neutral-900 text-neutral-400 hover:text-white transition-all hover:bg-neutral-800 cursor-pointer whitespace-nowrap"
+      >
+        {copied ? (lang === 'uk' ? 'Скопійовано' : 'Copied') : (lang === 'uk' ? 'Копіювати' : 'Copy')}
+      </button>
+    </div>
+  );
+};
 
 interface AccountModalProps {
   isOpen: boolean;
@@ -53,7 +80,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
   const acc = t.account;
 
   const [authLoading, setAuthLoading] = useState(false);
-  const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; text: React.ReactNode } | null>(null);
 
   if (!isOpen) return null;
 
@@ -71,19 +98,75 @@ export const AccountModal: React.FC<AccountModalProps> = ({
     } catch (err: any) {
       console.error('Login error:', err);
       sound.tick(250);
-      let errMsg = err?.message || (lang === 'uk' ? 'Не вдалося увійти через Google. Спробуйте ще раз.' : 'Failed to sign in with Google.');
+      
       if (err?.code === 'auth/unauthorized-domain' || err?.message?.includes('unauthorized-domain')) {
         const domain = window.location.hostname || 'localhost';
-        if (domain.includes('run.app')) {
-          errMsg = lang === 'uk'
-            ? `Помилка домену (${domain}). У Firebase Console -> Authentication -> Settings -> Authorized domains натисніть "Add domain" та додайте "run.app" або повний домен "${domain}".`
-            : `Unauthorized domain (${domain}). In Firebase Console -> Authentication -> Settings -> Authorized domains, click "Add domain" and add "run.app" or "${domain}".`;
-        } else {
-          errMsg = lang === 'uk' 
-            ? `Помилка домену (${domain}). У Firebase Console -> Authentication -> Settings -> Authorized domains перевірте наявність доменів "${domain}", "localhost" та "127.0.0.1".`
-            : `Unauthorized domain (${domain}). In Firebase Console -> Authentication -> Settings -> Authorized domains, verify "${domain}", "localhost", and "127.0.0.1" are added.`;
-        }
-      } else if (err?.code === 'auth/operation-not-allowed' || err?.message?.includes('operation-not-allowed')) {
+        const projectId = firebaseConfig.projectId || 'bezier3-4f548';
+        const consoleUrl = `https://console.firebase.google.com/project/${projectId}/authentication/settings`;
+
+        const domainsToRecommend = Array.from(new Set([
+          'localhost',
+          '127.0.0.1',
+          'run.app',
+          'europe-west2.run.app',
+          domain
+        ])).filter(Boolean);
+
+        setFeedbackMsg({
+          type: 'error',
+          text: (
+            <div className="space-y-3 w-full text-left">
+              <div>
+                <p className="font-bold text-rose-400 uppercase tracking-wide text-[11px]">
+                  {lang === 'uk' ? 'Помилка авторизації домену' : 'Unauthorized Domain Error'}
+                </p>
+                <p className="text-[10px] text-neutral-400 mt-1 leading-relaxed">
+                  {lang === 'uk'
+                    ? `Firebase блокує вхід, оскільки цей веб-домен не додано до дозволених у вашому проекті.`
+                    : `Firebase blocks Google login because this web domain is not added to the authorized domains list in your Firebase project.`}
+                </p>
+              </div>
+
+              {/* Step 1 */}
+              <div className="p-2.5 bg-rose-950/10 border border-rose-900/30 space-y-2">
+                <p className="text-[10px] font-bold text-rose-300 uppercase tracking-wider">
+                  {lang === 'uk' ? 'Крок 1. Відкрийте налаштування Firebase' : 'Step 1. Open Firebase Settings'}
+                </p>
+                <a
+                  href={consoleUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-950/80 border border-rose-800 hover:border-white text-white font-bold text-[10px] font-mono uppercase transition-all tracking-wider cursor-pointer"
+                  onClick={() => sound.activate()}
+                >
+                  <span>{lang === 'uk' ? 'Налаштування Firebase Console ↗' : 'Firebase Console Settings ↗'}</span>
+                </a>
+              </div>
+
+              {/* Step 2 */}
+              <div className="space-y-2">
+                <p className="text-[10px] font-bold text-neutral-300 uppercase tracking-wider">
+                  {lang === 'uk' ? 'Крок 2. Додайте ці домени у список:' : 'Step 2. Add these domains to the list:'}
+                </p>
+                <p className="text-[9px] text-neutral-500 leading-normal">
+                  {lang === 'uk'
+                    ? 'У розділі "Authorized domains" натисніть "Add domain" та додайте кожен із наведених нижче доменів:'
+                    : 'In the "Authorized domains" section, click "Add domain" and add each of these domains:'}
+                </p>
+                <div className="space-y-1 max-h-40 overflow-y-auto pr-1">
+                  {domainsToRecommend.map((d) => (
+                    <CopyableDomain key={d} domain={d} lang={lang} />
+                  ))}
+                </div>
+              </div>
+            </div>
+          )
+        });
+        return;
+      }
+
+      let errMsg = err?.message || (lang === 'uk' ? 'Не вдалося увійти через Google. Спробуйте ще раз.' : 'Failed to sign in with Google.');
+      if (err?.code === 'auth/operation-not-allowed' || err?.message?.includes('operation-not-allowed')) {
         errMsg = lang === 'uk'
           ? `Увага! Спосіб входу через Google вимкнено. У Firebase Console -> Authentication -> Sign-in method увімкніть "Google" і збережіть.`
           : `Google Sign-in disabled. In Firebase Console -> Authentication -> Sign-in method, enable "Google".`;

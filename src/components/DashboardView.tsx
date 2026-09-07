@@ -474,6 +474,10 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
       const currentTabs = tabsRef.current;
 
       try {
+        const customKey = localStorage.getItem('karkas_custom_api_key') || '';
+        const customModel = localStorage.getItem('karkas_custom_model') || '';
+        const customEnabled = localStorage.getItem('karkas_custom_ai_enabled') === 'true';
+
         const res = await fetch('/api/ai/recommendations', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -483,6 +487,8 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
             tabs: currentTabs,
             lang,
             period: periodToUse,
+            customApiKey: customEnabled ? customKey : undefined,
+            selectedModel: customEnabled ? customModel : undefined,
             periodMetrics: {
               totalCreated: analyticsData.totalTracked,
               totalCompleted: analyticsData.totalDelivered,

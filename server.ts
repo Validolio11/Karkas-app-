@@ -31,12 +31,16 @@ function getGeminiClient(): GoogleGenAI | null {
 async function generateGeminiContentWithFallback(params: {
   contents: string;
   config: any;
+  customAi?: GoogleGenAI | null;
+  selectedModel?: string;
 }): Promise<any> {
-  const ai = getGeminiClient();
+  const ai = params.customAi || getGeminiClient();
   if (!ai) return null;
 
   // Models to attempt: primary and fallback
-  const modelsToTry = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-flash-latest"];
+  const modelsToTry = params.selectedModel
+    ? [params.selectedModel, "gemini-3.8-flash", "gemini-flash-latest"]
+    : ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-flash-latest"];
 
   for (const model of modelsToTry) {
     try {
@@ -69,6 +73,40 @@ async function generateGeminiContentWithFallback(params: {
   return null;
 }
 
+// Endpoint to validate custom Gemini API key and automatically fetch available models
+app.post("/api/ai/verify-key", async (req, res) => {
+  const { apiKey } = req.body;
+  if (!apiKey || typeof apiKey !== "string") {
+    return res.status(400).json({ error: "API key is required" });
+  }
+
+  try {
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          "User-Agent": "aistudio-build",
+        },
+      },
+    });
+
+    const response = (await ai.models.list()) as any;
+    const models = (response.models || [])
+      .map((m: any) => m.name.replace("models/", ""))
+      .filter((name: string) => name.includes("gemini") && !name.includes("embedding"));
+
+    // Provide default fallback models in case of strict filters
+    if (models.length === 0) {
+      models.push("gemini-3.8-flash", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite");
+    }
+
+    res.json({ success: true, models });
+  } catch (err: any) {
+    console.error("Verify custom API key error:", err);
+    res.status(400).json({ error: err.message || "Invalid API key or network error" });
+  }
+});
+
 // Smart AI Assistant & Full App Context Analyzer Endpoint
 app.post("/api/ai/assist", async (req, res) => {
   try {
@@ -82,6 +120,8 @@ app.post("/api/ai/assist", async (req, res) => {
       stats = {},
       action = "generate",
       lang = "uk",
+      customApiKey,
+      selectedModel,
     } = req.body;
 
     if (!prompt || typeof prompt !== "string") {
@@ -89,7 +129,19 @@ app.post("/api/ai/assist", async (req, res) => {
     }
 
     const isUk = lang === "uk" || /[а-яіїєґ]/i.test(prompt);
-    const ai = getGeminiClient();
+    
+    // Dynamic AI Client setup
+    let ai = getGeminiClient();
+    if (customApiKey && typeof customApiKey === "string") {
+      ai = new GoogleGenAI({
+        apiKey: customApiKey,
+        httpOptions: {
+          headers: {
+            "User-Agent": "aistudio-build",
+          },
+        },
+      });
+    }
 
     // Consolidate active tasks list
     const effectiveActiveTasks = activeTasks.length > 0 ? activeTasks : currentTasks.filter((t: any) => !t.done);
@@ -215,6 +267,8 @@ ${JSON.stringify(fullAppContext, null, 2)}`,
               required: ["summary", "tasks"],
             },
           },
+          customAi: ai,
+          selectedModel: selectedModel,
         });
 
         if (response && response.text) {
@@ -486,7 +540,7 @@ app.post("/api/ai/breakdown-task", async (req, res) => {
       phase: req.body.phase,
     } : null);
 
-    const { allTasks = [], tabs = [], lang = "uk", fullAppContext } = req.body;
+    const { allTasks = [], tabs = [], lang = "uk", fullAppContext, customApiKey, selectedModel } = req.body;
     const task = rawTask;
 
     if (!task || !task.title) {
@@ -494,7 +548,19 @@ app.post("/api/ai/breakdown-task", async (req, res) => {
     }
 
     const isUk = lang === "uk" || /[а-яіїєґ]/i.test(task.title);
-    const ai = getGeminiClient();
+    
+    // Dynamic AI Client setup
+    let ai = getGeminiClient();
+    if (customApiKey && typeof customApiKey === "string") {
+      ai = new GoogleGenAI({
+        apiKey: customApiKey,
+        httpOptions: {
+          headers: {
+            "User-Agent": "aistudio-build",
+          },
+        },
+      });
+    }
 
     const effectiveAllTasks = fullAppContext?.activeTasks || allTasks || [];
     const effectiveTabs = fullAppContext?.tabs || tabs || [];
@@ -554,6 +620,8 @@ APP CONTEXT:
               required: ["steps", "stepList", "note"],
             },
           },
+          customAi: ai,
+          selectedModel: selectedModel,
         });
 
         if (response && response.text) {
@@ -621,9 +689,23 @@ app.post("/api/ai/recommendations", async (req, res) => {
       lang = "uk",
       period = "ALL_TIME",
       periodMetrics,
+      customApiKey,
+      selectedModel,
     } = req.body;
     const isUk = lang === "uk";
-    const ai = getGeminiClient();
+    
+    // Dynamic AI Client setup
+    let ai = getGeminiClient();
+    if (customApiKey && typeof customApiKey === "string") {
+      ai = new GoogleGenAI({
+        apiKey: customApiKey,
+        httpOptions: {
+          headers: {
+            "User-Agent": "aistudio-build",
+          },
+        },
+      });
+    }
 
     const activeTabIds: string[] = Array.isArray(tabs) && tabs.length > 0
       ? tabs.map((t: any) => (typeof t === "string" ? t : t.id))
@@ -753,6 +835,8 @@ Language: ${isUk ? "Ukrainian" : "English"}.`,
               ],
             },
           },
+          customAi: ai,
+          selectedModel: selectedModel,
         });
 
         if (response && response.text) {

@@ -304,6 +304,10 @@ export default function App() {
       const activeTasks = tasks.filter((t) => !t.done);
       const completedTasks = tasks.filter((t) => t.done);
 
+      const customKey = localStorage.getItem('karkas_custom_api_key') || '';
+      const customModel = localStorage.getItem('karkas_custom_model') || '';
+      const customEnabled = localStorage.getItem('karkas_custom_ai_enabled') === 'true';
+
       const res = await fetch('/api/ai/breakdown-task', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -313,6 +317,8 @@ export default function App() {
           note: targetTask.note,
           currentSteps: targetTask.stepList?.map((s) => s.title) || [],
           lang,
+          customApiKey: customEnabled ? customKey : undefined,
+          selectedModel: customEnabled ? customModel : undefined,
           fullAppContext: {
             activeTasks: activeTasks.map((t) => ({ title: t.title, phase: t.phase, priority: t.priority })),
             completedTasks: completedTasks.map((t) => ({ title: t.title, phase: t.phase })),
@@ -1750,7 +1756,7 @@ export default function App() {
         isOpen={isUpdateOpen}
         onClose={() => setIsUpdateOpen(false)}
         lang={lang}
-        currentVersion="1.1.4"
+        currentVersion="1.1.5"
       />
 
       {/* Tab Deletion Confirmation Safeguard Modal */}

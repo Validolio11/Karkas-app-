@@ -436,6 +436,22 @@ export default function App() {
     return [];
   });
 
+  // Track state values inside refs to avoid re-subscribing Firestore listener unnecessarily
+  const currentTasksRef = React.useRef(tasks);
+  currentTasksRef.current = tasks;
+  const currentTabsRef = React.useRef(tabs);
+  currentTabsRef.current = tabs;
+  const currentDeletedTasksRef = React.useRef(deletedTasks);
+  currentDeletedTasksRef.current = deletedTasks;
+  const currentSoundEnabledRef = React.useRef(soundEnabled);
+  currentSoundEnabledRef.current = soundEnabled;
+  const currentFireEnabledRef = React.useRef(fireEnabled);
+  currentFireEnabledRef.current = fireEnabled;
+  const currentLangRef = React.useRef(lang);
+  currentLangRef.current = lang;
+  const currentAiIconVariantRef = React.useRef(aiIconVariant);
+  currentAiIconVariantRef.current = aiIconVariant;
+
   // Sync tasks with localStorage (debounced for maximum performance)
   useEffect(() => {
     const handler = setTimeout(() => {
@@ -509,6 +525,12 @@ export default function App() {
           const data = await fetchUserCloudData(user.uid);
           if (data) {
             setCloudData(data);
+            
+            // Synchronize our local save timestamp reference with initial cloud data
+            if (data.updatedAt) {
+              lastLocalSaveTimeRef.current = data.updatedAt;
+            }
+
             // If local tasks are empty or default templates, auto-restore from cloud
             const isLocalDefault =
               tasks.length <= 6 &&
@@ -541,6 +563,8 @@ export default function App() {
             }
           } else {
             // First time login on this Google account: save local state to cloud immediately
+            const now = Date.now();
+            lastLocalSaveTimeRef.current = now;
             await saveUserCloudData(user.uid, {
               tasks,
               tabs,
@@ -552,7 +576,6 @@ export default function App() {
                 aiIconVariant,
               },
             });
-            const now = Date.now();
             setLastSyncTime(now);
             localStorage.setItem(LAST_SYNC_KEY, String(now));
           }
@@ -582,26 +605,34 @@ export default function App() {
         const isRemoteNewer = remoteUpdatedAt > (lastLocalSaveTimeRef.current + 1000);
 
         if (isRemoteNewer) {
-          if (remoteData.tasks) setTasks(remoteData.tasks);
-          if (remoteData.tabs) setTabs(remoteData.tabs);
-          if (remoteData.deletedTasks) setDeletedTasks(remoteData.deletedTasks);
+          // Perform deep comparison with current tracked ref values before calling state setters to prevent redundant renders and auto-saves
+          if (remoteData.tasks && JSON.stringify(remoteData.tasks) !== JSON.stringify(currentTasksRef.current)) {
+            setTasks(remoteData.tasks);
+          }
+          if (remoteData.tabs && JSON.stringify(remoteData.tabs) !== JSON.stringify(currentTabsRef.current)) {
+            setTabs(remoteData.tabs);
+          }
+          if (remoteData.deletedTasks && JSON.stringify(remoteData.deletedTasks) !== JSON.stringify(currentDeletedTasksRef.current)) {
+            setDeletedTasks(remoteData.deletedTasks);
+          }
           if (remoteData.settings) {
-            if (typeof remoteData.settings.soundEnabled === 'boolean') {
+            if (typeof remoteData.settings.soundEnabled === 'boolean' && remoteData.settings.soundEnabled !== currentSoundEnabledRef.current) {
               setSoundEnabled(remoteData.settings.soundEnabled);
               sound.enabled = remoteData.settings.soundEnabled;
             }
-            if (typeof remoteData.settings.fireEnabled === 'boolean') {
+            if (typeof remoteData.settings.fireEnabled === 'boolean' && remoteData.settings.fireEnabled !== currentFireEnabledRef.current) {
               setFireEnabled(remoteData.settings.fireEnabled);
             }
-            if (remoteData.settings.lang === 'uk' || remoteData.settings.lang === 'en') {
+            if ((remoteData.settings.lang === 'uk' || remoteData.settings.lang === 'en') && remoteData.settings.lang !== currentLangRef.current) {
               setLang(remoteData.settings.lang as Language);
             }
-            if (remoteData.settings.aiIconVariant) {
+            if (remoteData.settings.aiIconVariant && remoteData.settings.aiIconVariant !== currentAiIconVariantRef.current) {
               setAiIconVariant(remoteData.settings.aiIconVariant as AIIconId);
             }
           }
           if (remoteUpdatedAt) {
             setLastSyncTime(remoteUpdatedAt);
+            lastLocalSaveTimeRef.current = remoteUpdatedAt; // Update local save reference to prevent loops
             localStorage.setItem(LAST_SYNC_KEY, String(remoteUpdatedAt));
           }
         }
@@ -620,11 +651,29 @@ export default function App() {
 
   const performAutoSave = React.useCallback(async () => {
     if (!currentUser || !autoSyncEnabled) return;
+    
+    // Check if local data is actually different from the last known cloudData
+    if (cloudData) {
+      const isIdentical =
+        JSON.stringify(cloudData.tasks || []) === JSON.stringify(tasks) &&
+        JSON.stringify(cloudData.tabs || []) === JSON.stringify(tabs) &&
+        JSON.stringify(cloudData.deletedTasks || []) === JSON.stringify(deletedTasks) &&
+        Boolean(cloudData.settings?.soundEnabled) === Boolean(soundEnabled) &&
+        Boolean(cloudData.settings?.fireEnabled) === Boolean(fireEnabled) &&
+        cloudData.settings?.lang === lang &&
+        cloudData.settings?.aiIconVariant === aiIconVariant;
+      
+      if (isIdentical) {
+        return;
+      }
+    }
+
     try {
       setIsSyncing(true);
       const now = Date.now();
       lastLocalSaveTimeRef.current = now;
-      await saveUserCloudData(currentUser.uid, {
+      
+      const payload = {
         tasks,
         tabs,
         deletedTasks,
@@ -634,7 +683,17 @@ export default function App() {
           lang,
           aiIconVariant,
         },
+      };
+
+      await saveUserCloudData(currentUser.uid, payload);
+      
+      // Update cloudData cache locally to prevent triggering another save cycle on snapshot reflection
+      setCloudData({
+        ...payload,
+        userId: currentUser.uid,
+        updatedAt: now
       });
+      
       setLastSyncTime(now);
       localStorage.setItem(LAST_SYNC_KEY, String(now));
     } catch (err) {
@@ -642,7 +701,7 @@ export default function App() {
     } finally {
       setIsSyncing(false);
     }
-  }, [currentUser, autoSyncEnabled, tasks, tabs, deletedTasks, soundEnabled, fireEnabled, lang, aiIconVariant]);
+  }, [currentUser, autoSyncEnabled, tasks, tabs, deletedTasks, soundEnabled, fireEnabled, lang, aiIconVariant, cloudData]);
 
   useEffect(() => {
     if (isInitialMountRef.current) {

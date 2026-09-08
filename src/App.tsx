@@ -538,8 +538,19 @@ export default function App() {
                 JSON.stringify(tasks) === JSON.stringify(INITIAL_LIFE_TASKS_EN));
 
             if (isLocalDefault && data.tasks && data.tasks.length > 0) {
-              setTasks(data.tasks);
-              if (data.tabs && data.tabs.length > 0) setTabs(data.tabs);
+              const activeTabs = currentTabsRef.current.length > 0
+                ? currentTabsRef.current
+                : (lang === 'uk' ? DEFAULT_TABS_UK : DEFAULT_TABS_EN);
+              const validTabIds = new Set(activeTabs.map((t) => t.id));
+              const fallbackPhase = activeTabs[0]?.id || 'focus';
+
+              // Map tasks without introducing new tabs
+              const sanitizedTasks = data.tasks.map((task: PSTask) => ({
+                ...task,
+                phase: validTabIds.has(task.phase) ? task.phase : fallbackPhase,
+              }));
+              setTasks(sanitizedTasks);
+              // Do NOT add new tabs from cloud; keep current tabs intact
               if (data.deletedTasks) setDeletedTasks(data.deletedTasks);
               if (data.settings) {
                 if (typeof data.settings.soundEnabled === 'boolean') {
@@ -562,12 +573,23 @@ export default function App() {
               localStorage.setItem(LAST_SYNC_KEY, String(data.updatedAt));
             }
           } else {
-            // First time login on this Google account: save local state to cloud immediately
+            // First time login on this Google account: ensure standard default tabs without extra tabs
+            const defaultTabs = lang === 'uk' ? DEFAULT_TABS_UK : DEFAULT_TABS_EN;
+            const validTabIds = new Set(defaultTabs.map((t) => t.id));
+            const fallbackPhase = defaultTabs[0]?.id || 'focus';
+            const baseTasks = tasks.length > 0 ? tasks : (lang === 'uk' ? INITIAL_LIFE_TASKS_UK : INITIAL_LIFE_TASKS_EN);
+            const sanitizedTasks = baseTasks.map((task: PSTask) => ({
+              ...task,
+              phase: validTabIds.has(task.phase) ? task.phase : fallbackPhase,
+            }));
+
+            setTabs(defaultTabs);
+            setTasks(sanitizedTasks);
             const now = Date.now();
             lastLocalSaveTimeRef.current = now;
             await saveUserCloudData(user.uid, {
-              tasks,
-              tabs,
+              tasks: sanitizedTasks,
+              tabs: defaultTabs,
               deletedTasks,
               settings: {
                 soundEnabled,
@@ -607,11 +629,19 @@ export default function App() {
         if (isRemoteNewer) {
           // Perform deep comparison with current tracked ref values before calling state setters to prevent redundant renders and auto-saves
           if (remoteData.tasks && JSON.stringify(remoteData.tasks) !== JSON.stringify(currentTasksRef.current)) {
-            setTasks(remoteData.tasks);
+            const activeTabs = currentTabsRef.current.length > 0
+              ? currentTabsRef.current
+              : (lang === 'uk' ? DEFAULT_TABS_UK : DEFAULT_TABS_EN);
+            const validTabIds = new Set(activeTabs.map((t) => t.id));
+            const fallbackPhase = activeTabs[0]?.id || 'focus';
+
+            const sanitizedTasks = remoteData.tasks.map((task: PSTask) => ({
+              ...task,
+              phase: validTabIds.has(task.phase) ? task.phase : fallbackPhase,
+            }));
+            setTasks(sanitizedTasks);
           }
-          if (remoteData.tabs && JSON.stringify(remoteData.tabs) !== JSON.stringify(currentTabsRef.current)) {
-            setTabs(remoteData.tabs);
-          }
+          // Preserve current tab layout; do not inject new or foreign tabs from cloud
           if (remoteData.deletedTasks && JSON.stringify(remoteData.deletedTasks) !== JSON.stringify(currentDeletedTasksRef.current)) {
             setDeletedTasks(remoteData.deletedTasks);
           }
@@ -760,8 +790,18 @@ export default function App() {
     if (data) {
       setCloudData(data);
       if (data.tasks && data.tasks.length > 0) {
-        setTasks(data.tasks);
-        if (data.tabs && data.tabs.length > 0) setTabs(data.tabs);
+        const activeTabs = currentTabsRef.current.length > 0
+          ? currentTabsRef.current
+          : (lang === 'uk' ? DEFAULT_TABS_UK : DEFAULT_TABS_EN);
+        const validTabIds = new Set(activeTabs.map((t) => t.id));
+        const fallbackPhase = activeTabs[0]?.id || 'focus';
+
+        const sanitizedTasks = data.tasks.map((task: PSTask) => ({
+          ...task,
+          phase: validTabIds.has(task.phase) ? task.phase : fallbackPhase,
+        }));
+        setTasks(sanitizedTasks);
+        // Do NOT add new tabs from cloud account; preserve user tab structure
         if (data.deletedTasks) setDeletedTasks(data.deletedTasks);
         if (data.settings) {
           if (typeof data.settings.soundEnabled === 'boolean') {
@@ -784,10 +824,23 @@ export default function App() {
         localStorage.setItem(LAST_SYNC_KEY, String(data.updatedAt));
       }
     } else {
-      // First backup
+      // First backup for newly connected account: standard default tabs, no extra tabs
+      const defaultTabs = lang === 'uk' ? DEFAULT_TABS_UK : DEFAULT_TABS_EN;
+      const validTabIds = new Set(defaultTabs.map((t) => t.id));
+      const fallbackPhase = defaultTabs[0]?.id || 'focus';
+      const baseTasks = tasks.length > 0 ? tasks : (lang === 'uk' ? INITIAL_LIFE_TASKS_UK : INITIAL_LIFE_TASKS_EN);
+      const sanitizedTasks = baseTasks.map((task: PSTask) => ({
+        ...task,
+        phase: validTabIds.has(task.phase) ? task.phase : fallbackPhase,
+      }));
+
+      setTabs(defaultTabs);
+      setTasks(sanitizedTasks);
+      const now = Date.now();
+      lastLocalSaveTimeRef.current = now;
       await saveUserCloudData(user.uid, {
-        tasks,
-        tabs,
+        tasks: sanitizedTasks,
+        tabs: defaultTabs,
         deletedTasks,
         settings: {
           soundEnabled,
@@ -796,7 +849,6 @@ export default function App() {
           aiIconVariant,
         },
       });
-      const now = Date.now();
       setLastSyncTime(now);
       localStorage.setItem(LAST_SYNC_KEY, String(now));
     }
@@ -806,6 +858,17 @@ export default function App() {
     await logoutUser();
     setCurrentUser(null);
     setCloudData(null);
+    // Reset to clean default tabs and tasks without leftover custom tabs
+    const defaultTabs = lang === 'uk' ? DEFAULT_TABS_UK : DEFAULT_TABS_EN;
+    const defaultTasks = lang === 'uk' ? INITIAL_LIFE_TASKS_UK : INITIAL_LIFE_TASKS_EN;
+    setTabs(defaultTabs);
+    setTasks(defaultTasks);
+    try {
+      localStorage.setItem(TABS_KEY, JSON.stringify(defaultTabs));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(defaultTasks));
+    } catch (e) {
+      console.error('Failed to reset storage on logout', e);
+    }
   };
 
   const handleSyncNow = async () => {
@@ -840,8 +903,20 @@ export default function App() {
       const data = await fetchUserCloudData(currentUser.uid);
       if (data) {
         setCloudData(data);
-        if (data.tasks) setTasks(data.tasks);
-        if (data.tabs) setTabs(data.tabs);
+        if (data.tasks) {
+          const activeTabs = currentTabsRef.current.length > 0
+            ? currentTabsRef.current
+            : (lang === 'uk' ? DEFAULT_TABS_UK : DEFAULT_TABS_EN);
+          const validTabIds = new Set(activeTabs.map((t) => t.id));
+          const fallbackPhase = activeTabs[0]?.id || 'focus';
+
+          const sanitizedTasks = data.tasks.map((task: PSTask) => ({
+            ...task,
+            phase: validTabIds.has(task.phase) ? task.phase : fallbackPhase,
+          }));
+          setTasks(sanitizedTasks);
+        }
+        // Do NOT add new tabs from cloud on restore
         if (data.deletedTasks) setDeletedTasks(data.deletedTasks);
         if (data.settings) {
           if (typeof data.settings.soundEnabled === 'boolean') {
@@ -1815,7 +1890,7 @@ export default function App() {
         isOpen={isUpdateOpen}
         onClose={() => setIsUpdateOpen(false)}
         lang={lang}
-        currentVersion="1.1.7"
+        currentVersion="1.1.8"
       />
 
       {/* Tab Deletion Confirmation Safeguard Modal */}

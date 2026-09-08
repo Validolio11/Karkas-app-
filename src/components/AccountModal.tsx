@@ -402,6 +402,19 @@ export const AccountModal: React.FC<AccountModalProps> = ({
                 </button>
               </div>
 
+              {/* Tabs Protection Notice: Tasks synced without creating new tabs */}
+              <div className="p-2.5 bg-neutral-950 border border-neutral-800/80 text-[10px] font-mono flex items-start gap-2.5">
+                <Layers className="w-3.5 h-3.5 text-neutral-400 shrink-0 mt-0.5" />
+                <div className="space-y-0.5">
+                  <div className="font-bold text-neutral-200 flex items-center gap-1.5 text-[10px]">
+                    <span>{acc.tabsPreserved}</span>
+                  </div>
+                  <p className="text-[9px] text-neutral-400 leading-tight">
+                    {acc.tabsPreservedDesc}
+                  </p>
+                </div>
+              </div>
+
               {/* Sync Status Box */}
               <div className="p-3 bg-[#0c0c0e] border border-neutral-800 space-y-2">
                 <div className="flex items-center justify-between text-[11px] font-mono">

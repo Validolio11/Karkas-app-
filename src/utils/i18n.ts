@@ -227,6 +227,8 @@ export const TRANSLATIONS = {
       autoSyncStatus: 'ХМАРА В РЕАЛЬНОМУ ЧАСІ',
       realtimeActive: 'Автосинхронізація в реальному часі активна',
       realtimePaused: 'Автосинхронізацію вимкнено',
+      tabsPreserved: 'Синхронізація завдань без нових вкладок',
+      tabsPreservedDesc: 'Структура вкладок залишається незмінною; усі завдання надійно привʼязуються до наявних вкладок.',
     },
     winTitlebar: {
       appTitle: 'KARKAS // TASK ARCHITECT',
@@ -507,6 +509,8 @@ export const TRANSLATIONS = {
       autoSyncStatus: 'REAL-TIME CLOUD ACTIVE',
       realtimeActive: 'Real-time auto-sync is active',
       realtimePaused: 'Auto-sync is paused',
+      tabsPreserved: 'Task sync without new tabs',
+      tabsPreservedDesc: 'Your existing tab layout is preserved; tasks are mapped into existing tabs without adding new tabs.',
     },
     winTitlebar: {
       appTitle: 'KARKAS // TASK ARCHITECT',

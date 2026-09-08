@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { PSTask, TaskTab, DeletedTask, WorkflowStats, TaskStepItem } from '../types';
+import { PSTask, TaskTab, DeletedTask, WorkflowStats, TaskStepItem, AdaptiveProfile } from '../types';
 import { sound } from '../utils/audio';
 import { Language, TRANSLATIONS, AI_PRESETS_UK, AI_PRESETS_EN } from '../utils/i18n';
 import { X, CornerDownLeft, Plus, CheckCircle2, ListTree, Sparkles, Activity, Layers, ArrowRight, Lightbulb } from 'lucide-react';
@@ -14,15 +14,44 @@ interface AIAssistantSheetProps {
   currentTasks: PSTask[];
   deletedTasks?: DeletedTask[];
   stats?: WorkflowStats;
+  adaptiveProfile?: AdaptiveProfile;
   initialPrompt?: string;
   aiIconVariant?: AIIconId;
   onInjectTasks: (newTasks: Omit<PSTask, 'id' | 'currentStep' | 'done' | 'pinned' | 'createdAt'>[]) => void;
 }
 
-type AIMode = 'breakdown' | 'analyze' | 'generate';
+type AIMode = 'chat' | 'breakdown' | 'analyze' | 'generate';
+
+interface AIChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+interface AIChatOption {
+  label: string;
+  text: string;
+}
+
+const parseChatOptions = (content: string): { body: string; options: AIChatOption[] } => {
+  const lines = content.split('\n');
+  const options: AIChatOption[] = [];
+  const bodyLines: string[] = [];
+
+  for (const line of lines) {
+    const match = line.trim().match(/^(\d+|[А-Яа-яA-Za-z])\s*[.)\-:]\s+(.+)$/);
+    if (match) {
+      options.push({ label: match[1].toUpperCase(), text: match[2].trim() });
+    } else {
+      bodyLines.push(line);
+    }
+  }
+
+  return { body: bodyLines.join('\n').replace(/\n{3,}/g, '\n\n').trim(), options };
+};
 
 interface AIResponse {
   summary: string;
+  reply?: string;
   insights?: string[];
   tasks: {
     title: string;
@@ -36,6 +65,11 @@ interface AIResponse {
   source: string;
 }
 
+const isChatModel = (model: string) => {
+  const name = model.toLowerCase();
+  return name.includes('gemini') && !/(embedding|image|tts|transcrib|robotics|computer-use)/.test(name);
+};
+
 export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   isOpen,
   lang,
@@ -44,83 +78,130 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   currentTasks,
   deletedTasks = [],
   stats,
+  adaptiveProfile,
   initialPrompt = '',
   aiIconVariant,
   onInjectTasks,
 }) => {
   const t = TRANSLATIONS[lang];
   const presets = lang === 'uk' ? AI_PRESETS_UK : AI_PRESETS_EN;
+  const personalizedPresets = useMemo(() => {
+    if (!adaptiveProfile || adaptiveProfile.trackedTasks === 0) return presets;
+
+    const preferredPhase = adaptiveProfile.preferredPhases[0];
+    const preferredTab = tabs.find((tab) => tab.id === preferredPhase)?.name || preferredPhase;
+    const scenarioList: string[] = [];
+
+    if (lang === 'uk') {
+      if (adaptiveProfile.overloadedPhases.length > 0 || adaptiveProfile.activeLoad > adaptiveProfile.recommendedActiveLimit) {
+        scenarioList.push('Розвантажити чергу та залишити 3 головні задачі');
+      }
+      if (adaptiveProfile.urgentLoad > 0) {
+        scenarioList.push('Скласти план закриття термінових задач без перемикання контексту');
+      }
+      if (adaptiveProfile.averageCompletionMinutes > 0 && adaptiveProfile.averageCompletionMinutes <= 30) {
+        scenarioList.push('Сформувати план із коротких 25-хвилинних спринтів');
+      } else {
+        scenarioList.push('Розбити найбільшу задачу на реалістичні етапи');
+      }
+      if (preferredTab) {
+        scenarioList.push(`Скласти наступний робочий цикл для категорії «${preferredTab}»`);
+      }
+      scenarioList.push('Проаналізувати мій темп і скоригувати план на тиждень');
+    } else {
+      if (adaptiveProfile.overloadedPhases.length > 0 || adaptiveProfile.activeLoad > adaptiveProfile.recommendedActiveLimit) {
+        scenarioList.push('Reduce the queue to three essential tasks');
+      }
+      if (adaptiveProfile.urgentLoad > 0) {
+        scenarioList.push('Plan urgent tasks without context switching');
+      }
+      if (adaptiveProfile.averageCompletionMinutes > 0 && adaptiveProfile.averageCompletionMinutes <= 30) {
+        scenarioList.push('Build a plan from focused 25-minute sprints');
+      } else {
+        scenarioList.push('Break the largest task into realistic stages');
+      }
+      if (preferredTab) {
+        scenarioList.push(`Plan the next work cycle for ${preferredTab}`);
+      }
+      scenarioList.push('Analyze my pace and adjust the weekly plan');
+    }
+
+    return scenarioList.slice(0, 5);
+  }, [adaptiveProfile, lang, presets, tabs]);
   const [prompt, setPrompt] = useState(initialPrompt);
-  const [mode, setMode] = useState<AIMode>('breakdown');
+  const [mode, setMode] = useState<AIMode>('chat');
   const [loading, setLoading] = useState(false);
   const [response, setResponse] = useState<AIResponse | null>(null);
+  const [chatMessages, setChatMessages] = useState<AIChatMessage[]>([]);
+  const [pendingChatTasks, setPendingChatTasks] = useState<AIResponse['tasks'] | null>(null);
   const [injectedIds, setInjectedIds] = useState<number[]>([]);
-
-  // Custom API Key & Model States
-  const [showApiSettings, setShowApiSettings] = useState(false);
-  const [customKey, setCustomKey] = useState(() => localStorage.getItem('karkas_custom_api_key') || '');
-  const [customModel, setCustomModel] = useState(() => localStorage.getItem('karkas_custom_model') || 'gemini-3.8-flash');
-  const [customEnabled, setCustomEnabled] = useState(() => localStorage.getItem('karkas_custom_ai_enabled') === 'true');
   const [availableModels, setAvailableModels] = useState<string[]>(() => {
     try {
       const stored = localStorage.getItem('karkas_available_models');
-      return stored ? JSON.parse(stored) : ['gemini-3.8-flash', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite'];
+      const models = stored ? JSON.parse(stored) : [];
+      return Array.isArray(models) ? models.filter((model): model is string => typeof model === 'string' && isChatModel(model)) : [];
     } catch {
-      return ['gemini-3.8-flash', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite'];
+      return [];
     }
   });
-  const [testingKey, setTestingKey] = useState(false);
-  const [testError, setTestError] = useState<string | null>(null);
-  const [testSuccess, setTestSuccess] = useState(false);
+  const [customModel, setCustomModel] = useState(() => {
+    const storedModel = localStorage.getItem('karkas_custom_model') || '';
+    return availableModels.includes('gemini-3.1-flash-lite')
+      ? 'gemini-3.1-flash-lite'
+      : storedModel;
+  });
 
-  const saveApiSettings = (key: string, model: string, enabled: boolean, modelsList: string[]) => {
-    localStorage.setItem('karkas_custom_api_key', key);
-    localStorage.setItem('karkas_custom_model', model);
-    localStorage.setItem('karkas_custom_ai_enabled', enabled ? 'true' : 'false');
-    localStorage.setItem('karkas_available_models', JSON.stringify(modelsList));
-  };
+  useEffect(() => {
+    const apiKey = localStorage.getItem('karkas_custom_api_key') || '';
+    if (!apiKey) return;
 
-  const handleTestKey = async () => {
-    if (!customKey.trim()) {
-      setTestError(lang === 'uk' ? 'Введіть API ключ' : 'Please enter an API key');
-      return;
-    }
-    setTestingKey(true);
-    setTestError(null);
-    setTestSuccess(false);
-    sound.tick(500);
-
-    try {
-      const res = await fetch('/api/ai/verify-key', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apiKey: customKey.trim() }),
-      });
-
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || 'Invalid API Key');
-      }
-
-      const data = await res.json();
-      if (data.success && Array.isArray(data.models)) {
+    fetch('/api/ai/verify-key', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiKey }),
+    })
+      .then(async (res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!data?.success || !Array.isArray(data.models) || data.models.length === 0) return;
         setAvailableModels(data.models);
-        const modelToSet = data.models.includes(customModel) ? customModel : data.models[0] || 'gemini-3.8-flash';
-        setCustomModel(modelToSet);
-        setTestSuccess(true);
-        setCustomEnabled(true);
-        saveApiSettings(customKey.trim(), modelToSet, true, data.models);
-        sound.activate();
-      } else {
-        throw new Error('Could not parse models list');
-      }
-    } catch (err: any) {
-      console.error('API key test error:', err);
-      setTestError(err.message || (lang === 'uk' ? 'Помилка перевірки ключа' : 'Failed to verify API Key'));
-      sound.tick(250);
-    } finally {
-      setTestingKey(false);
-    }
+        const nextModel = data.models.includes(customModel) ? customModel : data.models[0];
+        setCustomModel(nextModel);
+        localStorage.setItem('karkas_custom_model', nextModel);
+        localStorage.setItem('karkas_available_models', JSON.stringify(data.models));
+      })
+      .catch(() => undefined);
+  }, []);
+
+  const confirmChatTasks = () => {
+    if (!pendingChatTasks?.length) return;
+
+    const tasks = pendingChatTasks.map((task) => {
+      const stepItems = task.stepList?.map((step, index) => ({
+        id: `s-chat-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`,
+        title: typeof step === 'string' ? step : step.title,
+        done: false,
+      }));
+
+      return {
+        title: task.title,
+        phase: task.phase,
+        priority: task.priority,
+        steps: stepItems?.length || task.steps || 1,
+        stepList: stepItems,
+        note: task.note,
+      };
+    });
+
+    onInjectTasks(tasks);
+    setPendingChatTasks(null);
+    setChatMessages((previous) => [
+      ...previous,
+      {
+        role: 'assistant',
+        content: lang === 'uk' ? `Готово. Додано завдань: ${tasks.length}.` : `Done. Added tasks: ${tasks.length}.`,
+      },
+    ]);
+    sound.activate();
   };
 
   const activeCount = currentTasks.filter((t) => !t.done).length;
@@ -130,42 +211,75 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   // Sync initialPrompt
   useEffect(() => {
     if (initialPrompt) {
+      const normalizedPrompt = initialPrompt.trim().toLowerCase().replace(/[!?.,]/g, '');
+      const isGreeting = /^(привіт|вітаю|добрий день|доброго ранку|добрий вечір|hello|hi|hey)$/.test(normalizedPrompt);
+      const initialMode: AIMode = isGreeting ? 'chat' : 'breakdown';
       setPrompt(initialPrompt);
-      handleGenerate(initialPrompt, 'breakdown');
+      setMode(initialMode);
+      handleGenerate(initialPrompt, initialMode);
     }
   }, [initialPrompt]);
 
   const handleGenerate = async (queryText?: string, selectedMode?: AIMode) => {
     const textToQuery = queryText !== undefined ? queryText : prompt;
     const currentMode = selectedMode || mode;
+    const requestText = textToQuery.trim() || (
+      currentMode === 'analyze'
+        ? (lang === 'uk' ? 'Повний аналіз поточних завдань та рекомендації щодо оптимізації' : 'Full analysis of current tasks and optimization recommendations')
+        : ''
+    );
 
-    if (currentMode !== 'analyze' && !textToQuery.trim() && !currentTasks.length) return;
+    if (!requestText) return;
     if (loading) return;
 
+    if (currentMode === 'chat' && pendingChatTasks && /^(так|підтверджую|підтверджено|yes|confirm|ок)$/i.test(textToQuery.trim())) {
+      setPrompt('');
+      setChatMessages((previous) => [...previous, { role: 'user', content: textToQuery.trim() }]);
+      confirmChatTasks();
+      return;
+    }
+
     sound.activate();
+    setPrompt('');
     setLoading(true);
     setResponse(null);
     setInjectedIds([]);
+    if (currentMode === 'chat') {
+      setChatMessages((previous) => [
+        ...previous,
+        { role: 'user', content: requestText },
+      ]);
+    }
+
+    const isTaskMutationRequest = currentMode === 'chat' && (
+      /\b(додай|додати|створи|створити|запиши|записати|add|create|make)\b/i.test(requestText) ||
+      /роз[іи]б|підзадач|break\s+down|subtasks?/i.test(requestText)
+    );
 
     const activeList = currentTasks.filter((t) => !t.done);
     const doneList = currentTasks.filter((t) => t.done);
 
     try {
       const customKey = localStorage.getItem('karkas_custom_api_key') || '';
-      const customModel = localStorage.getItem('karkas_custom_model') || '';
+      const storedModel = localStorage.getItem('karkas_custom_model') || '';
       const customEnabled = localStorage.getItem('karkas_custom_ai_enabled') === 'true';
 
+      const controller = new AbortController();
+      const requestTimeout = window.setTimeout(() => controller.abort(), 30000);
       const res = await fetch('/api/ai/assist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
-          prompt: textToQuery.trim() || (currentMode === 'analyze' ? 'Повний аналіз поточних завдань та рекомендації щодо оптимізації' : 'Сформувати тактичний план'),
-          action: currentMode === 'analyze' ? 'analyze' : currentMode === 'generate' ? 'generate' : 'breakdown',
+          prompt: requestText,
+          action: isTaskMutationRequest ? 'generate' : currentMode === 'chat' ? 'chat' : currentMode === 'analyze' ? 'analyze' : currentMode === 'generate' ? 'generate' : 'breakdown',
           lang,
           tabs: tabs.map((tb) => tb.id),
+          adaptiveProfile,
           currentTasks,
+          conversation: currentMode === 'chat' ? chatMessages : undefined,
           customApiKey: customEnabled ? customKey : undefined,
-          selectedModel: customEnabled ? customModel : undefined,
+          selectedModel: customEnabled ? (customModel || storedModel) : undefined,
           fullAppContext: {
             activeTasks: activeList.map((t) => ({
               title: t.title,
@@ -173,6 +287,9 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
               priority: t.priority,
               currentStep: t.currentStep,
               steps: t.steps,
+              timeSpentSeconds: t.timeSpentSeconds || 0,
+              createdAt: t.createdAt,
+              timerRunning: Boolean(t.timerRunning),
               stepList: t.stepList?.map((s) => s.title) || [],
               note: t.note,
             })),
@@ -180,6 +297,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
               title: t.title,
               phase: t.phase,
               completedAt: t.completedAt,
+              timeSpentSeconds: t.timeSpentSeconds || 0,
+              createdAt: t.createdAt,
             })),
             deletedTasks: deletedTasks.slice(0, 15).map((t) => ({
               title: t.title,
@@ -191,13 +310,31 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
               completed: completedCount,
               percent: currentTasks.length > 0 ? Math.round((completedCount / currentTasks.length) * 100) : 0,
             },
+            adaptiveProfile,
           },
         }),
       });
+      window.clearTimeout(requestTimeout);
 
       if (!res.ok) throw new Error('API request failed');
-      const data: AIResponse = await res.json();
-      setResponse(data);
+      const data: AIResponse & { reply?: string } = await res.json();
+      if (currentMode === 'chat') {
+        if (isTaskMutationRequest && Array.isArray(data.tasks) && data.tasks.length > 0) {
+          setPendingChatTasks(data.tasks);
+        }
+
+        setChatMessages((previous) => [
+          ...previous,
+          {
+            role: 'assistant',
+            content: isTaskMutationRequest && data.tasks?.length
+              ? `${data.summary || 'Готово.'}\n\nПідтвердити створення ${data.tasks.length} задач кнопкою нижче.`
+              : data.reply || data.summary,
+          },
+        ]);
+      } else {
+        setResponse(data);
+      }
       sound.activate();
     } catch (err) {
       console.error('AI query error:', err);
@@ -206,7 +343,20 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       const mainPhase = tabs[0]?.id || 'focus';
       const secondaryPhase = tabs[1]?.id || mainPhase;
 
-      const fallbackPrompt = textToQuery || (isUk ? 'Оптимізація завдань' : 'Task Optimization');
+      const fallbackPrompt = requestText || (isUk ? 'Оптимізація завдань' : 'Task Optimization');
+
+      if (currentMode === 'chat') {
+        setChatMessages((previous) => [
+          ...previous,
+          {
+            role: 'assistant',
+            content: isUk
+              ? `Зараз не можу підключитися до моделі. У вас ${activeCount} активних задач і ${completedCount} завершених. Спробуйте повторити запит або перевірте API-ключ.`
+              : `I cannot reach the model right now. You have ${activeCount} active and ${completedCount} completed tasks. Try again or check the API key.`,
+          },
+        ]);
+        return;
+      }
 
       setResponse({
         summary: isUk
@@ -374,7 +524,24 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
             </div>
 
             {/* Action Modes Selector */}
-            <div className="grid grid-cols-3 gap-1 px-4 sm:px-5 pt-3 pb-2 border-b border-neutral-800">
+            <div className="grid grid-cols-4 gap-1 px-4 sm:px-5 pt-3 pb-2 border-b border-neutral-800">
+              <button
+                id="ai-mode-chat-btn"
+                type="button"
+                onClick={() => {
+                  sound.tick(450);
+                  setMode('chat');
+                }}
+                className={`py-1.5 px-2 text-[10px] sm:text-xs font-mono font-bold tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                  mode === 'chat'
+                    ? 'bg-white text-black border-white'
+                    : 'bg-[#08080a] text-neutral-400 border-neutral-800 hover:text-white hover:border-neutral-700'
+                }`}
+              >
+                <span className="text-sm leading-none">◌</span>
+                <span className="truncate">{lang === 'uk' ? 'ЧАТ' : 'CHAT'}</span>
+              </button>
+
               <button
                 id="ai-mode-breakdown-btn"
                 type="button"
@@ -431,121 +598,13 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
             {/* Content Container (Scrollable) */}
             <div className="flex-1 overflow-y-auto p-4 sm:p-5 flex flex-col gap-4">
               
-              {/* Dynamic Custom API Settings Panel */}
-              <div className="border border-neutral-800 bg-[#0c0c0e]">
-                <button
-                  type="button"
-                  onClick={() => {
-                    sound.tick(400);
-                    setShowApiSettings(!showApiSettings);
-                  }}
-                  className="w-full flex items-center justify-between px-3.5 py-2.5 text-[11px] font-mono font-bold uppercase tracking-wider text-neutral-400 hover:text-white transition-colors cursor-pointer"
-                >
-                  <div className="flex items-center gap-2">
-                    <span className={`w-1.5 h-1.5 rounded-full ${customEnabled && customKey ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-neutral-600'}`} />
-                    <span>{lang === 'uk' ? '🔌 Налаштування власного API' : '🔌 Custom API Setup'}</span>
-                  </div>
-                  <span className="text-[10px] text-neutral-500">
-                    {showApiSettings ? '▲' : '▼'}
-                  </span>
-                </button>
-                
-                {showApiSettings && (
-                  <div className="px-3.5 pb-4 pt-1 border-t border-neutral-900/60 flex flex-col gap-3">
-                    <div className="space-y-1">
-                      <label className="block text-[9px] font-mono text-neutral-500 uppercase tracking-widest">
-                        {lang === 'uk' ? 'Ключ Gemini API' : 'Gemini API Key'}
-                      </label>
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="password"
-                          value={customKey}
-                          onChange={(e) => {
-                            setCustomKey(e.target.value);
-                            setTestSuccess(false);
-                          }}
-                          placeholder="AIzaSy..."
-                          className="flex-1 bg-[#050507] border border-neutral-800 text-white placeholder:text-neutral-700 text-xs font-mono px-3 py-2 focus:outline-none focus:border-white transition-colors"
-                        />
-                        <button
-                          type="button"
-                          onClick={handleTestKey}
-                          disabled={testingKey || !customKey.trim()}
-                          className="px-3 py-2 bg-neutral-900 border border-neutral-800 hover:border-neutral-600 text-neutral-300 text-[10px] font-mono font-bold uppercase hover:text-white transition-all cursor-pointer disabled:opacity-40"
-                        >
-                          {testingKey ? '...' : (lang === 'uk' ? 'Визначити моделі' : 'Detect Models')}
-                        </button>
-                      </div>
-                    </div>
-
-                    {testError && (
-                      <div className="text-[10px] font-mono text-red-400 bg-red-950/20 border border-red-900/50 p-2">
-                        ⚠️ {testError}
-                      </div>
-                    )}
-
-                    {testSuccess && (
-                      <div className="text-[10px] font-mono text-emerald-400 bg-emerald-950/10 border border-emerald-900/30 p-2">
-                        ✓ {lang === 'uk' ? 'Ключ перевірено! Знайдено моделей: ' : 'Key verified! Found models: '}{availableModels.length}
-                      </div>
-                    )}
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1">
-                        <label className="block text-[9px] font-mono text-neutral-500 uppercase tracking-widest">
-                          {lang === 'uk' ? 'Вибір Моделі' : 'Select Model'}
-                        </label>
-                        <select
-                          value={customModel}
-                          onChange={(e) => {
-                            const model = e.target.value;
-                            setCustomModel(model);
-                            saveApiSettings(customKey, model, customEnabled, availableModels);
-                            sound.tick(400);
-                          }}
-                          className="w-full bg-[#050507] border border-neutral-800 text-white text-xs font-mono px-2 py-2 focus:outline-none focus:border-white cursor-pointer"
-                        >
-                          {availableModels.map((m) => (
-                            <option key={m} value={m}>{m}</option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div className="space-y-1">
-                        <label className="block text-[9px] font-mono text-neutral-500 uppercase tracking-widest">
-                          {lang === 'uk' ? 'Статус ключа' : 'Status Mode'}
-                        </label>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const nextEnabled = !customEnabled;
-                            setCustomEnabled(nextEnabled);
-                            saveApiSettings(customKey, customModel, nextEnabled, availableModels);
-                            sound.activate();
-                          }}
-                          className={`w-full py-2 text-xs font-mono font-bold uppercase tracking-wider text-center border transition-all cursor-pointer ${
-                            customEnabled && customKey
-                              ? 'bg-emerald-950/20 text-emerald-400 border-emerald-800 hover:border-emerald-600'
-                              : 'bg-neutral-900/40 text-neutral-500 border-neutral-800 hover:border-neutral-700'
-                          }`}
-                        >
-                          {customEnabled && customKey 
-                            ? (lang === 'uk' ? 'Активний' : 'Active') 
-                            : (lang === 'uk' ? 'Вимкнено' : 'Inactive')}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-
               {/* Presets Chips */}
               <div>
                 <div className="text-[10px] font-mono uppercase tracking-widest text-neutral-400 mb-2">
                   {t.aiSheet.blueprints}
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  {presets.map((preset, i) => (
+                  {personalizedPresets.map((preset, i) => (
                     <button
                       key={i}
                       id={`ai-preset-chip-${i}`}
@@ -562,11 +621,69 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
               </div>
 
               {/* Response Section */}
+              {mode === 'chat' && chatMessages.length > 0 && (
+                <div className="flex flex-col gap-3">
+                  {chatMessages.map((message, index) => (
+                    <div
+                      key={`${message.role}-${index}`}
+                      className={`max-w-[92%] border p-3 text-xs leading-relaxed whitespace-pre-wrap ${
+                        message.role === 'user'
+                          ? 'self-end bg-white text-black border-white'
+                          : 'self-start bg-[#111116] text-neutral-200 border-neutral-800'
+                      }`}
+                    >
+                      <div className="mb-1 text-[9px] font-bold uppercase tracking-widest opacity-60">
+                        {message.role === 'user' ? (lang === 'uk' ? 'ВИ' : 'YOU') : 'KARKAS AI'}
+                      </div>
+                      {(() => {
+                        const parsed = message.role === 'assistant' ? parseChatOptions(message.content) : { body: message.content, options: [] };
+                        return (
+                          <>
+                            <div>{parsed.body}</div>
+                            {parsed.options.length > 0 && (
+                              <div className="flex flex-col gap-1.5 mt-3">
+                                {parsed.options.map((option) => (
+                                  <button
+                                    key={`${index}-${option.label}-${option.text}`}
+                                    type="button"
+                                    disabled={loading}
+                                    onClick={() => handleGenerate(option.text)}
+                                    className="w-full text-left border border-neutral-700 bg-[#08080a] px-3 py-2 text-xs text-neutral-200 hover:border-white hover:text-white disabled:opacity-40 transition-colors cursor-pointer"
+                                  >
+                                    <span className="inline-flex min-w-5 h-5 items-center justify-center mr-2 border border-neutral-600 text-[10px] font-bold text-neutral-400">
+                                      {option.label}
+                                    </span>
+                                    {option.text}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
+                    </div>
+                  ))}
+                  {pendingChatTasks && !loading && (
+                    <button
+                      type="button"
+                      onClick={confirmChatTasks}
+                      className="self-start border border-emerald-700 bg-emerald-950/30 px-3 py-2 text-[10px] font-mono font-bold uppercase tracking-wider text-emerald-300 hover:border-emerald-400 hover:text-white transition-colors cursor-pointer"
+                    >
+                      {lang === 'uk'
+                        ? `Підтвердити створення (${pendingChatTasks.length})`
+                        : `Confirm creation (${pendingChatTasks.length})`}
+                    </button>
+                  )}
+                </div>
+              )}
+
               {loading && (
                 <div className="p-8 border border-neutral-800 bg-black/40 flex flex-col items-center justify-center gap-3">
                   <div className="w-6 h-6 border-2 border-white border-t-transparent animate-spin rounded-full" />
                   <span className="text-xs font-mono tracking-widest text-neutral-300 uppercase animate-pulse">
-                    {t.aiSheet.thinking}
+                    {mode === 'chat'
+                      ? (lang === 'uk' ? 'KARKAS AI ФОРМУЄ ВІДПОВІДЬ...' : 'KARKAS AI IS RESPONDING...')
+                      : t.aiSheet.thinking}
                   </span>
                   <span className="text-[10px] font-mono text-neutral-500">
                     {t.aiSheet.fullContextDesc}
@@ -714,6 +831,26 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
 
             {/* Custom Prompt Input at the bottom of the sheet */}
             <div className="px-4 sm:px-5 py-3 bg-[#08080a] border-t border-neutral-800 flex items-center gap-2">
+              <select
+                aria-label={lang === 'uk' ? 'Модель AI' : 'AI model'}
+                value={customModel}
+                disabled={availableModels.length === 0}
+                onChange={(e) => {
+                  const model = e.target.value;
+                  setCustomModel(model);
+                  localStorage.setItem('karkas_custom_model', model);
+                  sound.tick(400);
+                }}
+                className="max-w-[150px] bg-[#050507] border border-neutral-800 text-neutral-300 text-[10px] font-mono px-2 py-2.5 focus:outline-none focus:border-white disabled:opacity-50"
+              >
+                {availableModels.length === 0 ? (
+                  <option value="">Модель не налаштована</option>
+                ) : (
+                  availableModels.map((model) => (
+                    <option key={model} value={model}>{model}</option>
+                  ))
+                )}
+              </select>
               <input
                 id="ai-prompt-input"
                 type="text"
@@ -723,7 +860,9 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   if (e.key === 'Enter') handleGenerate();
                 }}
                 placeholder={
-                  mode === 'analyze'
+                  mode === 'chat'
+                    ? (lang === 'uk' ? 'Напишіть, що відбувається або що потрібно вирішити...' : 'Tell me what is happening or what you need to solve...')
+                    : mode === 'analyze'
                     ? (lang === 'uk' ? 'Уточніть фокус аналізу (напр. пріоритети на сьогодні, перевірити дедлайни)...' : 'Refine audit focus (e.g. today priorities, bottlenecks)...')
                     : t.aiSheet.inputPlaceholder
                 }
@@ -732,7 +871,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
               <button
                 id="ai-generate-submit-btn"
                 onClick={() => handleGenerate()}
-                disabled={loading || (mode !== 'analyze' && !prompt.trim())}
+                disabled={loading || !prompt.trim()}
                 className="px-4 py-2.5 bg-white text-black font-bold text-xs font-mono uppercase tracking-wider hover:bg-neutral-200 disabled:opacity-40 transition-all flex items-center gap-1.5 cursor-pointer shrink-0"
               >
                 {loading ? (

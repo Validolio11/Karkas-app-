@@ -11,6 +11,14 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 app.use(express.json());
 
+function isChatModel(modelName: string): boolean {
+  const name = modelName.toLowerCase();
+  return (
+    name.includes("gemini") &&
+    !/(embedding|image|tts|transcrib|robotics|computer-use)/.test(name)
+  );
+}
+
 // Initialize Gemini Client
 let geminiClient: GoogleGenAI | null = null;
 function getGeminiClient(): GoogleGenAI | null {
@@ -39,16 +47,21 @@ async function generateGeminiContentWithFallback(params: {
 
   // Models to attempt: primary and fallback
   const modelsToTry = params.selectedModel
-    ? [params.selectedModel, "gemini-3.8-flash", "gemini-flash-latest"]
-    : ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-flash-latest"];
+    ? [params.selectedModel, "gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-flash-latest"]
+    : ["gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-flash-latest"];
 
   for (const model of modelsToTry) {
     try {
-      const response = await ai.models.generateContent({
-        model,
-        contents: params.contents,
-        config: params.config,
-      });
+      const response = await Promise.race([
+        ai.models.generateContent({
+          model,
+          contents: params.contents,
+          config: params.config,
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`Gemini model ${model} timed out`)), 12000)
+        ),
+      ]);
       if (response && response.text) {
         return response;
       }
@@ -60,9 +73,9 @@ async function generateGeminiContentWithFallback(params: {
         err?.message?.includes("high demand") ||
         err?.message?.includes("UNAVAILABLE");
 
-      if (isTemporaryDemand) {
-        // Softly attempt next fallback model after brief delay
-        await new Promise((r) => setTimeout(r, 350));
+      if (isTemporaryDemand || err?.message?.includes("timed out")) {
+        // Move quickly to the next model when a provider is slow or busy.
+        await new Promise((r) => setTimeout(r, 150));
         continue;
       } else {
         break;
@@ -81,23 +94,55 @@ app.post("/api/ai/verify-key", async (req, res) => {
   }
 
   try {
-    const ai = new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: {
-          "User-Agent": "aistudio-build",
-        },
-      },
-    });
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`,
+      { headers: { "User-Agent": "aistudio-build" } },
+    );
+    const responseData = await response.json() as any;
+    if (!response.ok) {
+      throw new Error(responseData?.error?.message || "Invalid API key or Gemini API access is unavailable");
+    }
 
-    const response = (await ai.models.list()) as any;
-    const models = (response.models || [])
-      .map((m: any) => m.name.replace("models/", ""))
-      .filter((name: string) => name.includes("gemini") && !name.includes("embedding"));
+    const listedModels = (responseData.models || [])
+      .filter((model: any) => {
+        const name = typeof model?.name === "string" ? model.name : "";
+        const methods = Array.isArray(model?.supportedGenerationMethods)
+          ? model.supportedGenerationMethods
+          : Array.isArray(model?.supportedActions)
+            ? model.supportedActions
+            : [];
+        return isChatModel(name) && methods.includes("generateContent");
+      })
+      .map((model: any) => model.name.replace("models/", ""));
 
-    // Provide default fallback models in case of strict filters
+    const models = (await Promise.all(
+      listedModels.map(async (model: string) => {
+        try {
+          const probeResponse = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "User-Agent": "aistudio-build" },
+              body: JSON.stringify({
+                contents: [{ parts: [{ text: "Reply with OK only." }] }],
+                generationConfig: { maxOutputTokens: 8 },
+              }),
+              signal: AbortSignal.timeout(5000),
+            },
+          );
+          if (!probeResponse.ok) return null;
+          const probeData = await probeResponse.json() as any;
+          return probeData?.candidates?.[0]?.content?.parts?.some((part: any) => typeof part?.text === "string" && part.text.trim())
+            ? model
+            : null;
+        } catch {
+          return null;
+        }
+      }),
+    )).filter((model): model is string => Boolean(model));
+
     if (models.length === 0) {
-      models.push("gemini-3.8-flash", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite");
+      return res.status(400).json({ error: "No Gemini models supporting generateContent were returned for this API key" });
     }
 
     res.json({ success: true, models });
@@ -149,10 +194,12 @@ app.post("/api/ai/assist", async (req, res) => {
       deletedTasks = [],
       tabs = [],
       stats = {},
+      adaptiveProfile = {},
       action = "generate",
       lang = "uk",
       customApiKey,
       selectedModel,
+      conversation = [],
     } = req.body;
 
     if (!prompt || typeof prompt !== "string") {
@@ -160,6 +207,17 @@ app.post("/api/ai/assist", async (req, res) => {
     }
 
     const isUk = lang === "uk" || /[а-яіїєґ]/i.test(prompt);
+    const normalizedPrompt = prompt.trim().toLowerCase().replace(/[!?.,]/g, "");
+    const isSimpleGreeting = /^(привіт|вітаю|добрий день|доброго ранку|добрий вечір|hello|hi|hey)$/.test(normalizedPrompt);
+
+    if (action === "chat" && isSimpleGreeting) {
+      return res.json({
+        reply: isUk
+          ? "Привіт. Я поруч і знаю контекст твоїх задач. Розкажи, що зараз хочеш вирішити або що заважає рухатися далі."
+          : "Hi. I am here with the context of your tasks. Tell me what you want to solve or what is slowing you down.",
+        source: "greeting",
+      });
+    }
     
     // Dynamic AI Client setup
     let ai = getGeminiClient();
@@ -179,19 +237,50 @@ app.post("/api/ai/assist", async (req, res) => {
     const effectiveCompletedTasks = completedTasks.length > 0 ? completedTasks : currentTasks.filter((t: any) => t.done);
 
     // Determine available tab IDs and descriptions
-    const tabList = Array.isArray(tabs) && tabs.length > 0
-      ? tabs
-      : [
-          { id: "focus", name: isUk ? "Фокус" : "Focus" },
-          { id: "work", name: isUk ? "Робота" : "Work" },
-          { id: "home", name: isUk ? "Дім" : "Home" },
-          { id: "health", name: isUk ? "Здоровʼя" : "Health" },
-          { id: "buy", name: isUk ? "Покупки" : "Buy" },
-          { id: "study", name: isUk ? "Навчання" : "Study" },
-        ];
+    const tabList = Array.isArray(tabs) ? tabs : [];
 
     const activeTabIds: string[] = tabList.map((t: any) => (typeof t === "string" ? t : t.id));
     const primaryTab = activeTabIds[0] || "focus";
+
+    if (ai && action === "chat") {
+      try {
+        const chatResponse = await generateGeminiContentWithFallback({
+          contents: `CURRENT USER MESSAGE: "${prompt}".
+CONVERSATION HISTORY:
+${JSON.stringify(Array.isArray(conversation) ? conversation.slice(-12) : [], null, 2)}
+CURRENT APPLICATION CONTEXT:
+${JSON.stringify({
+            activeTasks: effectiveActiveTasks,
+            completedTasks: effectiveCompletedTasks.slice(-20),
+            deletedTasks: deletedTasks.slice(-10),
+            tabs: tabList,
+            stats,
+            adaptiveProfile,
+          }, null, 2)}`,
+          config: {
+            systemInstruction: `You are Karkas AI, a practical conversational productivity coach embedded in the user's task app.
+Have a real dialogue. Answer the user's actual question first, then ask at most one useful follow-up question when needed.
+Use the application context to notice overload, avoidance, unfinished work, repeated patterns, time spent, and progress. Give concrete reasoning and small behavioral experiments, not generic motivational advice.
+Do not create a plan unless the user asks for one. Do not invent facts or claim to observe behavior that is not present in the context.
+You may suggest editing, completing, splitting, reprioritizing, or deleting tasks, but do not silently mutate app data.
+LANGUAGE: ${isUk ? "Ukrainian" : "English"}.
+            Return only a natural, concise answer. Markdown is allowed.`,
+          },
+          customAi: ai,
+          selectedModel,
+        });
+
+        if (chatResponse?.text) {
+          return res.json({
+            reply: chatResponse.text,
+            insights: [],
+            source: "gemini-chat",
+          });
+        }
+      } catch (chatError) {
+        console.warn("Gemini chat request failed, using local response.", chatError);
+      }
+    }
 
     // If Gemini client is available, leverage LLM with full context
     if (ai) {
@@ -203,8 +292,10 @@ You have FULL, UNRESTRICTED visibility into the user's entire app state:
 - Deleted / Archived tasks
 - User's dynamic category tabs
 - Overall completion metrics and priority distribution
+- Derived behavioral profile: completion pace, average task size, preferred categories, overloaded categories, and safe active-task limit
 
 Tone: Minimalist, direct, tactical, street-smart, actionable, zero corporate fluff, no emojis in task titles.
+Adapt to the behavioral profile in the application context. Prefer the user's demonstrated pace and categories, reduce load when they are overloaded, and avoid recommending more simultaneous work than their safe active-task limit.
 LANGUAGE REQUIREMENT: ${isUk ? "All output (summary, insights, task titles, step titles, notes) MUST be in UKRAINIAN." : "All output must be in English."}
 AVAILABLE CATEGORY TABS: ${JSON.stringify(activeTabIds)}.
 Every task MUST set "phase" to one of these exact available tabs: ${JSON.stringify(activeTabIds)}.
@@ -233,6 +324,7 @@ Adhere strictly to the requested JSON schema.`;
             activeCount: effectiveActiveTasks.length,
             urgentP1Count: effectiveActiveTasks.filter((t: any) => t.priority === 1).length,
           },
+          behavioralProfile: adaptiveProfile,
           categoryTabs: tabList,
           activeTasks: effectiveActiveTasks.map((t: any) => ({
             id: t.id,
@@ -345,6 +437,17 @@ ${JSON.stringify(fullAppContext, null, 2)}`,
       } catch (geminiError) {
         console.warn("Gemini assist API call encountered temporary issue, seamlessly transitioning to local rule engine.", geminiError);
       }
+    }
+
+    if (action === "chat") {
+      const activeCount = effectiveActiveTasks.length;
+      const completedCount = effectiveCompletedTasks.length;
+      return res.json({
+        reply: isUk
+          ? `Я тимчасово працюю без підключення до моделі. У контексті бачу ${activeCount} активних і ${completedCount} завершених задач. Опишіть конкретну проблему ще раз, коли AI-підключення буде доступне.`
+          : `I am temporarily working without a model connection. I can see ${activeCount} active and ${completedCount} completed tasks. Ask again when the AI connection is available.`,
+        source: "local-chat-fallback",
+      });
     }
 
     // High quality rule-based Assistant fallback (instant, offline-resilient)
@@ -571,7 +674,7 @@ app.post("/api/ai/breakdown-task", async (req, res) => {
       phase: req.body.phase,
     } : null);
 
-    const { allTasks = [], tabs = [], lang = "uk", fullAppContext, customApiKey, selectedModel } = req.body;
+    const { allTasks = [], tabs = [], lang = "uk", fullAppContext, customApiKey, selectedModel, currentSteps = [] } = req.body;
     const task = rawTask;
 
     if (!task || !task.title) {
@@ -603,15 +706,19 @@ app.post("/api/ai/breakdown-task", async (req, res) => {
     if (ai) {
       try {
         const systemInstruction = `You are an expert tactical task decomposition engine for the app "Karkas".
-Your mission: Break down a single specific task into 2 to 5 concrete, actionable, sequential sub-steps.
+Your mission: Break down a single specific task using a lightweight Work Breakdown Structure (WBS) into 2 to 5 concrete, actionable, sequential sub-steps.
 LANGUAGE REQUIREMENT: ${isUk ? "All output (sub-step titles, note, explanation) MUST be in UKRAINIAN." : "All output must be in English."}
 
 Requirements:
-1. "stepList": Array of 2 to 5 concise sequential sub-steps. Each title must begin with a number or clear action verb (e.g. ${isUk ? '"1. Підготувати матеріали", "2. Зробити перший прохід", "3. Перевірити результат"' : '"1. Gather assets", "2. Core implementation", "3. Quality review"'}).
+1. "stepList": Array of 2 to 5 concise sequential sub-steps. Each title must contain one observable action and a concrete completion signal (e.g. ${isUk ? '"1. Зібрати вимоги в один список", "2. Підготувати перший чернетковий результат", "3. Перевірити результат за чеклістом"' : '"1. Gather requirements into one list", "2. Produce a first draft", "3. Verify the result against a checklist"'}).
 2. "steps": Total count of generated sub-steps (equal to stepList.length).
 3. "note": Refined concise execution tip (max 6-8 words).
 4. "suggestedPriority": Number 1 (urgent), 2 (standard), or 3 (low).
 5. "explanation": One short tactical sentence explaining how to execute this task frictionlessly.
+6. Make the first sub-step independently actionable within roughly 25 minutes and name its expected output.
+7. Order steps by dependency: preparation/input -> execution/output -> verification/closeout. Do not put verification before execution.
+8. Preserve useful existing steps when they are still valid; do not repeat completed work.
+9. Avoid vague verbs ("work on", "handle", "continue", "do the task"), hidden multi-task steps, and unnecessary sub-steps. If the task is simple, use 2-3 steps; use 4-5 only when there are real dependencies.
 
 Return valid JSON adhering to schema.`;
 
@@ -622,6 +729,7 @@ Return valid JSON adhering to schema.`;
 - Priority: P${task.priority || 2}
 - Current Note: "${task.note || ''}"
 - Existing Step Count: ${task.steps || 1}
+- Existing Steps: ${JSON.stringify(Array.isArray(currentSteps) ? currentSteps : [])}
 
 APP CONTEXT:
 - Other active tasks: ${JSON.stringify(allTasks.slice(0, 8).map((t: any) => t.title))}
@@ -685,14 +793,14 @@ APP CONTEXT:
     const tTitle = task.title.trim();
     const fallbackList = isUk
       ? [
-          { id: `s-fb-1-${Date.now()}`, title: `1. Підготувати дані та ресурси для «${tTitle.slice(0, 24)}»`, done: false },
-          { id: `s-fb-2-${Date.now()}`, title: `2. Основний робочий блок виконання`, done: false },
-          { id: `s-fb-3-${Date.now()}`, title: `3. Фінальна перевірка та закриття результату`, done: false },
+          { id: `s-fb-1-${Date.now()}`, title: `1. Виписати очікуваний результат для «${tTitle.slice(0, 32)}»`, done: false },
+          { id: `s-fb-2-${Date.now()}`, title: `2. Виконати головну дію та створити перший результат`, done: false },
+          { id: `s-fb-3-${Date.now()}`, title: `3. Перевірити результат за коротким чеклістом`, done: false },
         ]
       : [
-          { id: `s-fb-1-${Date.now()}`, title: `1. Setup & prerequisites for "${tTitle.slice(0, 24)}"`, done: false },
-          { id: `s-fb-2-${Date.now()}`, title: `2. Core execution sprint`, done: false },
-          { id: `s-fb-3-${Date.now()}`, title: `3. Verification & final sign-off`, done: false },
+          { id: `s-fb-1-${Date.now()}`, title: `1. Define the expected outcome for "${tTitle.slice(0, 32)}"`, done: false },
+          { id: `s-fb-2-${Date.now()}`, title: `2. Complete the main action and produce a first result`, done: false },
+          { id: `s-fb-3-${Date.now()}`, title: `3. Verify the result against a short checklist`, done: false },
         ];
 
     return res.json({

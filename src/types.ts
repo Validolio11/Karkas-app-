@@ -44,6 +44,19 @@ export interface WorkflowStats {
   phaseCounts: Record<string, number>;
 }
 
+export interface AdaptiveProfile {
+  trackedTasks: number;
+  completedTasks: number;
+  completionRate: number;
+  averageCompletionMinutes: number;
+  averageStepCount: number;
+  preferredPhases: string[];
+  overloadedPhases: string[];
+  activeLoad: number;
+  urgentLoad: number;
+  recommendedActiveLimit: number;
+}
+
 export interface SuggestedTask {
   title: string;
   phase: string;

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { PSTask, DeletedTask, TaskTab, FilterMode, WorkflowStats, TaskStepItem } from './types';
+import { PSTask, DeletedTask, TaskTab, FilterMode, WorkflowStats, TaskStepItem, AdaptiveProfile } from './types';
 import { TaskCard } from './components/TaskCard';
 import { DashboardView } from './components/DashboardView';
 import { HistoryView } from './components/HistoryView';
@@ -42,9 +42,32 @@ const AI_ICON_KEY = 'karkas_ai_icon_variant';
 const FIRE_ENABLED_KEY = 'karkas_fire_enabled';
 const LAST_SYNC_KEY = 'karkas_last_sync_time';
 const AUTO_SYNC_KEY = 'karkas_auto_sync_enabled';
-const APP_CURRENT_VERSION = '1.2.1';
+const APP_CURRENT_VERSION = '1.2.2';
 
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+
+function normalizeVersion(version: string): number[] {
+  const cleaned = String(version || '').trim().replace(/^v/i, '').split('-')[0];
+  const parts = cleaned.split('.').map((part) => Number.parseInt(part, 10) || 0);
+
+  while (parts.length < 3) {
+    parts.push(0);
+  }
+
+  return parts.slice(0, 3);
+}
+
+function compareVersions(a: string, b: string): number {
+  const left = normalizeVersion(a);
+  const right = normalizeVersion(b);
+
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    const diff = (left[index] ?? 0) - (right[index] ?? 0);
+    if (diff !== 0) return diff;
+  }
+
+  return 0;
+}
 
 function sanitizeTasksTimerSafeguard(taskList: PSTask[]): PSTask[] {
   const now = Date.now();
@@ -104,12 +127,12 @@ export default function App() {
         console.error('Failed to load tabs from localStorage', e);
       }
     }
-    return DEFAULT_TABS_UK;
+    return [];
   });
 
-  // Load tasks from localStorage or initialize with curated life tasks
+  // Load tasks from localStorage. A new installation starts with an empty workspace.
   const [tasks, setTasks] = useState<PSTask[]>(() => {
-    let loaded: PSTask[] = INITIAL_LIFE_TASKS_UK;
+    let loaded: PSTask[] = [];
     if (typeof window !== 'undefined') {
       try {
         const saved = localStorage.getItem(STORAGE_KEY);
@@ -200,9 +223,7 @@ export default function App() {
         if (res.ok) {
           const data = await res.json();
           if (data && data.tag_name) {
-            const remoteClean = data.tag_name.replace(/^v/, '');
-            const localClean = APP_CURRENT_VERSION.replace(/^v/, '');
-            if (remoteClean !== localClean) {
+            if (compareVersions(data.tag_name, APP_CURRENT_VERSION) > 0) {
               const dismissed = sessionStorage.getItem('karkas_dismissed_update');
               if (dismissed !== data.tag_name) {
                 setAvailableNewRelease(data);
@@ -378,6 +399,9 @@ export default function App() {
                 currentStep: 0,
                 done: false,
                 note: data.note || t.note,
+                priority: data.suggestedPriority === 1 || data.suggestedPriority === 2 || data.suggestedPriority === 3
+                  ? data.suggestedPriority
+                  : t.priority,
               };
             }
             return t;
@@ -459,9 +483,11 @@ export default function App() {
     return true;
   });
   const [cloudData, setCloudData] = useState<UserCloudState | null>(null);
+  const [isCloudSyncReady, setIsCloudSyncReady] = useState(false);
 
   // Keep track of the timestamp of our own local saves to avoid loop flickering in real-time listeners
   const lastLocalSaveTimeRef = React.useRef<number>(0);
+  const cloudSyncReadyRef = React.useRef(false);
 
   // Fire particles background toggle state
   const [fireEnabled, setFireEnabled] = useState<boolean>(() => {
@@ -581,6 +607,8 @@ export default function App() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setCurrentUser(user);
+      cloudSyncReadyRef.current = false;
+      setIsCloudSyncReady(false);
       if (user) {
         try {
           setIsSyncing(true);
@@ -593,19 +621,9 @@ export default function App() {
               lastLocalSaveTimeRef.current = data.updatedAt;
             }
 
-            // If local tasks are empty or default templates, or cloud data is newer than local sync, auto-restore from cloud
-            const isDefaultTask = (t: PSTask) =>
-              t.id.startsWith('life-') || t.id.startsWith('ps-');
-            const isLocalDefault =
-              tasks.length === 0 ||
-              (tasks.length <= 6 && tasks.every(isDefaultTask));
-            const localSyncTime = parseInt(localStorage.getItem(LAST_SYNC_KEY) || '0', 10);
-            const isCloudNewer = Boolean(data.updatedAt && data.updatedAt > localSyncTime);
-
-            if ((isLocalDefault || isCloudNewer) && data.tasks && data.tasks.length > 0) {
-              const activeTabs = currentTabsRef.current.length > 0
-                ? currentTabsRef.current
-                : (lang === 'uk' ? DEFAULT_TABS_UK : DEFAULT_TABS_EN);
+            // Cloud is the source of truth after login, including empty arrays.
+            if (Array.isArray(data.tasks)) {
+              const activeTabs = Array.isArray(data.tabs) ? data.tabs : currentTabsRef.current;
               const validTabIds = new Set(activeTabs.map((t) => t.id));
               const fallbackPhase = activeTabs[0]?.id || 'focus';
 
@@ -618,26 +636,30 @@ export default function App() {
               currentTasksRef.current = sanitizedTasks;
               localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitizedTasks));
 
-              // Do NOT add new tabs from cloud; keep current tabs intact
-              if (data.deletedTasks) {
-                setDeletedTasks(data.deletedTasks);
-                currentDeletedTasksRef.current = data.deletedTasks;
-                localStorage.setItem(DELETED_STORAGE_KEY, JSON.stringify(data.deletedTasks));
+            }
+            if (Array.isArray(data.tabs)) {
+              setTabs(data.tabs);
+              currentTabsRef.current = data.tabs;
+              localStorage.setItem(TABS_KEY, JSON.stringify(data.tabs));
+            }
+            if (Array.isArray(data.deletedTasks)) {
+              setDeletedTasks(data.deletedTasks);
+              currentDeletedTasksRef.current = data.deletedTasks;
+              localStorage.setItem(DELETED_STORAGE_KEY, JSON.stringify(data.deletedTasks));
+            }
+            if (data.settings) {
+              if (typeof data.settings.soundEnabled === 'boolean') {
+                setSoundEnabled(data.settings.soundEnabled);
+                sound.enabled = data.settings.soundEnabled;
               }
-              if (data.settings) {
-                if (typeof data.settings.soundEnabled === 'boolean') {
-                  setSoundEnabled(data.settings.soundEnabled);
-                  sound.enabled = data.settings.soundEnabled;
-                }
-                if (typeof data.settings.fireEnabled === 'boolean') {
-                  setFireEnabled(data.settings.fireEnabled);
-                }
-                if (data.settings.lang === 'uk' || data.settings.lang === 'en') {
-                  setLang(data.settings.lang as Language);
-                }
-                if (data.settings.aiIconVariant) {
-                  setAiIconVariant(data.settings.aiIconVariant as AIIconId);
-                }
+              if (typeof data.settings.fireEnabled === 'boolean') {
+                setFireEnabled(data.settings.fireEnabled);
+              }
+              if (data.settings.lang === 'uk' || data.settings.lang === 'en') {
+                setLang(data.settings.lang as Language);
+              }
+              if (data.settings.aiIconVariant) {
+                setAiIconVariant(data.settings.aiIconVariant as AIIconId);
               }
             }
             if (data.updatedAt) {
@@ -645,23 +667,11 @@ export default function App() {
               localStorage.setItem(LAST_SYNC_KEY, String(data.updatedAt));
             }
           } else {
-            // First time login on this Google account: ensure standard default tabs without extra tabs
-            const defaultTabs = lang === 'uk' ? DEFAULT_TABS_UK : DEFAULT_TABS_EN;
-            const validTabIds = new Set(defaultTabs.map((t) => t.id));
-            const fallbackPhase = defaultTabs[0]?.id || 'focus';
-            const baseTasks = tasks.length > 0 ? tasks : (lang === 'uk' ? INITIAL_LIFE_TASKS_UK : INITIAL_LIFE_TASKS_EN);
-            const sanitizedTasks = baseTasks.map((task: PSTask) => ({
-              ...task,
-              phase: validTabIds.has(task.phase) ? task.phase : fallbackPhase,
-            }));
-
-            setTabs(defaultTabs);
-            setTasks(sanitizedTasks);
             const now = Date.now();
             lastLocalSaveTimeRef.current = now;
             await saveUserCloudData(user.uid, {
-              tasks: sanitizedTasks,
-              tabs: defaultTabs,
+              tasks,
+              tabs,
               deletedTasks,
               settings: {
                 soundEnabled,
@@ -673,6 +683,8 @@ export default function App() {
             setLastSyncTime(now);
             localStorage.setItem(LAST_SYNC_KEY, String(now));
           }
+          cloudSyncReadyRef.current = true;
+          setIsCloudSyncReady(true);
         } catch (err) {
           console.error('Error fetching cloud data on auth change:', err);
         } finally {
@@ -686,7 +698,7 @@ export default function App() {
 
   // Real-time listener for user cloud state (sync across tabs/windows)
   useEffect(() => {
-    if (!currentUser || !autoSyncEnabled) return;
+    if (!currentUser || !autoSyncEnabled || !isCloudSyncReady) return;
 
     const unsubscribe = subscribeToUserCloudData(
       currentUser.uid,
@@ -700,10 +712,14 @@ export default function App() {
 
         if (isRemoteNewer) {
           // Perform deep comparison with current tracked ref values before calling state setters to prevent redundant renders and auto-saves
-          if (remoteData.tasks && JSON.stringify(remoteData.tasks) !== JSON.stringify(currentTasksRef.current)) {
+          if (Array.isArray(remoteData.tabs) && JSON.stringify(remoteData.tabs) !== JSON.stringify(currentTabsRef.current)) {
+            setTabs(remoteData.tabs);
+            currentTabsRef.current = remoteData.tabs;
+          }
+          if (Array.isArray(remoteData.tasks) && JSON.stringify(remoteData.tasks) !== JSON.stringify(currentTasksRef.current)) {
             const activeTabs = currentTabsRef.current.length > 0
               ? currentTabsRef.current
-              : (lang === 'uk' ? DEFAULT_TABS_UK : DEFAULT_TABS_EN);
+              : remoteData.tabs || [];
             const validTabIds = new Set(activeTabs.map((t) => t.id));
             const fallbackPhase = activeTabs[0]?.id || 'focus';
 
@@ -713,9 +729,9 @@ export default function App() {
             }));
             setTasks(sanitizedTasks);
           }
-          // Preserve current tab layout; do not inject new or foreign tabs from cloud
-          if (remoteData.deletedTasks && JSON.stringify(remoteData.deletedTasks) !== JSON.stringify(currentDeletedTasksRef.current)) {
+          if (Array.isArray(remoteData.deletedTasks) && JSON.stringify(remoteData.deletedTasks) !== JSON.stringify(currentDeletedTasksRef.current)) {
             setDeletedTasks(remoteData.deletedTasks);
+            currentDeletedTasksRef.current = remoteData.deletedTasks;
           }
           if (remoteData.settings) {
             if (typeof remoteData.settings.soundEnabled === 'boolean' && remoteData.settings.soundEnabled !== currentSoundEnabledRef.current) {
@@ -745,14 +761,14 @@ export default function App() {
     );
 
     return () => unsubscribe();
-  }, [currentUser, autoSyncEnabled]);
+  }, [currentUser, autoSyncEnabled, isCloudSyncReady]);
 
   // Push local changes to Firestore with rapid debounce when auto-sync is enabled
   const autoSyncTimerRef = React.useRef<NodeJS.Timeout | null>(null);
   const isInitialMountRef = React.useRef<boolean>(true);
 
   const performAutoSave = React.useCallback(async () => {
-    if (!currentUser || !autoSyncEnabled) return;
+    if (!currentUser || !autoSyncEnabled || !isCloudSyncReady) return;
     
     // Check if local data is actually different from the last known cloudData
     if (cloudData) {
@@ -803,7 +819,7 @@ export default function App() {
     } finally {
       setIsSyncing(false);
     }
-  }, [currentUser, autoSyncEnabled, tasks, tabs, deletedTasks, soundEnabled, fireEnabled, lang, aiIconVariant, cloudData]);
+  }, [currentUser, autoSyncEnabled, isCloudSyncReady, tasks, tabs, deletedTasks, soundEnabled, fireEnabled, lang, aiIconVariant, cloudData]);
 
   useEffect(() => {
     if (isInitialMountRef.current) {
@@ -856,83 +872,16 @@ export default function App() {
   };
 
   const handleLoginWithGoogle = async () => {
-    const user = await loginWithGoogle();
-    setCurrentUser(user);
-    const data = await fetchUserCloudData(user.uid);
-    if (data) {
-      setCloudData(data);
-      if (data.tasks && data.tasks.length > 0) {
-        const activeTabs = currentTabsRef.current.length > 0
-          ? currentTabsRef.current
-          : (lang === 'uk' ? DEFAULT_TABS_UK : DEFAULT_TABS_EN);
-        const validTabIds = new Set(activeTabs.map((t) => t.id));
-        const fallbackPhase = activeTabs[0]?.id || 'focus';
-
-        const sanitizedTasks = data.tasks.map((task: PSTask) => ({
-          ...task,
-          phase: validTabIds.has(task.phase) ? task.phase : fallbackPhase,
-        }));
-        setTasks(sanitizedTasks);
-        // Do NOT add new tabs from cloud account; preserve user tab structure
-        if (data.deletedTasks) setDeletedTasks(data.deletedTasks);
-        if (data.settings) {
-          if (typeof data.settings.soundEnabled === 'boolean') {
-            setSoundEnabled(data.settings.soundEnabled);
-            sound.enabled = data.settings.soundEnabled;
-          }
-          if (typeof data.settings.fireEnabled === 'boolean') {
-            setFireEnabled(data.settings.fireEnabled);
-          }
-          if (data.settings.lang === 'uk' || data.settings.lang === 'en') {
-            setLang(data.settings.lang as Language);
-          }
-          if (data.settings.aiIconVariant) {
-            setAiIconVariant(data.settings.aiIconVariant as AIIconId);
-          }
-        }
-      }
-      if (data.updatedAt) {
-        setLastSyncTime(data.updatedAt);
-        localStorage.setItem(LAST_SYNC_KEY, String(data.updatedAt));
-      }
-    } else {
-      // First backup for newly connected account: standard default tabs, no extra tabs
-      const defaultTabs = lang === 'uk' ? DEFAULT_TABS_UK : DEFAULT_TABS_EN;
-      const validTabIds = new Set(defaultTabs.map((t) => t.id));
-      const fallbackPhase = defaultTabs[0]?.id || 'focus';
-      const baseTasks = tasks.length > 0 ? tasks : (lang === 'uk' ? INITIAL_LIFE_TASKS_UK : INITIAL_LIFE_TASKS_EN);
-      const sanitizedTasks = baseTasks.map((task: PSTask) => ({
-        ...task,
-        phase: validTabIds.has(task.phase) ? task.phase : fallbackPhase,
-      }));
-
-      setTabs(defaultTabs);
-      setTasks(sanitizedTasks);
-      const now = Date.now();
-      lastLocalSaveTimeRef.current = now;
-      await saveUserCloudData(user.uid, {
-        tasks: sanitizedTasks,
-        tabs: defaultTabs,
-        deletedTasks,
-        settings: {
-          soundEnabled,
-          fireEnabled,
-          lang,
-          aiIconVariant,
-        },
-      });
-      setLastSyncTime(now);
-      localStorage.setItem(LAST_SYNC_KEY, String(now));
-    }
+    await loginWithGoogle();
   };
 
   const handleLogout = async () => {
     await logoutUser();
     setCurrentUser(null);
     setCloudData(null);
-    // Reset to clean default tabs and tasks without leftover custom tabs
-    const defaultTabs = lang === 'uk' ? DEFAULT_TABS_UK : DEFAULT_TABS_EN;
-    const defaultTasks = lang === 'uk' ? INITIAL_LIFE_TASKS_UK : INITIAL_LIFE_TASKS_EN;
+    // Reset to a clean empty workspace without leaking the previous account's data.
+    const defaultTabs: TaskTab[] = [];
+    const defaultTasks: PSTask[] = [];
     setTabs(defaultTabs);
     setTasks(defaultTasks);
     setSelectedPhase('ALL');
@@ -978,10 +927,19 @@ export default function App() {
       const data = await fetchUserCloudData(currentUser.uid);
       if (data) {
         setCloudData(data);
-        if (data.tasks) {
+        if (Array.isArray(data.tabs)) {
+          setTabs(data.tabs);
+          currentTabsRef.current = data.tabs;
+          try {
+            localStorage.setItem(TABS_KEY, JSON.stringify(data.tabs));
+          } catch (e) {
+            console.error('Failed to save restored tabs to localStorage', e);
+          }
+        }
+        if (Array.isArray(data.tasks)) {
           const activeTabs = currentTabsRef.current.length > 0
             ? currentTabsRef.current
-            : (lang === 'uk' ? DEFAULT_TABS_UK : DEFAULT_TABS_EN);
+            : data.tabs || [];
           const validTabIds = new Set(activeTabs.map((t) => t.id));
           const fallbackPhase = activeTabs[0]?.id || 'focus';
 
@@ -997,8 +955,7 @@ export default function App() {
             console.error('Failed to save restored tasks to localStorage', e);
           }
         }
-        // Do NOT add new tabs from cloud on restore
-        if (data.deletedTasks) {
+        if (Array.isArray(data.deletedTasks)) {
           setDeletedTasks(data.deletedTasks);
           currentDeletedTasksRef.current = data.deletedTasks;
           try {
@@ -1056,6 +1013,48 @@ export default function App() {
 
     return { total, completed, percent, phaseCounts };
   }, [tasks, tabs]);
+
+  const adaptiveProfile: AdaptiveProfile = useMemo(() => {
+    const completedTasks = tasks.filter((task) => task.done && task.completedAt);
+    const trackedTasks = tasks.length + deletedTasks.length;
+    const completionRate = trackedTasks > 0 ? Math.round((completedTasks.length / trackedTasks) * 100) : 0;
+    const averageCompletionMinutes = completedTasks.length > 0
+      ? Math.round(completedTasks.reduce((total, task) => total + (task.timeSpentSeconds || 0), 0) / completedTasks.length / 60)
+      : 0;
+    const tasksWithSteps = tasks.filter((task) => task.steps > 0);
+    const averageStepCount = tasksWithSteps.length > 0
+      ? Math.round((tasksWithSteps.reduce((total, task) => total + task.steps, 0) / tasksWithSteps.length) * 10) / 10
+      : 0;
+    const completedByPhase = new Map<string, number>();
+    const activeByPhase = new Map<string, number>();
+    tasks.forEach((task) => {
+      const bucket = task.done ? completedByPhase : activeByPhase;
+      bucket.set(task.phase, (bucket.get(task.phase) || 0) + 1);
+    });
+    const preferredPhases = [...completedByPhase.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([phase]) => phase);
+    const overloadedPhases = [...activeByPhase.entries()]
+      .filter(([, count]) => count >= 4)
+      .sort((a, b) => b[1] - a[1])
+      .map(([phase]) => phase);
+    const activeLoad = tasks.filter((task) => !task.done).length;
+    const urgentLoad = tasks.filter((task) => !task.done && task.priority === 1).length;
+
+    return {
+      trackedTasks,
+      completedTasks: completedTasks.length,
+      completionRate,
+      averageCompletionMinutes,
+      averageStepCount,
+      preferredPhases,
+      overloadedPhases,
+      activeLoad,
+      urgentLoad,
+      recommendedActiveLimit: urgentLoad >= 3 || activeLoad >= 8 ? 3 : 5,
+    };
+  }, [tasks, deletedTasks]);
 
   // Filtered & Sorted Tasks (Running timers & Pinned on top, then by search, priority, creation)
   const filteredTasks = useMemo(() => {
@@ -2033,6 +2032,7 @@ export default function App() {
         currentTasks={tasks}
         deletedTasks={deletedTasks}
         stats={stats}
+        adaptiveProfile={adaptiveProfile}
         initialPrompt={aiPromptSeed}
         aiIconVariant={aiIconVariant}
         onInjectTasks={handleInjectAITasks}

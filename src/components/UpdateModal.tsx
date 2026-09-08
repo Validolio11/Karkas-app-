@@ -24,6 +24,29 @@ interface UpdateModalProps {
   currentVersion: string;
 }
 
+function normalizeVersion(version: string): number[] {
+  const cleaned = String(version || '').trim().replace(/^v/i, '').split('-')[0];
+  const parts = cleaned.split('.').map((part) => Number.parseInt(part, 10) || 0);
+
+  while (parts.length < 3) {
+    parts.push(0);
+  }
+
+  return parts.slice(0, 3);
+}
+
+function compareVersions(a: string, b: string): number {
+  const left = normalizeVersion(a);
+  const right = normalizeVersion(b);
+
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    const diff = (left[index] ?? 0) - (right[index] ?? 0);
+    if (diff !== 0) return diff;
+  }
+
+  return 0;
+}
+
 export const UpdateModal: React.FC<UpdateModalProps> = ({
   isOpen,
   onClose,
@@ -105,7 +128,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
 
   const versionTag = release?.tag_name || `v${currentVersion}`;
   const isNewVersionAvailable = release?.tag_name
-    ? release.tag_name.replace(/^v/, '') !== currentVersion.replace(/^v/, '')
+    ? compareVersions(release.tag_name, currentVersion) > 0
     : false;
 
   const exeAsset = release?.assets?.find((a) =>

@@ -107,6 +107,37 @@ app.post("/api/ai/verify-key", async (req, res) => {
   }
 });
 
+// App update checking endpoint with memory cache (2 min TTL) to avoid GitHub rate limits
+let cachedReleaseData: { data: any; timestamp: number } | null = null;
+app.get("/api/check-update", async (req, res) => {
+  try {
+    if (cachedReleaseData && Date.now() - cachedReleaseData.timestamp < 120000) {
+      return res.json(cachedReleaseData.data);
+    }
+
+    const ghRes = await fetch("https://api.github.com/repos/Validolio11/Karkas-app-/releases/latest", {
+      headers: {
+        "User-Agent": "Karkas-Updater/1.1",
+        Accept: "application/vnd.github.v3+json",
+      },
+    });
+
+    if (!ghRes.ok) {
+      if (ghRes.status === 404) {
+        return res.status(404).json({ error: "No releases found on GitHub" });
+      }
+      return res.status(ghRes.status).json({ error: `GitHub API error: ${ghRes.statusText}` });
+    }
+
+    const releaseData = await ghRes.json();
+    cachedReleaseData = { data: releaseData, timestamp: Date.now() };
+    res.json(releaseData);
+  } catch (err: any) {
+    console.error("Error checking GitHub release:", err);
+    res.status(500).json({ error: err.message || "Failed to check update" });
+  }
+});
+
 // Smart AI Assistant & Full App Context Analyzer Endpoint
 app.post("/api/ai/assist", async (req, res) => {
   try {

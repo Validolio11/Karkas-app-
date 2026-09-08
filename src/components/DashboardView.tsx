@@ -322,19 +322,54 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
         });
       }
     } else {
-      // 4 Weekly intervals
+      // 4 Weekly intervals based on actual task timestamps
+      const nowMs = Date.now();
+      let pStart = nowMs - 30 * 24 * 60 * 60 * 1000;
+      let pEnd = nowMs;
+
+      if (selectedPeriod === 'THIS_MONTH') {
+        pStart = new Date(currentYear, currentMonth, 1).getTime();
+        pEnd = new Date(currentYear, currentMonth + 1, 0, 23, 59, 59, 999).getTime();
+      } else if (selectedPeriod === 'LAST_30_DAYS') {
+        pStart = nowMs - 30 * 24 * 60 * 60 * 1000;
+        pEnd = nowMs;
+      } else {
+        // ALL_TIME: find earliest task or default to 30 days
+        const allTimestamps = [...tasks, ...deletedTasks]
+          .map((t) => t.createdAt || 0)
+          .filter((t) => t > 0);
+        const earliest = allTimestamps.length > 0 ? Math.min(...allTimestamps) : nowMs - 30 * 24 * 60 * 60 * 1000;
+        pStart = Math.min(earliest, nowMs - 7 * 24 * 60 * 60 * 1000);
+        pEnd = nowMs;
+      }
+
+      const intervalDuration = (pEnd - pStart) / 4;
+
       for (let w = 1; w <= 4; w++) {
         const label = lang === 'uk' ? `Т-${w}` : `W${w}`;
-        // Distribute proportionally or based on week offset
-        const sliceLen = Math.ceil(totalTracked / 4) || 1;
-        const subDelivered = Math.round(totalDelivered / 4);
-        const subDropped = Math.round(totalDropped / 4);
+        const wStart = pStart + (w - 1) * intervalDuration;
+        const wEnd = pStart + w * intervalDuration;
+
+        const wDelivered = [...completedInPeriod, ...deletedCompleted].filter((t) => {
+          const ts = t.completedAt || t.createdAt || 0;
+          return ts >= wStart && ts <= wEnd;
+        }).length;
+
+        const wDropped = droppedInPeriod.filter((t) => {
+          const ts = t.deletedAt || t.createdAt || 0;
+          return ts >= wStart && ts <= wEnd;
+        }).length;
+
+        const wCreated = [...activeInPeriod, ...completedInPeriod, ...deletedInPeriod].filter((t) => {
+          const ts = t.createdAt || 0;
+          return ts >= wStart && ts <= wEnd;
+        }).length;
 
         velocityBars.push({
           label,
-          delivered: w === 4 ? totalDelivered - subDelivered * 3 : subDelivered,
-          dropped: w === 4 ? totalDropped - subDropped * 3 : subDropped,
-          created: sliceLen,
+          delivered: wDelivered,
+          dropped: wDropped,
+          created: wCreated,
         });
       }
     }

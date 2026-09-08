@@ -42,6 +42,7 @@ const AI_ICON_KEY = 'karkas_ai_icon_variant';
 const FIRE_ENABLED_KEY = 'karkas_fire_enabled';
 const LAST_SYNC_KEY = 'karkas_last_sync_time';
 const AUTO_SYNC_KEY = 'karkas_auto_sync_enabled';
+const APP_CURRENT_VERSION = '1.2.0';
 
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 
@@ -52,7 +53,7 @@ function sanitizeTasksTimerSafeguard(taskList: PSTask[]): PSTask[] {
     if (t.timerRunning && t.timerStartedAt) {
       const elapsedMs = now - t.timerStartedAt;
       const startedDateStr = new Date(t.timerStartedAt).toDateString();
-      if (elapsedMs > TWO_HOURS_MS || startedDateStr !== todayStr) {
+      if (elapsedMs > TWO_HOURS_MS) {
         // Forgot to turn off timer! Auto-pause and cap session time at max 2 hours (7200s)
         const cappedSeconds = Math.min(Math.floor(elapsedMs / 1000), 7200);
         return {
@@ -155,7 +156,7 @@ export default function App() {
           if (t.timerRunning && t.timerStartedAt) {
             const elapsedMs = now - t.timerStartedAt;
             const startedDateStr = new Date(t.timerStartedAt).toDateString();
-            if (elapsedMs > TWO_HOURS_MS || startedDateStr !== todayStr) {
+            if (elapsedMs > TWO_HOURS_MS) {
               hasChanges = true;
               const cappedSeconds = Math.min(Math.floor(elapsedMs / 1000), 7200);
               return {
@@ -359,6 +360,40 @@ export default function App() {
       }
     } catch (err) {
       console.error('Task breakdown error:', err);
+      // Resilient fallback breakdown if network or API key is absent
+      const isUk = lang === 'uk';
+      const fallbackSteps: TaskStepItem[] = [
+        {
+          id: `s-${taskId}-${Date.now()}-0`,
+          title: isUk ? `Підготовка та збір контексту` : `Preparation & context review`,
+          done: false,
+        },
+        {
+          id: `s-${taskId}-${Date.now()}-1`,
+          title: isUk ? `Основне виконання завдання` : `Primary execution phase`,
+          done: false,
+        },
+        {
+          id: `s-${taskId}-${Date.now()}-2`,
+          title: isUk ? `Фінальна перевірка та закриття` : `Verification & completion`,
+          done: false,
+        },
+      ];
+      setTasks((prev) =>
+        prev.map((t) => {
+          if (t.id === taskId) {
+            return {
+              ...t,
+              stepList: fallbackSteps,
+              steps: fallbackSteps.length,
+              currentStep: 0,
+              done: false,
+            };
+          }
+          return t;
+        })
+      );
+      sound.activate();
     } finally {
       setBreakingDownTaskId(null);
     }
@@ -531,13 +566,16 @@ export default function App() {
               lastLocalSaveTimeRef.current = data.updatedAt;
             }
 
-            // If local tasks are empty or default templates, auto-restore from cloud
+            // If local tasks are empty or default templates, or cloud data is newer than local sync, auto-restore from cloud
+            const isDefaultTask = (t: PSTask) =>
+              t.id.startsWith('life-') || t.id.startsWith('ps-');
             const isLocalDefault =
-              tasks.length <= 6 &&
-              (JSON.stringify(tasks) === JSON.stringify(INITIAL_LIFE_TASKS_UK) ||
-                JSON.stringify(tasks) === JSON.stringify(INITIAL_LIFE_TASKS_EN));
+              tasks.length === 0 ||
+              (tasks.length <= 6 && tasks.every(isDefaultTask));
+            const localSyncTime = parseInt(localStorage.getItem(LAST_SYNC_KEY) || '0', 10);
+            const isCloudNewer = Boolean(data.updatedAt && data.updatedAt > localSyncTime);
 
-            if (isLocalDefault && data.tasks && data.tasks.length > 0) {
+            if ((isLocalDefault || isCloudNewer) && data.tasks && data.tasks.length > 0) {
               const activeTabs = currentTabsRef.current.length > 0
                 ? currentTabsRef.current
                 : (lang === 'uk' ? DEFAULT_TABS_UK : DEFAULT_TABS_EN);
@@ -550,8 +588,15 @@ export default function App() {
                 phase: validTabIds.has(task.phase) ? task.phase : fallbackPhase,
               }));
               setTasks(sanitizedTasks);
+              currentTasksRef.current = sanitizedTasks;
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitizedTasks));
+
               // Do NOT add new tabs from cloud; keep current tabs intact
-              if (data.deletedTasks) setDeletedTasks(data.deletedTasks);
+              if (data.deletedTasks) {
+                setDeletedTasks(data.deletedTasks);
+                currentDeletedTasksRef.current = data.deletedTasks;
+                localStorage.setItem(DELETED_STORAGE_KEY, JSON.stringify(data.deletedTasks));
+              }
               if (data.settings) {
                 if (typeof data.settings.soundEnabled === 'boolean') {
                   setSoundEnabled(data.settings.soundEnabled);
@@ -863,6 +908,9 @@ export default function App() {
     const defaultTasks = lang === 'uk' ? INITIAL_LIFE_TASKS_UK : INITIAL_LIFE_TASKS_EN;
     setTabs(defaultTabs);
     setTasks(defaultTasks);
+    setSelectedPhase('ALL');
+    currentTabsRef.current = defaultTabs;
+    currentTasksRef.current = defaultTasks;
     try {
       localStorage.setItem(TABS_KEY, JSON.stringify(defaultTabs));
       localStorage.setItem(STORAGE_KEY, JSON.stringify(defaultTasks));
@@ -915,9 +963,23 @@ export default function App() {
             phase: validTabIds.has(task.phase) ? task.phase : fallbackPhase,
           }));
           setTasks(sanitizedTasks);
+          currentTasksRef.current = sanitizedTasks;
+          try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitizedTasks));
+          } catch (e) {
+            console.error('Failed to save restored tasks to localStorage', e);
+          }
         }
         // Do NOT add new tabs from cloud on restore
-        if (data.deletedTasks) setDeletedTasks(data.deletedTasks);
+        if (data.deletedTasks) {
+          setDeletedTasks(data.deletedTasks);
+          currentDeletedTasksRef.current = data.deletedTasks;
+          try {
+            localStorage.setItem(DELETED_STORAGE_KEY, JSON.stringify(data.deletedTasks));
+          } catch (e) {
+            console.error('Failed to save restored deleted tasks to localStorage', e);
+          }
+        }
         if (data.settings) {
           if (typeof data.settings.soundEnabled === 'boolean') {
             setSoundEnabled(data.settings.soundEnabled);
@@ -935,6 +997,7 @@ export default function App() {
         }
         if (data.updatedAt) {
           setLastSyncTime(data.updatedAt);
+          lastLocalSaveTimeRef.current = data.updatedAt;
           localStorage.setItem(LAST_SYNC_KEY, String(data.updatedAt));
         }
       }
@@ -1052,7 +1115,17 @@ export default function App() {
 
   const handleSetPresetTabs = (preset: TaskTab[]) => {
     setTabs(preset);
-    if (selectedPhase !== 'ALL' && !preset.some((tb) => tb.id === selectedPhase)) {
+    const validTabIds = new Set(preset.map((t) => t.id));
+    const fallbackTabId = preset[0]?.id || 'focus';
+    setTasks((prev) =>
+      prev.map((t) => (validTabIds.has(t.phase) ? t : { ...t, phase: fallbackTabId }))
+    );
+    if (
+      selectedPhase !== 'ALL' &&
+      selectedPhase !== 'DASHBOARD' &&
+      selectedPhase !== 'HISTORY' &&
+      !validTabIds.has(selectedPhase)
+    ) {
       setSelectedPhase('ALL');
     }
   };
@@ -1063,26 +1136,51 @@ export default function App() {
       prev.map((t) => {
         if (t.id === id) {
           const nextDone = !t.done;
-          const updatedStepList = t.stepList
-            ? t.stepList.map((s) => ({ ...s, done: nextDone }))
-            : undefined;
+          let updatedStepList: { id: string; title: string; done: boolean }[] | undefined = undefined;
 
-          // If completing task while timer is running, bank the elapsed time
+          if (t.stepList && t.stepList.length > 0) {
+            if (nextDone) {
+              updatedStepList = t.stepList.map((s) => ({ ...s, done: true }));
+            } else {
+              // Reopening: uncheck the last completed step so progress accurately reflects reopening
+              const lastDoneIdx = t.stepList.map((s) => s.done).lastIndexOf(true);
+              if (lastDoneIdx >= 0) {
+                updatedStepList = t.stepList.map((s, idx) => ({
+                  ...s,
+                  done: idx === lastDoneIdx ? false : s.done,
+                }));
+              } else {
+                updatedStepList = t.stepList.map((s) => ({ ...s, done: false }));
+              }
+            }
+          }
+
+          const completedCount = updatedStepList
+            ? updatedStepList.filter((s) => s.done).length
+            : nextDone
+            ? t.steps
+            : Math.max(0, t.steps - 1);
+
+          // If completing task while timer is running, bank elapsed time and pause
           let updatedTimeSpent = t.timeSpentSeconds || 0;
+          let timerRunning = t.timerRunning;
+          let timerStartedAt = t.timerStartedAt;
           if (nextDone && t.timerRunning && t.timerStartedAt) {
             const elapsed = Math.floor((Date.now() - t.timerStartedAt) / 1000);
             updatedTimeSpent += Math.max(0, elapsed);
+            timerRunning = false;
+            timerStartedAt = undefined;
           }
 
           return {
             ...t,
             done: nextDone,
             stepList: updatedStepList,
-            currentStep: nextDone ? t.steps : Math.min(t.currentStep, t.steps - 1),
-            completedAt: nextDone ? Date.now() : undefined,
+            currentStep: completedCount,
+            completedAt: nextDone ? (t.completedAt || Date.now()) : undefined,
             timeSpentSeconds: updatedTimeSpent,
-            timerRunning: nextDone ? false : t.timerRunning,
-            timerStartedAt: nextDone ? undefined : t.timerStartedAt,
+            timerRunning,
+            timerStartedAt,
           };
         }
         return t;
@@ -1146,6 +1244,7 @@ export default function App() {
           return {
             ...t,
             timeSpentSeconds: Math.max(0, newTotalSeconds),
+            timerStartedAt: t.timerRunning ? Date.now() : undefined,
             autoPausedOverdue: false,
           };
         }
@@ -1163,12 +1262,25 @@ export default function App() {
             ? t.stepList.map((s, idx) => ({ ...s, done: idx < step }))
             : undefined;
 
+          let updatedTimeSpent = t.timeSpentSeconds || 0;
+          let timerRunning = t.timerRunning;
+          let timerStartedAt = t.timerStartedAt;
+          if (nextDone && t.timerRunning && t.timerStartedAt) {
+            const elapsed = Math.floor((Date.now() - t.timerStartedAt) / 1000);
+            updatedTimeSpent += Math.max(0, elapsed);
+            timerRunning = false;
+            timerStartedAt = undefined;
+          }
+
           return {
             ...t,
             currentStep: step,
             stepList: updatedStepList,
             done: nextDone,
             completedAt: nextDone ? (t.completedAt || Date.now()) : undefined,
+            timeSpentSeconds: updatedTimeSpent,
+            timerRunning,
+            timerStartedAt,
           };
         }
         return t;
@@ -1206,12 +1318,26 @@ export default function App() {
           const completedCount = updatedStepList.filter((s) => s.done).length;
           const isAllDone = completedCount === updatedStepList.length && updatedStepList.length > 0;
 
+          let updatedTimeSpent = t.timeSpentSeconds || 0;
+          let timerRunning = t.timerRunning;
+          let timerStartedAt = t.timerStartedAt;
+          if (isAllDone && !t.done && t.timerRunning && t.timerStartedAt) {
+            const elapsed = Math.floor((Date.now() - t.timerStartedAt) / 1000);
+            updatedTimeSpent += Math.max(0, elapsed);
+            timerRunning = false;
+            timerStartedAt = undefined;
+          }
+
           return {
             ...t,
             stepList: updatedStepList,
             steps: updatedStepList.length,
             currentStep: completedCount,
             done: isAllDone,
+            completedAt: isAllDone ? (t.completedAt || Date.now()) : undefined,
+            timeSpentSeconds: updatedTimeSpent,
+            timerRunning,
+            timerStartedAt,
           };
         }
         return t;
@@ -1250,12 +1376,26 @@ export default function App() {
           const completedCount = nextList.filter((s) => s.done).length;
           const isAllDone = nextList.length > 0 && completedCount === nextList.length;
 
+          let updatedTimeSpent = t.timeSpentSeconds || 0;
+          let timerRunning = t.timerRunning;
+          let timerStartedAt = t.timerStartedAt;
+          if (isAllDone && !t.done && t.timerRunning && t.timerStartedAt) {
+            const elapsed = Math.floor((Date.now() - t.timerStartedAt) / 1000);
+            updatedTimeSpent += Math.max(0, elapsed);
+            timerRunning = false;
+            timerStartedAt = undefined;
+          }
+
           return {
             ...t,
             stepList: nextList,
             steps: Math.max(1, nextList.length),
             currentStep: completedCount,
             done: isAllDone,
+            completedAt: isAllDone ? (t.completedAt || Date.now()) : undefined,
+            timeSpentSeconds: updatedTimeSpent,
+            timerRunning,
+            timerStartedAt,
           };
         }
         return t;
@@ -1304,9 +1444,19 @@ export default function App() {
   const handleDelete = (id: string) => {
     const taskToDelete = tasks.find((t) => t.id === id);
     if (taskToDelete) {
-      setRecentlyDeleted(taskToDelete);
-      const deletedItem: DeletedTask = {
+      let finalTimeSpent = taskToDelete.timeSpentSeconds || 0;
+      if (taskToDelete.timerRunning && taskToDelete.timerStartedAt) {
+        finalTimeSpent += Math.max(0, Math.floor((Date.now() - taskToDelete.timerStartedAt) / 1000));
+      }
+      const sanitizedToDelete: PSTask = {
         ...taskToDelete,
+        timeSpentSeconds: finalTimeSpent,
+        timerRunning: false,
+        timerStartedAt: undefined,
+      };
+      setRecentlyDeleted(sanitizedToDelete);
+      const deletedItem: DeletedTask = {
+        ...sanitizedToDelete,
         deletedAt: Date.now(),
       };
       setDeletedTasks((prev) => [deletedItem, ...prev.filter((d) => d.id !== id)]);
@@ -1326,7 +1476,12 @@ export default function App() {
   const handleRestoreDeletedTask = (task: DeletedTask) => {
     sound.activate();
     const { deletedAt, ...restTask } = task;
-    setTasks((prev) => [restTask, ...prev]);
+    const fallbackTab = tabs[0]?.id || 'focus';
+    const safeTask: PSTask = {
+      ...restTask,
+      phase: tabs.some((tb) => tb.id === restTask.phase) ? restTask.phase : fallbackTab,
+    };
+    setTasks((prev) => [safeTask, ...prev]);
     setDeletedTasks((prev) => prev.filter((d) => d.id !== task.id));
   };
 
@@ -1783,12 +1938,12 @@ export default function App() {
             sound.tick(600);
             setIsUpdateOpen(true);
           }}
-          title={lang === 'uk' ? 'Центр оновлень (v1.1.1)' : 'System update center (v1.1.1)'}
+          title={lang === 'uk' ? `Центр оновлень (v${APP_CURRENT_VERSION})` : `System update center (v${APP_CURRENT_VERSION})`}
           className="px-2 py-1 border border-neutral-800 bg-[#08080a]/95 text-neutral-400 hover:text-white hover:border-neutral-600 transition-all cursor-pointer flex items-center gap-1.5 text-[10px] font-mono tracking-wider uppercase backdrop-blur-md shadow-md app-no-drag pointer-events-auto"
         >
           <RefreshCw className="w-3.5 h-3.5 text-emerald-400" />
-          <span className="hidden sm:inline font-bold">
-            v1.1.1
+          <span className="font-bold text-neutral-300">
+            v{APP_CURRENT_VERSION}
           </span>
         </button>
       </div>
@@ -1890,7 +2045,7 @@ export default function App() {
         isOpen={isUpdateOpen}
         onClose={() => setIsUpdateOpen(false)}
         lang={lang}
-        currentVersion="1.1.8"
+        currentVersion={APP_CURRENT_VERSION}
       />
 
       {/* Tab Deletion Confirmation Safeguard Modal */}

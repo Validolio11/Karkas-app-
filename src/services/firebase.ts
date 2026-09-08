@@ -153,6 +153,10 @@ export async function saveUserCloudData(
       };
       if (t.note !== undefined && t.note !== null) taskObj.note = t.note;
       if (t.completedAt !== undefined && t.completedAt !== null) taskObj.completedAt = t.completedAt;
+      if (typeof t.timeSpentSeconds === 'number') taskObj.timeSpentSeconds = t.timeSpentSeconds;
+      if (t.timerRunning !== undefined) taskObj.timerRunning = Boolean(t.timerRunning);
+      if (typeof t.timerStartedAt === 'number') taskObj.timerStartedAt = t.timerStartedAt;
+      if (t.autoPausedOverdue !== undefined) taskObj.autoPausedOverdue = Boolean(t.autoPausedOverdue);
       if (t.stepList && Array.isArray(t.stepList)) {
         taskObj.stepList = t.stepList.map((st) => ({
           id: st.id,
@@ -185,6 +189,10 @@ export async function saveUserCloudData(
       };
       if (t.note !== undefined && t.note !== null) delObj.note = t.note;
       if (t.completedAt !== undefined && t.completedAt !== null) delObj.completedAt = t.completedAt;
+      if (typeof t.timeSpentSeconds === 'number') delObj.timeSpentSeconds = t.timeSpentSeconds;
+      if (t.timerRunning !== undefined) delObj.timerRunning = Boolean(t.timerRunning);
+      if (typeof t.timerStartedAt === 'number') delObj.timerStartedAt = t.timerStartedAt;
+      if (t.autoPausedOverdue !== undefined) delObj.autoPausedOverdue = Boolean(t.autoPausedOverdue);
       if (t.stepList && Array.isArray(t.stepList)) {
         delObj.stepList = t.stepList.map((st) => ({
           id: st.id,

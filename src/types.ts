@@ -67,3 +67,16 @@ export interface AIRecommendation {
   productivityGrade?: string;
 }
 
+declare global {
+  interface Window {
+    electronAPI?: {
+      minimize: () => void;
+      maximize: () => void;
+      close: () => void;
+      isElectron: boolean;
+      downloadAndInstallUpdate?: (url: string, fileName?: string) => Promise<{ success: boolean; message?: string }>;
+      openExternal?: (url: string) => void;
+    };
+  }
+}
+

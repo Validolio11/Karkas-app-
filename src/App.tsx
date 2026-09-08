@@ -18,7 +18,7 @@ import {
   INITIAL_LIFE_TASKS_EN,
   getRandomTabColor,
 } from './utils/i18n';
-import { SquareCode, Trash, Plus, RotateCcw, CheckCircle, Flame, RefreshCw, Search, X, AlertTriangle } from 'lucide-react';
+import { SquareCode, Trash, Plus, RotateCcw, CheckCircle, Flame, RefreshCw, Search, X, AlertTriangle, Sparkles } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AIIcon, AIIconId, getSavedAIIconId } from './components/AIIconTemplates';
 import { 
@@ -42,7 +42,7 @@ const AI_ICON_KEY = 'karkas_ai_icon_variant';
 const FIRE_ENABLED_KEY = 'karkas_fire_enabled';
 const LAST_SYNC_KEY = 'karkas_last_sync_time';
 const AUTO_SYNC_KEY = 'karkas_auto_sync_enabled';
-const APP_CURRENT_VERSION = '1.2.0';
+const APP_CURRENT_VERSION = '1.2.1';
 
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 
@@ -190,6 +190,33 @@ export default function App() {
   const [isManageTabsOpen, setIsManageTabsOpen] = useState(false);
   const [isAccountOpen, setIsAccountOpen] = useState(false);
   const [isUpdateOpen, setIsUpdateOpen] = useState(false);
+  const [availableNewRelease, setAvailableNewRelease] = useState<{ tag_name: string; name?: string } | null>(null);
+
+  // Background automated version analyzer: checks if a newer version exists
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch('/api/check-update');
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.tag_name) {
+            const remoteClean = data.tag_name.replace(/^v/, '');
+            const localClean = APP_CURRENT_VERSION.replace(/^v/, '');
+            if (remoteClean !== localClean) {
+              const dismissed = sessionStorage.getItem('karkas_dismissed_update');
+              if (dismissed !== data.tag_name) {
+                setAvailableNewRelease(data);
+              }
+            }
+          }
+        }
+      } catch {
+        // Silent background check fallback
+      }
+    }, 2500);
+
+    return () => clearTimeout(timer);
+  }, []);
   const [aiIconVariant, setAiIconVariant] = useState<AIIconId>(() => {
     return getSavedAIIconId();
   });
@@ -2047,6 +2074,47 @@ export default function App() {
         lang={lang}
         currentVersion={APP_CURRENT_VERSION}
       />
+
+      {/* Automated Update Detection Prompt Banner */}
+      <AnimatePresence>
+        {availableNewRelease && !isUpdateOpen && (
+          <motion.div
+            initial={{ opacity: 0, y: -25 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -25 }}
+            className="fixed top-3.5 left-1/2 -translate-x-1/2 z-50 bg-[#09090c]/95 border border-emerald-500/70 shadow-2xl px-4 py-2.5 flex items-center gap-3 font-mono text-xs backdrop-blur-md app-no-drag"
+          >
+            <Sparkles className="w-4 h-4 text-emerald-400 shrink-0 animate-pulse" />
+            <span className="text-neutral-200">
+              {lang === 'uk'
+                ? `Виявлено нову версію ${availableNewRelease.tag_name}. Встановити оновлення зараз?`
+                : `New version ${availableNewRelease.tag_name} available. Install update now?`}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                sound.activate();
+                setIsUpdateOpen(true);
+              }}
+              className="px-3 py-1 bg-white text-black font-extrabold uppercase text-[11px] hover:bg-neutral-200 transition-all cursor-pointer shadow-sm active:scale-95"
+            >
+              {lang === 'uk' ? 'Встановити' : 'Install'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                sound.tick(300);
+                sessionStorage.setItem('karkas_dismissed_update', availableNewRelease.tag_name);
+                setAvailableNewRelease(null);
+              }}
+              className="text-neutral-500 hover:text-white p-1 transition-colors cursor-pointer"
+              title={lang === 'uk' ? 'Пізніше' : 'Later'}
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Tab Deletion Confirmation Safeguard Modal */}
       <AnimatePresence>

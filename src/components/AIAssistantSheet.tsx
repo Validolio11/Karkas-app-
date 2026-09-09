@@ -270,9 +270,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
         setCustomModel(nextModel);
         setAwaitingApiKey(false);
         awaitingKeyRef.current = false;
-        setKeyStatus(lang === 'uk'
-              ? `API-ключ підключено. Автоматично обрано модель ${nextModel}.`
-              : `API key connected. Model ${nextModel} was selected automatically.`);
+        setKeyStatus(null);
         sound.activate();
         requestToResume = pendingRequest.current;
         pendingRequest.current = null;

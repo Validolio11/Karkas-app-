@@ -44,7 +44,7 @@ const FIRE_ENABLED_KEY = 'karkas_fire_enabled';
 const SOUND_ENABLED_KEY = 'karkas_sound_enabled';
 const LAST_SYNC_KEY = 'karkas_last_sync_time';
 const AUTO_SYNC_KEY = 'karkas_auto_sync_enabled';
-const APP_CURRENT_VERSION = '1.2.7';
+const APP_CURRENT_VERSION = '1.2.8';
 
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 

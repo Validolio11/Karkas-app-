@@ -44,7 +44,7 @@ const FIRE_ENABLED_KEY = 'karkas_fire_enabled';
 const SOUND_ENABLED_KEY = 'karkas_sound_enabled';
 const LAST_SYNC_KEY = 'karkas_last_sync_time';
 const AUTO_SYNC_KEY = 'karkas_auto_sync_enabled';
-const APP_CURRENT_VERSION = '1.2.8';
+const APP_CURRENT_VERSION = '1.2.9';
 
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 
@@ -351,6 +351,9 @@ export default function App() {
     setBreakingDownTaskId(taskId);
     sound.activate();
 
+    const requestController = new AbortController();
+    const requestTimeout = window.setTimeout(() => requestController.abort(), 12_000);
+
     try {
       const activeTasks = tasks.filter((t) => !t.done);
       const completedTasks = tasks.filter((t) => t.done);
@@ -361,6 +364,7 @@ export default function App() {
 
       const res = await fetch('/api/ai/breakdown-task', {
         method: 'POST',
+        signal: requestController.signal,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           taskId: targetTask.id,
@@ -384,14 +388,17 @@ export default function App() {
       const data = await res.json();
       const rawSteps = Array.isArray(data.stepList) ? data.stepList : Array.isArray(data.steps) ? data.steps : [];
 
-      if (rawSteps.length > 0) {
-        const newStepItems: TaskStepItem[] = rawSteps.map((st: any, idx: number) => ({
+      if (rawSteps.length === 0) {
+        throw new Error('AI breakdown returned no steps');
+      }
+
+      const newStepItems: TaskStepItem[] = rawSteps.map((st: any, idx: number) => ({
           id: st.id || `s-${taskId}-${Date.now()}-${idx}`,
           title: typeof st === 'string' ? st : st.title || `Крок ${idx + 1}`,
           done: false,
         }));
 
-        setTasks((prev) =>
+      setTasks((prev) =>
           prev.map((t) => {
             if (t.id === taskId) {
               return {
@@ -409,8 +416,7 @@ export default function App() {
             return t;
           })
         );
-        sound.activate();
-      }
+      sound.activate();
     } catch (err) {
       console.error('Task breakdown error:', err);
       // Resilient fallback breakdown if network or API key is absent
@@ -448,6 +454,7 @@ export default function App() {
       );
       sound.activate();
     } finally {
+      window.clearTimeout(requestTimeout);
       setBreakingDownTaskId(null);
     }
   };
@@ -1724,9 +1731,10 @@ export default function App() {
                   <button
                     id="empty-add-btn"
                     onClick={() => setIsAddOpen(true)}
-                    className="px-3.5 py-1.5 bg-white text-black font-extrabold text-xs font-mono tracking-wider hover:bg-neutral-200 transition-colors"
+                    className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 bg-white text-black font-extrabold text-xs font-mono tracking-wider hover:bg-neutral-200 transition-colors"
                   >
-                    {t.injectNewOp}
+                    <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>{t.injectNewOp}</span>
                   </button>
                 </div>
               </div>

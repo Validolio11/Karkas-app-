@@ -14,6 +14,7 @@ import {
   Plus,
   X,
   Sparkles,
+  LoaderCircle,
   Play,
   Pause,
   RotateCcw,
@@ -739,7 +740,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
           >
             <div className="bg-[#09090b] border border-neutral-800 border-t-0 p-3 sm:p-3.5 space-y-2">
               {/* Sub-Card Header */}
-              <div className="flex items-center justify-between border-b border-neutral-800/80 pb-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-800/80 pb-2">
                 <div className="flex items-center gap-2">
                   <span className="text-[10px] font-mono font-bold tracking-wider text-neutral-400 uppercase">
                     // {t.stepsSection.optionalTitle}
@@ -751,7 +752,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   )}
                 </div>
 
-                <div className="flex items-center gap-1.5">
+                <div className="flex flex-wrap items-center justify-end gap-1.5">
                   {onAIBreakdown && (
                     <button
                       type="button"
@@ -762,9 +763,15 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                       }}
                       disabled={isBreakingDown}
                       title={lang === 'uk' ? 'Автоматично розбити це завдання на послідовні підкроки через ШІ' : 'Auto-break down this task into steps via AI'}
-                      className="flex items-center gap-1 text-[9px] font-mono uppercase px-2 py-0.5 bg-neutral-900 border border-neutral-700 hover:border-white text-white hover:text-white transition-colors disabled:opacity-50"
+                      aria-label={isBreakingDown ? t.stepsSection.aiBreakingDown : t.stepsSection.aiBreakdownBtn}
+                      aria-busy={isBreakingDown}
+                      className="inline-flex items-center justify-center gap-1 whitespace-nowrap border border-neutral-700 bg-neutral-900 px-2 py-0.5 text-[9px] font-mono font-bold uppercase tracking-wider text-neutral-300 transition-colors hover:border-white hover:text-white focus-visible:outline-none focus-visible:border-white disabled:cursor-wait disabled:border-neutral-800 disabled:bg-neutral-950 disabled:text-neutral-600"
                     >
-                      <Sparkles className="w-2.5 h-2.5 text-white animate-pulse" />
+                      {isBreakingDown ? (
+                        <LoaderCircle className="h-2.5 w-2.5 animate-spin" aria-hidden="true" />
+                      ) : (
+                        <Sparkles className="h-2.5 w-2.5" aria-hidden="true" />
+                      )}
                       <span>{isBreakingDown ? t.stepsSection.aiBreakingDown : t.stepsSection.aiBreakdownBtn}</span>
                     </button>
                   )}
@@ -776,9 +783,9 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                       sound.tick(600);
                       setIsAddingStep(!isAddingStep);
                     }}
-                    className="flex items-center gap-1 text-[9px] font-mono uppercase px-2 py-0.5 bg-neutral-900 border border-neutral-700 hover:border-white text-neutral-300 hover:text-white transition-colors"
+                    className="inline-flex items-center justify-center gap-1 whitespace-nowrap border border-neutral-700 bg-neutral-900 px-2 py-0.5 text-[9px] font-mono font-bold uppercase tracking-wider text-neutral-300 transition-colors hover:border-white hover:text-white focus-visible:outline-none focus-visible:border-white"
                   >
-                    <Plus className="w-2.5 h-2.5" />
+                    <Plus className="h-2.5 w-2.5" aria-hidden="true" />
                     <span>{t.stepsSection.addStepBtn}</span>
                   </button>
                 </div>
@@ -943,66 +950,68 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
       {/* Time Adjustment Modal */}
       {isEditingTime && (
         <div
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4"
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="bg-[#121216] border border-neutral-700 w-full max-w-sm p-5 shadow-2xl flex flex-col gap-4 font-mono">
-            <div className="flex items-center justify-between border-b border-neutral-800 pb-3">
+          <div role="dialog" aria-modal="true" aria-labelledby="edit-time-title" className="flex w-full max-w-xs flex-col gap-3 border border-neutral-800 bg-[#0c0c0e] p-4 font-mono shadow-2xl">
+            <div className="flex items-center justify-between border-b border-neutral-800/80 pb-2.5">
               <h4 className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-2">
-                <Clock className="w-3.5 h-3.5 text-emerald-400" />
+                <Clock className="w-3.5 h-3.5 text-neutral-400" aria-hidden="true" />
+                <span id="edit-time-title">
                 {t.timer.editTitle}
+                </span>
               </h4>
               <button
                 type="button"
                 onClick={() => setIsEditingTime(false)}
-                className="text-neutral-500 hover:text-white p-1"
+                className="inline-flex h-6 w-6 items-center justify-center text-neutral-500 transition-colors hover:bg-neutral-900 hover:text-white"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <p className="text-[11px] text-neutral-400">
+            <p className="text-[10px] leading-relaxed text-neutral-500">
               {t.timer.safeguardActive}
             </p>
 
-            <div className="grid grid-cols-3 gap-2">
-              <div className="flex flex-col gap-1">
-                <label className="text-[10px] uppercase text-neutral-400">{t.timer.hours}</label>
+            <div className="grid grid-cols-3 gap-px border border-neutral-800 bg-neutral-800">
+              <div className="flex flex-col gap-1 bg-[#0c0c0e] p-2">
+                <label className="text-[9px] uppercase tracking-wider text-neutral-500">{t.timer.hours}</label>
                 <input
                   type="number"
                   min="0"
                   max="99"
                   value={editHours}
                   onChange={(e) => setEditHours(Math.max(0, parseInt(e.target.value) || 0))}
-                  className="bg-neutral-900 border border-neutral-700 px-2 py-1.5 text-sm text-center text-white focus:border-emerald-500 outline-none"
+                  className="bg-transparent px-1 py-1 text-center text-sm font-bold text-white outline-none focus:bg-neutral-900"
                 />
               </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-[10px] uppercase text-neutral-400">{t.timer.minutes}</label>
+              <div className="flex flex-col gap-1 bg-[#0c0c0e] p-2">
+                <label className="text-[9px] uppercase tracking-wider text-neutral-500">{t.timer.minutes}</label>
                 <input
                   type="number"
                   min="0"
                   max="59"
                   value={editMinutes}
                   onChange={(e) => setEditMinutes(Math.max(0, Math.min(59, parseInt(e.target.value) || 0)))}
-                  className="bg-neutral-900 border border-neutral-700 px-2 py-1.5 text-sm text-center text-white focus:border-emerald-500 outline-none"
+                  className="bg-transparent px-1 py-1 text-center text-sm font-bold text-white outline-none focus:bg-neutral-900"
                 />
               </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-[10px] uppercase text-neutral-400">{t.timer.seconds}</label>
+              <div className="flex flex-col gap-1 bg-[#0c0c0e] p-2">
+                <label className="text-[9px] uppercase tracking-wider text-neutral-500">{t.timer.seconds}</label>
                 <input
                   type="number"
                   min="0"
                   max="59"
                   value={editSeconds}
                   onChange={(e) => setEditSeconds(Math.max(0, Math.min(59, parseInt(e.target.value) || 0)))}
-                  className="bg-neutral-900 border border-neutral-700 px-2 py-1.5 text-sm text-center text-white focus:border-emerald-500 outline-none"
+                  className="bg-transparent px-1 py-1 text-center text-sm font-bold text-white outline-none focus:bg-neutral-900"
                 />
               </div>
             </div>
 
             {/* Quick Adjust Buttons */}
-            <div className="flex flex-wrap gap-1.5 pt-1">
+            <div className="grid grid-cols-3 gap-1">
               <button
                 type="button"
                 onClick={() => {
@@ -1011,7 +1020,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   setEditMinutes(Math.floor((total % 3600) / 60));
                   setEditSeconds(total % 60);
                 }}
-                className="text-[10px] px-2 py-1 bg-neutral-900 border border-neutral-800 text-neutral-300 hover:border-neutral-600"
+                className="border border-neutral-800 bg-neutral-900 px-2 py-1 text-[10px] text-neutral-400 transition-colors hover:border-neutral-600 hover:text-white"
               >
                 {t.timer.quickAdd15}
               </button>
@@ -1023,7 +1032,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   setEditMinutes(Math.floor((total % 3600) / 60));
                   setEditSeconds(total % 60);
                 }}
-                className="text-[10px] px-2 py-1 bg-neutral-900 border border-neutral-800 text-neutral-300 hover:border-neutral-600"
+                className="border border-neutral-800 bg-neutral-900 px-2 py-1 text-[10px] text-neutral-400 transition-colors hover:border-neutral-600 hover:text-white"
               >
                 {t.timer.quickAdd30}
               </button>
@@ -1035,7 +1044,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   setEditMinutes(Math.floor((total % 3600) / 60));
                   setEditSeconds(total % 60);
                 }}
-                className="text-[10px] px-2 py-1 bg-neutral-900 border border-neutral-800 text-neutral-300 hover:border-neutral-600"
+                className="border border-neutral-800 bg-neutral-900 px-2 py-1 text-[10px] text-neutral-400 transition-colors hover:border-neutral-600 hover:text-white"
               >
                 {t.timer.quickAdd60}
               </button>
@@ -1047,7 +1056,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   setEditMinutes(Math.floor((total % 3600) / 60));
                   setEditSeconds(total % 60);
                 }}
-                className="text-[10px] px-2 py-1 bg-neutral-900 border border-neutral-800 text-neutral-300 hover:border-neutral-600"
+                className="border border-neutral-800 bg-neutral-900 px-2 py-1 text-[10px] text-neutral-400 transition-colors hover:border-neutral-600 hover:text-white"
               >
                 {t.timer.quickSub30}
               </button>
@@ -1059,7 +1068,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   setEditMinutes(Math.floor((total % 3600) / 60));
                   setEditSeconds(total % 60);
                 }}
-                className="text-[10px] px-2 py-1 bg-neutral-900 border border-neutral-800 text-neutral-300 hover:border-neutral-600"
+                className="border border-neutral-800 bg-neutral-900 px-2 py-1 text-[10px] text-neutral-400 transition-colors hover:border-neutral-600 hover:text-white"
               >
                 {t.timer.quickSub60}
               </button>
@@ -1070,17 +1079,17 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   setEditMinutes(0);
                   setEditSeconds(0);
                 }}
-                className="text-[10px] px-2 py-1 bg-neutral-900 border border-rose-900/50 text-rose-400 hover:border-rose-700 ml-auto"
+                className="col-span-3 border border-transparent px-2 py-1 text-[10px] text-neutral-500 transition-colors hover:border-neutral-800 hover:text-rose-400"
               >
                 {t.timer.setZero}
               </button>
             </div>
 
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-neutral-800">
+            <div className="flex items-center justify-end gap-2 border-t border-neutral-800/80 pt-3">
               <button
                 type="button"
                 onClick={() => setIsEditingTime(false)}
-                className="px-3 py-1.5 text-xs text-neutral-400 hover:text-white"
+                className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-neutral-500 transition-colors hover:text-white"
               >
                 {t.timer.cancel}
               </button>
@@ -1093,7 +1102,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   }
                   setIsEditingTime(false);
                 }}
-                className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold uppercase tracking-wider"
+                className="border border-white bg-white px-4 py-1.5 text-[10px] font-bold uppercase tracking-wider text-black transition-colors hover:border-neutral-200 hover:bg-neutral-200"
               >
                 {t.timer.save}
               </button>

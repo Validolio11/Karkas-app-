@@ -1,7 +1,7 @@
 {
   "name": "karkas-app",
   "private": true,
-  "version": "1.2.8",
+  "version": "1.2.9",
   "description": "Karkas Application",
   "author": "Melychyn",
   "type": "module",
@@ -23,14 +23,22 @@
       "main": "electron/main.cjs"
     },
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "build"
     },
+    "extraResources": [
+      {
+        "from": "build/icon.png",
+        "to": "icon.png"
+      }
+    ],
     "files": [
       "dist/**/*",
       "electron/**/*",
       "package.json"
     ],
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         "nsis"
       ]

@@ -670,18 +670,18 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
   );
 
   return (
-    <div className="space-y-4 font-mono">
+    <div className="space-y-6 font-mono">
       {/* ------------------------------------------------------------- */}
       {/* PERIOD SELECTOR & HEADER BAR */}
       {/* ------------------------------------------------------------- */}
-      <div className="bg-[#08080a] border border-neutral-800 p-3">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-2.5 mb-2.5 border-b border-neutral-800/80">
+      <div className="border-b border-neutral-800/80 pb-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 mb-3">
           <div className="flex items-center gap-2">
-            <div className="w-2 h-2 bg-white" />
+            <div className="h-1.5 w-1.5 bg-white" />
             <div>
               <h2 className="text-xs font-bold uppercase tracking-wider text-white font-mono flex items-center gap-2">
                 <span>{tAnalytics.title}</span>
-                <span className="text-[10px] font-normal text-neutral-400 px-1.5 py-0.2 bg-neutral-900 border border-neutral-800">
+                <span className="hidden text-[10px] font-normal text-neutral-500 sm:inline">
                   {tAnalytics.subtitle}
                 </span>
               </h2>
@@ -696,7 +696,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
               fetchRecommendations(true, selectedPeriod);
             }}
             disabled={isLoadingRecs}
-            className="self-start sm:self-auto flex items-center gap-1.5 text-[10px] font-mono tracking-wider uppercase px-2.5 py-1 bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-600 text-neutral-300 hover:text-white transition-all disabled:opacity-50 cursor-pointer"
+            className="self-start sm:self-auto flex items-center gap-1.5 text-[10px] font-mono tracking-wider uppercase px-2 py-1 text-neutral-500 hover:text-white transition-colors disabled:opacity-50 cursor-pointer"
           >
             <RefreshCw className={`w-3 h-3 text-neutral-400 ${isLoadingRecs ? 'animate-spin' : ''}`} />
             <span>{isLoadingRecs ? tAnalytics.analyzing : tAnalytics.recalculate}</span>
@@ -705,7 +705,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
 
         {/* Period Selector Tabs */}
         <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
-          <span className="text-[10px] uppercase text-neutral-400 font-mono shrink-0 mr-1 flex items-center gap-1">
+          <span className="text-[9px] uppercase text-neutral-500 font-mono shrink-0 mr-1 flex items-center gap-1">
             <Calendar className="w-3 h-3 text-neutral-400" />
             <span>{tAnalytics.periodLabel}:</span>
           </span>
@@ -720,10 +720,10 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
                   sound.tick(550);
                   setSelectedPeriod(p.id);
                 }}
-                className={`px-2.5 py-1 text-[10px] font-mono font-bold tracking-wider uppercase whitespace-nowrap transition-all border cursor-pointer ${
+                className={`px-2.5 py-1 text-[10px] font-mono font-bold tracking-wider uppercase whitespace-nowrap transition-colors cursor-pointer ${
                   isSelected
-                    ? 'bg-white text-black border-white shadow-sm'
-                    : 'bg-neutral-900 text-neutral-400 hover:text-neutral-200 border-neutral-800 hover:border-neutral-700'
+                    ? 'bg-white text-black'
+                    : 'text-neutral-500 hover:bg-neutral-900 hover:text-neutral-200'
                 }`}
               >
                 {p.label}
@@ -736,9 +736,9 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
       {/* ------------------------------------------------------------- */}
       {/* KEY PERIOD PRODUCTIVITY METRICS (4 CARDS) */}
       {/* ------------------------------------------------------------- */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+      <div className="grid grid-cols-2 gap-px overflow-hidden border border-neutral-800/70 bg-neutral-800/70 sm:grid-cols-4">
         {/* Total Tracked Pool in Period */}
-        <div className="bg-[#09090b] border border-neutral-800 p-3 flex flex-col justify-between">
+        <div className="bg-[#09090b] p-3.5 flex flex-col justify-between">
           <div className="text-[10px] uppercase text-neutral-400 flex items-center justify-between font-mono">
             <span>{tAnalytics.totalPool}</span>
             <Layers className="w-3.5 h-3.5 text-neutral-500" />
@@ -752,21 +752,21 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
         </div>
 
         {/* Successfully Delivered / Completed */}
-        <div className="bg-[#09090b] border border-neutral-800 p-3 flex flex-col justify-between">
+        <div className="bg-[#09090b] p-3.5 flex flex-col justify-between">
           <div className="text-[10px] uppercase text-neutral-400 flex items-center justify-between font-mono">
             <span>{tAnalytics.completed}</span>
-            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+            <CheckCircle2 className="w-3.5 h-3.5 text-neutral-500" />
           </div>
           <div className="mt-2 flex items-baseline justify-between">
             <span className="text-xl font-bold text-white font-mono">{analyticsData.totalDelivered}</span>
-            <span className="text-[10px] text-emerald-400 font-mono font-bold">
+            <span className="text-[10px] text-neutral-400 font-mono font-bold">
               {analyticsData.deliveredNormPercent}% {lang === 'uk' ? 'норми' : 'norm'} ({analyticsData.successRate}%)
             </span>
           </div>
         </div>
 
         {/* Dropped / Deleted in Period */}
-        <div className="bg-[#09090b] border border-neutral-800 p-3 flex flex-col justify-between">
+        <div className="bg-[#09090b] p-3.5 flex flex-col justify-between">
           <div className="text-[10px] uppercase text-neutral-400 flex items-center justify-between font-mono">
             <span>{tAnalytics.dropped}</span>
             <Trash2 className="w-3.5 h-3.5 text-neutral-500" />
@@ -780,10 +780,10 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
         </div>
 
         {/* Productivity Grade & Velocity Index */}
-        <div className="bg-[#09090b] border border-neutral-800 p-3 flex flex-col justify-between">
+        <div className="bg-[#09090b] p-3.5 flex flex-col justify-between">
           <div className="text-[10px] uppercase text-neutral-400 flex items-center justify-between font-mono">
             <span>{tAnalytics.grade}</span>
-            <Award className="w-3.5 h-3.5 text-amber-400" />
+            <Award className="w-3.5 h-3.5 text-neutral-500" />
           </div>
           <div className="mt-2 flex items-baseline justify-between">
             {(() => {
@@ -817,19 +817,19 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
       {/* ------------------------------------------------------------- */}
       {/* TASK VOLUME QUOTA & DENSITY PROGRESS BAR */}
       {/* ------------------------------------------------------------- */}
-      <div className="bg-[#08080a] border border-neutral-800 p-3">
+      <div className="border-b border-neutral-800/70 pb-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 mb-2">
           <div className="flex items-center gap-2">
-            <span className="w-1.5 h-1.5 bg-amber-400" />
+            <span className="w-1.5 h-1.5 bg-neutral-500" />
             <span className="text-xs font-bold uppercase font-mono tracking-wider text-neutral-200">
               {tAnalytics.volumeNorm}
             </span>
-            <span className="text-[9px] font-mono text-neutral-400 px-1.5 py-0.5 bg-neutral-900 border border-neutral-800">
+            <span className="text-[9px] font-mono text-neutral-500">
               {analyticsData.totalDelivered} / {analyticsData.targetVolume} {lang === 'uk' ? 'завдань' : 'tasks'} ({analyticsData.deliveredNormPercent}%)
             </span>
           </div>
 
-          <div className="flex items-center gap-2 text-[9px] font-mono">
+          <div className="hidden items-center gap-2 text-[9px] font-mono md:flex">
             <span className="text-neutral-500">
               {lang === 'uk'
                 ? `Поріг грейдів: B ≥${analyticsData.minDeliveredForGrade.B} · A ≥${analyticsData.minDeliveredForGrade.A} · A+ ≥${analyticsData.minDeliveredForGrade.APlus} · S ≥${analyticsData.minDeliveredForGrade.S}`
@@ -839,7 +839,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
         </div>
 
         {/* Progress Bar with Milestones */}
-        <div className="w-full bg-neutral-900 h-2 border border-neutral-800 relative overflow-hidden">
+        <div className="w-full bg-neutral-900 h-1.5 relative overflow-hidden">
           <div
             className={`h-full transition-all duration-500 ${
               analyticsData.isVolumeDeficit
@@ -854,7 +854,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
 
         {/* Low Volume Advisory Callout if task count is critically low */}
         {analyticsData.isVolumeDeficit && (
-          <div className="mt-2.5 px-2.5 py-1.5 bg-amber-950/20 border border-amber-800/40 text-[10px] font-mono text-amber-200/90 flex items-center justify-between gap-2">
+          <div className="mt-2.5 border-l-2 border-amber-700/60 px-2.5 py-1 text-[10px] font-mono leading-relaxed text-neutral-500">
             <span>
               {lang === 'uk'
                 ? `⚠️ Зафіксовано лише ${analyticsData.totalDelivered} закритих завдань із місячної норми ${analyticsData.targetVolume}. 100% закриття на 1-3 завданнях не відображає реальної продуктивності. Додавайте щоденні атомарні справи для виходу на грейди A / S.`
@@ -867,8 +867,8 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
       {/* ------------------------------------------------------------- */}
       {/* TIMELINE ACTIVITY & COMPLETION VELOCITY BAR CHART */}
       {/* ------------------------------------------------------------- */}
-      <div className="bg-[#08080a] border border-neutral-800 p-3.5">
-        <div className="flex items-center justify-between mb-3 border-b border-neutral-800/80 pb-2">
+      <section className="border-b border-neutral-800/70 pb-5">
+        <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <TrendingUp className="w-3.5 h-3.5 text-neutral-300" />
             <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-200 font-mono">
@@ -888,7 +888,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
         </div>
 
         {/* Velocity Bars Container */}
-        <div className="grid grid-flow-col auto-cols-fr gap-1.5 items-end h-24 pt-4 px-1 bg-[#0c0c0e] border border-neutral-900">
+        <div className="grid grid-flow-col auto-cols-fr gap-1.5 items-end h-24 pt-4 px-1">
           {analyticsData.velocityBars.map((bar, idx) => {
             const deliveredHeightPercent = Math.min(100, Math.round((bar.delivered / maxBarValue) * 100));
             const droppedHeightPercent = Math.min(100, Math.round((bar.dropped / maxBarValue) * 100));
@@ -899,7 +899,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
                   {/* Delivered Bar */}
                   <div
                     style={{ height: `${Math.max(deliveredHeightPercent, 4)}%` }}
-                    className="w-full max-w-[14px] bg-emerald-500/80 group-hover:bg-emerald-400 transition-all rounded-none"
+                    className="w-full max-w-[14px] bg-neutral-300 group-hover:bg-white transition-all rounded-none"
                     title={`${bar.label}: ${bar.delivered} ${tAnalytics.completed.toLowerCase()}`}
                   />
                   {/* Dropped Bar */}
@@ -918,15 +918,15 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
             );
           })}
         </div>
-      </div>
+      </section>
 
       {/* ------------------------------------------------------------- */}
       {/* CATEGORY PRODUCTIVITY BREAKDOWN & PRIORITY MATRIX */}
       {/* ------------------------------------------------------------- */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
         {/* Category Breakdown in Period */}
-        <div className="bg-[#08080a] border border-neutral-800 p-3.5">
-          <div className="flex items-center justify-between mb-3 border-b border-neutral-800/80 pb-2">
+        <section className="border border-neutral-800/70 bg-[#08080a]/60 p-3.5">
+          <div className="flex items-center justify-between mb-2.5">
             <div className="flex items-center gap-2">
               <BarChart3 className="w-3.5 h-3.5 text-neutral-300" />
               <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-200">
@@ -943,7 +943,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
             </button>
           </div>
 
-          <div className="space-y-2">
+          <div className="divide-y divide-neutral-800/70">
             {analyticsData.categoryStats.map((tp) => (
               <div
                 key={tp.id}
@@ -951,7 +951,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
                   sound.tick(600);
                   onSelectTab(tp.id);
                 }}
-                className="group cursor-pointer p-2 bg-[#0c0c0e] hover:bg-neutral-900 border border-neutral-800 hover:border-neutral-600 transition-all"
+                className="group cursor-pointer px-1 py-2.5 transition-colors hover:bg-white/[0.025]"
               >
                 <div className="flex items-center justify-between text-xs mb-1.5 font-mono">
                   <div className="flex items-center gap-2">
@@ -975,7 +975,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
                 </div>
 
                 {/* Micro Progress Bar */}
-                <div className="w-full h-1 bg-neutral-900 overflow-hidden border border-neutral-800">
+                <div className="w-full h-0.5 bg-neutral-800 overflow-hidden">
                   <div
                     className="h-full transition-all duration-300"
                     style={{
@@ -992,24 +992,24 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
           <button
             id="dashboard-period-add-task-btn"
             onClick={onOpenAdd}
-            className="w-full mt-3 py-1.5 px-3 bg-neutral-900 hover:bg-white text-neutral-300 hover:text-black border border-neutral-800 hover:border-white text-xs font-bold font-mono tracking-wider uppercase transition-all flex items-center justify-center gap-1.5"
+            className="mt-3 flex w-full items-center justify-center gap-1.5 border border-neutral-800 px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-neutral-400 transition-colors hover:border-neutral-600 hover:text-white"
           >
             <Plus className="w-3.5 h-3.5" />
             <span>{t.injectNewOp}</span>
           </button>
-        </div>
+        </section>
 
         {/* Priority Matrix & Urgent Action Queue */}
-        <div className="bg-[#08080a] border border-neutral-800 p-3.5 flex flex-col justify-between">
+        <section className="flex flex-col justify-between border border-neutral-800/70 bg-[#08080a]/60 p-3.5">
           <div>
-            <div className="flex items-center justify-between mb-3 border-b border-neutral-800/80 pb-2">
+            <div className="flex items-center justify-between mb-2.5">
               <div className="flex items-center gap-2">
-                <div className="w-1.5 h-1.5 bg-rose-500" />
-                <h3 className="text-xs font-bold uppercase tracking-wider text-rose-300 font-mono">
+                <div className="w-1.5 h-1.5 bg-neutral-500" />
+                <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-200 font-mono">
                   {lang === 'uk' ? 'Фокус: Термінові справи' : 'Urgent Action Queue'}
                 </h3>
               </div>
-              <span className="text-[10px] font-mono text-neutral-400 px-1.5 py-0.5 bg-neutral-900 border border-neutral-800">
+              <span className="text-[10px] font-mono text-neutral-500">
                 {p1ActiveTasks.length + p2ActiveTasks.length} {lang === 'uk' ? 'активних' : 'queued'}
               </span>
             </div>
@@ -1017,8 +1017,8 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
             {/* List of top priority active tasks */}
             <div className="space-y-1.5">
               {p1ActiveTasks.length === 0 && p2ActiveTasks.length === 0 ? (
-                <div className="py-6 text-center border border-dashed border-neutral-800 p-4">
-                  <CheckCircle2 className="w-5 h-5 mx-auto mb-2 text-emerald-400" />
+                <div className="py-6 text-center">
+                  <CheckCircle2 className="w-5 h-5 mx-auto mb-2 text-neutral-500" />
                   <p className="text-xs text-neutral-300 font-bold uppercase font-mono">
                     {lang === 'uk' ? 'Всі термінові завдання закриті' : 'All urgent tasks cleared'}
                   </p>
@@ -1030,10 +1030,10 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
                 [...p1ActiveTasks, ...p2ActiveTasks].slice(0, 4).map((task) => (
                   <div
                     key={task.id}
-                    className={`flex items-start justify-between gap-2 p-2 border text-xs transition-colors font-mono ${
+                    className={`flex items-start justify-between gap-2 border-l-2 px-2 py-2 text-xs transition-colors font-mono ${
                       task.priority === 1
-                        ? 'bg-rose-950/20 border-rose-900/40 text-neutral-200'
-                        : 'bg-[#0c0c0e] border-neutral-800 text-neutral-300'
+                        ? 'border-rose-700/70 bg-white/[0.02] text-neutral-200'
+                        : 'border-neutral-700 bg-white/[0.015] text-neutral-300'
                     }`}
                   >
                     <div className="flex items-start gap-2 flex-1 min-w-0">
@@ -1073,7 +1073,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
           </div>
 
           {/* AI Tactical Generator Shortcut */}
-          <div className="mt-3 pt-3 border-t border-neutral-800">
+          <div className="mt-3 border-t border-neutral-800/70 pt-3">
             <button
               id="dashboard-ai-plan-period-btn"
               onClick={() => {
@@ -1084,7 +1084,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
                     : `Create a tactical productivity plan based on period "${selectedPeriod}"`
                 );
               }}
-              className="w-full py-2 px-3 bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-600 text-neutral-200 hover:text-white text-xs font-bold font-mono tracking-wider uppercase transition-all flex items-center justify-between cursor-pointer"
+              className="flex w-full items-center justify-between px-1 py-1 text-[10px] font-bold uppercase tracking-wider text-neutral-400 transition-colors hover:text-white cursor-pointer"
             >
               <div className="flex items-center gap-2">
                 <AIIcon id={aiIconVariant} className="w-3.5 h-3.5 text-neutral-300" />
@@ -1093,27 +1093,27 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
               <ArrowRight className="w-3 h-3 text-neutral-400" />
             </button>
           </div>
-        </div>
+        </section>
       </div>
 
       {/* ------------------------------------------------------------- */}
       {/* STRATEGIC AI PERIOD RETROSPECTIVE & RECOMMENDATIONS SECTION */}
       {/* ------------------------------------------------------------- */}
-      <div className="bg-[#08080a] border border-neutral-800 p-3.5">
+      <section className="border border-neutral-800/70 bg-[#08080a]/60 p-3.5">
         {/* Header with Title, Status & Refresh */}
-        <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 mb-2.5 border-b border-neutral-800">
+        <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2 flex-wrap">
             <AIIcon id={aiIconVariant} className="w-4 h-4 text-neutral-300" />
             <div className="flex items-center gap-2 flex-wrap">
               <h2 className="text-xs font-bold uppercase tracking-wider text-white font-mono">
                 {tAnalytics.aiAuditTitle}
               </h2>
-              <span className="text-[10px] font-mono px-1.5 py-0.5 bg-neutral-900 border border-neutral-800 text-neutral-300 flex items-center gap-1">
+              <span className="flex items-center gap-1 text-[10px] font-mono text-neutral-500">
                 <Clock className="w-3 h-3 text-neutral-400" />
                 <span>{periodsList.find((p) => p.id === selectedPeriod)?.label || selectedPeriod}</span>
               </span>
               {recommendation?.workloadStatus && (
-                <span className="text-[10px] font-mono px-1.5 py-0.5 bg-neutral-900 border border-neutral-800 text-neutral-300">
+                <span className="text-[10px] font-mono text-neutral-500">
                   {recommendation.workloadStatus}
                 </span>
               )}
@@ -1129,7 +1129,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
               }}
               disabled={isLoadingRecs}
               title={lang === 'uk' ? 'Оновити аналіз періоду' : 'Refresh period analysis'}
-              className="flex items-center gap-1.5 text-[10px] font-mono tracking-wider uppercase px-2 py-1 bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-600 text-neutral-300 hover:text-white transition-all disabled:opacity-50 cursor-pointer"
+              className="flex items-center gap-1.5 px-2 py-1 text-[10px] font-mono uppercase tracking-wider text-neutral-500 transition-colors hover:text-white disabled:opacity-50 cursor-pointer"
             >
               <RefreshCw className={`w-3 h-3 text-neutral-400 ${isLoadingRecs ? 'animate-spin' : ''}`} />
               <span>{isLoadingRecs ? tAnalytics.analyzing : tAnalytics.recalculate}</span>
@@ -1138,9 +1138,9 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
         </div>
 
         {/* Schedule & Last Analysis Status Bar */}
-        <div className="flex flex-wrap items-center justify-between gap-1 text-[10px] font-mono text-neutral-400 mb-3 px-2 py-1 bg-[#0c0c0e] border border-neutral-900">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-1 border-b border-neutral-800/60 pb-3 text-[10px] font-mono text-neutral-500">
           <div className="flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+            <span className="w-1.5 h-1.5 rounded-full bg-neutral-600" />
             <span>
               {lang === 'uk'
                 ? `Враховано ${analyticsData.totalTracked} завдань (включно з архівом та видаленими) за ${periodsList.find((p) => p.id === selectedPeriod)?.label}`
@@ -1157,12 +1157,12 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
         </div>
 
         {/* 3 AI Analytics Insight Blocks */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-3">
+        <div className="mb-5 grid grid-cols-1 divide-y divide-neutral-800/70 border-y border-neutral-800/70 md:grid-cols-3 md:divide-x md:divide-y-0">
           {/* Period Retrospective */}
-          <div className="p-2.5 bg-[#0c0c0e] border border-neutral-850 flex flex-col justify-between">
+          <div className="flex flex-col justify-between px-1 py-3 md:px-3">
             <div>
               <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase text-neutral-400 mb-1">
-                <Target className="w-3 h-3 text-emerald-400" />
+                <Target className="w-3 h-3 text-neutral-500" />
                 <span>{tAnalytics.aiRetrospective}</span>
               </div>
               <p className="text-xs text-neutral-200 leading-relaxed font-sans">
@@ -1175,10 +1175,10 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
           </div>
 
           {/* Dropoff & Bottlenecks Analysis */}
-          <div className="p-2.5 bg-[#0c0c0e] border border-neutral-850 flex flex-col justify-between">
+          <div className="flex flex-col justify-between px-1 py-3 md:px-3">
             <div>
               <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase text-neutral-400 mb-1">
-                <AlertTriangle className="w-3 h-3 text-amber-400" />
+                <AlertTriangle className="w-3 h-3 text-neutral-500" />
                 <span>{tAnalytics.aiDropoffAnalysis}</span>
               </div>
               <p className="text-xs text-neutral-300 leading-relaxed font-sans">
@@ -1191,10 +1191,10 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
           </div>
 
           {/* Future Strategic Guidance */}
-          <div className="p-2.5 bg-[#0c0c0e] border border-neutral-850 flex flex-col justify-between">
+          <div className="flex flex-col justify-between px-1 py-3 md:px-3">
             <div>
               <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase text-neutral-400 mb-1">
-                <Compass className="w-3 h-3 text-blue-400" />
+                <Compass className="w-3 h-3 text-neutral-500" />
                 <span>{tAnalytics.aiFutureStrategy}</span>
               </div>
               <p className="text-xs text-neutral-300 leading-relaxed font-sans">
@@ -1218,7 +1218,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          <div className="grid grid-cols-1 divide-y divide-neutral-800/70 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
             {(recommendation?.suggestedTasks || []).map((st, idx) => {
               const isAdded = addedTaskTitles.includes(st.title);
               const tabName = tabs.find((tb) => tb.id === st.phase)?.name || st.phase;
@@ -1226,18 +1226,18 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
               return (
                 <div
                   key={idx}
-                  className="p-2.5 bg-[#0c0c0e] border border-neutral-850 hover:border-neutral-700 flex flex-col justify-between transition-colors"
+                  className="flex flex-col justify-between px-1 py-3 transition-colors hover:bg-white/[0.02] sm:px-3"
                 >
                   <div>
                     <div className="flex items-center justify-between gap-1 mb-1.5">
-                      <span className="text-[9px] font-mono uppercase px-1.5 py-0.5 bg-neutral-900 border border-neutral-800 text-neutral-400 truncate max-w-[100px]">
+                      <span className="max-w-[100px] truncate text-[9px] font-mono uppercase text-neutral-500">
                         {tabName}
                       </span>
                       <span
-                        className={`text-[9px] font-mono px-1.5 py-0.5 border ${
+                        className={`text-[9px] font-mono ${
                           st.priority === 1
-                            ? 'border-neutral-700 text-rose-300 bg-neutral-900'
-                            : 'border-neutral-800 text-neutral-400 bg-neutral-900'
+                            ? 'text-rose-300'
+                            : 'text-neutral-500'
                         }`}
                       >
                         P{st.priority}
@@ -1255,14 +1255,14 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
                     )}
                   </div>
 
-                  <div className="mt-2 pt-2 border-t border-neutral-800/80 flex items-center gap-1.5">
+                  <div className="mt-2 flex items-center gap-1.5 pt-1">
                     <button
                       onClick={() => handleAddSuggestedTask(st)}
                       disabled={isAdded}
-                      className={`flex-1 py-1 px-2 text-[10px] font-mono font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1 border cursor-pointer ${
+                      className={`flex flex-1 items-center justify-center gap-1 border px-2 py-1 text-[10px] font-mono font-bold uppercase tracking-wider transition-colors cursor-pointer ${
                         isAdded
                           ? 'bg-neutral-900 border-neutral-800 text-neutral-500 cursor-default'
-                          : 'bg-white hover:bg-neutral-200 text-black border-white hover:border-neutral-200'
+                          : 'border-neutral-700 text-neutral-300 hover:border-white hover:text-white'
                       }`}
                     >
                       {isAdded ? (
@@ -1288,9 +1288,9 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
                         );
                       }}
                       title={lang === 'uk' ? 'Розгорнути з AI' : 'Deep dive with AI'}
-                      className="p-1 bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-neutral-400 hover:text-white cursor-pointer"
+                      className="inline-flex h-8 w-8 shrink-0 items-center justify-center self-center border border-neutral-800 bg-neutral-900 p-0 leading-none text-neutral-400 transition-colors hover:border-neutral-600 hover:bg-neutral-800 hover:text-white cursor-pointer"
                     >
-                      <AIIcon id={aiIconVariant} className="w-3 h-3 text-neutral-400 hover:text-white" />
+                      <AIIcon id={aiIconVariant} className="h-3.5 w-3.5 text-neutral-400" />
                     </button>
                   </div>
                 </div>
@@ -1298,7 +1298,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
             })}
           </div>
         </div>
-      </div>
+      </section>
     </div>
   );
 };

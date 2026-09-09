@@ -99,6 +99,9 @@ function createWindow() {
     width: 1280,
     height: 850,
     backgroundColor: '#09090b',
+    icon: app.isPackaged
+      ? path.join(process.resourcesPath, 'icon.png')
+      : path.join(__dirname, '../build/icon.png'),
     frame: false,
     webPreferences: {
       nodeIntegration: false,

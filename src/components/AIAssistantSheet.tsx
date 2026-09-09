@@ -32,6 +32,8 @@ interface AIChatOption {
   text: string;
 }
 
+const looksLikeGeminiApiKey = (value: string) => /^AIza[\w-]{20,}$/.test(value.trim());
+
 const parseChatOptions = (content: string): { body: string; options: AIChatOption[] } => {
   const lines = content.split('\n');
   const options: AIChatOption[] = [];
@@ -134,6 +136,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   const [response, setResponse] = useState<AIResponse | null>(null);
   const [chatMessages, setChatMessages] = useState<AIChatMessage[]>([]);
   const [pendingChatTasks, setPendingChatTasks] = useState<AIResponse['tasks'] | null>(null);
+  const [awaitingApiKey, setAwaitingApiKey] = useState(false);
+  const [pendingRequest, setPendingRequest] = useState<{ text: string; mode: AIMode } | null>(null);
   const [injectedIds, setInjectedIds] = useState<number[]>([]);
   const [availableModels, setAvailableModels] = useState<string[]>(() => {
     try {
@@ -168,6 +172,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
         setCustomModel(nextModel);
         localStorage.setItem('karkas_custom_model', nextModel);
         localStorage.setItem('karkas_available_models', JSON.stringify(data.models));
+        localStorage.setItem('karkas_custom_ai_enabled', 'true');
+        setAwaitingApiKey(false);
       })
       .catch(() => undefined);
   }, []);
@@ -231,6 +237,87 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
 
     if (!requestText) return;
     if (loading) return;
+
+    const savedApiKey = localStorage.getItem('karkas_custom_api_key') || '';
+    const customAiEnabled = localStorage.getItem('karkas_custom_ai_enabled') === 'true';
+
+    if (looksLikeGeminiApiKey(requestText)) {
+      setPrompt('');
+      setLoading(true);
+      try {
+        const res = await fetch('/api/ai/verify-key', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ apiKey: requestText.trim() }),
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok || !data?.success || !Array.isArray(data.models) || data.models.length === 0) {
+          throw new Error(data?.error || 'Invalid API key');
+        }
+
+        const nextModel = data.models.includes('gemini-3.1-flash-lite')
+          ? 'gemini-3.1-flash-lite'
+          : data.models[0];
+        localStorage.setItem('karkas_custom_api_key', requestText.trim());
+        localStorage.setItem('karkas_custom_ai_enabled', 'true');
+        localStorage.setItem('karkas_custom_model', nextModel);
+        localStorage.setItem('karkas_available_models', JSON.stringify(data.models));
+        setAvailableModels(data.models);
+        setCustomModel(nextModel);
+        setAwaitingApiKey(false);
+        setChatMessages((previous) => [
+          ...previous,
+          {
+            role: 'assistant',
+            content: lang === 'uk'
+              ? `API-ключ підключено. Автоматично обрано модель ${nextModel}.`
+              : `API key connected. Model ${nextModel} was selected automatically.`,
+          },
+        ]);
+        sound.activate();
+
+        const requestToResume = pendingRequest;
+        setPendingRequest(null);
+        setLoading(false);
+        if (requestToResume) {
+          window.setTimeout(() => handleGenerate(requestToResume.text, requestToResume.mode), 0);
+        }
+        return;
+      } catch (error) {
+        console.error('API key verification error:', error);
+        setAwaitingApiKey(true);
+        setChatMessages((previous) => [
+          ...previous,
+          {
+            role: 'assistant',
+            content: lang === 'uk'
+              ? 'Не вдалося перевірити цей ключ. Вставте дійсний Gemini API-ключ у цей самий рядок ще раз.'
+              : 'I could not verify this key. Paste a valid Gemini API key into this same input and try again.',
+          },
+        ]);
+        setLoading(false);
+        return;
+      }
+    }
+
+    if (!savedApiKey || !customAiEnabled) {
+      setPrompt('');
+      setAwaitingApiKey(true);
+      setPendingRequest({ text: requestText, mode: currentMode });
+      if (currentMode === 'chat') {
+        setChatMessages((previous) => [
+          ...previous,
+          { role: 'user', content: requestText },
+          {
+            role: 'assistant',
+            content: lang === 'uk'
+              ? 'Щоб підключити AI, вставте свій Gemini API-ключ у рядок чату нижче. Я перевірю, збережу його на цьому пристрої та автоматично продовжу ваш запит.'
+              : 'To connect AI, paste your Gemini API key into the chat input below. I will verify it, save it on this device, and automatically continue your request.',
+          },
+        ]);
+      }
+      return;
+    }
 
     if (currentMode === 'chat' && pendingChatTasks && /^(так|підтверджую|підтверджено|yes|confirm|ок)$/i.test(textToQuery.trim())) {
       setPrompt('');
@@ -853,14 +940,16 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
               </select>
               <input
                 id="ai-prompt-input"
-                type="text"
+                type={awaitingApiKey ? 'password' : 'text'}
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') handleGenerate();
                 }}
                 placeholder={
-                  mode === 'chat'
+                  awaitingApiKey
+                    ? (lang === 'uk' ? 'Вставте Gemini API-ключ сюди...' : 'Paste your Gemini API key here...')
+                    : mode === 'chat'
                     ? (lang === 'uk' ? 'Напишіть, що відбувається або що потрібно вирішити...' : 'Tell me what is happening or what you need to solve...')
                     : mode === 'analyze'
                     ? (lang === 'uk' ? 'Уточніть фокус аналізу (напр. пріоритети на сьогодні, перевірити дедлайни)...' : 'Refine audit focus (e.g. today priorities, bottlenecks)...')

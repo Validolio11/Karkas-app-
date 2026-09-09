@@ -87,6 +87,7 @@ declare global {
       maximize: () => void;
       close: () => void;
       isElectron: boolean;
+      loginWithGoogle?: () => Promise<{ success: boolean; idToken?: string; accessToken?: string; error?: string }>;
       downloadAndInstallUpdate?: (url: string, fileName?: string) => Promise<{ success: boolean; message?: string }>;
       openExternal?: (url: string) => void;
     };

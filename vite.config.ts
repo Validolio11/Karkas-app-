@@ -6,6 +6,14 @@ import {defineConfig} from 'vite';
 export default defineConfig(() => {
   return {
     base: './',
+    build: {
+      rollupOptions: {
+        input: {
+          app: path.resolve(__dirname, 'index.html'),
+          desktopAuth: path.resolve(__dirname, 'desktop-auth.html'),
+        },
+      },
+    },
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {

@@ -33,6 +33,7 @@ import {
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { AccountModal } from './components/AccountModal';
 import { UpdateModal } from './components/UpdateModal';
+import { mergeWorkspace, sameWorkspace, type WorkspaceState } from './utils/syncState';
 
 const STORAGE_KEY = 'life_todo_tasks_v2';
 const DELETED_STORAGE_KEY = 'karkas_deleted_tasks_v2';
@@ -40,9 +41,10 @@ const TABS_KEY = 'life_todo_tabs_v2';
 const LANG_KEY = 'todo_app_lang';
 const AI_ICON_KEY = 'karkas_ai_icon_variant';
 const FIRE_ENABLED_KEY = 'karkas_fire_enabled';
+const SOUND_ENABLED_KEY = 'karkas_sound_enabled';
 const LAST_SYNC_KEY = 'karkas_last_sync_time';
 const AUTO_SYNC_KEY = 'karkas_auto_sync_enabled';
-const APP_CURRENT_VERSION = '1.2.2';
+const APP_CURRENT_VERSION = '1.2.3';
 
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 
@@ -449,7 +451,22 @@ export default function App() {
       setBreakingDownTaskId(null);
     }
   };
-  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [soundEnabled, setSoundEnabled] = useState(() => {
+    try {
+      return localStorage.getItem(SOUND_ENABLED_KEY) !== 'false';
+    } catch (e) {
+      console.error('Failed to load sound state', e);
+      return true;
+    }
+  });
+  React.useLayoutEffect(() => {
+    sound.enabled = soundEnabled;
+    try {
+      localStorage.setItem(SOUND_ENABLED_KEY, String(soundEnabled));
+    } catch (e) {
+      console.error('Failed to save sound state', e);
+    }
+  }, [soundEnabled]);
   const [recentlyDeleted, setRecentlyDeleted] = useState<PSTask | null>(null);
 
   // Auto-dismiss "Task deleted" undo toast after 10 seconds
@@ -485,8 +502,6 @@ export default function App() {
   const [cloudData, setCloudData] = useState<UserCloudState | null>(null);
   const [isCloudSyncReady, setIsCloudSyncReady] = useState(false);
 
-  // Keep track of the timestamp of our own local saves to avoid loop flickering in real-time listeners
-  const lastLocalSaveTimeRef = React.useRef<number>(0);
   const cloudSyncReadyRef = React.useRef(false);
 
   // Fire particles background toggle state
@@ -540,16 +555,13 @@ export default function App() {
   const currentAiIconVariantRef = React.useRef(aiIconVariant);
   currentAiIconVariantRef.current = aiIconVariant;
 
-  // Sync tasks with localStorage (debounced for maximum performance)
-  useEffect(() => {
-    const handler = setTimeout(() => {
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
-      } catch (e) {
-        console.error('Failed to save tasks to localStorage', e);
-      }
-    }, 300);
-    return () => clearTimeout(handler);
+  // Persist each committed change before paint, with no pending timer on close.
+  React.useLayoutEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+    } catch (e) {
+      console.error('Failed to save tasks to localStorage', e);
+    }
   }, [tasks]);
 
   // Sync deletedTasks with localStorage
@@ -603,390 +615,269 @@ export default function App() {
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, [selectedPhase]);
 
-  // Monitor Firebase Auth State and synchronize upon initial sign-in
+  // Account snapshots retain unsent edits across reloads and sign-out.
+  const workspaceOwnerRef = React.useRef<string | null>(localStorage.getItem('karkas_workspace_owner'));
+  const baseWorkspaceRef = React.useRef<(WorkspaceState & { revision?: number }) | null>(undefined);
+  if (baseWorkspaceRef.current === undefined) {
+    try {
+      const cached = localStorage.getItem('karkas_workspace:' + (workspaceOwnerRef.current || 'guest'));
+      baseWorkspaceRef.current = cached ? JSON.parse(cached).base || null : null;
+    } catch { baseWorkspaceRef.current = null; }
+  }
+  const authGenerationRef = React.useRef(0);
+  const savingRef = React.useRef<number | null>(null);
+  const queuedRemoteRef = React.useRef<UserCloudState | null>(null);
+  const autoSyncEnabledRef = React.useRef(autoSyncEnabled);
+  autoSyncEnabledRef.current = autoSyncEnabled;
+  const accountKey = (uid: string | null) => 'karkas_workspace:' + (uid || 'guest');
+  const readWorkspace = (): WorkspaceState => ({
+    tasks: currentTasksRef.current,
+    tabs: currentTabsRef.current,
+    deletedTasks: currentDeletedTasksRef.current,
+    settings: {
+      soundEnabled: currentSoundEnabledRef.current,
+      fireEnabled: currentFireEnabledRef.current,
+      lang: currentLangRef.current,
+      aiIconVariant: currentAiIconVariantRef.current,
+    },
+  });
+  const persistWorkspace = () => {
+    localStorage.setItem(accountKey(workspaceOwnerRef.current), JSON.stringify({
+      workspace: readWorkspace(), base: baseWorkspaceRef.current,
+    }));
+  };
+  const applyWorkspace = (value: WorkspaceState) => {
+    currentTasksRef.current = value.tasks;
+    currentTabsRef.current = value.tabs;
+    currentDeletedTasksRef.current = value.deletedTasks;
+    currentSoundEnabledRef.current = value.settings.soundEnabled;
+    currentFireEnabledRef.current = value.settings.fireEnabled;
+    currentLangRef.current = value.settings.lang as Language;
+    currentAiIconVariantRef.current = value.settings.aiIconVariant as AIIconId;
+    setTasks(value.tasks);
+    setTabs(value.tabs);
+    setDeletedTasks(value.deletedTasks);
+    setSoundEnabled(value.settings.soundEnabled);
+    sound.enabled = value.settings.soundEnabled;
+    setFireEnabled(value.settings.fireEnabled);
+    setLang(value.settings.lang as Language);
+    setAiIconVariant(value.settings.aiIconVariant as AIIconId);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(value.tasks));
+    localStorage.setItem(TABS_KEY, JSON.stringify(value.tabs));
+    localStorage.setItem(DELETED_STORAGE_KEY, JSON.stringify(value.deletedTasks));
+    localStorage.setItem(AI_ICON_KEY, value.settings.aiIconVariant);
+    persistWorkspace();
+  };
+
+  React.useLayoutEffect(() => {
+    try { persistWorkspace(); } catch (error) {
+      console.error('Local account backup failed:', error);
+    }
+  }, [tasks, tabs, deletedTasks, soundEnabled, fireEnabled, lang, aiIconVariant]);
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      setCurrentUser(user);
+      const generation = ++authGenerationRef.current;
+      savingRef.current = null;
+      queuedRemoteRef.current = null;
+      const uid = user?.uid || null;
       cloudSyncReadyRef.current = false;
       setIsCloudSyncReady(false);
-      if (user) {
-        try {
-          setIsSyncing(true);
-          const data = await fetchUserCloudData(user.uid);
-          if (data) {
+      setCurrentUser(user);
+      setCloudData(null);
+      setLastSyncTime(null);
+      try {
+        const previousOwner = workspaceOwnerRef.current;
+        const cachedText = localStorage.getItem(accountKey(uid));
+        const cached = cachedText ? JSON.parse(cachedText) : null;
+        if (previousOwner !== uid) {
+          persistWorkspace();
+          setRecentlyDeleted(null);
+          setTabToDeleteConfirm(null);
+          setSelectedPhase('ALL');
+          setIsAIOpen(false);
+          setIsAddOpen(false);
+          setIsManageTabsOpen(false);
+        }
+        workspaceOwnerRef.current = uid;
+        if (uid) localStorage.setItem('karkas_workspace_owner', uid);
+        else localStorage.removeItem('karkas_workspace_owner');
+        baseWorkspaceRef.current = cached?.base || null;
+        if (cached?.workspace) {
+          applyWorkspace(cached.workspace);
+        } else if (previousOwner !== uid && previousOwner !== null) {
+          applyWorkspace({
+            tasks: [], tabs: [], deletedTasks: [],
+            settings: { soundEnabled: true, fireEnabled: true, lang: 'uk', aiIconVariant: 'quantum' },
+          });
+        }
+        if (!user) return;
+        setIsSyncing(true);
+        const data = await fetchUserCloudData(user.uid);
+        if (generation !== authGenerationRef.current || auth.currentUser?.uid !== user.uid) return;
+        if (data) {
+          if ((data.revision || 0) < (baseWorkspaceRef.current?.revision || 0)) return;
+          if (cached?.workspace && !autoSyncEnabledRef.current) {
             setCloudData(data);
-            
-            // Synchronize our local save timestamp reference with initial cloud data
-            if (data.updatedAt) {
-              lastLocalSaveTimeRef.current = data.updatedAt;
-            }
-
-            // Cloud is the source of truth after login, including empty arrays.
-            if (Array.isArray(data.tasks)) {
-              const activeTabs = Array.isArray(data.tabs) ? data.tabs : currentTabsRef.current;
-              const validTabIds = new Set(activeTabs.map((t) => t.id));
-              const fallbackPhase = activeTabs[0]?.id || 'focus';
-
-              // Map tasks without introducing new tabs
-              const sanitizedTasks = data.tasks.map((task: PSTask) => ({
-                ...task,
-                phase: validTabIds.has(task.phase) ? task.phase : fallbackPhase,
-              }));
-              setTasks(sanitizedTasks);
-              currentTasksRef.current = sanitizedTasks;
-              localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitizedTasks));
-
-            }
-            if (Array.isArray(data.tabs)) {
-              setTabs(data.tabs);
-              currentTabsRef.current = data.tabs;
-              localStorage.setItem(TABS_KEY, JSON.stringify(data.tabs));
-            }
-            if (Array.isArray(data.deletedTasks)) {
-              setDeletedTasks(data.deletedTasks);
-              currentDeletedTasksRef.current = data.deletedTasks;
-              localStorage.setItem(DELETED_STORAGE_KEY, JSON.stringify(data.deletedTasks));
-            }
-            if (data.settings) {
-              if (typeof data.settings.soundEnabled === 'boolean') {
-                setSoundEnabled(data.settings.soundEnabled);
-                sound.enabled = data.settings.soundEnabled;
-              }
-              if (typeof data.settings.fireEnabled === 'boolean') {
-                setFireEnabled(data.settings.fireEnabled);
-              }
-              if (data.settings.lang === 'uk' || data.settings.lang === 'en') {
-                setLang(data.settings.lang as Language);
-              }
-              if (data.settings.aiIconVariant) {
-                setAiIconVariant(data.settings.aiIconVariant as AIIconId);
-              }
-            }
-            if (data.updatedAt) {
-              setLastSyncTime(data.updatedAt);
-              localStorage.setItem(LAST_SYNC_KEY, String(data.updatedAt));
-            }
-          } else {
-            const now = Date.now();
-            lastLocalSaveTimeRef.current = now;
-            await saveUserCloudData(user.uid, {
-              tasks,
-              tabs,
-              deletedTasks,
-              settings: {
-                soundEnabled,
-                fireEnabled,
-                lang,
-                aiIconVariant,
-              },
-            });
-            setLastSyncTime(now);
-            localStorage.setItem(LAST_SYNC_KEY, String(now));
+            return;
           }
-          cloudSyncReadyRef.current = true;
-          setIsCloudSyncReady(true);
-        } catch (err) {
-          console.error('Error fetching cloud data on auth change:', err);
-        } finally {
+          const merged = mergeWorkspace(baseWorkspaceRef.current, readWorkspace(), data);
+          baseWorkspaceRef.current = data;
+          applyWorkspace(merged);
+          setCloudData(data);
+          setLastSyncTime(data.updatedAt);
+          localStorage.setItem(LAST_SYNC_KEY, String(data.updatedAt));
+        } else {
+          persistWorkspace();
+        }
+      } catch (error) {
+        console.error('Cloud initialization failed; local account data retained:', error);
+      } finally {
+        if (generation === authGenerationRef.current) {
+          cloudSyncReadyRef.current = Boolean(user);
+          setIsCloudSyncReady(Boolean(user));
           setIsSyncing(false);
         }
       }
     });
-
-    return () => unsubscribe();
+    return () => { ++authGenerationRef.current; unsubscribe(); };
   }, []);
 
-  // Real-time listener for user cloud state (sync across tabs/windows)
   useEffect(() => {
     if (!currentUser || !autoSyncEnabled || !isCloudSyncReady) return;
-
-    const unsubscribe = subscribeToUserCloudData(
-      currentUser.uid,
-      (remoteData) => {
-        if (!remoteData) return;
-        setCloudData(remoteData);
-
-        // Only apply remote changes if they originated after our last local save
-        const remoteUpdatedAt = remoteData.updatedAt || 0;
-        const isRemoteNewer = remoteUpdatedAt > (lastLocalSaveTimeRef.current + 1000);
-
-        if (isRemoteNewer) {
-          // Perform deep comparison with current tracked ref values before calling state setters to prevent redundant renders and auto-saves
-          if (Array.isArray(remoteData.tabs) && JSON.stringify(remoteData.tabs) !== JSON.stringify(currentTabsRef.current)) {
-            setTabs(remoteData.tabs);
-            currentTabsRef.current = remoteData.tabs;
-          }
-          if (Array.isArray(remoteData.tasks) && JSON.stringify(remoteData.tasks) !== JSON.stringify(currentTasksRef.current)) {
-            const activeTabs = currentTabsRef.current.length > 0
-              ? currentTabsRef.current
-              : remoteData.tabs || [];
-            const validTabIds = new Set(activeTabs.map((t) => t.id));
-            const fallbackPhase = activeTabs[0]?.id || 'focus';
-
-            const sanitizedTasks = remoteData.tasks.map((task: PSTask) => ({
-              ...task,
-              phase: validTabIds.has(task.phase) ? task.phase : fallbackPhase,
-            }));
-            setTasks(sanitizedTasks);
-          }
-          if (Array.isArray(remoteData.deletedTasks) && JSON.stringify(remoteData.deletedTasks) !== JSON.stringify(currentDeletedTasksRef.current)) {
-            setDeletedTasks(remoteData.deletedTasks);
-            currentDeletedTasksRef.current = remoteData.deletedTasks;
-          }
-          if (remoteData.settings) {
-            if (typeof remoteData.settings.soundEnabled === 'boolean' && remoteData.settings.soundEnabled !== currentSoundEnabledRef.current) {
-              setSoundEnabled(remoteData.settings.soundEnabled);
-              sound.enabled = remoteData.settings.soundEnabled;
-            }
-            if (typeof remoteData.settings.fireEnabled === 'boolean' && remoteData.settings.fireEnabled !== currentFireEnabledRef.current) {
-              setFireEnabled(remoteData.settings.fireEnabled);
-            }
-            if ((remoteData.settings.lang === 'uk' || remoteData.settings.lang === 'en') && remoteData.settings.lang !== currentLangRef.current) {
-              setLang(remoteData.settings.lang as Language);
-            }
-            if (remoteData.settings.aiIconVariant && remoteData.settings.aiIconVariant !== currentAiIconVariantRef.current) {
-              setAiIconVariant(remoteData.settings.aiIconVariant as AIIconId);
-            }
-          }
-          if (remoteUpdatedAt) {
-            setLastSyncTime(remoteUpdatedAt);
-            lastLocalSaveTimeRef.current = remoteUpdatedAt; // Update local save reference to prevent loops
-            localStorage.setItem(LAST_SYNC_KEY, String(remoteUpdatedAt));
-          }
-        }
-      },
-      (err) => {
-        console.warn('Real-time sync listener notice:', err);
-      }
-    );
-
-    return () => unsubscribe();
-  }, [currentUser, autoSyncEnabled, isCloudSyncReady]);
-
-  // Push local changes to Firestore with rapid debounce when auto-sync is enabled
-  const autoSyncTimerRef = React.useRef<NodeJS.Timeout | null>(null);
-  const isInitialMountRef = React.useRef<boolean>(true);
-
-  const performAutoSave = React.useCallback(async () => {
-    if (!currentUser || !autoSyncEnabled || !isCloudSyncReady) return;
-    
-    // Check if local data is actually different from the last known cloudData
-    if (cloudData) {
-      const isIdentical =
-        JSON.stringify(cloudData.tasks || []) === JSON.stringify(tasks) &&
-        JSON.stringify(cloudData.tabs || []) === JSON.stringify(tabs) &&
-        JSON.stringify(cloudData.deletedTasks || []) === JSON.stringify(deletedTasks) &&
-        Boolean(cloudData.settings?.soundEnabled) === Boolean(soundEnabled) &&
-        Boolean(cloudData.settings?.fireEnabled) === Boolean(fireEnabled) &&
-        cloudData.settings?.lang === lang &&
-        cloudData.settings?.aiIconVariant === aiIconVariant;
-      
-      if (isIdentical) {
+    const uid = currentUser.uid;
+    return subscribeToUserCloudData(uid, (remote) => {
+      if (auth.currentUser?.uid !== uid || workspaceOwnerRef.current !== uid) return;
+      if ((remote.revision || 0) < (baseWorkspaceRef.current?.revision || 0)) return;
+      if (savingRef.current !== null) {
+        queuedRemoteRef.current = remote;
         return;
       }
-    }
+      const merged = mergeWorkspace(baseWorkspaceRef.current, readWorkspace(), remote);
+      baseWorkspaceRef.current = remote;
+      if (!sameWorkspace(readWorkspace(), merged)) applyWorkspace(merged);
+      else persistWorkspace();
+      setCloudData(remote);
+      setLastSyncTime(remote.updatedAt);
+    }, (error) => console.warn('Cloud listener failed; local data retained:', error));
+  }, [currentUser, autoSyncEnabled, isCloudSyncReady]);
 
-    try {
-      setIsSyncing(true);
-      const now = Date.now();
-      lastLocalSaveTimeRef.current = now;
-      
-      const payload = {
-        tasks,
-        tabs,
-        deletedTasks,
-        settings: {
-          soundEnabled,
-          fireEnabled,
-          lang,
-          aiIconVariant,
-        },
-      };
-
-      await saveUserCloudData(currentUser.uid, payload);
-      
-      // Update cloudData cache locally to prevent triggering another save cycle on snapshot reflection
-      setCloudData({
-        ...payload,
-        userId: currentUser.uid,
-        updatedAt: now
-      });
-      
-      setLastSyncTime(now);
-      localStorage.setItem(LAST_SYNC_KEY, String(now));
-    } catch (err) {
-      console.error('Auto sync error:', err);
-    } finally {
-      setIsSyncing(false);
-    }
-  }, [currentUser, autoSyncEnabled, isCloudSyncReady, tasks, tabs, deletedTasks, soundEnabled, fireEnabled, lang, aiIconVariant, cloudData]);
-
-  useEffect(() => {
-    if (isInitialMountRef.current) {
-      isInitialMountRef.current = false;
+  const performAutoSave = React.useCallback(async (manual = false) => {
+    const uid = currentUser?.uid;
+    if (!uid || auth.currentUser?.uid !== uid || workspaceOwnerRef.current !== uid ||
+        !cloudSyncReadyRef.current || (!manual && !autoSyncEnabledRef.current) || savingRef.current !== null) {
+      if (manual) throw new Error('Synchronization is not ready or already in progress');
       return;
     }
-    if (!currentUser || !autoSyncEnabled) return;
+    const submitted = readWorkspace();
+    persistWorkspace();
+    if (baseWorkspaceRef.current && sameWorkspace(baseWorkspaceRef.current, submitted)) return;
+    const generation = authGenerationRef.current;
+    savingRef.current = generation;
+    setIsSyncing(true);
+    try {
+      const saved = await saveUserCloudData(uid, submitted, baseWorkspaceRef.current);
+      if (generation !== authGenerationRef.current || auth.currentUser?.uid !== uid) return;
+      // Keep edits made while the transaction was in flight.
+      const queued = queuedRemoteRef.current;
+      queuedRemoteRef.current = null;
+      const latest = queued && (queued.revision || 0) > (saved.revision || 0) ? queued : saved;
+      const merged = mergeWorkspace(submitted, readWorkspace(), latest);
+      baseWorkspaceRef.current = latest;
+      applyWorkspace(merged);
+      setCloudData(latest);
+      setLastSyncTime(latest.updatedAt);
+      localStorage.setItem(LAST_SYNC_KEY, String(latest.updatedAt));
+    } finally {
+      if (generation === authGenerationRef.current) {
+        savingRef.current = null;
+        const queued = queuedRemoteRef.current;
+        queuedRemoteRef.current = null;
+        if (queued) {
+          const merged = mergeWorkspace(baseWorkspaceRef.current, readWorkspace(), queued);
+          baseWorkspaceRef.current = queued;
+          applyWorkspace(merged);
+          setCloudData(queued);
+        }
+        setIsSyncing(false);
+      }
+    }
+  }, [currentUser]);
 
-    if (autoSyncTimerRef.current) clearTimeout(autoSyncTimerRef.current);
-    autoSyncTimerRef.current = setTimeout(() => {
-      performAutoSave();
-    }, 800);
-
-    return () => {
-      if (autoSyncTimerRef.current) clearTimeout(autoSyncTimerRef.current);
-    };
-  }, [currentUser, autoSyncEnabled, tasks, tabs, deletedTasks, soundEnabled, fireEnabled, lang, aiIconVariant, performAutoSave]);
-
-  // Flush save on page hide / unload so nothing is lost
   useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden' && currentUser && autoSyncEnabled) {
-        performAutoSave();
-      }
+    if (!currentUser || !autoSyncEnabled || !isCloudSyncReady) return;
+    const timer = setTimeout(() => {
+      performAutoSave().catch((error) => console.error('Cloud save failed; local changes retained:', error));
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [currentUser, autoSyncEnabled, isCloudSyncReady, tasks, tabs, deletedTasks,
+      soundEnabled, fireEnabled, lang, aiIconVariant, cloudData, performAutoSave]);
+
+  useEffect(() => {
+    const flushLocal = () => {
+      try { persistWorkspace(); } catch (error) { console.error('Local backup failed:', error); }
     };
-    const handleBeforeUnload = () => {
-      if (currentUser && autoSyncEnabled) {
-        performAutoSave();
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    window.addEventListener('beforeunload', handleBeforeUnload);
+    const retry = () => performAutoSave().catch((error) => console.error('Cloud retry failed:', error));
+    const hidden = () => { if (document.visibilityState === 'hidden') { flushLocal(); void retry(); } };
+    window.addEventListener('pagehide', flushLocal);
+    window.addEventListener('beforeunload', flushLocal);
+    window.addEventListener('online', retry);
+    document.addEventListener('visibilitychange', hidden);
     return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('pagehide', flushLocal);
+      window.removeEventListener('beforeunload', flushLocal);
+      window.removeEventListener('online', retry);
+      document.removeEventListener('visibilitychange', hidden);
     };
-  }, [currentUser, autoSyncEnabled, performAutoSave]);
+  }, [performAutoSave]);
 
   const handleToggleAutoSync = () => {
     const next = !autoSyncEnabled;
+    autoSyncEnabledRef.current = next;
     setAutoSyncEnabled(next);
-    try {
-      localStorage.setItem(AUTO_SYNC_KEY, String(next));
-    } catch (e) {
-      console.error('Failed to save auto sync state', e);
-    }
-    if (next && currentUser) {
-      performAutoSave();
-    }
+    localStorage.setItem(AUTO_SYNC_KEY, String(next));
   };
 
-  const handleLoginWithGoogle = async () => {
-    await loginWithGoogle();
-  };
+  const handleLoginWithGoogle = async () => { await loginWithGoogle(); };
 
   const handleLogout = async () => {
+    // A synchronous account-specific backup also works offline or with sync disabled.
+    persistWorkspace();
     await logoutUser();
-    setCurrentUser(null);
-    setCloudData(null);
-    // Reset to a clean empty workspace without leaking the previous account's data.
-    const defaultTabs: TaskTab[] = [];
-    const defaultTasks: PSTask[] = [];
-    setTabs(defaultTabs);
-    setTasks(defaultTasks);
     setSelectedPhase('ALL');
-    currentTabsRef.current = defaultTabs;
-    currentTasksRef.current = defaultTasks;
-    try {
-      localStorage.setItem(TABS_KEY, JSON.stringify(defaultTabs));
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(defaultTasks));
-    } catch (e) {
-      console.error('Failed to reset storage on logout', e);
-    }
   };
 
-  const handleSyncNow = async () => {
-    if (!currentUser) return;
-    setIsSyncing(true);
-    try {
-      await saveUserCloudData(currentUser.uid, {
-        tasks,
-        tabs,
-        deletedTasks,
-        settings: {
-          soundEnabled,
-          fireEnabled,
-          lang,
-          aiIconVariant,
-        },
-      });
-      const now = Date.now();
-      setLastSyncTime(now);
-      localStorage.setItem(LAST_SYNC_KEY, String(now));
-      const freshData = await fetchUserCloudData(currentUser.uid);
-      if (freshData) setCloudData(freshData);
-    } finally {
-      setIsSyncing(false);
-    }
-  };
+  const handleSyncNow = async () => { await performAutoSave(true); };
 
   const handleRestoreFromCloud = async () => {
-    if (!currentUser) return;
+    const uid = currentUser?.uid;
+    if (!uid || savingRef.current !== null) throw new Error('Synchronization is already in progress');
+    const generation = authGenerationRef.current;
+    savingRef.current = generation;
     setIsSyncing(true);
     try {
-      const data = await fetchUserCloudData(currentUser.uid);
-      if (data) {
-        setCloudData(data);
-        if (Array.isArray(data.tabs)) {
-          setTabs(data.tabs);
-          currentTabsRef.current = data.tabs;
-          try {
-            localStorage.setItem(TABS_KEY, JSON.stringify(data.tabs));
-          } catch (e) {
-            console.error('Failed to save restored tabs to localStorage', e);
-          }
-        }
-        if (Array.isArray(data.tasks)) {
-          const activeTabs = currentTabsRef.current.length > 0
-            ? currentTabsRef.current
-            : data.tabs || [];
-          const validTabIds = new Set(activeTabs.map((t) => t.id));
-          const fallbackPhase = activeTabs[0]?.id || 'focus';
-
-          const sanitizedTasks = data.tasks.map((task: PSTask) => ({
-            ...task,
-            phase: validTabIds.has(task.phase) ? task.phase : fallbackPhase,
-          }));
-          setTasks(sanitizedTasks);
-          currentTasksRef.current = sanitizedTasks;
-          try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitizedTasks));
-          } catch (e) {
-            console.error('Failed to save restored tasks to localStorage', e);
-          }
-        }
-        if (Array.isArray(data.deletedTasks)) {
-          setDeletedTasks(data.deletedTasks);
-          currentDeletedTasksRef.current = data.deletedTasks;
-          try {
-            localStorage.setItem(DELETED_STORAGE_KEY, JSON.stringify(data.deletedTasks));
-          } catch (e) {
-            console.error('Failed to save restored deleted tasks to localStorage', e);
-          }
-        }
-        if (data.settings) {
-          if (typeof data.settings.soundEnabled === 'boolean') {
-            setSoundEnabled(data.settings.soundEnabled);
-            sound.enabled = data.settings.soundEnabled;
-          }
-          if (typeof data.settings.fireEnabled === 'boolean') {
-            setFireEnabled(data.settings.fireEnabled);
-          }
-          if (data.settings.lang === 'uk' || data.settings.lang === 'en') {
-            setLang(data.settings.lang as Language);
-          }
-          if (data.settings.aiIconVariant) {
-            setAiIconVariant(data.settings.aiIconVariant as AIIconId);
-          }
-        }
-        if (data.updatedAt) {
-          setLastSyncTime(data.updatedAt);
-          lastLocalSaveTimeRef.current = data.updatedAt;
-          localStorage.setItem(LAST_SYNC_KEY, String(data.updatedAt));
-        }
-      }
+      const data = await fetchUserCloudData(uid);
+      if (generation !== authGenerationRef.current || auth.currentUser?.uid !== uid) return;
+      if (!data) throw new Error('No cloud backup exists');
+      // Retain a recovery copy before an explicitly requested restore.
+      localStorage.setItem(accountKey(uid) + ':before-restore', JSON.stringify(readWorkspace()));
+      baseWorkspaceRef.current = data;
+      applyWorkspace(data);
+      setCloudData(data);
+      setLastSyncTime(data.updatedAt);
     } finally {
-      setIsSyncing(false);
+      if (generation === authGenerationRef.current) {
+        savingRef.current = null;
+        const queued = queuedRemoteRef.current;
+        queuedRemoteRef.current = null;
+        if (queued && (queued.revision || 0) > (baseWorkspaceRef.current?.revision || 0)) {
+          const merged = mergeWorkspace(baseWorkspaceRef.current, readWorkspace(), queued);
+          baseWorkspaceRef.current = queued;
+          applyWorkspace(merged);
+          setCloudData(queued);
+        }
+        setIsSyncing(false);
+      }
     }
   };
 
@@ -1921,8 +1812,10 @@ export default function App() {
         </AnimatePresence>
       </main>
 
-      {/* Bottom-Left Corner: Fire Animation Toggle Button */}
-      <div className="fixed bottom-2.5 left-3 sm:left-4 z-50 flex items-center app-no-drag pointer-events-auto">
+      {/* All bottom controls share the same responsive layout. */}
+      <footer className="fixed bottom-0 left-0 right-0 z-30 bg-[#060608]/95 backdrop-blur-md border-t border-neutral-800/80 px-3 sm:px-4 py-2.5 app-no-drag pointer-events-auto">
+        <div className="max-w-6xl mx-auto flex flex-wrap items-center gap-2 sm:gap-3 app-no-drag">
+      <div className="order-0 shrink-0 flex items-center app-no-drag pointer-events-auto">
         <button
           id="toggle-fire-animation-btn"
           type="button"
@@ -1955,8 +1848,8 @@ export default function App() {
         </button>
       </div>
 
-      {/* Bottom-Right Corner: System Update Trigger Button */}
-      <div className="fixed bottom-2.5 right-3 sm:right-4 z-50 flex items-center app-no-drag pointer-events-auto">
+      {/* System Update Trigger Button */}
+      <div className="order-4 shrink-0 flex items-center app-no-drag pointer-events-auto">
         <button
           id="toggle-update-modal-btn"
           type="button"
@@ -1968,17 +1861,14 @@ export default function App() {
           className="px-2 py-1 border border-neutral-800 bg-[#08080a]/95 text-neutral-400 hover:text-white hover:border-neutral-600 transition-all cursor-pointer flex items-center gap-1.5 text-[10px] font-mono tracking-wider uppercase backdrop-blur-md shadow-md app-no-drag pointer-events-auto"
         >
           <RefreshCw className="w-3.5 h-3.5 text-emerald-400" />
-          <span className="font-bold text-neutral-300">
+          <span className="hidden sm:inline font-bold text-neutral-300">
             v{APP_CURRENT_VERSION}
           </span>
         </button>
       </div>
 
-      {/* Floating Street-style Bottom Action Strip */}
-      <footer className="fixed bottom-0 left-0 right-0 z-30 bg-[#060608]/95 backdrop-blur-md border-t border-neutral-800/80 px-4 py-2.5 app-no-drag pointer-events-auto">
-        <div className="max-w-3xl mx-auto flex items-center justify-between pl-11 sm:pl-28 md:pl-0 app-no-drag">
           {/* Left: Quick Filter Status */}
-          <div className="flex items-center gap-2 text-[10px] font-mono text-neutral-400 app-no-drag">
+          <div className="order-5 basis-full lg:order-1 lg:basis-auto flex flex-wrap items-center justify-center gap-2 text-[10px] font-mono text-neutral-400 app-no-drag">
             <span className="text-neutral-200 font-bold">
               {filteredTasks.length} {t.shownCount}
             </span>
@@ -2002,10 +1892,12 @@ export default function App() {
               setAiPromptSeed('');
               setIsAIOpen(true);
             }}
-            className="flex items-center gap-2 px-3.5 py-1.5 bg-neutral-900 border border-neutral-700 hover:border-white text-white font-mono text-xs font-bold tracking-wider transition-all active:scale-95 app-no-drag"
+            title={t.swipeUpAI}
+            className="order-2 min-w-0 flex-1 flex items-center justify-center gap-2 px-2 sm:px-3.5 py-1.5 bg-neutral-900 border border-neutral-700 hover:border-white text-white font-mono text-xs font-bold tracking-wider transition-all active:scale-95 app-no-drag"
           >
-            <AIIcon id={aiIconVariant} className="w-3.5 h-3.5 text-neutral-300" />
-            <span>{t.swipeUpAI}</span>
+            <AIIcon id={aiIconVariant} className="w-3.5 h-3.5 shrink-0 text-neutral-300" />
+            <span className="sm:hidden truncate">KARKAS AI</span>
+            <span className="hidden sm:inline truncate">{t.swipeUpAI}</span>
           </button>
 
           {/* Right: Quick Add Button */}
@@ -2015,7 +1907,7 @@ export default function App() {
               sound.tick(600);
               setIsAddOpen((prev) => !prev);
             }}
-            className="flex items-center gap-1 px-3 py-1.5 bg-white text-black font-extrabold font-mono text-xs tracking-wider hover:bg-neutral-200 transition-all active:scale-95 app-no-drag"
+            className="order-3 shrink-0 flex items-center gap-1 px-3 py-1.5 bg-white text-black font-extrabold font-mono text-xs tracking-wider hover:bg-neutral-200 transition-all active:scale-95 app-no-drag"
           >
             <Plus className="w-3.5 h-3.5" />
             <span>{t.addOp}</span>

@@ -3,6 +3,7 @@ import {
   getAuth,
   GoogleAuthProvider,
   signInWithPopup,
+  signInWithCredential,
   signInWithRedirect,
   signOut,
   onAuthStateChanged,
@@ -11,13 +12,14 @@ import {
 import {
   getFirestore,
   doc,
-  setDoc,
+  runTransaction,
   getDoc,
   getDocFromServer,
   onSnapshot,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { PSTask, TaskTab, DeletedTask } from '../types';
+import { mergeWorkspace, type WorkspaceState } from '../utils/syncState';
 
 // Initialize Firebase App instance safely
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
@@ -63,10 +65,18 @@ export interface UserCloudState {
     aiIconVariant: string;
   };
   updatedAt: number;
+  revision?: number;
 }
 
 // Sign in with Google Popup
 export async function loginWithGoogle(): Promise<User> {
+  if (window.electronAPI?.isElectron) {
+    if (!window.electronAPI.loginWithGoogle) throw new Error('Перезапустіть застосунок, щоб увімкнути вхід у браузері.');
+    const result = await window.electronAPI.loginWithGoogle();
+    if (!result.success) throw new Error(result.error || 'Не вдалося відкрити вхід у браузері.');
+    const credential = GoogleAuthProvider.credential(result.idToken, result.accessToken);
+    return (await signInWithCredential(auth, credential)).user;
+  }
   try {
     const result = await signInWithPopup(auth, googleProvider);
     return result.user;
@@ -117,29 +127,26 @@ export function sanitizeForFirestore<T>(data: T): T {
 // Save all user tasks, tabs, deleted history and settings to Firestore
 export async function saveUserCloudData(
   userId: string,
-  data: {
-    tasks: PSTask[];
-    tabs: TaskTab[];
-    deletedTasks: DeletedTask[];
-    settings: {
-      soundEnabled: boolean;
-      fireEnabled: boolean;
-      lang: string;
-      aiIconVariant: string;
-    };
-  }
-): Promise<void> {
+  data: WorkspaceState,
+  base: WorkspaceState | null = null,
+): Promise<UserCloudState> {
   const currentUser = auth.currentUser;
   if (!currentUser || currentUser.uid !== userId) {
     throw new Error('User is not authorized to save this cloud data');
   }
 
+  const userDocRef = doc(db, 'users', userId);
+  return runTransaction(db, async (transaction) => {
+  const snapshot = await transaction.get(userDocRef);
+  const merged = snapshot.exists()
+    ? mergeWorkspace(base, data, snapshot.data() as UserCloudState)
+    : data;
   const rawPayload = {
     userId,
     email: currentUser.email ?? null,
     displayName: currentUser.displayName ?? null,
     photoURL: currentUser.photoURL ?? null,
-    tasks: (data.tasks || []).map((t) => {
+    tasks: (merged.tasks || []).map((t) => {
       const taskObj: Record<string, any> = {
         id: t.id,
         title: t.title,
@@ -166,7 +173,7 @@ export async function saveUserCloudData(
       }
       return taskObj;
     }),
-    tabs: (data.tabs || []).map((tb) => {
+    tabs: (merged.tabs || []).map((tb) => {
       const tabObj: Record<string, any> = {
         id: tb.id,
         name: tb.name,
@@ -174,7 +181,7 @@ export async function saveUserCloudData(
       if (tb.color) tabObj.color = tb.color;
       return tabObj;
     }),
-    deletedTasks: (data.deletedTasks || []).map((t) => {
+    deletedTasks: (merged.deletedTasks || []).map((t) => {
       const delObj: Record<string, any> = {
         id: t.id,
         title: t.title,
@@ -203,23 +210,25 @@ export async function saveUserCloudData(
       return delObj;
     }),
     settings: {
-      soundEnabled: Boolean(data.settings?.soundEnabled),
-      fireEnabled: Boolean(data.settings?.fireEnabled),
-      lang: data.settings?.lang || 'uk',
-      aiIconVariant: data.settings?.aiIconVariant || 'quantum',
+      soundEnabled: Boolean(merged.settings?.soundEnabled),
+      fireEnabled: Boolean(merged.settings?.fireEnabled),
+      lang: merged.settings?.lang || 'uk',
+      aiIconVariant: merged.settings?.aiIconVariant || 'quantum',
     },
     updatedAt: Date.now(),
+    revision: (Number(snapshot.data()?.revision) || 0) + 1,
   };
 
   const cleanPayload = sanitizeForFirestore(rawPayload);
-  const userDocRef = doc(db, 'users', userId);
-  await setDoc(userDocRef, cleanPayload, { merge: true });
+  transaction.set(userDocRef, cleanPayload, { merge: true });
+  return cleanPayload as UserCloudState;
+  });
 }
 
 // Load user data from Firestore
 export async function fetchUserCloudData(userId: string): Promise<UserCloudState | null> {
   const userDocRef = doc(db, 'users', userId);
-  const snapshot = await getDoc(userDocRef);
+  const snapshot = await getDocFromServer(userDocRef);
   if (snapshot.exists()) {
     return snapshot.data() as UserCloudState;
   }
@@ -235,8 +244,9 @@ export function subscribeToUserCloudData(
   const userDocRef = doc(db, 'users', userId);
   return onSnapshot(
     userDocRef,
+    { includeMetadataChanges: true },
     (snapshot) => {
-      if (snapshot.exists()) {
+      if (snapshot.exists() && !snapshot.metadata.fromCache && !snapshot.metadata.hasPendingWrites) {
         onData(snapshot.data() as UserCloudState);
       }
     },

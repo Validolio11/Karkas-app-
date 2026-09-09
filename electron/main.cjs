@@ -1,4 +1,5 @@
-const { app, BrowserWindow, ipcMain, session, Menu, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, shell } = require('electron');
+const { beginBrowserGoogleLogin } = require('./browser-auth.cjs');
 const path = require('path');
 const http = require('http');
 const https = require('https');
@@ -11,6 +12,40 @@ Menu.setApplicationMenu(null);
 
 let localServer = null;
 const LOCAL_PORT = 14141;
+let loginController = null;
+
+ipcMain.handle('google-login-browser', async (event) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const expectedOrigin = app.isPackaged ? `http://localhost:${LOCAL_PORT}` : 'http://localhost:3000';
+  if (!window || event.senderFrame !== event.sender.mainFrame ||
+      new URL(event.senderFrame.url).origin !== expectedOrigin) {
+    return { success: false, error: 'Недозволене джерело запиту входу.' };
+  }
+  if (loginController) return { success: false, error: 'Вхід уже відкрито у браузері.' };
+  const controller = new AbortController();
+  loginController = controller;
+  const cancel = () => controller.abort();
+  window.once('closed', cancel);
+  try {
+    const credential = await beginBrowserGoogleLogin({
+      openExternal: (url) => shell.openExternal(url),
+      assetDir: path.join(__dirname, '../dist'),
+      signal: controller.signal,
+    });
+    if (!window.isDestroyed()) {
+      if (window.isMinimized()) window.restore();
+      window.show();
+      window.focus();
+    }
+    return { success: true, ...credential };
+  } catch {
+    return { success: false, error: 'Вхід не завершено. Спробуйте ще раз і підтвердьте Google-акаунт у браузері.' };
+  } finally {
+    window.removeListener('closed', cancel);
+    if (loginController === controller) loginController = null;
+  }
+});
+app.on('before-quit', () => loginController?.abort());
 
 function startLocalServer() {
   if (localServer) return;
@@ -109,21 +144,6 @@ function createWindow() {
   // Handle external window links and popup requests without opening blank white windows
   mainWindow.webContents.setWindowOpenHandler((details) => {
     const url = details.url || '';
-    // Allow Google auth popups with dark background and no menu bar
-    if (url.includes('accounts.google.com') || url.includes('firebaseapp.com')) {
-      return {
-        action: 'allow',
-        overrideBrowserWindowOptions: {
-          backgroundColor: '#09090b',
-          autoHideMenuBar: true,
-          webPreferences: {
-            contextIsolation: true,
-            nodeIntegration: false,
-          },
-        },
-      };
-    }
-
     // For all external URLs (github, releases, downloads, web links), open in external default browser
     if (url.startsWith('https://') || url.startsWith('http://')) {
       shell.openExternal(url);
@@ -199,11 +219,6 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  // Set custom user agent globally to prevent Google OAuth 403 "disallowed_useragent" error
-  session.defaultSession.setUserAgent(
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-  );
-
   createWindow();
 
   app.on('activate', () => {

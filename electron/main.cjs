@@ -47,44 +47,14 @@ ipcMain.handle('google-login-browser', async (event) => {
 });
 app.on('before-quit', () => loginController?.abort());
 
-function startLocalServer() {
+async function startLocalServer() {
   if (localServer) return;
-
-  localServer = http.createServer((req, res) => {
-    const decodedUrl = decodeURIComponent(req.url.split('?')[0]);
-    let filePath = path.join(__dirname, '../dist', decodedUrl === '/' ? 'index.html' : decodedUrl);
-
-    fs.readFile(filePath, (err, data) => {
-      if (err) {
-        fs.readFile(path.join(__dirname, '../dist/index.html'), (errIndex, dataIndex) => {
-          if (errIndex) {
-            res.writeHead(404, { 'Content-Type': 'text/plain' });
-            res.end('Not Found');
-            return;
-          }
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-          res.end(dataIndex);
-        });
-        return;
-      }
-
-      let contentType = 'text/html; charset=utf-8';
-      const ext = path.extname(filePath).toLowerCase();
-      if (ext === '.js') contentType = 'application/javascript; charset=utf-8';
-      else if (ext === '.css') contentType = 'text/css; charset=utf-8';
-      else if (ext === '.json') contentType = 'application/json; charset=utf-8';
-      else if (ext === '.png') contentType = 'image/png';
-      else if (ext === '.jpg' || ext === '.jpeg') contentType = 'image/jpeg';
-      else if (ext === '.svg') contentType = 'image/svg+xml; charset=utf-8';
-      else if (ext === '.ico') contentType = 'image/x-icon';
-
-      res.writeHead(200, { 'Content-Type': contentType });
-      res.end(data);
-    });
-  });
-
-  localServer.listen(LOCAL_PORT, '127.0.0.1', () => {
-    console.log(`Local static server for production running on http://127.0.0.1:${LOCAL_PORT}`);
+  process.env.NODE_ENV = 'production';
+  const { startServer } = require('../dist/server.cjs');
+  localServer = await startServer({
+    port: LOCAL_PORT,
+    host: '127.0.0.1',
+    distPath: path.join(__dirname, '../dist'),
   });
 }
 
@@ -213,12 +183,12 @@ function createWindow() {
   if (isDev) {
     mainWindow.loadURL('http://localhost:3000');
   } else {
-    startLocalServer();
     mainWindow.loadURL(`http://localhost:${LOCAL_PORT}`);
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  if (app.isPackaged && process.env.NODE_ENV !== 'development') await startLocalServer();
   createWindow();
 
   app.on('activate', () => {
@@ -226,7 +196,12 @@ app.whenReady().then(() => {
       createWindow();
     }
   });
+}).catch(() => {
+  require('electron').dialog.showErrorBox('KARKAS', 'Не вдалося запустити локальний сервер застосунку. Закрийте іншу копію KARKAS і спробуйте ще раз.');
+  app.quit();
 });
+
+app.on('before-quit', () => localServer?.close());
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {

@@ -37,6 +37,24 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Verify application and packaged server routes
+        shell: powershell
+        run: |
+          npm run lint
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $testFiles = Get-ChildItem electron, src/utils, server -Filter '*.test.*' -File
+          node --import tsx --test $testFiles.FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:ELECTRON_RUN_AS_NODE = '1'
+          $env:KARKAS_TEST_APP_DIR = Join-Path $pwd 'release/win-unpacked/resources/app.asar'
+          $smokeTest = Join-Path $pwd 'electron/server-runtime.test.cjs'
+          $stdout = Join-Path $env:RUNNER_TEMP 'karkas-smoke-stdout.log'
+          $stderr = Join-Path $env:RUNNER_TEMP 'karkas-smoke-stderr.log'
+          $process = Start-Process -FilePath 'release/win-unpacked/Karkas.exe' -ArgumentList "--test `"$smokeTest`"" -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          Get-Content $stdout
+          Get-Content $stderr
+          exit $process.ExitCode
+
       - name: Upload Build Artifacts to Workflow Run
         uses: actions/upload-artifact@v4
         with:

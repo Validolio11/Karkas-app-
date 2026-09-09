@@ -1,7 +1,7 @@
 {
   "name": "karkas-app",
   "private": true,
-  "version": "1.2.6",
+  "version": "1.2.7",
   "description": "Karkas Application",
   "author": "Melychyn",
   "type": "module",
@@ -14,7 +14,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "build:win": "vite build && electron-builder --win --x64"
+    "build:win": "npm run build && electron-builder --win --x64 --publish never"
   },
   "build": {
     "appId": "com.karkas.app",

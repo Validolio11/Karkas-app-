@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { PSTask, TaskTab, DeletedTask, WorkflowStats, TaskStepItem, AdaptiveProfile } from '../types';
 import { sound } from '../utils/audio';
@@ -6,6 +6,7 @@ import { Language, TRANSLATIONS, AI_PRESETS_UK, AI_PRESETS_EN } from '../utils/i
 import { X, CornerDownLeft, Plus, CheckCircle2, ListTree, Sparkles, Activity, Layers, ArrowRight, Lightbulb } from 'lucide-react';
 import { AIIcon, AIIconId } from './AIIconTemplates';
 import { shouldVerifyAsApiKey } from '../utils/apiKey';
+import { verifyApiKey, keyVerificationMessage } from '../utils/verifyApiKey';
 
 interface AIAssistantSheetProps {
   isOpen: boolean;
@@ -136,7 +137,12 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   const [chatMessages, setChatMessages] = useState<AIChatMessage[]>([]);
   const [pendingChatTasks, setPendingChatTasks] = useState<AIResponse['tasks'] | null>(null);
   const [awaitingApiKey, setAwaitingApiKey] = useState(false);
-  const [pendingRequest, setPendingRequest] = useState<{ text: string; mode: AIMode } | null>(null);
+  const [keyStatus, setKeyStatus] = useState<string | null>(null);
+  const pendingRequest = useRef<{ text: string; mode: AIMode } | null>(null);
+  const requestInFlight = useRef(false);
+  const awaitingKeyRef = useRef(false);
+  const verificationController = useRef<AbortController | null>(null);
+  const backgroundVerification = useRef<AbortController | null>(null);
   const [injectedIds, setInjectedIds] = useState<number[]>([]);
   const [availableModels, setAvailableModels] = useState<string[]>(() => {
     try {
@@ -158,24 +164,25 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     const apiKey = localStorage.getItem('karkas_custom_api_key') || '';
     if (!apiKey) return;
 
-    fetch('/api/ai/verify-key', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ apiKey }),
-    })
-      .then(async (res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (!data?.success || !Array.isArray(data.models) || data.models.length === 0) return;
-        setAvailableModels(data.models);
-        const nextModel = data.models.includes(customModel) ? customModel : data.models[0];
+    const controller = new AbortController();
+    backgroundVerification.current = controller;
+    verifyApiKey(apiKey, { signal: controller.signal })
+      .then((models) => {
+        if (controller.signal.aborted) return;
+        setAvailableModels(models);
+        const nextModel = models.includes(customModel) ? customModel : models[0];
         setCustomModel(nextModel);
         localStorage.setItem('karkas_custom_model', nextModel);
-        localStorage.setItem('karkas_available_models', JSON.stringify(data.models));
+        localStorage.setItem('karkas_available_models', JSON.stringify(models));
         localStorage.setItem('karkas_custom_ai_enabled', 'true');
         setAwaitingApiKey(false);
+        awaitingKeyRef.current = false;
       })
       .catch(() => undefined);
+    return () => controller.abort();
   }, []);
+
+  useEffect(() => () => verificationController.current?.abort(), []);
 
   const confirmChatTasks = () => {
     if (!pendingChatTasks?.length) return;
@@ -225,7 +232,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     }
   }, [initialPrompt]);
 
-  const handleGenerate = async (queryText?: string, selectedMode?: AIMode) => {
+  const handleGenerate = async (queryText?: string, selectedMode?: AIMode, resuming = false) => {
     const textToQuery = queryText !== undefined ? queryText : prompt;
     const currentMode = selectedMode || mode;
     const requestText = textToQuery.trim() || (
@@ -235,84 +242,67 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     );
 
     if (!requestText) return;
-    if (loading) return;
+    if (requestInFlight.current) return;
 
     const savedApiKey = localStorage.getItem('karkas_custom_api_key') || '';
     const customAiEnabled = localStorage.getItem('karkas_custom_ai_enabled') === 'true';
 
-    if (shouldVerifyAsApiKey(requestText, awaitingApiKey, queryText === undefined)) {
+    if (!resuming && shouldVerifyAsApiKey(requestText, awaitingKeyRef.current, queryText === undefined)) {
+      requestInFlight.current = true;
+      backgroundVerification.current?.abort();
+      const controller = new AbortController();
+      verificationController.current = controller;
       setPrompt('');
       setLoading(true);
+      setKeyStatus(lang === 'uk' ? 'Перевіряю API-ключ…' : 'Verifying API key…');
+      let requestToResume: { text: string; mode: AIMode } | null = null;
       try {
-        const res = await fetch('/api/ai/verify-key', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ apiKey: requestText.trim() }),
-        });
-        const data = await res.json().catch(() => null);
-        if (!res.ok || !data?.success || !Array.isArray(data.models) || data.models.length === 0) {
-          throw new Error(data?.error || 'Invalid API key');
-        }
-
-        const nextModel = data.models.includes('gemini-3.1-flash-lite')
+        const models = await verifyApiKey(requestText, { signal: controller.signal });
+        if (controller.signal.aborted) return;
+        const nextModel = models.includes('gemini-3.1-flash-lite')
           ? 'gemini-3.1-flash-lite'
-          : data.models[0];
+          : models[0];
         localStorage.setItem('karkas_custom_api_key', requestText.trim());
         localStorage.setItem('karkas_custom_ai_enabled', 'true');
         localStorage.setItem('karkas_custom_model', nextModel);
-        localStorage.setItem('karkas_available_models', JSON.stringify(data.models));
-        setAvailableModels(data.models);
+        localStorage.setItem('karkas_available_models', JSON.stringify(models));
+        setAvailableModels(models);
         setCustomModel(nextModel);
         setAwaitingApiKey(false);
-        setChatMessages((previous) => [
-          ...previous,
-          {
-            role: 'assistant',
-            content: lang === 'uk'
+        awaitingKeyRef.current = false;
+        setKeyStatus(lang === 'uk'
               ? `API-ключ підключено. Автоматично обрано модель ${nextModel}.`
-              : `API key connected. Model ${nextModel} was selected automatically.`,
-          },
-        ]);
+              : `API key connected. Model ${nextModel} was selected automatically.`);
         sound.activate();
-
-        const requestToResume = pendingRequest;
-        setPendingRequest(null);
-        setLoading(false);
-        if (requestToResume) {
-          window.setTimeout(() => handleGenerate(requestToResume.text, requestToResume.mode), 0);
-        }
-        return;
+        requestToResume = pendingRequest.current;
+        pendingRequest.current = null;
       } catch (error) {
-        console.error('API key verification error:', error);
+        if (controller.signal.aborted) return;
         setAwaitingApiKey(true);
-        setChatMessages((previous) => [
-          ...previous,
-          {
-            role: 'assistant',
-            content: lang === 'uk'
-              ? 'Не вдалося перевірити цей ключ. Вставте дійсний Gemini API-ключ у цей самий рядок ще раз.'
-              : 'I could not verify this key. Paste a valid Gemini API key into this same input and try again.',
-          },
-        ]);
+        awaitingKeyRef.current = true;
+        setKeyStatus(keyVerificationMessage(error, lang));
+      } finally {
+        requestInFlight.current = false;
         setLoading(false);
-        return;
       }
+      if (requestToResume) {
+        await handleGenerate(requestToResume.text, requestToResume.mode, true);
+      }
+      return;
     }
 
     if (!savedApiKey || !customAiEnabled) {
       setPrompt('');
       setAwaitingApiKey(true);
-      setPendingRequest({ text: requestText, mode: currentMode });
+      awaitingKeyRef.current = true;
+      pendingRequest.current = { text: requestText, mode: currentMode };
+      setKeyStatus(lang === 'uk'
+        ? 'Щоб підключити AI, вставте свій Gemini API-ключ у рядок нижче. Я перевірю його, збережу на цьому пристрої та автоматично продовжу ваш запит.'
+        : 'To connect AI, paste your Gemini API key into the input below. I will verify it, save it on this device, and automatically continue your request.');
       if (currentMode === 'chat') {
         setChatMessages((previous) => [
           ...previous,
           { role: 'user', content: requestText },
-          {
-            role: 'assistant',
-            content: lang === 'uk'
-              ? 'Щоб підключити AI, вставте свій Gemini API-ключ у рядок чату нижче. Я перевірю, збережу його на цьому пристрої та автоматично продовжу ваш запит.'
-              : 'To connect AI, paste your Gemini API key into the chat input below. I will verify it, save it on this device, and automatically continue your request.',
-          },
         ]);
       }
       return;
@@ -327,10 +317,11 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
 
     sound.activate();
     setPrompt('');
+    requestInFlight.current = true;
     setLoading(true);
     setResponse(null);
     setInjectedIds([]);
-    if (currentMode === 'chat') {
+    if (currentMode === 'chat' && !resuming) {
       setChatMessages((previous) => [
         ...previous,
         { role: 'user', content: requestText },
@@ -365,7 +356,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
           currentTasks,
           conversation: currentMode === 'chat' ? chatMessages : undefined,
           customApiKey: customEnabled ? customKey : undefined,
-          selectedModel: customEnabled ? (customModel || storedModel) : undefined,
+          selectedModel: customEnabled ? (storedModel || customModel) : undefined,
           fullAppContext: {
             activeTasks: activeList.map((t) => ({
               title: t.title,
@@ -500,6 +491,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
         source: 'local-fallback',
       });
     } finally {
+      requestInFlight.current = false;
       setLoading(false);
     }
   };
@@ -760,6 +752,13 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                         : `Confirm creation (${pendingChatTasks.length})`}
                     </button>
                   )}
+                </div>
+              )}
+
+              {keyStatus && (
+                <div role="status" aria-live="polite" className="border border-neutral-800 bg-[#111116] p-3 text-xs leading-relaxed text-neutral-200 whitespace-pre-wrap">
+                  <div className="mb-1 text-[9px] font-bold uppercase tracking-widest opacity-60">KARKAS AI</div>
+                  {keyStatus}
                 </div>
               )}
 

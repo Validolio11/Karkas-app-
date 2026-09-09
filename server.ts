@@ -2,22 +2,25 @@ import express from "express";
 import path from "path";
 import dotenv from "dotenv";
 import { GoogleGenAI, Type } from "@google/genai";
-import { createServer as createViteServer } from "vite";
+import { verifyGeminiKey } from "./server/geminiKeyVerification";
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
+// The packaged app accepts API writes only from its own local window.
+app.use('/api', (req, res, next) => {
+  if (process.versions.electron && !['GET', 'HEAD'].includes(req.method)) {
+    const origin = req.headers.origin;
+    const port = req.socket.localPort;
+    if (origin !== `http://localhost:${port}` && origin !== `http://127.0.0.1:${port}`) {
+      return res.status(403).json({ code: 'ACCESS_DENIED', error: 'Request origin is not allowed' });
+    }
+  }
+  next();
+});
 app.use(express.json());
-
-function isChatModel(modelName: string): boolean {
-  const name = modelName.toLowerCase();
-  return (
-    name.includes("gemini") &&
-    !/(embedding|image|tts|transcrib|robotics|computer-use)/.test(name)
-  );
-}
 
 // Initialize Gemini Client
 let geminiClient: GoogleGenAI | null = null;
@@ -88,68 +91,8 @@ async function generateGeminiContentWithFallback(params: {
 
 // Endpoint to validate custom Gemini API key and automatically fetch available models
 app.post("/api/ai/verify-key", async (req, res) => {
-  const { apiKey } = req.body;
-  if (!apiKey || typeof apiKey !== "string") {
-    return res.status(400).json({ error: "API key is required" });
-  }
-
-  try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`,
-      { headers: { "User-Agent": "aistudio-build" } },
-    );
-    const responseData = await response.json() as any;
-    if (!response.ok) {
-      throw new Error(responseData?.error?.message || "Invalid API key or Gemini API access is unavailable");
-    }
-
-    const listedModels = (responseData.models || [])
-      .filter((model: any) => {
-        const name = typeof model?.name === "string" ? model.name : "";
-        const methods = Array.isArray(model?.supportedGenerationMethods)
-          ? model.supportedGenerationMethods
-          : Array.isArray(model?.supportedActions)
-            ? model.supportedActions
-            : [];
-        return isChatModel(name) && methods.includes("generateContent");
-      })
-      .map((model: any) => model.name.replace("models/", ""));
-
-    const models = (await Promise.all(
-      listedModels.map(async (model: string) => {
-        try {
-          const probeResponse = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json", "User-Agent": "aistudio-build" },
-              body: JSON.stringify({
-                contents: [{ parts: [{ text: "Reply with OK only." }] }],
-                generationConfig: { maxOutputTokens: 8 },
-              }),
-              signal: AbortSignal.timeout(5000),
-            },
-          );
-          if (!probeResponse.ok) return null;
-          const probeData = await probeResponse.json() as any;
-          return probeData?.candidates?.[0]?.content?.parts?.some((part: any) => typeof part?.text === "string" && part.text.trim())
-            ? model
-            : null;
-        } catch {
-          return null;
-        }
-      }),
-    )).filter((model): model is string => Boolean(model));
-
-    if (models.length === 0) {
-      return res.status(400).json({ error: "No Gemini models supporting generateContent were returned for this API key" });
-    }
-
-    res.json({ success: true, models });
-  } catch (err: any) {
-    console.error("Verify custom API key error:", err);
-    res.status(400).json({ error: err.message || "Invalid API key or network error" });
-  }
+  const result = await verifyGeminiKey(req.body?.apiKey);
+  return res.status(result.status).json(result.body);
 });
 
 // App update checking endpoint with memory cache (2 min TTL) to avoid GitHub rate limits
@@ -1135,24 +1078,28 @@ Language: ${isUk ? "Ukrainian" : "English"}.`,
   }
 });
 
-async function startServer() {
+export async function startServer(options: { port?: number; host?: string; distPath?: string } = {}) {
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), "dist");
+    const distPath = options.distPath || path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (_req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`PS To-Do server running on http://0.0.0.0:${PORT}`);
+  return new Promise<import('node:http').Server>((resolve, reject) => {
+    const server = app.listen(options.port ?? PORT, options.host || "0.0.0.0", () => resolve(server));
+    server.once('error', reject);
   });
 }
 
-startServer();
+if (!process.versions.electron && process.env.KARKAS_SERVER_AUTOSTART !== 'false') {
+  startServer().catch(() => { console.error('Application server failed to start'); process.exitCode = 1; });
+}

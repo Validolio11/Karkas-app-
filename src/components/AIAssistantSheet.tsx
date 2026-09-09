@@ -5,6 +5,7 @@ import { sound } from '../utils/audio';
 import { Language, TRANSLATIONS, AI_PRESETS_UK, AI_PRESETS_EN } from '../utils/i18n';
 import { X, CornerDownLeft, Plus, CheckCircle2, ListTree, Sparkles, Activity, Layers, ArrowRight, Lightbulb } from 'lucide-react';
 import { AIIcon, AIIconId } from './AIIconTemplates';
+import { shouldVerifyAsApiKey } from '../utils/apiKey';
 
 interface AIAssistantSheetProps {
   isOpen: boolean;
@@ -31,8 +32,6 @@ interface AIChatOption {
   label: string;
   text: string;
 }
-
-const looksLikeGeminiApiKey = (value: string) => /^AIza[\w-]{20,}$/.test(value.trim());
 
 const parseChatOptions = (content: string): { body: string; options: AIChatOption[] } => {
   const lines = content.split('\n');
@@ -241,7 +240,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     const savedApiKey = localStorage.getItem('karkas_custom_api_key') || '';
     const customAiEnabled = localStorage.getItem('karkas_custom_ai_enabled') === 'true';
 
-    if (looksLikeGeminiApiKey(requestText)) {
+    if (shouldVerifyAsApiKey(requestText, awaitingApiKey)) {
       setPrompt('');
       setLoading(true);
       try {

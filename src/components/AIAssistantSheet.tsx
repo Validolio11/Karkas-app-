@@ -240,7 +240,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     const savedApiKey = localStorage.getItem('karkas_custom_api_key') || '';
     const customAiEnabled = localStorage.getItem('karkas_custom_ai_enabled') === 'true';
 
-    if (shouldVerifyAsApiKey(requestText, awaitingApiKey)) {
+    if (shouldVerifyAsApiKey(requestText, awaitingApiKey, queryText === undefined)) {
       setPrompt('');
       setLoading(true);
       try {

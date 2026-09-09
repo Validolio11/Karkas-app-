@@ -8,6 +8,10 @@ test('recognizes legacy and current Gemini API key formats', () => {
 });
 
 test('treats any secret entered in the explicit key prompt as an API key', () => {
-  assert.equal(shouldVerifyAsApiKey('future-key-format', true), true);
-  assert.equal(shouldVerifyAsApiKey('ordinary chat message', false), false);
+  assert.equal(shouldVerifyAsApiKey('future-key-format', true, true), true);
+  assert.equal(shouldVerifyAsApiKey('ordinary chat message', false, true), false);
+});
+
+test('does not reclassify a resumed pending request as an API key', () => {
+  assert.equal(shouldVerifyAsApiKey('original user request', true, false), false);
 });

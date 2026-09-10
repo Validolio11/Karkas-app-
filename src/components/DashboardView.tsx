@@ -25,7 +25,6 @@ import {
   Lightbulb,
   CheckCheck,
   Calendar,
-  TrendingUp,
   BarChart3,
   Trash2,
   Award,
@@ -33,6 +32,7 @@ import {
   Target,
 } from 'lucide-react';
 import { AIIcon, AIIconId } from './AIIconTemplates';
+import { ActivityChart } from './ActivityChart';
 
 const AI_ANALYSIS_STORAGE_KEY_PREFIX = 'karkas_ai_dashboard_analysis_cache_';
 
@@ -663,12 +663,6 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
     { id: 'ALL_TIME', label: tAnalytics.periods.ALL_TIME },
   ];
 
-  // Calculate max height for velocity bars
-  const maxBarValue = Math.max(
-    ...analyticsData.velocityBars.map((b) => Math.max(b.delivered, b.dropped, b.created, 1)),
-    5
-  );
-
   return (
     <div className="space-y-6 font-mono">
       {/* ------------------------------------------------------------- */}
@@ -865,60 +859,17 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
       </div>
 
       {/* ------------------------------------------------------------- */}
-      {/* TIMELINE ACTIVITY & COMPLETION VELOCITY BAR CHART */}
-      {/* ------------------------------------------------------------- */}
-      <section className="border-b border-neutral-800/70 pb-5">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <TrendingUp className="w-3.5 h-3.5 text-neutral-300" />
-            <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-200 font-mono">
-              {tAnalytics.timelineVelocity}
-            </h3>
-          </div>
-          <div className="flex items-center gap-3 text-[9px] font-mono text-neutral-400">
-            <span className="flex items-center gap-1">
-              <span className="w-2 h-2 bg-emerald-400 inline-block" />
-              <span>{tAnalytics.completed}</span>
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="w-2 h-2 bg-neutral-600 inline-block" />
-              <span>{tAnalytics.dropped}</span>
-            </span>
-          </div>
-        </div>
-
-        {/* Velocity Bars Container */}
-        <div className="grid grid-flow-col auto-cols-fr gap-1.5 items-end h-24 pt-4 px-1">
-          {analyticsData.velocityBars.map((bar, idx) => {
-            const deliveredHeightPercent = Math.min(100, Math.round((bar.delivered / maxBarValue) * 100));
-            const droppedHeightPercent = Math.min(100, Math.round((bar.dropped / maxBarValue) * 100));
-
-            return (
-              <div key={idx} className="flex flex-col items-center h-full justify-end group">
-                <div className="w-full flex items-end justify-center gap-0.5 h-16 relative">
-                  {/* Delivered Bar */}
-                  <div
-                    style={{ height: `${Math.max(deliveredHeightPercent, 4)}%` }}
-                    className="w-full max-w-[14px] bg-neutral-300 group-hover:bg-white transition-all rounded-none"
-                    title={`${bar.label}: ${bar.delivered} ${tAnalytics.completed.toLowerCase()}`}
-                  />
-                  {/* Dropped Bar */}
-                  {bar.dropped > 0 && (
-                    <div
-                      style={{ height: `${Math.max(droppedHeightPercent, 4)}%` }}
-                      className="w-full max-w-[8px] bg-neutral-700 group-hover:bg-neutral-600 transition-all rounded-none"
-                      title={`${bar.label}: ${bar.dropped} ${tAnalytics.dropped.toLowerCase()}`}
-                    />
-                  )}
-                </div>
-                <span className="text-[9px] font-mono text-neutral-400 group-hover:text-white mt-1">
-                  {bar.label}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      </section>
+      {/* Activity over the selected period */}
+      <ActivityChart
+        key={selectedPeriod}
+        data={analyticsData.velocityBars}
+        title={tAnalytics.timelineVelocity}
+        period={periodsList.find(period => period.id === selectedPeriod)?.label || ''}
+        completedLabel={tAnalytics.completed}
+        deletedLabel={tAnalytics.dropped}
+        unitLabel={lang === 'uk' ? '\u041a\u0456\u043b\u044c\u043a\u0456\u0441\u0442\u044c \u0437\u0430\u0432\u0434\u0430\u043d\u044c' : 'Task count'}
+        emptyLabel={lang === 'uk' ? '\u0417\u0430 \u0446\u0435\u0439 \u043f\u0435\u0440\u0456\u043e\u0434 \u0449\u0435 \u043d\u0435\u043c\u0430\u0454 \u0432\u0438\u043a\u043e\u043d\u0430\u043d\u0438\u0445 \u0447\u0438 \u0432\u0438\u0434\u0430\u043b\u0435\u043d\u0438\u0445 \u0437\u0430\u0432\u0434\u0430\u043d\u044c.' : 'No completed or deleted tasks in this period yet.'}
+      />
 
       {/* ------------------------------------------------------------- */}
       {/* CATEGORY PRODUCTIVITY BREAKDOWN & PRIORITY MATRIX */}

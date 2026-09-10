@@ -266,34 +266,39 @@ export const AccountModal: React.FC<AccountModalProps> = ({
         initial={{ opacity: 0, scale: 0.95, y: 10 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 10 }}
-        className="relative z-10 w-full max-w-md bg-[#0c0c0e] border border-neutral-800 text-neutral-100 shadow-2xl overflow-hidden font-mono"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="account-modal-title"
+        aria-describedby="account-modal-description"
+        className="relative z-10 flex max-h-[calc(100dvh-2rem)] w-full max-w-lg flex-col overflow-hidden border border-neutral-800 bg-[#0c0c0e] font-mono text-neutral-100 shadow-2xl [&_button]:cursor-pointer [&_button]:focus-visible:outline-2 [&_button]:focus-visible:outline-offset-2 [&_button]:focus-visible:outline-white"
       >
         {/* Top Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-neutral-800 bg-[#0c0c0e]">
+        <div className="flex shrink-0 items-center justify-between gap-3 px-5 py-5 border-b border-neutral-800 bg-[#0c0c0e]">
           <div className="flex items-center gap-2">
             <Cloud className="w-4 h-4 text-white" />
             <div>
-              <h2 className="text-xs font-mono font-black tracking-widest uppercase text-white">
+              <h2 id="account-modal-title" className="text-xs font-mono font-black tracking-widest uppercase text-white">
                 {acc.title}
               </h2>
-              <p className="text-[10px] font-mono text-neutral-400">
+              <p id="account-modal-description" className="mt-1 text-[11px] leading-relaxed text-neutral-400">
                 {acc.subtitle}
               </p>
             </div>
           </div>
           <button
             id="close-account-modal-btn"
+            aria-label={lang === 'uk' ? 'Закрити' : 'Close'}
             onClick={() => {
               sound.tick(400);
               onClose();
             }}
-            className="p-1 hover:bg-neutral-800 text-neutral-400 hover:text-white transition-colors cursor-pointer"
+            className="shrink-0 p-2 hover:bg-neutral-800 text-neutral-400 hover:text-white transition-colors cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        <div className="p-5 space-y-4">
+        <div className="min-h-0 overflow-y-auto p-4 sm:p-5 space-y-4">
           {/* Feedback message banner */}
           <AnimatePresence>
             {feedbackMsg && (
@@ -318,159 +323,93 @@ export const AccountModal: React.FC<AccountModalProps> = ({
           </AnimatePresence>
 
           {user ? (
-            /* Logged-in view */
-            <div className="space-y-4">
-              {/* User Profile Card */}
-              <div className="p-3.5 bg-[#0e0e11] border border-neutral-800 flex items-center justify-between">
-                <div className="flex items-center gap-3">
+            <div className="space-y-5">
+              {/* Identity stays separate from the current sync state. */}
+              <div className="border border-neutral-800 bg-[#0e0e11]">
+                <div className="flex items-center gap-3 p-4">
                   {user.photoURL ? (
-                    <img
-                      src={user.photoURL}
-                      alt={user.displayName || user.email?.split('@')[0] || 'User'}
-                      className="w-10 h-10 rounded-full border border-neutral-700 object-cover"
-                      referrerPolicy="no-referrer"
-                    />
+                    <img src={user.photoURL} alt="" className="h-12 w-12 shrink-0 rounded-full border border-neutral-700 object-cover" referrerPolicy="no-referrer" />
                   ) : (
-                    <div className="w-10 h-10 rounded-full bg-neutral-800 border border-neutral-700 flex items-center justify-center text-sm font-bold font-mono text-white">
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-neutral-700 bg-neutral-800 text-lg font-bold text-white">
                       {(user.displayName || user.email?.split('@')[0] || 'U')[0].toUpperCase()}
                     </div>
                   )}
-                  <div className="overflow-hidden">
-                    <p className="text-xs font-bold text-white truncate">
-                      {user.displayName || (user.email ? user.email.split('@')[0] : 'User')}
-                    </p>
-                    <p className="text-[10px] font-mono text-neutral-400 truncate">
-                      {user.email}
-                    </p>
-                    <div className="flex items-center gap-1.5 mt-1 text-[9px] font-mono">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                      <span className="text-emerald-400">{acc.statusConnected}</span>
-                      {user.email?.toLowerCase() === 'melychyn4@gmail.com' && (
-                        <span className="ml-1 px-1.5 py-0.5 bg-amber-950/80 border border-amber-500/80 text-amber-300 font-bold uppercase tracking-wider text-[8px]">
-                          {lang === 'uk' ? 'ВЛАСНИК СИСТЕМИ' : 'SYSTEM OWNER'}
-                        </span>
-                      )}
-                    </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-bold text-white">{user.displayName || user.email?.split('@')[0] || 'User'}</p>
+                    <p className="mt-1 break-all text-[11px] leading-relaxed text-neutral-400">{user.email}</p>
                   </div>
+                  <button id="sign-out-btn" onClick={handleSignOut} disabled={authLoading} title={acc.signOut} aria-label={acc.signOut}
+                    className="flex h-9 w-9 shrink-0 items-center justify-center border border-neutral-800 text-neutral-400 transition-colors hover:border-rose-900 hover:text-rose-400 disabled:opacity-40">
+                    <LogOut className="h-4 w-4" />
+                  </button>
                 </div>
-
-                <button
-                  id="sign-out-btn"
-                  onClick={handleSignOut}
-                  disabled={authLoading}
-                  title={acc.signOut}
-                  className="px-2.5 py-1 text-[10px] font-mono font-bold tracking-wider text-neutral-400 hover:text-rose-400 border border-neutral-800 hover:border-rose-900 bg-neutral-900 transition-colors flex items-center gap-1 shrink-0"
-                >
-                  <LogOut className="w-3 h-3" />
-                  <span className="hidden sm:inline">{acc.signOut}</span>
-                </button>
-              </div>
-
-              {/* Auto-Sync Toggle Control Card */}
-              <div className="p-3 bg-[#0c0c0e] border border-neutral-800 flex items-center justify-between gap-3">
-                <div className="space-y-0.5">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`w-2 h-2 rounded-full shrink-0 ${
-                        autoSyncEnabled
-                          ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.9)] animate-pulse'
-                          : 'bg-neutral-600'
-                      }`}
-                    />
-                    <span className="text-xs font-mono font-bold text-white tracking-wider">
-                      {acc.autoSyncTitle}
-                    </span>
-                  </div>
-                  <p className="text-[10px] font-mono text-neutral-400 leading-tight">
-                    {acc.autoSyncDesc}
-                  </p>
-                </div>
-                <button
-                  id="toggle-autosync-btn"
-                  type="button"
-                  onClick={() => {
-                    sound.tick(600);
-                    onToggleAutoSync();
-                  }}
-                  className={`px-3 py-1.5 text-[10px] font-mono font-extrabold tracking-wider border transition-all cursor-pointer shrink-0 ${
-                    autoSyncEnabled
-                      ? 'bg-emerald-950/70 border-emerald-500 text-emerald-300 hover:bg-emerald-900/80 shadow-sm'
-                      : 'bg-neutral-900 border-neutral-700 text-neutral-400 hover:text-white hover:border-neutral-500'
-                  }`}
-                >
-                  {autoSyncEnabled ? acc.autoSyncOn : acc.autoSyncOff}
-                </button>
-              </div>
-
-              {/* Tabs Protection Notice: Tasks synced without creating new tabs */}
-              <div className="p-2.5 bg-neutral-950 border border-neutral-800/80 text-[10px] font-mono flex items-start gap-2.5">
-                <Layers className="w-3.5 h-3.5 text-neutral-400 shrink-0 mt-0.5" />
-                <div className="space-y-0.5">
-                  <div className="font-bold text-neutral-200 flex items-center gap-1.5 text-[10px]">
-                    <span>{acc.tabsPreserved}</span>
-                  </div>
-                  <p className="text-[9px] text-neutral-400 leading-tight">
-                    {acc.tabsPreservedDesc}
-                  </p>
+                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-neutral-800 px-4 py-2.5 text-[10px]">
+                  <span className="flex items-center gap-2 text-neutral-300"><CloudCheck className="h-3.5 w-3.5 text-emerald-400" />{lang === 'uk' ? 'Google акаунт підключено' : 'Google account connected'}</span>
+                  {user.email?.toLowerCase() === 'melychyn4@gmail.com' && (
+                    <span className="flex items-center gap-1.5 whitespace-nowrap text-[9px] font-bold uppercase tracking-wider text-amber-300"><ShieldCheck className="h-3 w-3" />{lang === 'uk' ? 'Власник системи' : 'System owner'}</span>
+                  )}
                 </div>
               </div>
 
-              {/* Sync Status Box */}
-              <div className="p-3 bg-[#0c0c0e] border border-neutral-800 space-y-2">
-                <div className="flex items-center justify-between text-[11px] font-mono">
-                  <span className="text-neutral-400">{acc.lastSynced}</span>
-                  <span className="text-neutral-200 font-bold">
-                    {isSyncing ? acc.syncing : formatLastSync(lastSyncTime)}
+              <section className="border border-neutral-800" aria-labelledby="account-sync-heading">
+                <div className="flex items-start justify-between gap-4 p-4">
+                  <div className="min-w-0">
+                    <h3 id="account-sync-heading" className="text-xs font-bold tracking-wide text-white">{acc.autoSyncTitle}</h3>
+                    <p className="mt-2 max-w-xs text-[11px] leading-relaxed text-neutral-400">{acc.autoSyncDesc}</p>
+                  </div>
+                  <button id="toggle-autosync-btn" type="button" role="switch" aria-checked={autoSyncEnabled} aria-label={acc.autoSyncTitle}
+                    onClick={() => { sound.tick(600); onToggleAutoSync(); }}
+                    className={`relative mt-0.5 h-6 w-11 shrink-0 border transition-colors ${autoSyncEnabled ? 'border-emerald-500 bg-emerald-950/70 hover:bg-emerald-900/80' : 'border-neutral-600 bg-neutral-900 hover:border-neutral-400'}`}>
+                    <span className={`absolute top-1 h-3.5 w-3.5 transition-transform ${autoSyncEnabled ? 'left-1 translate-x-5 bg-emerald-300' : 'left-1 bg-neutral-400'}`} />
+                  </button>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-neutral-800 bg-neutral-950/50 px-4 py-3 text-[10px]">
+                  <span className={`flex items-center gap-2 ${autoSyncEnabled ? 'text-emerald-400' : 'text-neutral-400'}`}>
+                    <span className={`h-1.5 w-1.5 ${autoSyncEnabled ? 'bg-emerald-400' : 'bg-neutral-500'}`} />
+                    {autoSyncEnabled ? (lang === 'uk' ? 'Увімкнено · реальний час' : 'On · real time') : acc.autoSyncOff}
+                  </span>
+                  <span className="flex items-center gap-1.5 text-neutral-400" aria-live="polite">
+                    <History className="h-3 w-3 shrink-0" />
+                    <span>{acc.lastSynced} <span className="text-neutral-200">{formatLastSync(lastSyncTime)}</span></span>
                   </span>
                 </div>
-                <p className="text-[10px] font-mono text-neutral-500 leading-relaxed">
-                  {autoSyncEnabled ? acc.autoSyncNote : acc.realtimePaused}
-                </p>
-              </div>
+              </section>
 
-              {/* Cloud Snapshot Summary */}
               {cloudData && (
-                <div className="p-3 bg-[#0a0a0c] border border-neutral-800 text-[10px] font-mono space-y-1.5">
-                  <span className="text-neutral-400 font-bold uppercase tracking-wider block">
-                    {acc.backupStats}
-                  </span>
-                  <div className="grid grid-cols-3 gap-2 pt-1 text-center">
-                    <div className="p-1.5 bg-neutral-900 border border-neutral-800/80">
-                      <div className="text-white font-bold text-xs">{cloudData.tasks?.length || 0}</div>
-                      <div className="text-neutral-500 text-[9px] truncate">{acc.activeTasks}</div>
-                    </div>
-                    <div className="p-1.5 bg-neutral-900 border border-neutral-800/80">
-                      <div className="text-white font-bold text-xs">{cloudData.tabs?.length || 0}</div>
-                      <div className="text-neutral-500 text-[9px] truncate">{acc.tabsCount}</div>
-                    </div>
-                    <div className="p-1.5 bg-neutral-900 border border-neutral-800/80">
-                      <div className="text-white font-bold text-xs">{cloudData.deletedTasks?.length || 0}</div>
-                      <div className="text-neutral-500 text-[9px] truncate">{acc.historyCount}</div>
-                    </div>
+                <section aria-label={acc.backupStats}>
+                  <h3 className="mb-3 text-[10px] font-bold uppercase tracking-wider text-neutral-400">{acc.backupStats}</h3>
+                  <div className="grid grid-cols-3 divide-x divide-neutral-800 border border-neutral-800 bg-[#0a0a0c]">
+                    {[
+                      [cloudData.tasks?.length || 0, acc.activeTasks],
+                      [cloudData.tabs?.length || 0, acc.tabsCount],
+                      [cloudData.deletedTasks?.length || 0, acc.historyCount],
+                    ].map(([count, label]) => (
+                      <div key={label} className="min-w-0 px-2 py-3 text-center">
+                        <div className="text-lg font-bold tabular-nums text-white">{count}</div>
+                        <div className="mt-1 text-[9px] leading-relaxed text-neutral-400">{label}</div>
+                      </div>
+                    ))}
                   </div>
-                </div>
+                </section>
               )}
 
-              {/* Actions Grid */}
-              <div className="grid grid-cols-2 gap-2 pt-1">
-                <button
-                  id="sync-now-cloud-btn"
-                  onClick={handleManualSync}
-                  disabled={isSyncing}
-                  className="py-2.5 px-3 bg-neutral-900 hover:bg-neutral-800 text-white border border-neutral-700 hover:border-white font-mono text-xs font-bold tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-amber-400' : 'text-neutral-300'}`} />
-                  <span>{isSyncing ? acc.syncing : acc.syncNow}</span>
-                </button>
+              <div className="flex items-start gap-2.5 px-1">
+                <Layers className="mt-0.5 h-4 w-4 shrink-0 text-neutral-500" />
+                <div>
+                  <p className="text-[11px] font-bold leading-relaxed text-neutral-300">{acc.tabsPreserved}</p>
+                  <p className="mt-1 text-[10px] leading-relaxed text-neutral-400">{acc.tabsPreservedDesc}</p>
+                </div>
+              </div>
 
-                <button
-                  id="restore-from-cloud-btn"
-                  onClick={handleManualRestore}
-                  disabled={isSyncing}
-                  className="py-2.5 px-3 bg-white hover:bg-neutral-200 text-black font-mono text-xs font-extrabold tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
-                >
-                  <Database className="w-3.5 h-3.5 text-black" />
-                  <span>{acc.restoreFromCloud}</span>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <button id="sync-now-cloud-btn" onClick={handleManualSync} disabled={isSyncing} aria-busy={isSyncing}
+                  className="flex min-h-11 items-center justify-center gap-2 bg-white px-3 py-3 text-[11px] font-bold tracking-wide text-black transition-colors hover:bg-neutral-200 disabled:cursor-wait disabled:bg-neutral-800 disabled:text-neutral-400">
+                  <RefreshCw className={`h-3.5 w-3.5 shrink-0 ${isSyncing ? 'animate-spin' : ''}`} />
+                  <span aria-live="polite">{isSyncing ? acc.syncing : acc.syncNow}</span>
+                </button>
+                <button id="restore-from-cloud-btn" onClick={handleManualRestore} disabled={isSyncing}
+                  className="flex min-h-11 items-center justify-center gap-2 border border-neutral-700 bg-neutral-900 px-3 py-3 text-[11px] font-bold tracking-wide text-neutral-300 transition-colors hover:border-neutral-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40">
+                  <Database className="h-3.5 w-3.5 shrink-0" /><span>{acc.restoreFromCloud}</span>
                 </button>
               </div>
             </div>
@@ -533,7 +472,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="px-5 py-3 border-t border-neutral-800/80 bg-[#0a0a0c] flex items-center justify-between text-[10px] font-mono text-neutral-400">
+        <div className="shrink-0 px-5 py-3 border-t border-neutral-800/80 bg-[#0a0a0c] flex items-center justify-between text-[10px] font-mono text-neutral-400">
           <span>KARKAS // SECURE CLOUD</span>
           <button
             onClick={onClose}

@@ -19,7 +19,7 @@ interface ActivityChartProps {
 
 const SERIES = [
   { key: 'delivered', color: 'text-emerald-400', dash: undefined },
-  { key: 'dropped', color: 'text-neutral-500', dash: '5 5' },
+  { key: 'dropped', color: 'text-neutral-400', dash: '5 5' },
 ] as const;
 
 export const ActivityChart: React.FC<ActivityChartProps> = ({ data, title, period, completedLabel, deletedLabel, unitLabel, emptyLabel }) => {
@@ -36,19 +36,19 @@ export const ActivityChart: React.FC<ActivityChartProps> = ({ data, title, perio
   const x = (index: number) => data.length < 2 ? (left + right) / 2 : left + index * (right - left) / (data.length - 1);
   const y = (value: number) => bottom - (value / ceiling) * (bottom - top);
   const active = activeIndex === null ? undefined : data[activeIndex];
-  const tooltipX = activeIndex === null ? left : Math.min(right - 194, Math.max(left, x(activeIndex) - 97));
+  const tooltipX = activeIndex === null ? left : Math.min(right - 260, Math.max(left, x(activeIndex) - 130));
 
   return (
-    <section className="border border-neutral-800/80 bg-[#08080a]/60 p-4 sm:p-5" aria-labelledby={`${id}-title`}>
+    <section className="border border-neutral-800/80 bg-[#08080a]/60 p-5 sm:p-6" aria-labelledby={`${id}-title`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-center gap-2">
           <TrendingUp className="h-3.5 w-3.5 shrink-0 text-neutral-300" />
-          <h3 id={`${id}-title`} className="font-mono text-xs font-bold uppercase tracking-wider text-neutral-200">{title}</h3>
+          <h3 id={`${id}-title`} className="font-mono text-sm font-bold uppercase tracking-wider text-neutral-200">{title}</h3>
         </div>
-        <span className="border border-neutral-800 bg-neutral-950 px-2.5 py-1.5 text-[10px] text-neutral-400">{period}</span>
+        <span className="border border-neutral-800 bg-neutral-950 px-2.5 py-1.5 text-xs text-neutral-400">{period}</span>
       </div>
-      <div className="mt-5 flex flex-wrap items-center justify-between gap-3 text-[10px] font-mono">
-        <span className="text-neutral-500">{unitLabel}</span>
+      <div className="mt-5 flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
+        <span className="text-neutral-400">{unitLabel}</span>
         <div className="flex flex-wrap gap-4">
           {SERIES.map(series => (
             <span key={series.key} className="flex items-center gap-2 text-neutral-400">
@@ -60,7 +60,7 @@ export const ActivityChart: React.FC<ActivityChartProps> = ({ data, title, perio
       </div>
       {maximum === 0 && <p className="mt-4 text-xs text-neutral-400" role="status">{emptyLabel}</p>}
       <div className="mt-2 overflow-x-auto">
-        <svg viewBox="0 0 1000 280" className="block w-full min-w-[560px] overflow-visible font-mono" role="group" aria-label={title}
+        <svg viewBox="0 0 1000 280" className="block w-full min-w-[700px] overflow-visible font-mono" role="group" aria-label={title}
           onPointerLeave={() => setActiveIndex(null)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setActiveIndex(null); }}>
           <defs>
             <linearGradient id={`${id}-fill`} x1="0" y1="0" x2="0" y2="1">
@@ -71,7 +71,7 @@ export const ActivityChart: React.FC<ActivityChartProps> = ({ data, title, perio
           {[0, 1, 2, 3, 4].map(tick => (
             <g key={tick}>
               <line x1={left} x2={right} y1={y(tick * step)} y2={y(tick * step)} className="stroke-neutral-800/70" vectorEffect="non-scaling-stroke" />
-              <text x={left - 16} y={y(tick * step) + 4} textAnchor="end" className="fill-neutral-500 text-[11px]">{tick * step}</text>
+              <text x={left - 16} y={y(tick * step) + 4} textAnchor="end" className="fill-neutral-400 text-[18px]">{tick * step}</text>
             </g>
           ))}
           {data.length > 1 && <path d={`M ${x(0)} ${bottom} ${data.map((point, index) => `L ${x(index)} ${y(point.delivered)}`).join(' ')} L ${x(data.length - 1)} ${bottom} Z`} fill={`url(#${id}-fill)`} />}
@@ -87,7 +87,7 @@ export const ActivityChart: React.FC<ActivityChartProps> = ({ data, title, perio
             const hitRight = index === data.length - 1 ? right + 14 : (x(index) + x(index + 1)) / 2;
             return (
             <g key={index}>
-              <text x={x(index)} y={bottom + 26} textAnchor="middle" className="fill-neutral-400 text-[11px]">{point.label}</text>
+              <text x={x(index)} y={bottom + 26} textAnchor="middle" className="fill-neutral-400 text-[18px]">{point.label}</text>
               <rect x={hitLeft} y={top} width={hitRight - hitLeft} height={bottom - top}
                 fill="transparent" tabIndex={0} role="button" className="cursor-crosshair focus:outline-none focus-visible:stroke-neutral-400"
                 aria-label={`${point.label}: ${completedLabel} ${point.delivered}, ${deletedLabel} ${point.dropped}`}
@@ -96,10 +96,10 @@ export const ActivityChart: React.FC<ActivityChartProps> = ({ data, title, perio
             </g>
           ); })}
           {active && <g pointerEvents="none" aria-hidden="true">
-            <rect x={tooltipX} y={0} width={194} height={72} className="fill-neutral-950 stroke-neutral-700" />
-            <text x={tooltipX + 12} y={18} className="fill-neutral-400 text-[10px]">{active.label}</text>
-            <text x={tooltipX + 12} y={39} className="fill-emerald-400 text-[11px]">{completedLabel}<tspan x={tooltipX + 182} textAnchor="end" fontWeight="bold">{active.delivered}</tspan></text>
-            <text x={tooltipX + 12} y={59} className="fill-neutral-400 text-[11px]">{deletedLabel}<tspan x={tooltipX + 182} textAnchor="end" fontWeight="bold">{active.dropped}</tspan></text>
+            <rect x={tooltipX} y={0} width={260} height={90} className="fill-neutral-950 stroke-neutral-700" />
+            <text x={tooltipX + 12} y={23} className="fill-neutral-400 text-[16px]">{active.label}</text>
+            <text x={tooltipX + 12} y={51} className="fill-emerald-400 text-[18px]">{completedLabel}<tspan x={tooltipX + 246} textAnchor="end" fontWeight="bold">{active.delivered}</tspan></text>
+            <text x={tooltipX + 12} y={77} className="fill-neutral-400 text-[18px]">{deletedLabel}<tspan x={tooltipX + 246} textAnchor="end" fontWeight="bold">{active.dropped}</tspan></text>
           </g>}
         </svg>
       </div>

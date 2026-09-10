@@ -664,7 +664,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
   ];
 
   return (
-    <div className="space-y-6 font-mono">
+    <div className="space-y-8 font-mono leading-relaxed">
       {/* ------------------------------------------------------------- */}
       {/* PERIOD SELECTOR & HEADER BAR */}
       {/* ------------------------------------------------------------- */}
@@ -673,11 +673,8 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
           <div className="flex items-center gap-2">
             <div className="h-1.5 w-1.5 bg-white" />
             <div>
-              <h2 className="text-xs font-bold uppercase tracking-wider text-white font-mono flex items-center gap-2">
+              <h2 className="text-sm font-bold uppercase tracking-wider text-white font-mono flex items-center gap-2">
                 <span>{tAnalytics.title}</span>
-                <span className="hidden text-[10px] font-normal text-neutral-500 sm:inline">
-                  {tAnalytics.subtitle}
-                </span>
               </h2>
             </div>
           </div>
@@ -690,7 +687,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
               fetchRecommendations(true, selectedPeriod);
             }}
             disabled={isLoadingRecs}
-            className="self-start sm:self-auto flex items-center gap-1.5 text-[10px] font-mono tracking-wider uppercase px-2 py-1 text-neutral-500 hover:text-white transition-colors disabled:opacity-50 cursor-pointer"
+            className="self-start sm:self-auto flex items-center gap-1.5 text-xs font-mono tracking-wider uppercase px-2 py-1 text-neutral-400 hover:text-white transition-colors disabled:opacity-50 cursor-pointer"
           >
             <RefreshCw className={`w-3 h-3 text-neutral-400 ${isLoadingRecs ? 'animate-spin' : ''}`} />
             <span>{isLoadingRecs ? tAnalytics.analyzing : tAnalytics.recalculate}</span>
@@ -699,7 +696,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
 
         {/* Period Selector Tabs */}
         <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
-          <span className="text-[9px] uppercase text-neutral-500 font-mono shrink-0 mr-1 flex items-center gap-1">
+          <span className="text-[11px] uppercase text-neutral-400 font-mono shrink-0 mr-1 flex items-center gap-1">
             <Calendar className="w-3 h-3 text-neutral-400" />
             <span>{tAnalytics.periodLabel}:</span>
           </span>
@@ -714,10 +711,10 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
                   sound.tick(550);
                   setSelectedPeriod(p.id);
                 }}
-                className={`px-2.5 py-1 text-[10px] font-mono font-bold tracking-wider uppercase whitespace-nowrap transition-colors cursor-pointer ${
+                className={`px-3 py-2 text-xs font-mono font-bold tracking-wider uppercase whitespace-nowrap transition-colors cursor-pointer ${
                   isSelected
                     ? 'bg-white text-black'
-                    : 'text-neutral-500 hover:bg-neutral-900 hover:text-neutral-200'
+                    : 'text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200'
                 }`}
               >
                 {p.label}
@@ -730,56 +727,56 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
       {/* ------------------------------------------------------------- */}
       {/* KEY PERIOD PRODUCTIVITY METRICS (4 CARDS) */}
       {/* ------------------------------------------------------------- */}
-      <div className="grid grid-cols-2 gap-px overflow-hidden border border-neutral-800/70 bg-neutral-800/70 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-px overflow-hidden border border-neutral-800/70 bg-neutral-800/70 xl:grid-cols-4">
         {/* Total Tracked Pool in Period */}
-        <div className="bg-[#09090b] p-3.5 flex flex-col justify-between">
-          <div className="text-[10px] uppercase text-neutral-400 flex items-center justify-between font-mono">
+        <div className="bg-[#09090b] p-5 flex flex-col justify-between">
+          <div className="text-xs uppercase text-neutral-400 flex items-center justify-between gap-3 font-mono">
             <span>{tAnalytics.totalPool}</span>
-            <Layers className="w-3.5 h-3.5 text-neutral-500" />
+            <Layers className="w-3.5 h-3.5 text-neutral-400" />
           </div>
-          <div className="mt-2 flex items-baseline justify-between">
-            <span className="text-xl font-bold text-white font-mono">{analyticsData.totalTracked}</span>
-            <span className="text-[10px] text-neutral-400 font-mono">
+          <div className="mt-3 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-2">
+            <span className="text-2xl font-bold text-white font-mono">{analyticsData.totalTracked}</span>
+            <span className="text-xs text-neutral-400 font-mono">
               {analyticsData.totalTracked} / {analyticsData.targetVolume} {lang === 'uk' ? 'норми' : 'norm'}
             </span>
           </div>
         </div>
 
         {/* Successfully Delivered / Completed */}
-        <div className="bg-[#09090b] p-3.5 flex flex-col justify-between">
-          <div className="text-[10px] uppercase text-neutral-400 flex items-center justify-between font-mono">
+        <div className="bg-[#09090b] p-5 flex flex-col justify-between">
+          <div className="text-xs uppercase text-neutral-400 flex items-center justify-between gap-3 font-mono">
             <span>{tAnalytics.completed}</span>
-            <CheckCircle2 className="w-3.5 h-3.5 text-neutral-500" />
+            <CheckCircle2 className="w-3.5 h-3.5 text-neutral-400" />
           </div>
-          <div className="mt-2 flex items-baseline justify-between">
-            <span className="text-xl font-bold text-white font-mono">{analyticsData.totalDelivered}</span>
-            <span className="text-[10px] text-neutral-400 font-mono font-bold">
+          <div className="mt-3 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-2">
+            <span className="text-2xl font-bold text-white font-mono">{analyticsData.totalDelivered}</span>
+            <span className="text-xs text-neutral-400 font-mono font-bold">
               {analyticsData.deliveredNormPercent}% {lang === 'uk' ? 'норми' : 'norm'} ({analyticsData.successRate}%)
             </span>
           </div>
         </div>
 
         {/* Dropped / Deleted in Period */}
-        <div className="bg-[#09090b] p-3.5 flex flex-col justify-between">
-          <div className="text-[10px] uppercase text-neutral-400 flex items-center justify-between font-mono">
+        <div className="bg-[#09090b] p-5 flex flex-col justify-between">
+          <div className="text-xs uppercase text-neutral-400 flex items-center justify-between gap-3 font-mono">
             <span>{tAnalytics.dropped}</span>
-            <Trash2 className="w-3.5 h-3.5 text-neutral-500" />
+            <Trash2 className="w-3.5 h-3.5 text-neutral-400" />
           </div>
-          <div className="mt-2 flex items-baseline justify-between">
-            <span className="text-xl font-bold text-neutral-300 font-mono">{analyticsData.totalDropped}</span>
-            <span className="text-[10px] text-neutral-400 font-mono">
+          <div className="mt-3 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-2">
+            <span className="text-2xl font-bold text-neutral-300 font-mono">{analyticsData.totalDropped}</span>
+            <span className="text-xs text-neutral-400 font-mono">
               {analyticsData.substepsCount} {tAnalytics.substepsCompleted.toLowerCase()}
             </span>
           </div>
         </div>
 
         {/* Productivity Grade & Velocity Index */}
-        <div className="bg-[#09090b] p-3.5 flex flex-col justify-between">
-          <div className="text-[10px] uppercase text-neutral-400 flex items-center justify-between font-mono">
+        <div className="bg-[#09090b] p-5 flex flex-col justify-between">
+          <div className="text-xs uppercase text-neutral-400 flex items-center justify-between gap-3 font-mono">
             <span>{tAnalytics.grade}</span>
-            <Award className="w-3.5 h-3.5 text-neutral-500" />
+            <Award className="w-3.5 h-3.5 text-neutral-400" />
           </div>
-          <div className="mt-2 flex items-baseline justify-between">
+          <div className="mt-3 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-2">
             {(() => {
               const currentGrade = recommendation?.productivityGrade || analyticsData.grade;
               let gradeColor = 'text-emerald-300';
@@ -789,16 +786,16 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
               else if (currentGrade === 'C') gradeColor = 'text-rose-400';
 
               return (
-                <span className={`text-xl font-bold font-mono tracking-wider ${gradeColor}`}>
+                <span className={`text-2xl font-bold font-mono tracking-wider ${gradeColor}`}>
                   {currentGrade}
                 </span>
               );
             })()}
             <div className="text-right">
-              <span className="text-[10px] text-neutral-200 font-mono font-bold block">
+              <span className="text-xs text-neutral-200 font-mono font-bold block">
                 {analyticsData.successRate}% {tAnalytics.completionRate.toLowerCase()}
               </span>
-              <span className="text-[8px] text-neutral-400 font-mono block">
+              <span className="text-[11px] text-neutral-400 font-mono block">
                 {analyticsData.isVolumeDeficit
                   ? (lang === 'uk' ? `дефіцит: ${analyticsData.totalDelivered}/${analyticsData.minDeliveredForGrade.B} мін.` : `deficit: ${analyticsData.totalDelivered}/${analyticsData.minDeliveredForGrade.B} min`)
                   : (lang === 'uk' ? 'норма обсягу ✓' : 'quota met ✓')}
@@ -815,21 +812,14 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 mb-2">
           <div className="flex items-center gap-2">
             <span className="w-1.5 h-1.5 bg-neutral-500" />
-            <span className="text-xs font-bold uppercase font-mono tracking-wider text-neutral-200">
+            <span className="text-sm font-bold uppercase font-mono tracking-wider text-neutral-200">
               {tAnalytics.volumeNorm}
             </span>
-            <span className="text-[9px] font-mono text-neutral-500">
+            <span className="text-[11px] font-mono text-neutral-400">
               {analyticsData.totalDelivered} / {analyticsData.targetVolume} {lang === 'uk' ? 'завдань' : 'tasks'} ({analyticsData.deliveredNormPercent}%)
             </span>
           </div>
 
-          <div className="hidden items-center gap-2 text-[9px] font-mono md:flex">
-            <span className="text-neutral-500">
-              {lang === 'uk'
-                ? `Поріг грейдів: B ≥${analyticsData.minDeliveredForGrade.B} · A ≥${analyticsData.minDeliveredForGrade.A} · A+ ≥${analyticsData.minDeliveredForGrade.APlus} · S ≥${analyticsData.minDeliveredForGrade.S}`
-                : `Cutoffs: B ≥${analyticsData.minDeliveredForGrade.B} · A ≥${analyticsData.minDeliveredForGrade.A} · A+ ≥${analyticsData.minDeliveredForGrade.APlus} · S ≥${analyticsData.minDeliveredForGrade.S}`}
-            </span>
-          </div>
         </div>
 
         {/* Progress Bar with Milestones */}
@@ -846,16 +836,6 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
           />
         </div>
 
-        {/* Low Volume Advisory Callout if task count is critically low */}
-        {analyticsData.isVolumeDeficit && (
-          <div className="mt-2.5 border-l-2 border-amber-700/60 px-2.5 py-1 text-[10px] font-mono leading-relaxed text-neutral-500">
-            <span>
-              {lang === 'uk'
-                ? `⚠️ Зафіксовано лише ${analyticsData.totalDelivered} закритих завдань із місячної норми ${analyticsData.targetVolume}. 100% закриття на 1-3 завданнях не відображає реальної продуктивності. Додавайте щоденні атомарні справи для виходу на грейди A / S.`
-                : `⚠️ Only ${analyticsData.totalDelivered} completed tasks recorded out of ${analyticsData.targetVolume} monthly target. 100% completion on 1-3 tasks does not reflect real productivity. Log daily atomic tasks to qualify for A / S grades.`}
-            </span>
-          </div>
-        )}
       </div>
 
       {/* ------------------------------------------------------------- */}
@@ -876,18 +856,18 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
       {/* ------------------------------------------------------------- */}
       <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
         {/* Category Breakdown in Period */}
-        <section className="border border-neutral-800/70 bg-[#08080a]/60 p-3.5">
-          <div className="flex items-center justify-between mb-2.5">
+        <section className="border border-neutral-800/70 bg-[#08080a]/60 p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
             <div className="flex items-center gap-2">
               <BarChart3 className="w-3.5 h-3.5 text-neutral-300" />
-              <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-200">
+              <h3 className="text-sm font-bold uppercase tracking-wider text-neutral-200">
                 {tAnalytics.categoryDistribution}
               </h3>
             </div>
             <button
               id="dashboard-manage-tabs-period-btn"
               onClick={onOpenManageTabs}
-              className="text-[10px] text-neutral-400 hover:text-white flex items-center gap-1 transition-colors font-mono"
+              className="text-xs text-neutral-400 hover:text-white flex items-center gap-1 transition-colors font-mono"
             >
               <Sliders className="w-3 h-3" />
               <span>{t.manageTabs}</span>
@@ -902,7 +882,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
                   sound.tick(600);
                   onSelectTab(tp.id);
                 }}
-                className="group cursor-pointer px-1 py-2.5 transition-colors hover:bg-white/[0.025]"
+                className="group cursor-pointer px-2 py-4 transition-colors hover:bg-white/[0.025]"
               >
                 <div className="flex items-center justify-between text-xs mb-1.5 font-mono">
                   <div className="flex items-center gap-2">
@@ -915,11 +895,11 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
                     <span className="font-bold text-white group-hover:text-neutral-200 transition-colors">
                       {tp.name}
                     </span>
-                    <span className="text-[10px] text-neutral-400">
+                    <span className="text-xs text-neutral-400">
                       ({tp.delivered}/{tp.total})
                     </span>
                   </div>
-                  <div className="flex items-center gap-1.5 text-[10px] text-neutral-400">
+                  <div className="flex items-center gap-1.5 text-xs text-neutral-400">
                     <span className="font-bold text-neutral-300">{tp.percent}%</span>
                     <ArrowRight className="w-3 h-3 text-neutral-400 group-hover:text-white transition-transform group-hover:translate-x-0.5" />
                   </div>
@@ -943,7 +923,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
           <button
             id="dashboard-period-add-task-btn"
             onClick={onOpenAdd}
-            className="mt-3 flex w-full items-center justify-center gap-1.5 border border-neutral-800 px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-neutral-400 transition-colors hover:border-neutral-600 hover:text-white"
+            className="mt-3 flex w-full items-center justify-center gap-1.5 border border-neutral-800 px-3 py-2.5 text-sm font-bold uppercase tracking-wider text-neutral-400 transition-colors hover:border-neutral-600 hover:text-white"
           >
             <Plus className="w-3.5 h-3.5" />
             <span>{t.injectNewOp}</span>
@@ -951,37 +931,34 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
         </section>
 
         {/* Priority Matrix & Urgent Action Queue */}
-        <section className="flex flex-col justify-between border border-neutral-800/70 bg-[#08080a]/60 p-3.5">
+        <section className="flex flex-col justify-between border border-neutral-800/70 bg-[#08080a]/60 p-5">
           <div>
-            <div className="flex items-center justify-between mb-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
               <div className="flex items-center gap-2">
                 <div className="w-1.5 h-1.5 bg-neutral-500" />
-                <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-200 font-mono">
+                <h3 className="text-sm font-bold uppercase tracking-wider text-neutral-200 font-mono">
                   {lang === 'uk' ? 'Фокус: Термінові справи' : 'Urgent Action Queue'}
                 </h3>
               </div>
-              <span className="text-[10px] font-mono text-neutral-500">
+              <span className="text-xs font-mono text-neutral-400">
                 {p1ActiveTasks.length + p2ActiveTasks.length} {lang === 'uk' ? 'активних' : 'queued'}
               </span>
             </div>
 
             {/* List of top priority active tasks */}
-            <div className="space-y-1.5">
+            <div className="space-y-3">
               {p1ActiveTasks.length === 0 && p2ActiveTasks.length === 0 ? (
                 <div className="py-6 text-center">
-                  <CheckCircle2 className="w-5 h-5 mx-auto mb-2 text-neutral-500" />
+                  <CheckCircle2 className="w-5 h-5 mx-auto mb-2 text-neutral-400" />
                   <p className="text-xs text-neutral-300 font-bold uppercase font-mono">
                     {lang === 'uk' ? 'Всі термінові завдання закриті' : 'All urgent tasks cleared'}
-                  </p>
-                  <p className="text-[10px] text-neutral-400 mt-1 font-mono">
-                    {lang === 'uk' ? 'Черга під повним контролем.' : 'Queue is fully under control.'}
                   </p>
                 </div>
               ) : (
                 [...p1ActiveTasks, ...p2ActiveTasks].slice(0, 4).map((task) => (
                   <div
                     key={task.id}
-                    className={`flex items-start justify-between gap-2 border-l-2 px-2 py-2 text-xs transition-colors font-mono ${
+                    className={`flex items-start justify-between gap-3 border-l-2 px-3 py-3 text-xs transition-colors font-mono ${
                       task.priority === 1
                         ? 'border-rose-700/70 bg-white/[0.02] text-neutral-200'
                         : 'border-neutral-700 bg-white/[0.015] text-neutral-300'
@@ -999,16 +976,16 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
                         {task.done && <Check className="w-3 h-3 text-white" />}
                       </button>
                       <div className="min-w-0 flex-1">
-                        <p className="font-bold text-xs truncate text-white font-sans">{task.title}</p>
+                        <p className="font-bold text-sm break-words text-white font-sans">{task.title}</p>
                         {task.note && (
-                          <p className="text-[10px] text-neutral-400 truncate mt-0.5 font-mono">{task.note}</p>
+                          <p className="text-xs text-neutral-400 truncate mt-0.5 font-mono">{task.note}</p>
                         )}
                       </div>
                     </div>
 
                     <div className="flex items-center gap-1.5 shrink-0">
                       <span
-                        className={`text-[9px] font-mono px-1.5 py-0.5 border ${
+                        className={`text-[11px] font-mono px-1.5 py-0.5 border ${
                           task.priority === 1
                             ? 'border-rose-800 text-rose-300 bg-rose-950/40'
                             : 'border-neutral-700 text-amber-300 bg-neutral-900'
@@ -1035,7 +1012,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
                     : `Create a tactical productivity plan based on period "${selectedPeriod}"`
                 );
               }}
-              className="flex w-full items-center justify-between px-1 py-1 text-[10px] font-bold uppercase tracking-wider text-neutral-400 transition-colors hover:text-white cursor-pointer"
+              className="flex w-full items-center justify-between px-1 py-1 text-sm font-bold uppercase tracking-wider text-neutral-400 transition-colors hover:text-white cursor-pointer"
             >
               <div className="flex items-center gap-2">
                 <AIIcon id={aiIconVariant} className="w-3.5 h-3.5 text-neutral-300" />
@@ -1050,21 +1027,21 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
       {/* ------------------------------------------------------------- */}
       {/* STRATEGIC AI PERIOD RETROSPECTIVE & RECOMMENDATIONS SECTION */}
       {/* ------------------------------------------------------------- */}
-      <section className="border border-neutral-800/70 bg-[#08080a]/60 p-3.5">
+      <section className="border border-neutral-800/70 bg-[#08080a]/60 p-5">
         {/* Header with Title, Status & Refresh */}
-        <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2 flex-wrap">
             <AIIcon id={aiIconVariant} className="w-4 h-4 text-neutral-300" />
             <div className="flex items-center gap-2 flex-wrap">
-              <h2 className="text-xs font-bold uppercase tracking-wider text-white font-mono">
+              <h2 className="text-sm font-bold uppercase tracking-wider text-white font-mono">
                 {tAnalytics.aiAuditTitle}
               </h2>
-              <span className="flex items-center gap-1 text-[10px] font-mono text-neutral-500">
+              <span className="flex items-center gap-1 text-xs font-mono text-neutral-400">
                 <Clock className="w-3 h-3 text-neutral-400" />
                 <span>{periodsList.find((p) => p.id === selectedPeriod)?.label || selectedPeriod}</span>
               </span>
               {recommendation?.workloadStatus && (
-                <span className="text-[10px] font-mono text-neutral-500">
+                <span className="text-xs font-mono text-neutral-400">
                   {recommendation.workloadStatus}
                 </span>
               )}
@@ -1080,7 +1057,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
               }}
               disabled={isLoadingRecs}
               title={lang === 'uk' ? 'Оновити аналіз періоду' : 'Refresh period analysis'}
-              className="flex items-center gap-1.5 px-2 py-1 text-[10px] font-mono uppercase tracking-wider text-neutral-500 transition-colors hover:text-white disabled:opacity-50 cursor-pointer"
+              className="flex items-center gap-1.5 px-2 py-1 text-xs font-mono uppercase tracking-wider text-neutral-400 transition-colors hover:text-white disabled:opacity-50 cursor-pointer"
             >
               <RefreshCw className={`w-3 h-3 text-neutral-400 ${isLoadingRecs ? 'animate-spin' : ''}`} />
               <span>{isLoadingRecs ? tAnalytics.analyzing : tAnalytics.recalculate}</span>
@@ -1089,17 +1066,17 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
         </div>
 
         {/* Schedule & Last Analysis Status Bar */}
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-1 border-b border-neutral-800/60 pb-3 text-[10px] font-mono text-neutral-500">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-1 border-b border-neutral-800/60 pb-3 text-xs font-mono text-neutral-400">
           <div className="flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-neutral-600" />
             <span>
               {lang === 'uk'
-                ? `Враховано ${analyticsData.totalTracked} завдань (включно з архівом та видаленими) за ${periodsList.find((p) => p.id === selectedPeriod)?.label}`
-                : `Analyzed ${analyticsData.totalTracked} tasks (active, completed & archived) for ${selectedPeriod}`}
+                ? `Враховано ${analyticsData.totalTracked} завдань`
+                : `Analyzed ${analyticsData.totalTracked} tasks`}
             </span>
           </div>
           {lastAnalyzedAt && lastSlotType && (
-            <span className="text-neutral-500">
+            <span className="text-neutral-400">
               {lang === 'uk'
                 ? `Останній аналіз: ${formatTimeShort(lastAnalyzedAt, lang)} (${getSlotLabel(lastSlotType, lang)})`
                 : `Last analyzed: ${formatTimeShort(lastAnalyzedAt, lang)} (${getSlotLabel(lastSlotType, lang)})`}
@@ -1110,13 +1087,13 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
         {/* 3 AI Analytics Insight Blocks */}
         <div className="mb-5 grid grid-cols-1 divide-y divide-neutral-800/70 border-y border-neutral-800/70 md:grid-cols-3 md:divide-x md:divide-y-0">
           {/* Period Retrospective */}
-          <div className="flex flex-col justify-between px-1 py-3 md:px-3">
+          <div className="flex flex-col justify-between px-1 py-4 md:px-5">
             <div>
-              <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase text-neutral-400 mb-1">
-                <Target className="w-3 h-3 text-neutral-500" />
+              <div className="flex items-center gap-1.5 text-xs font-mono uppercase text-neutral-400 mb-1">
+                <Target className="w-3 h-3 text-neutral-400" />
                 <span>{tAnalytics.aiRetrospective}</span>
               </div>
-              <p className="text-xs text-neutral-200 leading-relaxed font-sans">
+              <p className="text-sm text-neutral-200 leading-relaxed font-sans">
                 {recommendation?.periodRetrospective ||
                   (lang === 'uk'
                     ? `Зафіксовано ${analyticsData.totalTracked} завдань із рівнем успішності ${analyticsData.successRate}%.`
@@ -1126,13 +1103,13 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
           </div>
 
           {/* Dropoff & Bottlenecks Analysis */}
-          <div className="flex flex-col justify-between px-1 py-3 md:px-3">
+          <div className="flex flex-col justify-between px-1 py-4 md:px-5">
             <div>
-              <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase text-neutral-400 mb-1">
-                <AlertTriangle className="w-3 h-3 text-neutral-500" />
+              <div className="flex items-center gap-1.5 text-xs font-mono uppercase text-neutral-400 mb-1">
+                <AlertTriangle className="w-3 h-3 text-neutral-400" />
                 <span>{tAnalytics.aiDropoffAnalysis}</span>
               </div>
-              <p className="text-xs text-neutral-300 leading-relaxed font-sans">
+              <p className="text-sm text-neutral-300 leading-relaxed font-sans">
                 {recommendation?.dropoffAnalysis ||
                   (lang === 'uk'
                     ? `Утилізовано ${analyticsData.totalDropped} завдань для утримання високої концентрації на головному.`
@@ -1142,13 +1119,13 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
           </div>
 
           {/* Future Strategic Guidance */}
-          <div className="flex flex-col justify-between px-1 py-3 md:px-3">
+          <div className="flex flex-col justify-between px-1 py-4 md:px-5">
             <div>
-              <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase text-neutral-400 mb-1">
-                <Compass className="w-3 h-3 text-neutral-500" />
+              <div className="flex items-center gap-1.5 text-xs font-mono uppercase text-neutral-400 mb-1">
+                <Compass className="w-3 h-3 text-neutral-400" />
                 <span>{tAnalytics.aiFutureStrategy}</span>
               </div>
-              <p className="text-xs text-neutral-300 leading-relaxed font-sans">
+              <p className="text-sm text-neutral-300 leading-relaxed font-sans">
                 {recommendation?.futureStrategy || recommendation?.optimizationTip ||
                   (lang === 'uk'
                     ? 'Плануйте дрібні спринти та закривайте ключові цілі у першій половині дня.'
@@ -1163,7 +1140,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-1.5">
               <Zap className="w-3 h-3 text-neutral-400" />
-              <h3 className="text-xs font-bold font-mono uppercase tracking-wider text-neutral-300">
+              <h3 className="text-sm font-bold font-mono uppercase tracking-wider text-neutral-300">
                 {lang === 'uk' ? 'Рекомендовані наступні кроки' : 'Suggested Action Items'}
               </h3>
             </div>
@@ -1177,30 +1154,30 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
               return (
                 <div
                   key={idx}
-                  className="flex flex-col justify-between px-1 py-3 transition-colors hover:bg-white/[0.02] sm:px-3"
+                  className="flex flex-col justify-between px-1 py-4 transition-colors hover:bg-white/[0.02] sm:px-3"
                 >
                   <div>
                     <div className="flex items-center justify-between gap-1 mb-1.5">
-                      <span className="max-w-[100px] truncate text-[9px] font-mono uppercase text-neutral-500">
+                      <span className="max-w-[100px] truncate text-[11px] font-mono uppercase text-neutral-400">
                         {tabName}
                       </span>
                       <span
-                        className={`text-[9px] font-mono ${
+                        className={`text-[11px] font-mono ${
                           st.priority === 1
                             ? 'text-rose-300'
-                            : 'text-neutral-500'
+                            : 'text-neutral-400'
                         }`}
                       >
                         P{st.priority}
                       </span>
                     </div>
 
-                    <h4 className="text-xs font-bold text-white mb-1 leading-snug line-clamp-2 font-sans">
+                    <h4 className="text-sm font-bold text-white mb-1 leading-snug line-clamp-2 font-sans">
                       {st.title}
                     </h4>
 
                     {st.reason && (
-                      <p className="text-[10px] text-neutral-400 font-sans mb-2 line-clamp-2">
+                      <p className="text-xs text-neutral-400 font-sans mb-2 line-clamp-2">
                         ↳ {st.reason}
                       </p>
                     )}
@@ -1210,9 +1187,9 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
                     <button
                       onClick={() => handleAddSuggestedTask(st)}
                       disabled={isAdded}
-                      className={`flex flex-1 items-center justify-center gap-1 border px-2 py-1 text-[10px] font-mono font-bold uppercase tracking-wider transition-colors cursor-pointer ${
+                      className={`flex flex-1 items-center justify-center gap-1 border px-2 py-1 text-xs font-mono font-bold uppercase tracking-wider transition-colors cursor-pointer ${
                         isAdded
-                          ? 'bg-neutral-900 border-neutral-800 text-neutral-500 cursor-default'
+                          ? 'bg-neutral-900 border-neutral-800 text-neutral-400 cursor-default'
                           : 'border-neutral-700 text-neutral-300 hover:border-white hover:text-white'
                       }`}
                     >

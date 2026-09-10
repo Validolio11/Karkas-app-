@@ -44,7 +44,7 @@ const FIRE_ENABLED_KEY = 'karkas_fire_enabled';
 const SOUND_ENABLED_KEY = 'karkas_sound_enabled';
 const LAST_SYNC_KEY = 'karkas_last_sync_time';
 const AUTO_SYNC_KEY = 'karkas_auto_sync_enabled';
-const APP_CURRENT_VERSION = '1.2.9';
+const APP_CURRENT_VERSION = '1.2.10';
 
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 
@@ -249,7 +249,6 @@ export default function App() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [tabToDeleteConfirm, setTabToDeleteConfirm] = useState<TaskTab | null>(null);
-  const [showGesturesLegend, setShowGesturesLegend] = useState(() => localStorage.getItem('karkas_show_gestures_legend') !== 'false');
   const searchInputRef = React.useRef<HTMLInputElement | null>(null);
 
   // Sync fullscreen state with browser fullscreen changes
@@ -1555,7 +1554,7 @@ export default function App() {
               sound.tick(600);
               setIsWindowMinimized(false);
             }}
-            className="px-2.5 py-1 bg-white text-black font-mono font-extrabold text-[10px] tracking-wider hover:bg-neutral-200 transition-colors uppercase cursor-pointer"
+            className="px-2.5 py-1 bg-white text-black font-mono font-extrabold text-xs tracking-wider hover:bg-neutral-200 transition-colors uppercase cursor-pointer"
           >
             {t.winTitlebar?.restoreBtn || 'RESTORE WINDOW'}
           </button>
@@ -1577,7 +1576,7 @@ export default function App() {
       />
 
       {/* Main Content Area */}
-      <main className="flex-1 max-w-3xl w-full mx-auto px-4 sm:px-6 py-4 pb-28 relative z-10">
+      <main className="flex-1 max-w-4xl w-full mx-auto px-5 sm:px-8 py-7 sm:py-8 pb-32 relative z-10">
         {selectedPhase === 'DASHBOARD' ? (
           <DashboardView
             tasks={tasks}
@@ -1611,7 +1610,7 @@ export default function App() {
         ) : (
           <>
             {/* Search Input Bar with Hotkeys Badge */}
-            <div className="mb-3 flex items-center gap-2">
+            <div className="mb-6 flex items-center gap-3">
               <div className="relative flex-1">
                 <Search className="w-3.5 h-3.5 text-neutral-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <input
@@ -1621,10 +1620,10 @@ export default function App() {
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder={
                     lang === 'uk'
-                      ? 'Пошук завдань... (Натисніть "/" або Ctrl+N)'
-                      : 'Search tasks... (Press "/" or Ctrl+N)'
+                      ? 'Пошук завдань…'
+                      : 'Search tasks…'
                   }
-                  className="w-full pl-9 pr-8 py-2 bg-[#09090d] border border-neutral-800 text-neutral-200 placeholder-neutral-500 text-xs font-mono focus:outline-none focus:border-neutral-500 transition-colors shadow-inner"
+                  className="w-full pl-9 pr-8 py-3 bg-[#09090d] border border-neutral-800 text-neutral-200 placeholder-neutral-400 text-sm font-mono focus:outline-none focus:border-neutral-500 transition-colors shadow-inner"
                 />
                 {searchQuery && (
                   <button
@@ -1636,39 +1635,7 @@ export default function App() {
                   </button>
                 )}
               </div>
-              <div className="hidden sm:flex items-center gap-1.5 text-[9px] font-mono text-neutral-400 bg-[#0a0a0d] border border-neutral-800 px-2.5 py-2 shrink-0">
-                <span className="px-1 bg-neutral-800 border border-neutral-700 text-neutral-200 font-bold">/</span>
-                <span>{lang === 'uk' ? 'Пошук' : 'Search'}</span>
-                <span className="mx-0.5 text-neutral-700">|</span>
-                <span className="px-1 bg-neutral-800 border border-neutral-700 text-neutral-200 font-bold">Ctrl+N</span>
-                <span>{lang === 'uk' ? 'Створити' : 'New'}</span>
-              </div>
             </div>
-
-            {/* Gestures Navigation Legend Bar (Dismissible) */}
-            {showGesturesLegend && (
-              <div className="flex items-center justify-between py-1 px-3 mb-2 bg-[#09090b] border border-neutral-900 text-[10px] font-mono text-neutral-400 animate-in fade-in duration-200">
-                <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
-                  <span>{t.gesturesLegend.swipeLeft}</span>
-                  <span className="text-neutral-700">|</span>
-                  <span>{t.gesturesLegend.swipeRight}</span>
-                  <span className="text-neutral-700 hidden sm:inline">|</span>
-                  <span className="hidden sm:inline">{t.gesturesLegend.tapScrubber}</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    sound.tick(300);
-                    setShowGesturesLegend(false);
-                    localStorage.setItem('karkas_show_gestures_legend', 'false');
-                  }}
-                  title={lang === 'uk' ? 'Сховати підказки' : 'Hide shortcuts legend'}
-                  className="p-0.5 text-neutral-500 hover:text-white transition-colors cursor-pointer shrink-0 ml-2"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              </div>
-            )}
 
             {/* Empty State */}
             {filteredTasks.length === 0 && (
@@ -1741,7 +1708,7 @@ export default function App() {
             )}
 
             {/* Tasks List */}
-            <div className="flex flex-col">
+            <div className="flex flex-col gap-4">
               <AnimatePresence initial={false}>
                 {filteredTasks.map((task, index) => (
                   <motion.div
@@ -1836,7 +1803,7 @@ export default function App() {
               ? (lang === 'uk' ? 'Вимкнути анімацію вогню' : 'Turn off fire animation')
               : (lang === 'uk' ? 'Увімкнути анімацію вогню' : 'Turn on fire animation')
           }
-          className={`px-2 py-1 border transition-all cursor-pointer flex items-center gap-1.5 text-[10px] font-mono tracking-wider uppercase backdrop-blur-md shadow-md app-no-drag pointer-events-auto ${
+          className={`px-2 py-1 border transition-all cursor-pointer flex items-center gap-1.5 text-xs font-mono tracking-wider uppercase backdrop-blur-md shadow-md app-no-drag pointer-events-auto ${
             fireEnabled
               ? 'border-neutral-700 bg-neutral-900/95 text-neutral-200 hover:border-white hover:text-white'
               : 'border-neutral-800 bg-[#08080a]/95 text-neutral-500 hover:text-neutral-300 hover:border-neutral-700'
@@ -1866,7 +1833,7 @@ export default function App() {
             setIsUpdateOpen(true);
           }}
           title={lang === 'uk' ? `Центр оновлень (v${APP_CURRENT_VERSION})` : `System update center (v${APP_CURRENT_VERSION})`}
-          className="px-2 py-1 border border-neutral-800 bg-[#08080a]/95 text-neutral-400 hover:text-white hover:border-neutral-600 transition-all cursor-pointer flex items-center gap-1.5 text-[10px] font-mono tracking-wider uppercase backdrop-blur-md shadow-md app-no-drag pointer-events-auto"
+          className="px-2 py-1 border border-neutral-800 bg-[#08080a]/95 text-neutral-400 hover:text-white hover:border-neutral-600 transition-all cursor-pointer flex items-center gap-1.5 text-xs font-mono tracking-wider uppercase backdrop-blur-md shadow-md app-no-drag pointer-events-auto"
         >
           <RefreshCw className="w-3.5 h-3.5 text-emerald-400" />
           <span className="hidden sm:inline font-bold text-neutral-300">
@@ -1876,7 +1843,7 @@ export default function App() {
       </div>
 
           {/* Left: Quick Filter Status */}
-          <div className="order-5 basis-full lg:order-1 lg:basis-auto flex flex-wrap items-center justify-center gap-2 text-[10px] font-mono text-neutral-400 app-no-drag">
+          <div className="order-5 basis-full lg:order-1 lg:basis-auto flex flex-wrap items-center justify-center gap-2 text-xs font-mono text-neutral-400 app-no-drag">
             <span className="text-neutral-200 font-bold">
               {filteredTasks.length} {t.shownCount}
             </span>

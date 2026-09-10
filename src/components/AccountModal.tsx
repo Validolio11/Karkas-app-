@@ -14,7 +14,6 @@ import {
   CheckCircle2, 
   AlertCircle,
   Database,
-  Layers,
   History
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -32,12 +31,12 @@ const CopyableDomain: React.FC<{ domain: string; lang: string }> = ({ domain, la
     }
   };
   return (
-    <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 bg-black border border-neutral-800 text-[11px] font-mono hover:border-neutral-700 transition-colors">
+    <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 bg-black border border-neutral-800 text-xs font-mono hover:border-neutral-700 transition-colors">
       <span className="text-neutral-300 truncate select-all">{domain}</span>
       <button
         type="button"
         onClick={handleCopy}
-        className="text-[9px] uppercase font-bold tracking-wider px-2 py-0.5 border border-neutral-800 bg-neutral-900 text-neutral-400 hover:text-white transition-all hover:bg-neutral-800 cursor-pointer whitespace-nowrap"
+        className="text-xs uppercase font-bold tracking-wider px-2 py-0.5 border border-neutral-800 bg-neutral-900 text-neutral-400 hover:text-white transition-all hover:bg-neutral-800 cursor-pointer whitespace-nowrap"
       >
         {copied ? (lang === 'uk' ? 'Скопійовано' : 'Copied') : (lang === 'uk' ? 'Копіювати' : 'Copy')}
       </button>
@@ -118,10 +117,10 @@ export const AccountModal: React.FC<AccountModalProps> = ({
           text: (
             <div className="space-y-3 w-full text-left">
               <div>
-                <p className="font-bold text-rose-400 uppercase tracking-wide text-[11px]">
+                <p className="font-bold text-rose-400 uppercase tracking-wide text-xs">
                   {lang === 'uk' ? 'Помилка авторизації домену' : 'Unauthorized Domain Error'}
                 </p>
-                <p className="text-[10px] text-neutral-400 mt-1 leading-relaxed">
+                <p className="text-xs text-neutral-400 mt-1 leading-relaxed">
                   {lang === 'uk'
                     ? `Firebase блокує вхід, оскільки цей веб-домен не додано до дозволених у вашому проекті.`
                     : `Firebase blocks Google login because this web domain is not added to the authorized domains list in your Firebase project.`}
@@ -130,14 +129,14 @@ export const AccountModal: React.FC<AccountModalProps> = ({
 
               {/* Step 1 */}
               <div className="p-2.5 bg-rose-950/10 border border-rose-900/30 space-y-2">
-                <p className="text-[10px] font-bold text-rose-300 uppercase tracking-wider">
+                <p className="text-xs font-bold text-rose-300 uppercase tracking-wider">
                   {lang === 'uk' ? 'Крок 1. Відкрийте налаштування Firebase' : 'Step 1. Open Firebase Settings'}
                 </p>
                 <a
                   href={consoleUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-950/80 border border-rose-800 hover:border-white text-white font-bold text-[10px] font-mono uppercase transition-all tracking-wider cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-950/80 border border-rose-800 hover:border-white text-white font-bold text-xs font-mono uppercase transition-all tracking-wider cursor-pointer"
                   onClick={() => sound.activate()}
                 >
                   <span>{lang === 'uk' ? 'Налаштування Firebase Console ↗' : 'Firebase Console Settings ↗'}</span>
@@ -146,10 +145,10 @@ export const AccountModal: React.FC<AccountModalProps> = ({
 
               {/* Step 2 */}
               <div className="space-y-2">
-                <p className="text-[10px] font-bold text-neutral-300 uppercase tracking-wider">
+                <p className="text-xs font-bold text-neutral-300 uppercase tracking-wider">
                   {lang === 'uk' ? 'Крок 2. Додайте ці домени у список:' : 'Step 2. Add these domains to the list:'}
                 </p>
-                <p className="text-[9px] text-neutral-500 leading-normal">
+                <p className="text-xs text-neutral-500 leading-normal">
                   {lang === 'uk'
                     ? 'У розділі "Authorized domains" натисніть "Add domain" та додайте кожен із наведених нижче доменів:'
                     : 'In the "Authorized domains" section, click "Add domain" and add each of these domains:'}
@@ -270,7 +269,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
         aria-modal="true"
         aria-labelledby="account-modal-title"
         aria-describedby="account-modal-description"
-        className="relative z-10 flex max-h-[calc(100dvh-2rem)] w-full max-w-lg flex-col overflow-hidden border border-neutral-800 bg-[#0c0c0e] font-mono text-neutral-100 shadow-2xl [&_button]:cursor-pointer [&_button]:focus-visible:outline-2 [&_button]:focus-visible:outline-offset-2 [&_button]:focus-visible:outline-white"
+        className="relative z-10 flex max-h-[calc(100dvh-2rem)] w-full max-w-xl flex-col overflow-hidden border border-neutral-800 bg-[#0c0c0e] font-mono text-neutral-100 shadow-2xl [&_button]:cursor-pointer [&_button]:focus-visible:outline-2 [&_button]:focus-visible:outline-offset-2 [&_button]:focus-visible:outline-white"
       >
         {/* Top Header */}
         <div className="flex shrink-0 items-center justify-between gap-3 px-5 py-5 border-b border-neutral-800 bg-[#0c0c0e]">
@@ -280,7 +279,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
               <h2 id="account-modal-title" className="text-xs font-mono font-black tracking-widest uppercase text-white">
                 {acc.title}
               </h2>
-              <p id="account-modal-description" className="mt-1 text-[11px] leading-relaxed text-neutral-400">
+              <p id="account-modal-description" className="mt-1 text-xs leading-relaxed text-neutral-400">
                 {acc.subtitle}
               </p>
             </div>
@@ -298,7 +297,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
           </button>
         </div>
 
-        <div className="min-h-0 overflow-y-auto p-4 sm:p-5 space-y-4">
+        <div className="min-h-0 overflow-y-auto p-5 sm:p-6 space-y-5">
           {/* Feedback message banner */}
           <AnimatePresence>
             {feedbackMsg && (
@@ -336,17 +335,17 @@ export const AccountModal: React.FC<AccountModalProps> = ({
                   )}
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-bold text-white">{user.displayName || user.email?.split('@')[0] || 'User'}</p>
-                    <p className="mt-1 break-all text-[11px] leading-relaxed text-neutral-400">{user.email}</p>
+                    <p className="mt-1 break-all text-xs leading-relaxed text-neutral-400">{user.email}</p>
                   </div>
                   <button id="sign-out-btn" onClick={handleSignOut} disabled={authLoading} title={acc.signOut} aria-label={acc.signOut}
                     className="flex h-9 w-9 shrink-0 items-center justify-center border border-neutral-800 text-neutral-400 transition-colors hover:border-rose-900 hover:text-rose-400 disabled:opacity-40">
                     <LogOut className="h-4 w-4" />
                   </button>
                 </div>
-                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-neutral-800 px-4 py-2.5 text-[10px]">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-neutral-800 px-4 py-2.5 text-xs">
                   <span className="flex items-center gap-2 text-neutral-300"><CloudCheck className="h-3.5 w-3.5 text-emerald-400" />{lang === 'uk' ? 'Google акаунт підключено' : 'Google account connected'}</span>
                   {user.email?.toLowerCase() === 'melychyn4@gmail.com' && (
-                    <span className="flex items-center gap-1.5 whitespace-nowrap text-[9px] font-bold uppercase tracking-wider text-amber-300"><ShieldCheck className="h-3 w-3" />{lang === 'uk' ? 'Власник системи' : 'System owner'}</span>
+                    <span className="flex items-center gap-1.5 whitespace-nowrap text-xs font-bold uppercase tracking-wider text-amber-300"><ShieldCheck className="h-3 w-3" />{lang === 'uk' ? 'Власник системи' : 'System owner'}</span>
                   )}
                 </div>
               </div>
@@ -355,7 +354,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
                 <div className="flex items-start justify-between gap-4 p-4">
                   <div className="min-w-0">
                     <h3 id="account-sync-heading" className="text-xs font-bold tracking-wide text-white">{acc.autoSyncTitle}</h3>
-                    <p className="mt-2 max-w-xs text-[11px] leading-relaxed text-neutral-400">{acc.autoSyncDesc}</p>
+                    <p className="mt-2 max-w-xs text-xs leading-relaxed text-neutral-400">{acc.autoSyncDesc}</p>
                   </div>
                   <button id="toggle-autosync-btn" type="button" role="switch" aria-checked={autoSyncEnabled} aria-label={acc.autoSyncTitle}
                     onClick={() => { sound.tick(600); onToggleAutoSync(); }}
@@ -363,7 +362,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
                     <span className={`absolute top-1 h-3.5 w-3.5 transition-transform ${autoSyncEnabled ? 'left-1 translate-x-5 bg-emerald-300' : 'left-1 bg-neutral-400'}`} />
                   </button>
                 </div>
-                <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-neutral-800 bg-neutral-950/50 px-4 py-3 text-[10px]">
+                <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-neutral-800 bg-neutral-950/50 px-4 py-3 text-xs">
                   <span className={`flex items-center gap-2 ${autoSyncEnabled ? 'text-emerald-400' : 'text-neutral-400'}`}>
                     <span className={`h-1.5 w-1.5 ${autoSyncEnabled ? 'bg-emerald-400' : 'bg-neutral-500'}`} />
                     {autoSyncEnabled ? (lang === 'uk' ? 'Увімкнено · реальний час' : 'On · real time') : acc.autoSyncOff}
@@ -377,7 +376,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
 
               {cloudData && (
                 <section aria-label={acc.backupStats}>
-                  <h3 className="mb-3 text-[10px] font-bold uppercase tracking-wider text-neutral-400">{acc.backupStats}</h3>
+                  <h3 className="mb-3 text-xs font-bold uppercase tracking-wider text-neutral-400">{acc.backupStats}</h3>
                   <div className="grid grid-cols-3 divide-x divide-neutral-800 border border-neutral-800 bg-[#0a0a0c]">
                     {[
                       [cloudData.tasks?.length || 0, acc.activeTasks],
@@ -386,29 +385,21 @@ export const AccountModal: React.FC<AccountModalProps> = ({
                     ].map(([count, label]) => (
                       <div key={label} className="min-w-0 px-2 py-3 text-center">
                         <div className="text-lg font-bold tabular-nums text-white">{count}</div>
-                        <div className="mt-1 text-[9px] leading-relaxed text-neutral-400">{label}</div>
+                        <div className="mt-1 text-xs leading-relaxed text-neutral-400">{label}</div>
                       </div>
                     ))}
                   </div>
                 </section>
               )}
 
-              <div className="flex items-start gap-2.5 px-1">
-                <Layers className="mt-0.5 h-4 w-4 shrink-0 text-neutral-500" />
-                <div>
-                  <p className="text-[11px] font-bold leading-relaxed text-neutral-300">{acc.tabsPreserved}</p>
-                  <p className="mt-1 text-[10px] leading-relaxed text-neutral-400">{acc.tabsPreservedDesc}</p>
-                </div>
-              </div>
-
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <button id="sync-now-cloud-btn" onClick={handleManualSync} disabled={isSyncing} aria-busy={isSyncing}
-                  className="flex min-h-11 items-center justify-center gap-2 bg-white px-3 py-3 text-[11px] font-bold tracking-wide text-black transition-colors hover:bg-neutral-200 disabled:cursor-wait disabled:bg-neutral-800 disabled:text-neutral-400">
+                  className="flex min-h-11 items-center justify-center gap-2 bg-white px-3 py-3 text-xs font-bold tracking-wide text-black transition-colors hover:bg-neutral-200 disabled:cursor-wait disabled:bg-neutral-800 disabled:text-neutral-400">
                   <RefreshCw className={`h-3.5 w-3.5 shrink-0 ${isSyncing ? 'animate-spin' : ''}`} />
                   <span aria-live="polite">{isSyncing ? acc.syncing : acc.syncNow}</span>
                 </button>
                 <button id="restore-from-cloud-btn" onClick={handleManualRestore} disabled={isSyncing}
-                  className="flex min-h-11 items-center justify-center gap-2 border border-neutral-700 bg-neutral-900 px-3 py-3 text-[11px] font-bold tracking-wide text-neutral-300 transition-colors hover:border-neutral-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40">
+                  className="flex min-h-11 items-center justify-center gap-2 border border-neutral-700 bg-neutral-900 px-3 py-3 text-xs font-bold tracking-wide text-neutral-300 transition-colors hover:border-neutral-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40">
                   <Database className="h-3.5 w-3.5 shrink-0" /><span>{acc.restoreFromCloud}</span>
                 </button>
               </div>
@@ -422,7 +413,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
                   <p className="font-bold text-white mb-1">
                     {lang === 'uk' ? 'Захист від втрати завдань' : 'Cloud Backup Protection'}
                   </p>
-                  <p className="text-[11px] text-neutral-400">
+                  <p className="text-xs text-neutral-400">
                     {acc.localDataNotice}
                   </p>
                 </div>
@@ -462,17 +453,12 @@ export const AccountModal: React.FC<AccountModalProps> = ({
                   : acc.signInWithGoogle}</span>
               </button>
 
-              <div className="text-[10px] font-mono text-neutral-500 text-center leading-relaxed">
-                {lang === 'uk' 
-                  ? 'При вході ваші поточні локальні завдання автоматично збережуться у вашому персональному хмарному профілі Google.'
-                  : 'Upon sign in, your existing local tasks will be backed up to your personal Google Cloud profile.'}
-              </div>
             </div>
           )}
         </div>
 
         {/* Footer */}
-        <div className="shrink-0 px-5 py-3 border-t border-neutral-800/80 bg-[#0a0a0c] flex items-center justify-between text-[10px] font-mono text-neutral-400">
+        <div className="shrink-0 px-5 py-3 border-t border-neutral-800/80 bg-[#0a0a0c] flex items-center justify-between text-xs font-mono text-neutral-400">
           <span>KARKAS // SECURE CLOUD</span>
           <button
             onClick={onClose}

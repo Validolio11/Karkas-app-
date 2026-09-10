@@ -147,14 +147,14 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
                 {hv.title}
               </h1>
             </div>
-            <p className="text-[11px] text-neutral-400 font-sans mt-0.5">
+            <p className="text-xs text-neutral-400 font-sans mt-2 leading-relaxed">
               {hv.subtitle}
             </p>
           </div>
         </div>
 
         {/* Counter Summary Pills */}
-        <div className="flex items-center gap-2 text-[10px] font-mono flex-wrap">
+        <div className="flex items-center gap-2 text-xs font-mono flex-wrap">
           <div className="px-2 py-1 bg-black border border-neutral-800 text-neutral-300 flex items-center gap-1.5">
             <span className="text-neutral-500">{hv.totalCount}:</span>
             <span className="font-bold text-white">{allHistoryItems.length}</span>
@@ -182,7 +182,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
               sound.tick(500);
               setActiveSubFilter('ALL');
             }}
-            className={`px-2.5 py-1 text-[10px] font-mono tracking-wider border uppercase transition-all cursor-pointer ${
+            className={`px-2.5 py-1 text-xs font-mono tracking-wider border uppercase transition-all cursor-pointer ${
               activeSubFilter === 'ALL'
                 ? 'border-white bg-white text-black font-extrabold'
                 : 'border-neutral-800 bg-black text-neutral-400 hover:text-white hover:border-neutral-700'
@@ -197,7 +197,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
               sound.tick(500);
               setActiveSubFilter('COMPLETED');
             }}
-            className={`flex items-center gap-1 px-2.5 py-1 text-[10px] font-mono tracking-wider border uppercase transition-all cursor-pointer ${
+            className={`flex items-center gap-1 px-2.5 py-1 text-xs font-mono tracking-wider border uppercase transition-all cursor-pointer ${
               activeSubFilter === 'COMPLETED'
                 ? 'border-white bg-white text-black font-extrabold'
                 : 'border-neutral-800 bg-black text-neutral-400 hover:text-white hover:border-neutral-700'
@@ -213,7 +213,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
               sound.tick(500);
               setActiveSubFilter('DELETED');
             }}
-            className={`flex items-center gap-1 px-2.5 py-1 text-[10px] font-mono tracking-wider border uppercase transition-all cursor-pointer ${
+            className={`flex items-center gap-1 px-2.5 py-1 text-xs font-mono tracking-wider border uppercase transition-all cursor-pointer ${
               activeSubFilter === 'DELETED'
                 ? 'border-white bg-white text-black font-extrabold'
                 : 'border-neutral-800 bg-black text-neutral-400 hover:text-white hover:border-neutral-700'
@@ -234,7 +234,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder={hv.searchPlaceholder}
-              className="w-full bg-black border border-neutral-800 text-[11px] font-mono text-white placeholder:text-neutral-500 pl-7 pr-2 py-1 outline-none focus:border-neutral-500 transition-colors"
+              className="w-full bg-black border border-neutral-800 text-xs font-mono text-white placeholder:text-neutral-500 pl-7 pr-3 py-2.5 outline-none focus:border-neutral-500 transition-colors"
             />
             {searchQuery && (
               <button
@@ -255,7 +255,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
                 setShowClearConfirm(true);
               }}
               title={hv.clearDeleted}
-              className="px-2 py-1 bg-black border border-neutral-800 hover:border-red-600 hover:text-red-400 text-neutral-400 text-[10px] font-mono tracking-wider uppercase transition-colors whitespace-nowrap cursor-pointer flex items-center gap-1"
+              className="px-2 py-1 bg-black border border-neutral-800 hover:border-red-600 hover:text-red-400 text-neutral-400 text-xs font-mono tracking-wider uppercase transition-colors whitespace-nowrap cursor-pointer flex items-center gap-1"
             >
               <Trash2 className="w-3 h-3" />
               <span>{hv.clearDeleted}</span>
@@ -340,7 +340,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
                 }`}
               >
                 {/* Header line: Badges & Timestamp */}
-                <div className="flex items-center justify-between gap-2 flex-wrap text-[10px] font-mono mb-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap text-xs font-mono mb-2">
                   <div className="flex items-center gap-2 flex-wrap">
                     {/* Status Badge */}
                     {isCompleted ? (
@@ -368,7 +368,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
 
                     {/* Priority Badge */}
                     <span
-                      className={`px-1.5 py-0.5 border text-[9px] uppercase font-bold ${
+                      className={`px-1.5 py-0.5 border text-xs uppercase font-bold ${
                         task.priority === 1
                           ? 'border-red-800 text-red-400 bg-red-950/20'
                           : task.priority === 2
@@ -389,7 +389,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
                     {/* Time spent duration pill */}
                     {task.timeSpentSeconds && task.timeSpentSeconds > 0 ? (
                       <span
-                        className="inline-flex items-center gap-1 px-1.5 py-0.5 border border-neutral-800 bg-black text-[9px] font-mono text-neutral-300"
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 border border-neutral-800 bg-black text-xs font-mono text-neutral-300"
                         title={lang === 'uk' ? 'Витрачено часу на завдання' : 'Time spent on task'}
                       >
                         <Timer className="w-2.5 h-2.5 text-neutral-400" />
@@ -457,7 +457,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
 
                 {/* Bottom Action Buttons */}
                 <div className="pt-2 border-t border-neutral-900/80 flex items-center justify-between flex-wrap gap-2 text-xs font-mono">
-                  <div className="text-[10px] text-neutral-400">
+                  <div className="text-xs text-neutral-400">
                     <span>{hv.createdAtPrefix}: {formatTimestamp(task.createdAt)}</span>
                   </div>
 

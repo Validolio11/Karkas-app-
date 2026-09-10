@@ -104,6 +104,7 @@ function createWindow() {
       : path.join(__dirname, '../build/icon.png'),
     frame: false,
     webPreferences: {
+      zoomFactor: 1.25,
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.cjs'),

@@ -140,7 +140,7 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
           transition={{ duration: 0.22, ease: 'easeOut' }}
           className="overflow-hidden bg-[#0c0c0e] border-b border-neutral-800 font-mono"
         >
-          <form onSubmit={handleSubmit} className="p-4 sm:p-5 max-w-3xl mx-auto flex flex-col gap-3">
+          <form onSubmit={handleSubmit} className="p-5 sm:p-8 max-w-4xl mx-auto flex flex-col gap-5">
             {/* Title Input */}
             <div className="flex items-center gap-2">
               <input
@@ -150,7 +150,7 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder={t.quickAdd.titlePlaceholder}
-                className="flex-1 bg-[#08080a] border border-neutral-700 text-white placeholder:text-neutral-500 placeholder:font-normal placeholder:normal-case px-3.5 py-2.5 text-xs font-mono tracking-normal focus:outline-none focus:border-white transition-colors"
+                className="min-w-0 flex-1 bg-[#08080a] border border-neutral-700 text-white placeholder:text-neutral-500 placeholder:font-normal placeholder:normal-case px-3.5 py-3 text-sm leading-relaxed font-mono tracking-normal focus:outline-none focus:border-white transition-colors"
               />
               <button
                 type="button"
@@ -170,15 +170,15 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
                 placeholder={t.quickAdd.notePlaceholder}
-                className="w-full bg-[#08080a] border border-neutral-800 text-neutral-200 placeholder:text-neutral-500 placeholder:font-normal px-3.5 py-2 text-xs font-mono focus:outline-none focus:border-neutral-400 transition-colors"
+                className="w-full bg-[#08080a] border border-neutral-800 text-neutral-200 placeholder:text-neutral-500 placeholder:font-normal px-3.5 py-3 text-sm leading-relaxed font-mono focus:outline-none focus:border-neutral-400 transition-colors"
               />
             </div>
 
             {/* Phase / Tab & Priority Tactical Controls */}
             <div className="flex flex-wrap items-center justify-between gap-3 pt-1 text-xs">
               {/* Tab Selection */}
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <span className="text-[10px] font-mono text-neutral-400 font-bold uppercase tracking-wider">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs font-mono text-neutral-400 font-bold uppercase tracking-wider">
                   {t.quickAdd.phaseLabel}
                 </span>
                 {tabs.map((tb) => {
@@ -193,7 +193,7 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
                         sound.tick(600);
                         setPhase(tb.id);
                       }}
-                      className={`px-2 py-0.5 text-[10px] font-mono border transition-all flex items-center gap-1.5 ${
+                      className={`px-2 py-1 text-xs font-mono border transition-all flex items-center gap-1.5 ${
                         isSelected
                           ? 'border-white bg-white text-black font-extrabold'
                           : 'border-neutral-800 text-neutral-400 hover:text-neutral-200 bg-neutral-900/60'
@@ -214,7 +214,7 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
               {/* Priority Selection */}
               <div className="flex items-center gap-3">
                 <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] font-mono text-neutral-400 font-bold">{t.quickAdd.priorityLabel}</span>
+                  <span className="text-xs font-mono text-neutral-400 font-bold">{t.quickAdd.priorityLabel}</span>
                   {([1, 2, 3] as (1 | 2 | 3)[]).map((pri) => {
                     const isSelected = priority === pri;
                     const tooltip =
@@ -234,7 +234,7 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
                           setPriority(pri);
                         }}
                         title={tooltip}
-                        className={`flex items-center gap-1 px-2 py-0.5 text-[10px] font-mono border transition-all ${
+                        className={`flex items-center gap-1 px-2 py-1 text-xs font-mono border transition-all ${
                           isSelected
                             ? pri === 1
                               ? 'border-red-500 bg-red-500 text-black font-extrabold'
@@ -266,8 +266,8 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
             </div>
 
             {/* Optional Custom Steps & Descriptions Section */}
-            <div className="pt-2 border-t border-neutral-800/80">
-              <div className="flex items-center justify-between mb-2">
+            <div className="pt-4 border-t border-neutral-800/80">
+              <div className="flex items-center justify-between gap-3 mb-3">
                 <button
                   type="button"
                   id="toggle-steps-section-btn"
@@ -278,12 +278,12 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
                     }
                     setShowStepsSection(!showStepsSection);
                   }}
-                  className="flex items-center gap-1.5 text-[11px] font-mono text-neutral-300 hover:text-white transition-colors"
+                  className="flex items-center gap-1.5 text-xs font-mono text-neutral-300 hover:text-white transition-colors"
                 >
                   <span className="text-neutral-500">[{showStepsSection ? '−' : '+'}]</span>
                   <span className="font-bold uppercase tracking-wider">{t.stepsSection.optionalTitle}</span>
                   {customSteps.length > 0 && (
-                    <span className="text-[10px] px-1.5 py-0.2 bg-neutral-800 text-neutral-300 border border-neutral-700">
+                    <span className="text-xs px-1.5 py-1 bg-neutral-800 text-neutral-300 border border-neutral-700">
                       {customSteps.length}
                     </span>
                   )}
@@ -294,7 +294,7 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
                     type="button"
                     id="add-custom-step-btn"
                     onClick={handleAddStepInput}
-                    className="text-[10px] font-mono uppercase px-2 py-0.5 bg-neutral-900 border border-neutral-700 hover:border-white text-neutral-300 hover:text-white transition-colors"
+                    className="text-xs font-mono uppercase px-2 py-1 bg-neutral-900 border border-neutral-700 hover:border-white text-neutral-300 hover:text-white transition-colors"
                   >
                     {t.stepsSection.addStepBtn}
                   </button>
@@ -309,11 +309,11 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
                     animate={{ opacity: 1, height: 'auto' }}
                     exit={{ opacity: 0, height: 0 }}
                     transition={{ duration: 0.18 }}
-                    className="space-y-1.5 overflow-hidden"
+                    className="space-y-3 overflow-hidden"
                   >
                     {customSteps.map((stepText, idx) => (
                       <div key={idx} className="flex items-center gap-2">
-                        <span className="text-[10px] font-mono text-neutral-500 w-5 shrink-0">
+                        <span className="text-xs font-mono text-neutral-500 w-5 shrink-0">
                           #{idx + 1}
                         </span>
                         <input
@@ -322,7 +322,7 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
                           value={stepText}
                           onChange={(e) => handleUpdateStepText(idx, e.target.value)}
                           placeholder={`${t.stepsSection.stepPlaceholder} ${idx + 1}`}
-                          className="flex-1 bg-[#101014] border border-neutral-800 focus:border-neutral-400 text-white placeholder:text-neutral-600 px-3 py-1.5 text-xs font-mono transition-colors"
+                          className="min-w-0 flex-1 bg-[#101014] border border-neutral-800 focus:border-neutral-400 text-white placeholder:text-neutral-500 px-3 py-2.5 text-sm leading-relaxed font-mono transition-colors"
                         />
                         <button
                           type="button"
@@ -335,24 +335,19 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
                       </div>
                     ))}
 
-                    {customSteps.length === 0 && (
-                      <p className="text-[11px] font-mono text-neutral-500 py-1">
-                        {t.stepsSection.noStepsHint}
-                      </p>
-                    )}
                   </motion.div>
                 )}
               </AnimatePresence>
             </div>
 
             {/* Action Buttons */}
-            <div className="flex items-center justify-end gap-2 pt-1">
+            <div className="flex flex-wrap items-center justify-end gap-3 pt-2">
               {title.trim() && (
                 <button
                   type="button"
                   id="quick-add-ai-generate-btn"
                   onClick={handleAskAI}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-[#08080a] border border-neutral-800 text-xs font-mono text-neutral-400 hover:text-white hover:border-neutral-600 transition-colors cursor-pointer"
+                  className="flex items-center gap-1.5 px-3 py-2.5 bg-[#08080a] border border-neutral-800 text-xs font-mono text-neutral-400 hover:text-white hover:border-neutral-600 transition-colors cursor-pointer"
                 >
                   <SquareCode className="w-3.5 h-3.5 text-neutral-300" />
                   <span>{t.quickAdd.aiBreakdown}</span>
@@ -362,7 +357,7 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
               <button
                 type="submit"
                 id="quick-add-submit-btn"
-                className="flex items-center gap-1.5 px-4 py-1.5 bg-white text-black font-extrabold text-xs font-mono tracking-wider hover:bg-neutral-200 transition-colors"
+                className="flex items-center gap-1.5 px-4 py-2.5 bg-white text-black font-extrabold text-xs font-mono tracking-wider hover:bg-neutral-200 transition-colors"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>{t.quickAdd.submitBtn}</span>
@@ -374,4 +369,3 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
     </AnimatePresence>
   );
 };
-

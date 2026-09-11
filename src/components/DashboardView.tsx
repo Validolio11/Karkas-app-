@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import { AIIcon, AIIconId } from './AIIconTemplates';
 import { ActivityChart } from './ActivityChart';
+import { karkasApiFetch } from '../utils/desktopApi';
 
 const AI_ANALYSIS_STORAGE_KEY_PREFIX = 'karkas_ai_dashboard_analysis_cache_';
 
@@ -513,7 +514,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
         const customModel = localStorage.getItem('karkas_custom_model') || '';
         const customEnabled = localStorage.getItem('karkas_custom_ai_enabled') === 'true';
 
-        const res = await fetch('/api/ai/recommendations', {
+        const res = await karkasApiFetch('/api/ai/recommendations', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

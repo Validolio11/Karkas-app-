@@ -1,3 +1,5 @@
+import type { WorkspaceSyncOperation } from './utils/syncOperations';
+
 export interface TaskTab {
   id: string;
   name: string;
@@ -81,15 +83,101 @@ export interface AIRecommendation {
 }
 
 declare global {
+  type DesktopResult<T> =
+    | { ok: true; value: T }
+    | { ok: false; error: { code: string; message: string } };
+
+  interface DesktopWindowState {
+    maximized: boolean;
+    visible: boolean;
+  }
+
+  interface DesktopAccountSnapshot {
+    workspace: {
+      tasks: PSTask[];
+      tabs: TaskTab[];
+      deletedTasks: DeletedTask[];
+      settings: { soundEnabled: boolean; fireEnabled: boolean; lang: string; aiIconVariant: string };
+    };
+    base?: DesktopAccountSnapshot['workspace'] | null;
+    operations?: WorkspaceSyncOperation[];
+    lastSyncTime?: number | null;
+    recovery?: DesktopAccountSnapshot['workspace'] | null;
+    syncClientId?: string;
+    nextSyncSequence?: number;
+    pendingSync?: DesktopPendingSync | null;
+    inFlightSync?: DesktopPendingSync | null;
+  }
+
+  interface DesktopPendingSync {
+    mutationId: string;
+    clientId: string;
+    sequence: number;
+    createdAt: number;
+    attempts: number;
+    nextAttemptAt: number;
+    lastError?: string;
+    workspace: DesktopAccountSnapshot['workspace'];
+    base?: DesktopAccountSnapshot['workspace'] | null;
+  }
+
+  interface DesktopPreferences {
+    zoomPercent?: number;
+    launchAtStartup?: boolean;
+    window?: { bounds?: { x: number; y: number; width: number; height: number }; maximized?: boolean };
+    [key: string]: unknown;
+  }
+
   interface Window {
-    electronAPI?: {
-      minimize: () => void;
-      maximize: () => void;
-      close: () => void;
-      isElectron: boolean;
-      loginWithGoogle?: () => Promise<{ success: boolean; idToken?: string; accessToken?: string; error?: string }>;
-      downloadAndInstallUpdate?: (url: string, fileName?: string) => Promise<{ success: boolean; message?: string }>;
-      openExternal?: (url: string) => void;
+    karkasDesktop?: {
+      isDesktop: true;
+      window: {
+        minimize: () => void;
+        toggleMaximize: () => void;
+        hide: () => void;
+        quit: () => Promise<DesktopResult<void>>;
+        getState: () => Promise<DesktopResult<DesktopWindowState>>;
+        setZoomFactor: (factor: number) => void;
+        onStateChanged: (callback: (state: DesktopWindowState) => void) => () => void;
+        onCommand: (callback: (command: 'new-task' | 'open-settings') => void) => () => void;
+      };
+      workspace: {
+        loadAccount: (ownerId: string | null) => Promise<DesktopResult<DesktopAccountSnapshot | null>>;
+        saveAccount: (input: { ownerId: string | null; record: DesktopAccountSnapshot }) => Promise<DesktopResult<void>>;
+        getActiveOwner: () => Promise<DesktopResult<string | null>>;
+        setActiveOwner: (ownerId: string | null) => Promise<DesktopResult<void>>;
+        createRecoveryPoint: (ownerId: string | null) => Promise<DesktopResult<void>>;
+        stageSync: (input: { ownerId: string; workspace: DesktopAccountSnapshot['workspace']; base?: DesktopAccountSnapshot['workspace'] | null; operations?: WorkspaceSyncOperation[] }) => Promise<DesktopResult<DesktopPendingSync>>;
+        claimSync: (ownerId: string, bypassBackoff?: boolean) => Promise<DesktopResult<DesktopPendingSync | null>>;
+        markSyncFailed: (input: { ownerId: string; mutationId: string; message: string }) => Promise<DesktopResult<DesktopPendingSync | null>>;
+        acknowledgeSync: (input: { ownerId: string; mutationId: string; base: DesktopAccountSnapshot['workspace']; lastSyncTime: number }) => Promise<DesktopResult<{ acknowledged: boolean; pending: DesktopPendingSync | null }>>;
+        replaceWithCloud: (input: { ownerId: string; workspace: DesktopAccountSnapshot['workspace']; lastSyncTime: number }) => Promise<DesktopResult<DesktopAccountSnapshot>>;
+      };
+      preferences: {
+        get: () => Promise<DesktopResult<DesktopPreferences>>;
+        update: (changes: DesktopPreferences) => Promise<DesktopResult<DesktopPreferences>>;
+      };
+      auth: {
+        loginWithGoogle: () => Promise<DesktopResult<{ success: boolean; idToken?: string; accessToken?: string; error?: string }>>;
+      };
+      ai: {
+        hasKey: () => Promise<DesktopResult<boolean>>;
+        verifyAndStoreKey: (apiKey: string) => Promise<DesktopResult<{ models: string[] }>>;
+        clearKey: () => Promise<DesktopResult<void>>;
+        assist: (input: unknown) => Promise<DesktopResult<{ status: number; body: any }>>;
+        breakdown: (input: unknown) => Promise<DesktopResult<{ status: number; body: any }>>;
+        recommendations: (input: unknown) => Promise<DesktopResult<{ status: number; body: any }>>;
+      };
+      updates: {
+        checkLatest: () => Promise<DesktopResult<{ status: number; body: any }>>;
+        downloadAndInstall: (input: { url: string; fileName?: string }) => Promise<DesktopResult<void>>;
+      };
+      system: {
+        openExternal: (url: string) => Promise<DesktopResult<void>>;
+        showNotification: (input: { title: string; body: string }) => Promise<DesktopResult<void>>;
+        getStartupEnabled: () => Promise<DesktopResult<boolean>>;
+        setStartupEnabled: (enabled: boolean) => Promise<DesktopResult<boolean>>;
+      };
     };
   }
 }

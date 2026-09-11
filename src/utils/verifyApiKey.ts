@@ -1,3 +1,5 @@
+import { karkasApiFetch } from './desktopApi';
+
 export type KeyVerificationCode = 'INVALID_API_KEY' | 'ACCESS_DENIED' | 'QUOTA_EXCEEDED' | 'NETWORK_ERROR' | 'TIMEOUT' | 'NO_MODELS' | 'PROVIDER_ERROR' | 'MISSING_API_KEY' | 'SERVER_UNAVAILABLE';
 
 const codes: KeyVerificationCode[] = ['INVALID_API_KEY', 'ACCESS_DENIED', 'QUOTA_EXCEEDED', 'NETWORK_ERROR', 'TIMEOUT', 'NO_MODELS', 'PROVIDER_ERROR', 'MISSING_API_KEY', 'SERVER_UNAVAILABLE'];
@@ -24,7 +26,7 @@ export async function verifyApiKey(apiKey: string, options: {
     controller.abort();
   }, options.timeoutMs ?? 20000);
   try {
-    const response = await (options.fetcher ?? fetch)('/api/ai/verify-key', {
+    const response = await (options.fetcher ?? karkasApiFetch)('/api/ai/verify-key', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ apiKey: apiKey.trim() }),

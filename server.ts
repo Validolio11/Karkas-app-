@@ -90,14 +90,15 @@ async function generateGeminiContentWithFallback(params: {
 }
 
 // Endpoint to validate custom Gemini API key and automatically fetch available models
-app.post("/api/ai/verify-key", async (req, res) => {
+export async function verifyKeyHandler(req: any, res: any) {
   const result = await verifyGeminiKey(req.body?.apiKey);
   return res.status(result.status).json(result.body);
-});
+}
+app.post("/api/ai/verify-key", verifyKeyHandler);
 
 // App update checking endpoint with memory cache (2 min TTL) to avoid GitHub rate limits
 let cachedReleaseData: { data: any; timestamp: number } | null = null;
-app.get("/api/check-update", async (req, res) => {
+export async function checkUpdateHandler(_req: any, res: any) {
   try {
     if (cachedReleaseData && Date.now() - cachedReleaseData.timestamp < 120000) {
       return res.json(cachedReleaseData.data);
@@ -124,10 +125,11 @@ app.get("/api/check-update", async (req, res) => {
     console.error("Error checking GitHub release:", err);
     res.status(500).json({ error: err.message || "Failed to check update" });
   }
-});
+}
+app.get("/api/check-update", checkUpdateHandler);
 
 // Smart AI Assistant & Full App Context Analyzer Endpoint
-app.post("/api/ai/assist", async (req, res) => {
+export async function assistHandler(req: any, res: any) {
   try {
     const {
       prompt,
@@ -143,6 +145,8 @@ app.post("/api/ai/assist", async (req, res) => {
       customApiKey,
       selectedModel,
       conversation = [],
+      fullAppContext,
+      allowNewTabs = false,
     } = req.body;
 
     if (!prompt || typeof prompt !== "string") {
@@ -175,12 +179,28 @@ app.post("/api/ai/assist", async (req, res) => {
       });
     }
 
-    // Consolidate active tasks list
-    const effectiveActiveTasks = activeTasks.length > 0 ? activeTasks : currentTasks.filter((t: any) => !t.done);
-    const effectiveCompletedTasks = completedTasks.length > 0 ? completedTasks : currentTasks.filter((t: any) => t.done);
+    // The client sends the complete state as fullAppContext. Older clients only
+    // send top-level fields, so accept both formats while preferring full context.
+    const suppliedContext = fullAppContext && typeof fullAppContext === 'object' ? fullAppContext : {};
+    const contextActiveTasks = Array.isArray(suppliedContext.activeTasks) ? suppliedContext.activeTasks : [];
+    const contextCompletedTasks = Array.isArray(suppliedContext.completedTasks) ? suppliedContext.completedTasks : [];
+    const contextDeletedTasks = Array.isArray(suppliedContext.deletedTasks) ? suppliedContext.deletedTasks : [];
+    const contextTabs = Array.isArray(suppliedContext.tabs) ? suppliedContext.tabs : [];
+    const effectiveActiveTasks = activeTasks.length > 0
+      ? activeTasks
+      : contextActiveTasks.length > 0
+        ? contextActiveTasks
+        : currentTasks.filter((t: any) => !t.done);
+    const effectiveCompletedTasks = completedTasks.length > 0
+      ? completedTasks
+      : contextCompletedTasks.length > 0
+        ? contextCompletedTasks
+        : currentTasks.filter((t: any) => t.done);
+    const effectiveDeletedTasks = deletedTasks.length > 0 ? deletedTasks : contextDeletedTasks;
+    const effectiveStats = Object.keys(stats || {}).length > 0 ? stats : (suppliedContext.stats || {});
 
-    // Determine available tab IDs and descriptions
-    const tabList = Array.isArray(tabs) ? tabs : [];
+    // Preserve tab names and colors for analysis, instead of only receiving IDs.
+    const tabList = contextTabs.length > 0 ? contextTabs : (Array.isArray(tabs) ? tabs : []);
 
     const activeTabIds: string[] = tabList.map((t: any) => (typeof t === "string" ? t : t.id));
     const primaryTab = activeTabIds[0] || "focus";
@@ -195,9 +215,9 @@ CURRENT APPLICATION CONTEXT:
 ${JSON.stringify({
             activeTasks: effectiveActiveTasks,
             completedTasks: effectiveCompletedTasks.slice(-20),
-            deletedTasks: deletedTasks.slice(-10),
+            deletedTasks: effectiveDeletedTasks.slice(-10),
             tabs: tabList,
-            stats,
+            stats: effectiveStats,
             adaptiveProfile,
           }, null, 2)}`,
           config: {
@@ -242,6 +262,7 @@ Adapt to the behavioral profile in the application context. Prefer the user's de
 LANGUAGE REQUIREMENT: ${isUk ? "All output (summary, insights, task titles, step titles, notes) MUST be in UKRAINIAN." : "All output must be in English."}
 AVAILABLE CATEGORY TABS: ${JSON.stringify(activeTabIds)}.
 Every task MUST set "phase" to one of these exact available tabs: ${JSON.stringify(activeTabIds)}.
+${allowNewTabs ? `The user explicitly requested a new category tab. You may return 1-3 NEW tabs in "tabs" only when needed. Each new tab must have a short human-readable "name" and a unique lowercase ASCII "id" (for example "fitness"). Never repeat an existing tab. Tasks may use a newly returned tab id.` : 'Do not create or rename tabs. Return an empty "tabs" array.'}
 
 When breaking down tasks or analyzing:
 1. Provide a punchy "summary" explaining the execution roadmap or strategic diagnosis.
@@ -261,9 +282,9 @@ Adhere strictly to the requested JSON schema.`;
           actionType: action,
           language: isUk ? "Ukrainian" : "English",
           applicationOverview: {
-            totalTasks: (stats.total || effectiveActiveTasks.length + effectiveCompletedTasks.length),
-            completedCount: (stats.completed || effectiveCompletedTasks.length),
-            completionPercent: stats.percent ?? 0,
+            totalTasks: (effectiveStats.total || effectiveActiveTasks.length + effectiveCompletedTasks.length),
+            completedCount: (effectiveStats.completed || effectiveCompletedTasks.length),
+            completionPercent: effectiveStats.percent ?? 0,
             activeCount: effectiveActiveTasks.length,
             urgentP1Count: effectiveActiveTasks.filter((t: any) => t.priority === 1).length,
           },
@@ -283,7 +304,7 @@ Adhere strictly to the requested JSON schema.`;
             title: t.title,
             phase: t.phase,
           })),
-          deletedArchiveSample: deletedTasks.slice(-5).map((t: any) => ({
+          deletedArchiveSample: effectiveDeletedTasks.slice(-5).map((t: any) => ({
             title: t.title,
             phase: t.phase,
           })),
@@ -329,6 +350,17 @@ ${JSON.stringify(fullAppContext, null, 2)}`,
                     required: ["title", "phase", "priority", "steps"],
                   },
                 },
+                tabs: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      id: { type: Type.STRING },
+                      name: { type: Type.STRING },
+                    },
+                    required: ["id", "name"],
+                  },
+                },
               },
               required: ["summary", "tasks"],
             },
@@ -340,6 +372,30 @@ ${JSON.stringify(fullAppContext, null, 2)}`,
         if (response && response.text) {
           const rawText = response.text || "{}";
           const parsed = JSON.parse(rawText);
+
+          const existingTabIds = new Set(activeTabIds);
+          const newTabIdMap = new Map<string, string>();
+          const validatedTabs: { id: string; name: string }[] = [];
+          if (allowNewTabs && Array.isArray(parsed.tabs)) {
+            for (const rawTab of parsed.tabs.slice(0, 3)) {
+              const name = typeof rawTab?.name === 'string' ? rawTab.name.trim().slice(0, 32) : '';
+              if (!name) continue;
+              const requestedId = typeof rawTab?.id === 'string' ? rawTab.id.trim() : '';
+              const baseId = (requestedId || name)
+                .toLowerCase()
+                .replace(/[^a-z0-9_-]+/g, '_')
+                .replace(/^_+|_+$/g, '')
+                .slice(0, 28) || 'tab';
+              let id = baseId;
+              let suffix = 2;
+              while (existingTabIds.has(id) || validatedTabs.some((tab) => tab.id === id)) {
+                id = `${baseId.slice(0, 24)}_${suffix++}`;
+              }
+              newTabIdMap.set(requestedId, id);
+              validatedTabs.push({ id, name });
+            }
+          }
+          const allowedTaskPhases = new Set([...activeTabIds, ...validatedTabs.map((tab) => tab.id)]);
 
           const validatedTasks = (parsed.tasks || []).map((t: any, idx: number) => {
             const rawStepList = Array.isArray(t.stepList) ? t.stepList : [];
@@ -357,7 +413,7 @@ ${JSON.stringify(fullAppContext, null, 2)}`,
 
             return {
               title: t.title,
-              phase: activeTabIds.includes(t.phase) ? t.phase : primaryTab,
+              phase: allowedTaskPhases.has(t.phase) ? t.phase : (newTabIdMap.get(t.phase) || primaryTab),
               priority: (t.priority === 1 || t.priority === 2 || t.priority === 3) ? t.priority : 2,
               steps: finalStepList.length,
               stepList: finalStepList,
@@ -369,6 +425,7 @@ ${JSON.stringify(fullAppContext, null, 2)}`,
             summary: parsed.summary || (isUk ? "План сформовано з повного аналізу додатку." : "Plan formulated from full app analysis."),
             insights: parsed.insights || [],
             tasks: validatedTasks,
+            tabs: validatedTabs,
             analyzedContext: {
               activeCount: effectiveActiveTasks.length,
               completedCount: effectiveCompletedTasks.length,
@@ -588,10 +645,16 @@ ${JSON.stringify(fullAppContext, null, 2)}`,
           ];
     }
 
+    const quotedTabName = prompt.match(/["«]([^"»]{1,32})["»]/)?.[1]?.trim();
+    const fallbackTabs = allowNewTabs
+      ? [{ id: `tab_${Date.now().toString(36)}`, name: quotedTabName || (isUk ? 'Нова вкладка' : 'New tab') }]
+      : [];
+
     return res.json({
       summary: fallbackSummary,
       insights: fallbackInsights,
       tasks: fallbackTasks,
+      tabs: fallbackTabs,
       analyzedContext: {
         activeCount: effectiveActiveTasks.length,
         completedCount: effectiveCompletedTasks.length,
@@ -603,10 +666,11 @@ ${JSON.stringify(fullAppContext, null, 2)}`,
     console.error("AI assist error:", err);
     return res.status(500).json({ error: "Failed to process AI assist request" });
   }
-});
+}
+app.post("/api/ai/assist", assistHandler);
 
 // Dedicated Single-Task AI Breakdown into Sub-steps Endpoint
-app.post("/api/ai/breakdown-task", async (req, res) => {
+export async function breakdownTaskHandler(req: any, res: any) {
   try {
     const rawTask = req.body.task || (req.body.title ? {
       id: req.body.taskId || req.body.id,
@@ -759,10 +823,11 @@ APP CONTEXT:
     console.error("Task breakdown API error:", err);
     return res.status(500).json({ error: "Failed to break down task" });
   }
-});
+}
+app.post("/api/ai/breakdown-task", breakdownTaskHandler);
 
 // AI Dashboard Recommendations & Period Productivity Analysis Endpoint
-app.post("/api/ai/recommendations", async (req, res) => {
+export async function recommendationsHandler(req: any, res: any) {
   try {
     const {
       tasks = [],
@@ -1076,7 +1141,38 @@ Language: ${isUk ? "Ukrainian" : "English"}.`,
     console.error("AI recommendations error:", err);
     return res.status(500).json({ error: "Failed to generate AI recommendations" });
   }
-});
+}
+app.post("/api/ai/recommendations", recommendationsHandler);
+
+const desktopHandlers: Record<string, (req: any, res: any) => Promise<any>> = {
+  verifyKey: verifyKeyHandler,
+  checkUpdate: checkUpdateHandler,
+  assist: assistHandler,
+  breakdown: breakdownTaskHandler,
+  recommendations: recommendationsHandler,
+};
+
+/** Run an API service in-process for the Electron IPC bridge without opening a TCP listener. */
+export async function invokeDesktopApi(operation: string, body: any = {}) {
+  const handler = desktopHandlers[operation];
+  if (!handler) return { status: 404, body: { error: 'Unknown desktop API operation' } };
+
+  let status = 200;
+  let responseBody: any;
+  const response = {
+    status(code: number) {
+      status = code;
+      return response;
+    },
+    json(value: any) {
+      responseBody = value;
+      return response;
+    },
+  };
+
+  await handler({ body }, response);
+  return { status, body: responseBody };
+}
 
 export async function startServer(options: { port?: number; host?: string; distPath?: string } = {}) {
   if (process.env.NODE_ENV !== "production") {

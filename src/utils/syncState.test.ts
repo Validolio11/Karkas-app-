@@ -1,6 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeWorkspace, sameWorkspace, type WorkspaceState } from './syncState';
+import {
+  MAX_CLOUD_PAYLOAD_BYTES,
+  assertCloudPayloadWithinLimit,
+  cloudPayloadSizeBytes,
+  isSyncMutationApplied,
+  mergeWorkspace,
+  recordSyncMutation,
+  sameWorkspace,
+  type WorkspaceState,
+} from './syncState';
 import type { PSTask } from '../types';
 
 const task = (id: string, title = id): PSTask => ({
@@ -31,6 +40,21 @@ test('local deletion removes remote task and remote deletion is not resurrected 
   assert.deepEqual(result.deletedTasks.map((item) => item.id).sort(), ['local-delete', 'remote-delete']);
 });
 
+test('remote deletion wins over an offline edit and never leaves the task active and deleted', () => {
+  const base = state([task('deleted-remotely', 'Original title')]);
+  const local = state([{ ...task('deleted-remotely', 'Edited offline'), pinned: true }]);
+  const remote = state();
+  remote.deletedTasks = [{ ...task('deleted-remotely', 'Original title'), deletedAt: 10 }];
+
+  const result = mergeWorkspace(base, local, remote);
+  const activeCopies = result.tasks.filter((item) => item.id === 'deleted-remotely');
+  const deletedCopies = result.deletedTasks.filter((item) => item.id === 'deleted-remotely');
+
+  assert.deepEqual(activeCopies, []);
+  assert.equal(deletedCopies.length, 1);
+  assert.equal(deletedCopies[0].deletedAt, 10);
+});
+
 test('both devices can add tasks concurrently', () => {
   const result = mergeWorkspace(state(), state([task('local')]), state([task('remote')]));
   assert.deepEqual(result.tasks.map((item) => item.id).sort(), ['local', 'remote']);
@@ -57,9 +81,49 @@ test('first sync unions local and remote entities without mutating inputs', () =
   assert.deepEqual(remote.tasks, [task('remote')]);
 });
 
+test('first sync prefers remote settings over untouched defaults while preserving local entities', () => {
+  const local = state([task('local-draft')]);
+  const remote = state([task('remote-task')]);
+  remote.settings = {
+    soundEnabled: false,
+    fireEnabled: false,
+    lang: 'en',
+    aiIconVariant: 'orbit',
+  };
+
+  const result = mergeWorkspace(null, local, remote, { preferRemoteSettingsOnFirstSync: true });
+
+  assert.deepEqual(result.settings, remote.settings);
+  assert.deepEqual(result.tasks.map((item) => item.id).sort(), ['local-draft', 'remote-task']);
+});
+
 test('canonical workspace equality ignores key order and cloud metadata', () => {
   const original = state([task('a')]);
   const reordered = { ...original, tasks: original.tasks.map((item) => Object.fromEntries(Object.entries(item).reverse()) as PSTask), updatedAt: 100 };
   assert.equal(sameWorkspace(original, reordered), true);
   assert.equal(sameWorkspace(original, state()), false);
+});
+
+test('sync mutation identity makes a lost-response retry idempotent per client', () => {
+  const recorded = recordSyncMutation({ 'other-client': 4 }, { clientId: 'desktop-a', sequence: 7 });
+  assert.equal(isSyncMutationApplied(recorded, { clientId: 'desktop-a', sequence: 7 }), true);
+  assert.equal(isSyncMutationApplied(recorded, { clientId: 'desktop-a', sequence: 8 }), false);
+  assert.equal(isSyncMutationApplied(recorded, { clientId: 'desktop-b', sequence: 7 }), false);
+  assert.deepEqual(recorded, { 'other-client': 4, 'desktop-a': 7 });
+});
+
+test('sync mutation metadata ignores malformed cloud values', () => {
+  const malformed = { 'desktop-a': '999', short: 5, 'desktop-valid': -2 } as unknown as Record<string, number>;
+  assert.equal(isSyncMutationApplied(malformed, { clientId: 'desktop-a', sequence: 1 }), false);
+  assert.deepEqual(recordSyncMutation(malformed, { clientId: 'desktop-new', sequence: 3 }), { 'desktop-new': 3 });
+});
+
+test('cloud payload guard leaves headroom below the Firestore document limit', () => {
+  const valid = { text: 'ж'.repeat(100) };
+  assert.ok(cloudPayloadSizeBytes(valid) > 100, 'size must be measured as UTF-8 bytes');
+  assert.doesNotThrow(() => assertCloudPayloadWithinLimit(valid));
+  assert.throws(
+    () => assertCloudPayloadWithinLimit({ text: 'x'.repeat(MAX_CLOUD_PAYLOAD_BYTES) }),
+    { name: 'CloudWorkspaceTooLargeError' },
+  );
 });

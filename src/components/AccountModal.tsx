@@ -13,6 +13,7 @@ import {
   ShieldCheck, 
   CheckCircle2, 
   AlertCircle,
+  WifiOff,
   Database,
   History
 } from 'lucide-react';
@@ -52,6 +53,8 @@ interface AccountModalProps {
   isSyncing: boolean;
   lastSyncTime: number | null;
   autoSyncEnabled: boolean;
+  syncStatus: 'idle' | 'pending' | 'syncing' | 'synced' | 'offline' | 'error';
+  syncError: string | null;
   onClose: () => void;
   onLoginWithGoogle: () => Promise<void>;
   onLogout: () => Promise<void>;
@@ -68,6 +71,8 @@ export const AccountModal: React.FC<AccountModalProps> = ({
   isSyncing,
   lastSyncTime,
   autoSyncEnabled,
+  syncStatus,
+  syncError,
   onClose,
   onLoginWithGoogle,
   onLogout,
@@ -249,6 +254,15 @@ export const AccountModal: React.FC<AccountModalProps> = ({
     });
   };
 
+  const syncStatusView = {
+    idle: { color: 'text-neutral-400', dot: 'bg-neutral-500', label: lang === 'uk' ? 'Очікування змін' : 'Waiting for changes' },
+    pending: { color: 'text-amber-300', dot: 'bg-amber-400', label: lang === 'uk' ? 'Є невідправлені зміни' : 'Changes waiting to sync' },
+    syncing: { color: 'text-sky-300', dot: 'bg-sky-400 animate-pulse', label: lang === 'uk' ? 'Синхронізація…' : 'Syncing…' },
+    synced: { color: 'text-emerald-400', dot: 'bg-emerald-400', label: lang === 'uk' ? 'Синхронізовано' : 'Synced' },
+    offline: { color: 'text-amber-300', dot: 'bg-amber-400', label: lang === 'uk' ? 'Офлайн · зміни збережено локально' : 'Offline · changes saved locally' },
+    error: { color: 'text-rose-400', dot: 'bg-rose-400', label: lang === 'uk' ? 'Помилка синхронізації' : 'Sync error' },
+  }[syncStatus];
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       {/* Backdrop */}
@@ -363,15 +377,21 @@ export const AccountModal: React.FC<AccountModalProps> = ({
                   </button>
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-neutral-800 bg-neutral-950/50 px-4 py-3 text-xs">
-                  <span className={`flex items-center gap-2 ${autoSyncEnabled ? 'text-emerald-400' : 'text-neutral-400'}`}>
-                    <span className={`h-1.5 w-1.5 ${autoSyncEnabled ? 'bg-emerald-400' : 'bg-neutral-500'}`} />
-                    {autoSyncEnabled ? (lang === 'uk' ? 'Увімкнено · реальний час' : 'On · real time') : acc.autoSyncOff}
+                  <span className={`flex items-center gap-2 ${autoSyncEnabled ? syncStatusView.color : 'text-neutral-400'}`} title={syncError || undefined}>
+                    {syncStatus === 'offline' ? <WifiOff className="h-3.5 w-3.5" /> : <span className={`h-1.5 w-1.5 ${autoSyncEnabled ? syncStatusView.dot : 'bg-neutral-500'}`} />}
+                    {autoSyncEnabled ? syncStatusView.label : acc.autoSyncOff}
                   </span>
                   <span className="flex items-center gap-1.5 text-neutral-400" aria-live="polite">
                     <History className="h-3 w-3 shrink-0" />
                     <span>{acc.lastSynced} <span className="text-neutral-200">{formatLastSync(lastSyncTime)}</span></span>
                   </span>
                 </div>
+                {syncError && (syncStatus === 'error' || syncStatus === 'offline') && (
+                  <div className="flex items-start gap-2 border-t border-rose-950 bg-rose-950/20 px-4 py-2.5 text-[10px] leading-relaxed text-rose-300" role="status">
+                    <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
+                    <span>{syncError}</span>
+                  </div>
+                )}
               </section>
 
               {cloudData && (
@@ -447,7 +467,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
                   />
                 </svg>
                 <span>{authLoading
-                  ? window.electronAPI?.isElectron
+                  ? window.karkasDesktop?.isDesktop
                     ? (lang === 'uk' ? 'ОЧІКУЄМО ВХІД У БРАУЗЕРІ…' : 'WAITING FOR BROWSER SIGN-IN…')
                     : (lang === 'uk' ? 'ПІДКЛЮЧЕННЯ...' : 'CONNECTING...')
                   : acc.signInWithGoogle}</span>

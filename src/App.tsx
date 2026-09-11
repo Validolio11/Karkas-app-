@@ -28,12 +28,19 @@ import {
   saveUserCloudData, 
   fetchUserCloudData, 
   subscribeToUserCloudData,
+  advanceUserCloudShadowMigration,
+  verifyUserCloudShadowData,
+  repairUserCloudShadowData,
   UserCloudState 
 } from './services/firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { AccountModal } from './components/AccountModal';
 import { UpdateModal } from './components/UpdateModal';
+import { SettingsModal } from './components/SettingsModal';
 import { mergeWorkspace, sameWorkspace, type WorkspaceState } from './utils/syncState';
+import { diffWorkspaceOperations } from './utils/syncOperations';
+import { karkasApiFetch } from './utils/desktopApi';
+import { sanitizeTasksTimerSafeguard } from './utils/taskOperations';
 
 const STORAGE_KEY = 'life_todo_tasks_v2';
 const DELETED_STORAGE_KEY = 'karkas_deleted_tasks_v2';
@@ -44,8 +51,11 @@ const FIRE_ENABLED_KEY = 'karkas_fire_enabled';
 const SOUND_ENABLED_KEY = 'karkas_sound_enabled';
 const LAST_SYNC_KEY = 'karkas_last_sync_time';
 const AUTO_SYNC_KEY = 'karkas_auto_sync_enabled';
+const APP_ZOOM_KEY = 'karkas_app_zoom_percent';
+const MIN_APP_ZOOM = 75;
+const MAX_APP_ZOOM = 150;
+const DEFAULT_APP_ZOOM = 100;
 const APP_CURRENT_VERSION = '1.2.10';
-
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 
 function normalizeVersion(version: string): number[] {
@@ -71,27 +81,12 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-function sanitizeTasksTimerSafeguard(taskList: PSTask[]): PSTask[] {
-  const now = Date.now();
-  const todayStr = new Date(now).toDateString();
-  return taskList.map((t) => {
-    if (t.timerRunning && t.timerStartedAt) {
-      const elapsedMs = now - t.timerStartedAt;
-      const startedDateStr = new Date(t.timerStartedAt).toDateString();
-      if (elapsedMs > TWO_HOURS_MS) {
-        // Forgot to turn off timer! Auto-pause and cap session time at max 2 hours (7200s)
-        const cappedSeconds = Math.min(Math.floor(elapsedMs / 1000), 7200);
-        return {
-          ...t,
-          timeSpentSeconds: (t.timeSpentSeconds || 0) + cappedSeconds,
-          timerRunning: false,
-          timerStartedAt: undefined,
-          autoPausedOverdue: true,
-        };
-      }
-    }
-    return t;
-  });
+function normalizeAppZoom(value: unknown): number {
+  if (value === null || value === undefined || value === '') return DEFAULT_APP_ZOOM;
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return DEFAULT_APP_ZOOM;
+  const clamped = Math.min(MAX_APP_ZOOM, Math.max(MIN_APP_ZOOM, numericValue));
+  return Math.round(clamped / 5) * 5;
 }
 
 export default function App() {
@@ -215,13 +210,62 @@ export default function App() {
   const [isManageTabsOpen, setIsManageTabsOpen] = useState(false);
   const [isAccountOpen, setIsAccountOpen] = useState(false);
   const [isUpdateOpen, setIsUpdateOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [launchAtStartup, setLaunchAtStartup] = useState(false);
+  const [desktopPreferencesReady, setDesktopPreferencesReady] = useState(() => !window.karkasDesktop);
+  const [appZoomPercent, setAppZoomPercent] = useState(() => {
+    if (typeof window === 'undefined') return DEFAULT_APP_ZOOM;
+    try {
+      return normalizeAppZoom(localStorage.getItem(APP_ZOOM_KEY));
+    } catch {
+      return DEFAULT_APP_ZOOM;
+    }
+  });
   const [availableNewRelease, setAvailableNewRelease] = useState<{ tag_name: string; name?: string } | null>(null);
+
+  useEffect(() => {
+    const desktop = window.karkasDesktop;
+    if (!desktop) return;
+    let active = true;
+    Promise.all([desktop.preferences.get(), desktop.system.getStartupEnabled()]).then(([preferences, startup]) => {
+      if (!active) return;
+      if (preferences.ok && preferences.value.zoomPercent != null) {
+        setAppZoomPercent(normalizeAppZoom(preferences.value.zoomPercent));
+      }
+      if (startup.ok) setLaunchAtStartup(startup.value);
+      setDesktopPreferencesReady(true);
+    }).catch(() => setDesktopPreferencesReady(true));
+    const unsubscribe = desktop.window.onCommand((command) => {
+      if (command === 'new-task') setIsAddOpen(true);
+      if (command === 'open-settings') setIsSettingsOpen(true);
+    });
+    return () => { active = false; unsubscribe(); };
+  }, []);
+
+  useEffect(() => {
+    if (window.karkasDesktop && !desktopPreferencesReady) return;
+    const normalizedZoom = normalizeAppZoom(appZoomPercent);
+    try {
+      localStorage.setItem(APP_ZOOM_KEY, String(normalizedZoom));
+    } catch (error) {
+      console.error('Failed to save app zoom', error);
+    }
+
+    const zoomFactor = normalizedZoom / 100;
+    if (window.karkasDesktop) {
+      document.documentElement.style.zoom = '';
+      window.karkasDesktop.window.setZoomFactor(zoomFactor);
+      void window.karkasDesktop.preferences.update({ zoomPercent: normalizedZoom });
+    } else {
+      document.documentElement.style.zoom = String(zoomFactor);
+    }
+  }, [appZoomPercent, desktopPreferencesReady]);
 
   // Background automated version analyzer: checks if a newer version exists
   useEffect(() => {
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch('/api/check-update');
+        const res = await karkasApiFetch('/api/check-update');
         if (res.ok) {
           const data = await res.json();
           if (data && data.tag_name) {
@@ -274,6 +318,7 @@ export default function App() {
         else if (isAccountOpen) setIsAccountOpen(false);
         else if (isManageTabsOpen) setIsManageTabsOpen(false);
         else if (isUpdateOpen) setIsUpdateOpen(false);
+        else if (isSettingsOpen) setIsSettingsOpen(false);
         else if (isAddOpen) setIsAddOpen(false);
         else if (isWindowMinimized) setIsWindowMinimized(false);
         else if (searchQuery) setSearchQuery('');
@@ -309,7 +354,7 @@ export default function App() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isAIOpen, isAccountOpen, isManageTabsOpen, isUpdateOpen, isAddOpen, isWindowMinimized, searchQuery]);
+  }, [isAIOpen, isAccountOpen, isManageTabsOpen, isUpdateOpen, isSettingsOpen, isAddOpen, isWindowMinimized, searchQuery]);
 
   const handleToggleFullscreen = () => {
     sound.tick(500);
@@ -361,7 +406,7 @@ export default function App() {
       const customModel = localStorage.getItem('karkas_custom_model') || '';
       const customEnabled = localStorage.getItem('karkas_custom_ai_enabled') === 'true';
 
-      const res = await fetch('/api/ai/breakdown-task', {
+      const res = await karkasApiFetch('/api/ai/breakdown-task', {
         method: 'POST',
         signal: requestController.signal,
         headers: { 'Content-Type': 'application/json' },
@@ -494,6 +539,14 @@ export default function App() {
     }
     return null;
   });
+  const lastSyncTimeRef = React.useRef(lastSyncTime);
+  lastSyncTimeRef.current = lastSyncTime;
+  const updateLastSyncTime = (value: number | null) => {
+    lastSyncTimeRef.current = value;
+    setLastSyncTime(value);
+    if (value === null) localStorage.removeItem(LAST_SYNC_KEY);
+    else localStorage.setItem(LAST_SYNC_KEY, String(value));
+  };
   const [autoSyncEnabled, setAutoSyncEnabled] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       try {
@@ -507,6 +560,11 @@ export default function App() {
   });
   const [cloudData, setCloudData] = useState<UserCloudState | null>(null);
   const [isCloudSyncReady, setIsCloudSyncReady] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'pending' | 'syncing' | 'synced' | 'offline' | 'error'>(
+    () => navigator.onLine ? 'idle' : 'offline',
+  );
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [nextSyncRetryAt, setNextSyncRetryAt] = useState<number | null>(null);
 
   const cloudSyncReadyRef = React.useRef(false);
 
@@ -623,6 +681,7 @@ export default function App() {
 
   // Account snapshots retain unsent edits across reloads and sign-out.
   const workspaceOwnerRef = React.useRef<string | null>(localStorage.getItem('karkas_workspace_owner'));
+  const desktopWorkspaceReadyRef = React.useRef(!window.karkasDesktop);
   const baseWorkspaceRef = React.useRef<(WorkspaceState & { revision?: number }) | null>(undefined);
   if (baseWorkspaceRef.current === undefined) {
     try {
@@ -648,9 +707,15 @@ export default function App() {
     },
   });
   const persistWorkspace = () => {
-    localStorage.setItem(accountKey(workspaceOwnerRef.current), JSON.stringify({
-      workspace: readWorkspace(), base: baseWorkspaceRef.current,
-    }));
+    const record = {
+      workspace: readWorkspace(),
+      base: baseWorkspaceRef.current,
+      lastSyncTime: lastSyncTimeRef.current,
+    };
+    localStorage.setItem(accountKey(workspaceOwnerRef.current), JSON.stringify(record));
+    if (desktopWorkspaceReadyRef.current && window.karkasDesktop) {
+      void window.karkasDesktop.workspace.saveAccount({ ownerId: workspaceOwnerRef.current, record });
+    }
   };
   const applyWorkspace = (value: WorkspaceState) => {
     currentTasksRef.current = value.tasks;
@@ -691,11 +756,22 @@ export default function App() {
       setIsCloudSyncReady(false);
       setCurrentUser(user);
       setCloudData(null);
-      setLastSyncTime(null);
+      updateLastSyncTime(null);
+      setSyncError(null);
+      setSyncStatus(user ? (navigator.onLine ? 'syncing' : 'offline') : 'idle');
       try {
         const previousOwner = workspaceOwnerRef.current;
         const cachedText = localStorage.getItem(accountKey(uid));
-        const cached = cachedText ? JSON.parse(cachedText) : null;
+        let cached = cachedText ? JSON.parse(cachedText) : null;
+        if (window.karkasDesktop) {
+          const desktopCached = await window.karkasDesktop.workspace.loadAccount(uid);
+          if (generation !== authGenerationRef.current || (auth.currentUser?.uid ?? null) !== uid) return;
+          if (desktopCached.ok && desktopCached.value) cached = desktopCached.value;
+          const activeOwner = await window.karkasDesktop.workspace.setActiveOwner(uid);
+          if ('error' in activeOwner) throw new Error(activeOwner.error.message);
+          if (generation !== authGenerationRef.current || (auth.currentUser?.uid ?? null) !== uid) return;
+          desktopWorkspaceReadyRef.current = true;
+        }
         if (previousOwner !== uid) {
           persistWorkspace();
           setRecentlyDeleted(null);
@@ -709,6 +785,13 @@ export default function App() {
         if (uid) localStorage.setItem('karkas_workspace_owner', uid);
         else localStorage.removeItem('karkas_workspace_owner');
         baseWorkspaceRef.current = cached?.base || null;
+        updateLastSyncTime(typeof cached?.lastSyncTime === 'number' ? cached.lastSyncTime : null);
+        if (cached?.inFlightSync || cached?.pendingSync) {
+          const pending = cached.inFlightSync || cached.pendingSync;
+          setNextSyncRetryAt(pending?.nextAttemptAt ?? null);
+          setSyncError(pending?.lastError || null);
+          setSyncStatus(navigator.onLine ? 'pending' : 'offline');
+        }
         if (cached?.workspace) {
           applyWorkspace(cached.workspace);
         } else if (previousOwner !== uid && previousOwner !== null) {
@@ -716,28 +799,57 @@ export default function App() {
             tasks: [], tabs: [], deletedTasks: [],
             settings: { soundEnabled: true, fireEnabled: true, lang: 'uk', aiIconVariant: 'quantum' },
           });
+        } else {
+          persistWorkspace();
         }
         if (!user) return;
         setIsSyncing(true);
         const data = await fetchUserCloudData(user.uid);
         if (generation !== authGenerationRef.current || auth.currentUser?.uid !== user.uid) return;
         if (data) {
-          if ((data.revision || 0) < (baseWorkspaceRef.current?.revision || 0)) return;
-          if (cached?.workspace && !autoSyncEnabledRef.current) {
-            setCloudData(data);
+          if (data.shadowStatus === 'deferred' || data.shadowStatus === 'migrating') {
+            void advanceUserCloudShadowMigration(user.uid).catch((error) =>
+              console.warn('Cloud schema migration will resume later:', error));
+          }
+          if (data.shadowStatus === 'ready' && data.shadowRevision === data.revision) {
+            void verifyUserCloudShadowData(user.uid, data).then((valid) => {
+              if (!valid) {
+                console.warn('Cloud schema v2 shadow does not match the legacy workspace; scheduling repair.');
+                void repairUserCloudShadowData(user.uid, data.revision || 0).catch((error) =>
+                  console.warn('Cloud schema v2 repair will resume later:', error));
+              }
+            });
+          }
+          if ((data.revision || 0) < (baseWorkspaceRef.current?.revision || 0)) {
+            setSyncStatus(navigator.onLine ? 'pending' : 'offline');
             return;
           }
-          const merged = mergeWorkspace(baseWorkspaceRef.current, readWorkspace(), data);
+          if (cached?.workspace && !autoSyncEnabledRef.current) {
+            setCloudData(data);
+            setSyncStatus(cached?.inFlightSync || cached?.pendingSync ? (navigator.onLine ? 'pending' : 'offline') : 'idle');
+            return;
+          }
+          const merged = mergeWorkspace(baseWorkspaceRef.current, readWorkspace(), data, {
+            preferRemoteSettingsOnFirstSync: !cached?.workspace,
+          });
           baseWorkspaceRef.current = data;
           applyWorkspace(merged);
           setCloudData(data);
-          setLastSyncTime(data.updatedAt);
-          localStorage.setItem(LAST_SYNC_KEY, String(data.updatedAt));
+          if (sameWorkspace(merged, data)) {
+            updateLastSyncTime(data.updatedAt);
+            setSyncStatus('synced');
+          } else {
+            setSyncStatus(navigator.onLine ? 'pending' : 'offline');
+          }
         } else {
           persistWorkspace();
+          setSyncStatus(navigator.onLine ? 'pending' : 'offline');
         }
       } catch (error) {
+        if (generation !== authGenerationRef.current || (auth.currentUser?.uid ?? null) !== uid) return;
         console.error('Cloud initialization failed; local account data retained:', error);
+        setSyncError(error instanceof Error ? error.message : 'Cloud initialization failed');
+        setSyncStatus(navigator.onLine ? 'error' : 'offline');
       } finally {
         if (generation === authGenerationRef.current) {
           cloudSyncReadyRef.current = Boolean(user);
@@ -761,28 +873,110 @@ export default function App() {
       }
       const merged = mergeWorkspace(baseWorkspaceRef.current, readWorkspace(), remote);
       baseWorkspaceRef.current = remote;
+      const hasPendingLocalChanges = !sameWorkspace(merged, remote);
       if (!sameWorkspace(readWorkspace(), merged)) applyWorkspace(merged);
       else persistWorkspace();
       setCloudData(remote);
-      setLastSyncTime(remote.updatedAt);
-    }, (error) => console.warn('Cloud listener failed; local data retained:', error));
+      setSyncError(null);
+      if (hasPendingLocalChanges) setSyncStatus(navigator.onLine ? 'pending' : 'offline');
+      else {
+        updateLastSyncTime(remote.updatedAt);
+        setSyncStatus('synced');
+      }
+    }, (error) => {
+      console.warn('Cloud listener failed; local data retained:', error);
+      setSyncError(error.message);
+      setSyncStatus(navigator.onLine ? 'error' : 'offline');
+    });
   }, [currentUser, autoSyncEnabled, isCloudSyncReady]);
 
-  const performAutoSave = React.useCallback(async (manual = false) => {
+  const stagingRef = React.useRef<Promise<void>>(Promise.resolve());
+  const stageCurrentDesktopSync = async (
+    ownerId = workspaceOwnerRef.current,
+    workspace = readWorkspace(),
+    base = baseWorkspaceRef.current,
+  ) => {
+    const desktop = window.karkasDesktop;
+    if (!desktop || !ownerId) return null;
+    if (base && sameWorkspace(base, workspace)) return null;
+    const previous = stagingRef.current.catch(() => undefined);
+    let resolveResult: (value: DesktopPendingSync | null) => void;
+    let rejectResult: (error: unknown) => void;
+    const resultPromise = new Promise<DesktopPendingSync | null>((resolve, reject) => {
+      resolveResult = resolve;
+      rejectResult = reject;
+    });
+    stagingRef.current = previous.then(async () => {
+      const result = await desktop.workspace.stageSync({
+        ownerId,
+        workspace,
+        base,
+        ...(base ? { operations: diffWorkspaceOperations(base, workspace) } : {}),
+      });
+      if ('error' in result) throw new Error(result.error.message);
+      resolveResult(result.value);
+    }).catch((error) => {
+      rejectResult(error);
+    });
+    return resultPromise;
+  };
+
+  const runAutoSave = React.useCallback(async (manual = false): Promise<boolean> => {
     const uid = currentUser?.uid;
+    const generation = authGenerationRef.current;
     if (!uid || auth.currentUser?.uid !== uid || workspaceOwnerRef.current !== uid ||
         !cloudSyncReadyRef.current || (!manual && !autoSyncEnabledRef.current) || savingRef.current !== null) {
       if (manual) throw new Error('Synchronization is not ready or already in progress');
-      return;
+      return false;
     }
-    const submitted = readWorkspace();
+    try {
+      await stageCurrentDesktopSync(uid, readWorkspace(), baseWorkspaceRef.current);
+    } catch (error) {
+      if (generation === authGenerationRef.current && auth.currentUser?.uid === uid) {
+        setSyncError(error instanceof Error ? error.message : 'Could not queue local changes');
+        setSyncStatus('error');
+      }
+      throw error;
+    }
+    if (generation !== authGenerationRef.current || auth.currentUser?.uid !== uid) return false;
+    if (!navigator.onLine) {
+      setSyncStatus('offline');
+      if (manual) throw new Error('No network connection');
+      return false;
+    }
+    let submitted = readWorkspace();
+    let submittedBase = baseWorkspaceRef.current;
+    let mutation: { clientId: string; sequence: number } | undefined;
+    let mutationId: string | null = null;
+    if (window.karkasDesktop) {
+      const claimed = await window.karkasDesktop.workspace.claimSync(uid, manual);
+      if (generation !== authGenerationRef.current || auth.currentUser?.uid !== uid) return false;
+      if ('error' in claimed) {
+        setSyncError(claimed.error.message);
+        setSyncStatus('error');
+        throw new Error(claimed.error.message);
+      }
+      if (!claimed.value) {
+        if (!baseWorkspaceRef.current || !sameWorkspace(baseWorkspaceRef.current, submitted)) setSyncStatus('pending');
+        return false;
+      }
+      submitted = claimed.value.workspace;
+      submittedBase = claimed.value.base || null;
+      mutation = { clientId: claimed.value.clientId, sequence: claimed.value.sequence };
+      mutationId = claimed.value.mutationId;
+    }
     persistWorkspace();
-    if (baseWorkspaceRef.current && sameWorkspace(baseWorkspaceRef.current, submitted)) return;
-    const generation = authGenerationRef.current;
+    if (!mutationId && baseWorkspaceRef.current && sameWorkspace(baseWorkspaceRef.current, submitted)) {
+      setSyncError(null);
+      setSyncStatus('synced');
+      return false;
+    }
     savingRef.current = generation;
     setIsSyncing(true);
+    setSyncError(null);
+    setSyncStatus('syncing');
     try {
-      const saved = await saveUserCloudData(uid, submitted, baseWorkspaceRef.current);
+      const saved = await saveUserCloudData(uid, submitted, submittedBase, mutation);
       if (generation !== authGenerationRef.current || auth.currentUser?.uid !== uid) return;
       // Keep edits made while the transaction was in flight.
       const queued = queuedRemoteRef.current;
@@ -790,10 +984,35 @@ export default function App() {
       const latest = queued && (queued.revision || 0) > (saved.revision || 0) ? queued : saved;
       const merged = mergeWorkspace(submitted, readWorkspace(), latest);
       baseWorkspaceRef.current = latest;
+      let remainingPending: DesktopPendingSync | null = null;
+      if (window.karkasDesktop && mutationId) {
+        const acknowledged = await window.karkasDesktop.workspace.acknowledgeSync({
+          ownerId: uid, mutationId, base: latest, lastSyncTime: latest.updatedAt,
+        });
+        if ('error' in acknowledged) throw new Error(acknowledged.error.message);
+        if (!acknowledged.value.acknowledged) throw new Error('Stale sync acknowledgement rejected');
+        remainingPending = acknowledged.value.pending;
+      }
       applyWorkspace(merged);
       setCloudData(latest);
-      setLastSyncTime(latest.updatedAt);
-      localStorage.setItem(LAST_SYNC_KEY, String(latest.updatedAt));
+      updateLastSyncTime(latest.updatedAt);
+      setNextSyncRetryAt(remainingPending?.nextAttemptAt ?? null);
+      setSyncStatus(remainingPending ? 'pending' : 'synced');
+      return Boolean(remainingPending);
+    } catch (error) {
+      if (window.karkasDesktop && mutationId && generation === authGenerationRef.current) {
+        const failed = await window.karkasDesktop.workspace.markSyncFailed({
+          ownerId: uid,
+          mutationId,
+          message: error instanceof Error ? error.message : 'Cloud save failed',
+        });
+        if (failed.ok) setNextSyncRetryAt(failed.value?.nextAttemptAt ?? null);
+      }
+      if (generation === authGenerationRef.current && auth.currentUser?.uid === uid) {
+        setSyncError(error instanceof Error ? error.message : 'Cloud save failed');
+        setSyncStatus(navigator.onLine ? 'error' : 'offline');
+      }
+      throw error;
     } finally {
       if (generation === authGenerationRef.current) {
         savingRef.current = null;
@@ -810,6 +1029,50 @@ export default function App() {
     }
   }, [currentUser]);
 
+  const syncDrainPromiseRef = React.useRef<Promise<void> | null>(null);
+  const performAutoSave = React.useCallback((manual = false): Promise<void> => {
+    if (syncDrainPromiseRef.current) {
+      const activeDrain = syncDrainPromiseRef.current;
+      // A manual request means "everything is synced", even if it arrived while
+      // a background drain was only sending the first coalesced mutation.
+      return manual ? activeDrain.then(() => performAutoSave(true)) : Promise.resolve();
+    }
+    const drain = (async () => {
+      let hasMore = false;
+      do {
+        hasMore = await runAutoSave(manual);
+      } while (manual && hasMore);
+    })();
+    syncDrainPromiseRef.current = drain;
+    void drain.finally(() => {
+      if (syncDrainPromiseRef.current === drain) syncDrainPromiseRef.current = null;
+    }).catch(() => undefined);
+    return drain;
+  }, [runAutoSave]);
+
+  useEffect(() => {
+    if (!currentUser || !isCloudSyncReady) return;
+    if (baseWorkspaceRef.current && sameWorkspace(baseWorkspaceRef.current, readWorkspace())) return;
+    setSyncStatus(navigator.onLine ? 'pending' : 'offline');
+    const generation = authGenerationRef.current;
+    const uid = currentUser.uid;
+    stageCurrentDesktopSync(uid, readWorkspace(), baseWorkspaceRef.current).catch((error) => {
+      if (generation !== authGenerationRef.current || auth.currentUser?.uid !== uid) return;
+      setSyncError(error instanceof Error ? error.message : 'Could not queue local changes');
+      setSyncStatus('error');
+    });
+  }, [currentUser, autoSyncEnabled, isCloudSyncReady, tasks, tabs, deletedTasks,
+      soundEnabled, fireEnabled, lang, aiIconVariant]);
+
+  useEffect(() => {
+    if (!currentUser || !autoSyncEnabled || !isCloudSyncReady || !nextSyncRetryAt || !navigator.onLine) return;
+    const delay = Math.max(0, nextSyncRetryAt - Date.now());
+    const timer = window.setTimeout(() => {
+      performAutoSave().catch((error) => console.error('Scheduled cloud retry failed:', error));
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [currentUser, autoSyncEnabled, isCloudSyncReady, nextSyncRetryAt, performAutoSave]);
+
   useEffect(() => {
     if (!currentUser || !autoSyncEnabled || !isCloudSyncReady) return;
     const timer = setTimeout(() => {
@@ -823,16 +1086,23 @@ export default function App() {
     const flushLocal = () => {
       try { persistWorkspace(); } catch (error) { console.error('Local backup failed:', error); }
     };
-    const retry = () => performAutoSave().catch((error) => console.error('Cloud retry failed:', error));
+    const retry = () => {
+      if (!auth.currentUser || !autoSyncEnabledRef.current) return;
+      setSyncStatus('pending');
+      performAutoSave().catch((error) => console.error('Cloud retry failed:', error));
+    };
+    const offline = () => setSyncStatus(auth.currentUser && autoSyncEnabledRef.current ? 'offline' : 'idle');
     const hidden = () => { if (document.visibilityState === 'hidden') { flushLocal(); void retry(); } };
     window.addEventListener('pagehide', flushLocal);
     window.addEventListener('beforeunload', flushLocal);
     window.addEventListener('online', retry);
+    window.addEventListener('offline', offline);
     document.addEventListener('visibilitychange', hidden);
     return () => {
       window.removeEventListener('pagehide', flushLocal);
       window.removeEventListener('beforeunload', flushLocal);
       window.removeEventListener('online', retry);
+      window.removeEventListener('offline', offline);
       document.removeEventListener('visibilitychange', hidden);
     };
   }, [performAutoSave]);
@@ -842,6 +1112,7 @@ export default function App() {
     autoSyncEnabledRef.current = next;
     setAutoSyncEnabled(next);
     localStorage.setItem(AUTO_SYNC_KEY, String(next));
+    setSyncStatus(next ? (navigator.onLine ? 'pending' : 'offline') : 'idle');
   };
 
   const handleLoginWithGoogle = async () => { await loginWithGoogle(); };
@@ -867,10 +1138,23 @@ export default function App() {
       if (!data) throw new Error('No cloud backup exists');
       // Retain a recovery copy before an explicitly requested restore.
       localStorage.setItem(accountKey(uid) + ':before-restore', JSON.stringify(readWorkspace()));
+      if (window.karkasDesktop) {
+        const recovery = await window.karkasDesktop.workspace.createRecoveryPoint(uid);
+        if ('error' in recovery) throw new Error(recovery.error.message);
+        const replaced = await window.karkasDesktop.workspace.replaceWithCloud({
+          ownerId: uid,
+          workspace: data,
+          lastSyncTime: data.updatedAt,
+        });
+        if ('error' in replaced) throw new Error(replaced.error.message);
+      }
       baseWorkspaceRef.current = data;
       applyWorkspace(data);
       setCloudData(data);
-      setLastSyncTime(data.updatedAt);
+      updateLastSyncTime(data.updatedAt);
+      setNextSyncRetryAt(null);
+      setSyncError(null);
+      setSyncStatus('synced');
     } finally {
       if (generation === authGenerationRef.current) {
         savingRef.current = null;
@@ -1448,11 +1732,27 @@ export default function App() {
   };
 
   const handleInjectAITasks = (
-    newTasks: Omit<PSTask, 'id' | 'currentStep' | 'done' | 'pinned' | 'createdAt'>[]
+    newTasks: Omit<PSTask, 'id' | 'currentStep' | 'done' | 'pinned' | 'createdAt'>[],
+    requestedTabs: TaskTab[] = [],
   ) => {
+    const knownIds = new Set(tabs.map((tab) => tab.id));
+    const knownNames = new Set(tabs.map((tab) => tab.name.trim().toLocaleLowerCase()));
+    const tabsToAdd: TaskTab[] = [];
+    for (const requestedTab of requestedTabs) {
+      const name = typeof requestedTab?.name === 'string' ? requestedTab.name.trim().slice(0, 32) : '';
+      const id = typeof requestedTab?.id === 'string' ? requestedTab.id.trim().slice(0, 40) : '';
+      if (!name || !id || knownIds.has(id) || knownNames.has(name.toLocaleLowerCase())) continue;
+      knownIds.add(id);
+      knownNames.add(name.toLocaleLowerCase());
+      tabsToAdd.push({ id, name, color: requestedTab.color || getRandomTabColor([...tabs, ...tabsToAdd]) });
+    }
+    const availableTabIds = new Set([...tabs.map((tab) => tab.id), ...tabsToAdd.map((tab) => tab.id)]);
+    if (tabsToAdd.length > 0) {
+      setTabs((previous) => [...previous, ...tabsToAdd]);
+    }
     const items: PSTask[] = newTasks.map((t, i) => {
       let phase = t.phase;
-      if (phase === 'DASHBOARD' || phase === 'ALL' || !tabs.some((tb) => tb.id === phase)) {
+      if (phase === 'DASHBOARD' || phase === 'ALL' || !availableTabIds.has(phase)) {
         phase = tabs[0]?.id || 'focus';
       }
       const stepCount = t.stepList && t.stepList.length > 0 ? t.stepList.length : (t.steps || 1);
@@ -1468,7 +1768,8 @@ export default function App() {
         createdAt: Date.now() + i,
       };
     });
-    setTasks((prev) => [...items, ...prev]);
+    if (items.length > 0) setTasks((prev) => [...items, ...prev]);
+    if (tabsToAdd.length > 0 && items.length === 0) setSelectedPhase(tabsToAdd[0].id);
   };
 
   const handleClearCompleted = () => {
@@ -1513,6 +1814,8 @@ export default function App() {
         user={currentUser}
         isSyncing={isSyncing}
         autoSyncEnabled={autoSyncEnabled}
+        syncStatus={syncStatus}
+        syncError={syncError}
         isMinimized={isWindowMinimized}
         isFullscreen={isFullscreen}
         onMinimize={handleMinimizeWindow}
@@ -1531,6 +1834,7 @@ export default function App() {
         onDeleteTab={handleDeleteTab}
         onOpenManageTabs={() => setIsManageTabsOpen(true)}
         onOpenAccount={() => setIsAccountOpen(true)}
+        onOpenSettings={() => setIsSettingsOpen(true)}
       />
 
       {/* Minimized Window Taskbar Floating Notification */}
@@ -1902,6 +2206,7 @@ export default function App() {
         adaptiveProfile={adaptiveProfile}
         initialPrompt={aiPromptSeed}
         aiIconVariant={aiIconVariant}
+        accountId={currentUser?.uid ?? null}
         onInjectTasks={handleInjectAITasks}
       />
 
@@ -1940,6 +2245,23 @@ export default function App() {
         onClose={() => setIsUpdateOpen(false)}
         lang={lang}
         currentVersion={APP_CURRENT_VERSION}
+      />
+
+      {/* Device-local application settings */}
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        lang={lang}
+        zoomPercent={appZoomPercent}
+        minZoom={MIN_APP_ZOOM}
+        maxZoom={MAX_APP_ZOOM}
+        defaultZoom={DEFAULT_APP_ZOOM}
+        launchAtStartup={launchAtStartup}
+        onLaunchAtStartupChange={async (enabled) => {
+          const result = await window.karkasDesktop?.system.setStartupEnabled(enabled);
+          setLaunchAtStartup(result?.ok ? result.value : enabled);
+        }}
+        onZoomChange={(value) => setAppZoomPercent(normalizeAppZoom(value))}
+        onClose={() => setIsSettingsOpen(false)}
       />
 
       {/* Automated Update Detection Prompt Banner */}

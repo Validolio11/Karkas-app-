@@ -19,7 +19,19 @@ import {
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { PSTask, TaskTab, DeletedTask } from '../types';
-import { mergeWorkspace, type WorkspaceState } from '../utils/syncState';
+import { assertCloudPayloadWithinLimit, isSyncMutationApplied, mergeWorkspace, recordSyncMutation, sameWorkspace, type SyncMutationIdentity, type WorkspaceState } from '../utils/syncState';
+import {
+  buildCloudShadowPlan,
+  encodeCloudEntityDocumentId,
+  materializeCloudShadow,
+  pageCloudShadowPlan,
+  parseCloudShadowManifest,
+  type CloudShadowManifest,
+  type CloudShadowPlan,
+  type CloudShadowStoredSettings,
+  type CloudShadowStoredTab,
+  type CloudShadowStoredTask,
+} from '../utils/cloudShadow';
 
 // Initialize Firebase App instance safely
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
@@ -66,13 +78,135 @@ export interface UserCloudState {
   };
   updatedAt: number;
   revision?: number;
+  syncClients?: Record<string, number>;
+  shadowSchemaVersion?: 2 | null;
+  shadowRevision?: number | null;
+  shadowStatus?: 'ready' | 'migrating' | 'deferred';
+}
+
+function emptyWorkspace(settings: WorkspaceState['settings']): WorkspaceState & { revision: number } {
+  return { tasks: [], tabs: [], deletedTasks: [], settings, revision: 0 };
+}
+
+function writeCloudShadow(
+  transaction: Parameters<Parameters<typeof runTransaction>[1]>[0],
+  userId: string,
+  plan: CloudShadowPlan,
+  updatedAt: number,
+  mutation?: SyncMutationIdentity,
+  writeManifest = true,
+) {
+  const mutationMetadata = mutation ? { clientId: mutation.clientId, sequence: mutation.sequence } : null;
+  for (const write of plan.taskWrites) {
+    transaction.set(doc(db, 'users', userId, 'tasks', write.documentId), sanitizeForFirestore({
+      id: write.id,
+      lifecycle: write.lifecycle,
+      ...(write.value ? { value: write.value } : {}),
+      revision: plan.manifest.revision,
+      updatedAt,
+      ...(mutationMetadata ? { lastMutation: mutationMetadata } : {}),
+    }));
+  }
+  for (const write of plan.tabWrites) {
+    transaction.set(doc(db, 'users', userId, 'tabs', write.documentId), sanitizeForFirestore({
+      id: write.id,
+      lifecycle: write.lifecycle,
+      ...(write.value ? { value: write.value } : {}),
+      revision: plan.manifest.revision,
+      updatedAt,
+      ...(mutationMetadata ? { lastMutation: mutationMetadata } : {}),
+    }));
+  }
+  if (plan.settings) {
+    transaction.set(doc(db, 'users', userId, 'workspace', 'settings'), sanitizeForFirestore({
+      value: plan.settings,
+      revision: plan.manifest.revision,
+      updatedAt,
+      ...(mutationMetadata ? { lastMutation: mutationMetadata } : {}),
+    }));
+  }
+  if (writeManifest) {
+    transaction.set(doc(db, 'users', userId, 'workspace', 'manifest'), sanitizeForFirestore({
+      ...plan.manifest,
+      updatedAt,
+    }));
+  }
+}
+
+export async function advanceUserCloudShadowMigration(userId: string, maxBatches = 4): Promise<boolean> {
+  if (!Number.isSafeInteger(maxBatches) || maxBatches < 1 || maxBatches > 25) {
+    throw new Error('Cloud shadow migration batch limit is invalid');
+  }
+  const currentUser = auth.currentUser;
+  if (!currentUser || currentUser.uid !== userId) throw new Error('User is not authorized to migrate cloud data');
+
+  for (let batch = 0; batch < maxBatches; batch += 1) {
+    const complete = await runTransaction(db, async (transaction) => {
+      const rootRef = doc(db, 'users', userId);
+      const manifestRef = doc(db, 'users', userId, 'workspace', 'manifest');
+      const checkpointRef = doc(db, 'users', userId, 'workspace', 'migration');
+      const rootSnapshot = await transaction.get(rootRef);
+      if (!rootSnapshot.exists()) return true;
+      const root = rootSnapshot.data() as UserCloudState;
+      const revision = Number(root.revision) || 0;
+      if (revision < 1) throw new Error('Cloud workspace revision is invalid');
+      const manifestSnapshot = await transaction.get(manifestRef);
+      const checkpointSnapshot = await transaction.get(checkpointRef);
+      const previousManifest = manifestSnapshot.exists() ? manifestSnapshot.data() as CloudShadowManifest : null;
+      if (root.shadowStatus === 'ready' && root.shadowSchemaVersion === 2 &&
+          root.shadowRevision === revision && previousManifest?.revision === revision) return true;
+
+      const plan = buildCloudShadowPlan(previousManifest, root, root, revision, {
+        maxWrites: Number.MAX_SAFE_INTEGER,
+      });
+      const checkpoint = checkpointSnapshot.exists() ? checkpointSnapshot.data() : null;
+      const planEntryCount = plan.taskWrites.length + plan.tabWrites.length + (plan.settings ? 1 : 0);
+      const checkpointCursor = checkpoint?.targetRevision === revision && Number.isSafeInteger(checkpoint?.cursor) &&
+        checkpoint.cursor >= 0 && checkpoint.cursor <= planEntryCount ? checkpoint.cursor : 0;
+      const cursor = checkpointCursor;
+      const page = pageCloudShadowPlan(plan, cursor, 400);
+      writeCloudShadow(transaction, userId, {
+        ...plan,
+        taskWrites: page.taskWrites,
+        tabWrites: page.tabWrites,
+        settings: page.settings,
+      }, Date.now(), undefined, false);
+
+      if (page.complete) {
+        transaction.set(manifestRef, sanitizeForFirestore({ ...plan.manifest, updatedAt: Date.now() }));
+        transaction.set(rootRef, {
+          userId,
+          shadowStatus: 'ready',
+          shadowSchemaVersion: 2,
+          shadowRevision: revision,
+        }, { merge: true });
+        transaction.delete(checkpointRef);
+        return true;
+      }
+      transaction.set(checkpointRef, {
+        targetRevision: revision,
+        cursor: page.nextCursor,
+        updatedAt: Date.now(),
+      });
+      transaction.set(rootRef, {
+        userId,
+        shadowStatus: 'migrating',
+        shadowSchemaVersion: null,
+        shadowRevision: null,
+      }, { merge: true });
+      return false;
+    });
+    if (complete) return true;
+  }
+  return false;
 }
 
 // Sign in with Google Popup
 export async function loginWithGoogle(): Promise<User> {
-  if (window.electronAPI?.isElectron) {
-    if (!window.electronAPI.loginWithGoogle) throw new Error('Перезапустіть застосунок, щоб увімкнути вхід у браузері.');
-    const result = await window.electronAPI.loginWithGoogle();
+  if (window.karkasDesktop?.isDesktop) {
+    const desktopResult = await window.karkasDesktop.auth.loginWithGoogle();
+    if ('error' in desktopResult) throw new Error(desktopResult.error.message);
+    const result = desktopResult.value;
     if (!result.success) throw new Error(result.error || 'Не вдалося відкрити вхід у браузері.');
     const credential = GoogleAuthProvider.credential(result.idToken, result.accessToken);
     return (await signInWithCredential(auth, credential)).user;
@@ -129,6 +263,7 @@ export async function saveUserCloudData(
   userId: string,
   data: WorkspaceState,
   base: WorkspaceState | null = null,
+  mutation?: SyncMutationIdentity,
 ): Promise<UserCloudState> {
   const currentUser = auth.currentUser;
   if (!currentUser || currentUser.uid !== userId) {
@@ -136,11 +271,43 @@ export async function saveUserCloudData(
   }
 
   const userDocRef = doc(db, 'users', userId);
-  return runTransaction(db, async (transaction) => {
+  const saved = await runTransaction(db, async (transaction) => {
   const snapshot = await transaction.get(userDocRef);
+  const existing = snapshot.exists() ? snapshot.data() as UserCloudState : null;
+  let syncClientRef: ReturnType<typeof doc> | null = null;
+  if (mutation) {
+    if (!/^[a-zA-Z0-9_-]{8,80}$/.test(mutation.clientId) || !Number.isSafeInteger(mutation.sequence) || mutation.sequence < 1) {
+      throw new Error('Invalid sync mutation identity');
+    }
+    syncClientRef = doc(db, 'users', userId, 'syncClients', mutation.clientId);
+    const syncClientSnapshot = await transaction.get(syncClientRef);
+    const durableSequence = syncClientSnapshot.exists() ? syncClientSnapshot.data().lastSequence : null;
+    const durableApplied = Number.isSafeInteger(durableSequence) && durableSequence >= mutation.sequence;
+    const legacyApplied = isSyncMutationApplied(existing?.syncClients, mutation);
+    if (durableApplied || legacyApplied) {
+      if (!existing) throw new Error('Sync watermark exists without a cloud workspace');
+      if (!durableApplied) {
+        transaction.set(syncClientRef, {
+          clientId: mutation.clientId,
+          lastSequence: mutation.sequence,
+          updatedAt: Date.now(),
+        }, { merge: true });
+      }
+      return existing;
+    }
+  }
+  const shadowManifestRef = doc(db, 'users', userId, 'workspace', 'manifest');
+  const shadowManifestSnapshot = await transaction.get(shadowManifestRef);
+  const previousShadowManifest = shadowManifestSnapshot.exists()
+    ? shadowManifestSnapshot.data() as CloudShadowManifest
+    : null;
   const merged = snapshot.exists()
-    ? mergeWorkspace(base, data, snapshot.data() as UserCloudState)
+    ? mergeWorkspace(base, data, existing!)
     : data;
+  const syncClients = mutation
+    ? recordSyncMutation(existing?.syncClients, mutation)
+    : { ...(existing?.syncClients || {}) };
+  const nextRevision = (Number(snapshot.data()?.revision) || 0) + 1;
   const rawPayload = {
     userId,
     email: currentUser.email ?? null,
@@ -216,13 +383,57 @@ export async function saveUserCloudData(
       aiIconVariant: merged.settings?.aiIconVariant || 'quantum',
     },
     updatedAt: Date.now(),
-    revision: (Number(snapshot.data()?.revision) || 0) + 1,
+    revision: nextRevision,
+    syncClients,
   };
 
-  const cleanPayload = sanitizeForFirestore(rawPayload);
+  const cleanPayload = sanitizeForFirestore(rawPayload) as UserCloudState;
+  let shadowPlan: CloudShadowPlan | null = null;
+  try {
+    // Plan from the exact normalized payload written to v1, so shadow values
+    // can be verified byte-for-byte before the eventual schema cutover.
+    shadowPlan = buildCloudShadowPlan(
+      previousShadowManifest,
+      existing ?? emptyWorkspace(cleanPayload.settings),
+      cleanPayload,
+      nextRevision,
+    );
+  } catch (error) {
+    // Legacy v1 remains authoritative until the shadow is verified and cut over.
+    // A very large first migration is deferred instead of blocking user sync.
+    console.warn('Cloud schema v2 shadow write deferred:', error instanceof Error ? error.message : 'invalid shadow plan');
+  }
+  cleanPayload.shadowStatus = shadowPlan ? 'ready' : 'deferred';
+  if (shadowPlan) {
+    cleanPayload.shadowSchemaVersion = 2;
+    cleanPayload.shadowRevision = nextRevision;
+  } else {
+    // Never leave a stale revision looking eligible for schema-v2 reads.
+    cleanPayload.shadowSchemaVersion = null;
+    cleanPayload.shadowRevision = null;
+  }
+  // Firestore documents have a hard 1 MiB limit. Leave headroom for field names
+  // and wire-format overhead so users get a clear, recoverable sync error first.
+  assertCloudPayloadWithinLimit(cleanPayload);
+  if (shadowPlan) writeCloudShadow(transaction, userId, shadowPlan, cleanPayload.updatedAt, mutation);
+  if (mutation && syncClientRef) {
+    transaction.set(syncClientRef, {
+      clientId: mutation.clientId,
+      lastSequence: mutation.sequence,
+      updatedAt: cleanPayload.updatedAt,
+    });
+  }
   transaction.set(userDocRef, cleanPayload, { merge: true });
-  return cleanPayload as UserCloudState;
+  return cleanPayload;
   });
+  if (saved.shadowStatus === 'deferred') {
+    try {
+      await advanceUserCloudShadowMigration(userId);
+    } catch (error) {
+      console.warn('Cloud schema v2 background migration paused:', error instanceof Error ? error.message : 'migration failed');
+    }
+  }
+  return saved;
 }
 
 // Load user data from Firestore
@@ -233,6 +444,69 @@ export async function fetchUserCloudData(userId: string): Promise<UserCloudState
     return snapshot.data() as UserCloudState;
   }
   return null;
+}
+
+async function getServerDocumentsInBatches(references: ReturnType<typeof doc>[]) {
+  const snapshots = [];
+  for (let index = 0; index < references.length; index += 50) {
+    snapshots.push(...await Promise.all(references.slice(index, index + 50).map((reference) => getDocFromServer(reference))));
+  }
+  return snapshots;
+}
+
+export async function fetchUserCloudShadowData(userId: string, expectedRevision: number): Promise<WorkspaceState> {
+  const manifestSnapshot = await getDocFromServer(doc(db, 'users', userId, 'workspace', 'manifest'));
+  if (!manifestSnapshot.exists()) throw new Error('Cloud shadow manifest is missing');
+  const manifest = parseCloudShadowManifest(manifestSnapshot.data());
+  if (manifest.revision !== expectedRevision) throw new Error('Cloud shadow manifest revision is stale');
+
+  const [taskSnapshots, tabSnapshots, settingsSnapshot] = await Promise.all([
+    getServerDocumentsInBatches(manifest.tasks.map((entry) =>
+      doc(db, 'users', userId, 'tasks', encodeCloudEntityDocumentId(entry.id)))),
+    getServerDocumentsInBatches(manifest.tabs.map((entry) =>
+      doc(db, 'users', userId, 'tabs', encodeCloudEntityDocumentId(entry.id)))),
+    getDocFromServer(doc(db, 'users', userId, 'workspace', 'settings')),
+  ]);
+  if (!settingsSnapshot.exists()) throw new Error('Cloud shadow settings are missing');
+  const taskDocuments = taskSnapshots.map((snapshot) => ({
+    ...(snapshot.exists() ? snapshot.data() : {}),
+    documentId: snapshot.id,
+  })) as CloudShadowStoredTask[];
+  const tabDocuments = tabSnapshots.map((snapshot) => ({
+    ...(snapshot.exists() ? snapshot.data() : {}),
+    documentId: snapshot.id,
+  })) as CloudShadowStoredTab[];
+  const settingsDocument = settingsSnapshot.data() as CloudShadowStoredSettings;
+  return materializeCloudShadow(manifest, taskDocuments, tabDocuments, settingsDocument);
+}
+
+export async function verifyUserCloudShadowData(userId: string, legacy: UserCloudState): Promise<boolean> {
+  if (legacy.shadowStatus !== 'ready' || legacy.shadowSchemaVersion !== 2 ||
+      legacy.shadowRevision !== legacy.revision) return false;
+  try {
+    return sameWorkspace(await fetchUserCloudShadowData(userId, legacy.revision || 0), legacy);
+  } catch (error) {
+    console.warn('Cloud schema v2 verification failed:', error instanceof Error ? error.message : 'invalid shadow data');
+    return false;
+  }
+}
+
+export async function repairUserCloudShadowData(userId: string, expectedRevision: number): Promise<boolean> {
+  const currentUser = auth.currentUser;
+  if (!currentUser || currentUser.uid !== userId) throw new Error('User is not authorized to repair cloud data');
+  const invalidated = await runTransaction(db, async (transaction) => {
+    const rootRef = doc(db, 'users', userId);
+    const snapshot = await transaction.get(rootRef);
+    if (!snapshot.exists() || (Number(snapshot.data().revision) || 0) !== expectedRevision) return false;
+    transaction.set(rootRef, {
+      userId,
+      shadowStatus: 'deferred',
+      shadowSchemaVersion: null,
+      shadowRevision: null,
+    }, { merge: true });
+    return true;
+  });
+  return invalidated ? advanceUserCloudShadowMigration(userId) : false;
 }
 
 // Real-time listener for user data

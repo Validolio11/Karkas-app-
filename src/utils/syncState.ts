@@ -1,6 +1,56 @@
 import type { UserCloudState } from '../services/firebase';
+import { applyWorkspaceMutation, diffWorkspaceMutation } from './syncOperations';
 
 export type WorkspaceState = Pick<UserCloudState, 'tasks' | 'tabs' | 'deletedTasks' | 'settings'>;
+
+export interface MergeWorkspaceOptions {
+  /** A new device has no account baseline, so its UI defaults are not user edits. */
+  preferRemoteSettingsOnFirstSync?: boolean;
+}
+
+export interface SyncMutationIdentity {
+  clientId: string;
+  sequence: number;
+}
+
+export const MAX_CLOUD_PAYLOAD_BYTES = 900 * 1024;
+
+export function cloudPayloadSizeBytes(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}
+
+export function assertCloudPayloadWithinLimit(value: unknown): void {
+  const bytes = cloudPayloadSizeBytes(value);
+  if (bytes > MAX_CLOUD_PAYLOAD_BYTES) {
+    const error = new Error(`Cloud workspace is too large to sync (${Math.ceil(bytes / 1024)} KiB).`);
+    error.name = 'CloudWorkspaceTooLargeError';
+    throw error;
+  }
+}
+
+export function isSyncMutationApplied(
+  syncClients: Record<string, number> | undefined,
+  mutation: SyncMutationIdentity,
+): boolean {
+  const appliedSequence = syncClients?.[mutation.clientId];
+  return typeof appliedSequence === 'number' && Number.isSafeInteger(appliedSequence) && appliedSequence >= mutation.sequence;
+}
+
+export function recordSyncMutation(
+  syncClients: Record<string, number> | undefined,
+  mutation: SyncMutationIdentity,
+): Record<string, number> {
+  const next = Object.fromEntries(Object.entries(syncClients || {}).filter(([clientId, sequence]) =>
+    /^[a-zA-Z0-9_-]{8,80}$/.test(clientId) && Number.isSafeInteger(sequence) && sequence > 0,
+  ));
+  delete next[mutation.clientId];
+  next[mutation.clientId] = mutation.sequence;
+  const overflow = Object.keys(next).length - 64;
+  if (overflow > 0) {
+    for (const clientId of Object.keys(next).slice(0, overflow)) delete next[clientId];
+  }
+  return next;
+}
 
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
@@ -16,45 +66,21 @@ export function sameWorkspace(left: WorkspaceState, right: WorkspaceState): bool
     .every((key) => canonical(left[key]) === canonical(right[key]));
 }
 
-function mergeFields<T extends object>(base: T | undefined, local: T, remote: T): T {
-  const result = { ...remote };
-  for (const key of new Set([...Object.keys(base ?? {}), ...Object.keys(local)])) {
-    const field = key as keyof T;
-    if (!base || canonical(local[field]) !== canonical(base[field])) {
-      if (local[field] === undefined) delete result[field];
-      else result[field] = local[field];
-    }
-  }
-  return result;
-}
-
-function mergeEntities<T extends { id: string }>(base: T[] | undefined, local: T[], remote: T[]): T[] {
-  const baseline = new Map((base ?? []).map((item) => [item.id, item]));
-  const localItems = new Map(local.map((item) => [item.id, item]));
-  const result = new Map(remote.map((item) => [item.id, item]));
-  for (const [id, original] of baseline) {
-    const current = localItems.get(id);
-    if (!current) result.delete(id);
-    else if (canonical(current) !== canonical(original)) {
-      result.set(id, mergeFields(original, current, result.get(id) ?? original));
-    }
-  }
-  for (const [id, current] of localItems) {
-    if (!baseline.has(id)) result.set(id, mergeFields(undefined, current, result.get(id) ?? current));
-  }
-  return [...result.values()];
-}
-
 /** Replay only local edits since the last acknowledged cloud state onto fresh remote data. */
 export function mergeWorkspace(
   base: WorkspaceState | null,
   local: WorkspaceState,
   remote: WorkspaceState,
+  options: MergeWorkspaceOptions = {},
 ): WorkspaceState {
-  return {
-    tasks: mergeEntities(base?.tasks, local.tasks ?? [], remote.tasks ?? []),
-    tabs: mergeEntities(base?.tabs, local.tabs ?? [], remote.tabs ?? []),
-    deletedTasks: mergeEntities(base?.deletedTasks, local.deletedTasks ?? [], remote.deletedTasks ?? []),
-    settings: mergeFields(base?.settings, local.settings, remote.settings),
+  const baseline: WorkspaceState = base ?? {
+    tasks: [],
+    tabs: [],
+    deletedTasks: [],
+    // On a first sync, using the local settings as the baseline emits no
+    // settings operation and therefore preserves the remote device settings.
+    settings: options.preferRemoteSettingsOnFirstSync ? local.settings : remote.settings,
   };
+  const mutation = diffWorkspaceMutation(baseline, local, { clientId: 'merge-local', sequence: 1 }, 0);
+  return applyWorkspaceMutation(remote, mutation);
 }

@@ -5,7 +5,7 @@
   "description": "Karkas Application",
   "author": "Melychyn",
   "type": "module",
-  "main": "dist/server.cjs",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "tsx server.ts",
     "electron": "electron electron/main.cjs",
@@ -14,6 +14,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
+    "test": "node --import tsx --test electron/*.test.cjs src/utils/*.test.ts server/*.test.ts",
     "build:win": "npm run build && electron-builder --win --x64 --publish never"
   },
   "build": {

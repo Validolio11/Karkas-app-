@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Download, CheckCircle2, X, RefreshCw, HardDrive, ShieldCheck, Sparkles, ArrowRight } from 'lucide-react';
 import { sound } from '../utils/audio';
+import { karkasApiFetch } from '../utils/desktopApi';
 
 interface ReleaseAsset {
   name: string;
@@ -79,7 +80,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
 
     const fetchLatestSilently = async () => {
       try {
-        const proxyRes = await fetch('/api/check-update');
+        const proxyRes = await karkasApiFetch('/api/check-update');
         if (proxyRes.ok) {
           const data = await proxyRes.json();
           if (isMounted && data && data.tag_name) {
@@ -94,6 +95,12 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
         }
       } catch {
         // Fallback to direct github query
+      }
+
+      // Desktop networking belongs to the main-process update service.
+      if (window.karkasDesktop) {
+        if (isMounted) setIsChecking(false);
+        return;
       }
 
       try {
@@ -158,7 +165,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
     if (progressTimerRef.current) clearInterval(progressTimerRef.current);
 
     // If running in desktop Electron environment, use native silent auto-updater
-    if (window.electronAPI?.downloadAndInstallUpdate) {
+    if (window.karkasDesktop) {
       const totalTarget = totalMb || 58.4;
       let currentPct = 0;
 
@@ -174,7 +181,8 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
       }, 100);
 
       try {
-        await window.electronAPI.downloadAndInstallUpdate(downloadUrl, fileName);
+        const result = await window.karkasDesktop.updates.downloadAndInstall({ url: downloadUrl, fileName });
+        if ('error' in result) throw new Error(result.error.message);
         if (progressTimerRef.current) clearInterval(progressTimerRef.current);
         setInstallProgress(100);
         setDownloadedMb(totalTarget);

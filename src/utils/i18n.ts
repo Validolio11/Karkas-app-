@@ -2,6 +2,33 @@ import { PSTask, TaskTab } from '../types';
 
 export type Language = 'uk' | 'en';
 
+export const SETTINGS_TRANSLATIONS = {
+  uk: {
+    title: 'НАЛАШТУВАННЯ ЗАСТОСУНКУ',
+    subtitle: 'Налаштуйте розмір інтерфейсу під свій екран.',
+    scale: 'Масштаб інтерфейсу',
+    decrease: 'Зменшити масштаб',
+    increase: 'Збільшити масштаб',
+    reset: 'Скинути до 100%',
+    close: 'Закрити налаштування',
+    savedLocally: 'Зберігається на цьому пристрої',
+    startup: 'Запускати разом із Windows',
+    startupDescription: 'Karkas відкриється після входу в систему.',
+  },
+  en: {
+    title: 'APP SETTINGS',
+    subtitle: 'Adjust the interface size for your display.',
+    scale: 'Interface scale',
+    decrease: 'Decrease scale',
+    increase: 'Increase scale',
+    reset: 'Reset to 100%',
+    close: 'Close settings',
+    savedLocally: 'Saved on this device',
+    startup: 'Launch with Windows',
+    startupDescription: 'Open Karkas after you sign in.',
+  },
+} as const;
+
 export const TRANSLATIONS = {
   uk: {
     appTitle: 'KARKAS',

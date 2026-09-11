@@ -7,6 +7,9 @@ import { X, CornerDownLeft, Plus, CheckCircle2, ListTree, Sparkles, Activity, La
 import { AIIcon, AIIconId } from './AIIconTemplates';
 import { shouldVerifyAsApiKey } from '../utils/apiKey';
 import { verifyApiKey, keyVerificationMessage } from '../utils/verifyApiKey';
+import { desktopHasAiKey, karkasApiFetch } from '../utils/desktopApi';
+import { loadAIChatHistory, saveAIChatHistory } from '../services/chatHistory';
+import type { PersistedAIChatMessage } from '../services/chatHistory';
 
 interface AIAssistantSheetProps {
   isOpen: boolean;
@@ -19,7 +22,11 @@ interface AIAssistantSheetProps {
   adaptiveProfile?: AdaptiveProfile;
   initialPrompt?: string;
   aiIconVariant?: AIIconId;
-  onInjectTasks: (newTasks: Omit<PSTask, 'id' | 'currentStep' | 'done' | 'pinned' | 'createdAt'>[]) => void;
+  onInjectTasks: (
+    newTasks: Omit<PSTask, 'id' | 'currentStep' | 'done' | 'pinned' | 'createdAt'>[],
+    newTabs?: TaskTab[],
+  ) => void;
+  accountId?: string | null;
 }
 
 type AIMode = 'chat' | 'breakdown' | 'analyze' | 'generate';
@@ -64,6 +71,7 @@ interface AIResponse {
     note?: string;
     reason?: string;
   }[];
+  tabs?: TaskTab[];
   source: string;
 }
 
@@ -84,6 +92,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   initialPrompt = '',
   aiIconVariant,
   onInjectTasks,
+  accountId = null,
 }) => {
   const t = TRANSLATIONS[lang];
   const presets = lang === 'uk' ? AI_PRESETS_UK : AI_PRESETS_EN;
@@ -134,8 +143,11 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   const [mode, setMode] = useState<AIMode>('chat');
   const [loading, setLoading] = useState(false);
   const [response, setResponse] = useState<AIResponse | null>(null);
-  const [chatMessages, setChatMessages] = useState<AIChatMessage[]>([]);
+  const [chatMessages, setChatMessages] = useState<AIChatMessage[]>(() => loadAIChatHistory(accountId));
+  const hydratedAccountRef = useRef(accountId);
+  const skipPersistRef = useRef(false);
   const [pendingChatTasks, setPendingChatTasks] = useState<AIResponse['tasks'] | null>(null);
+  const [pendingChatTabs, setPendingChatTabs] = useState<TaskTab[]>([]);
   const [awaitingApiKey, setAwaitingApiKey] = useState(false);
   const [keyStatus, setKeyStatus] = useState<string | null>(null);
   const pendingRequest = useRef<{ text: string; mode: AIMode } | null>(null);
@@ -160,7 +172,42 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       : storedModel;
   });
 
+  // Keep the conversation available after reloads and separate it per signed-in account.
   useEffect(() => {
+    if (hydratedAccountRef.current === accountId) return;
+    hydratedAccountRef.current = accountId;
+    skipPersistRef.current = true;
+    setChatMessages(loadAIChatHistory(accountId));
+  }, [accountId]);
+
+  useEffect(() => {
+    if (skipPersistRef.current) {
+      skipPersistRef.current = false;
+      return;
+    }
+    saveAIChatHistory(accountId, chatMessages as PersistedAIChatMessage[]);
+  }, [accountId, chatMessages]);
+
+  useEffect(() => {
+    if (window.karkasDesktop) {
+      let active = true;
+      Promise.all([desktopHasAiKey(), window.karkasDesktop.preferences.get()]).then(([hasKey, preferences]) => {
+        if (!active || !hasKey) return;
+        const storedModels = preferences.ok ? preferences.value.karkas_available_models : null;
+        const parsedModels = typeof storedModels === 'string' ? JSON.parse(storedModels) : storedModels;
+        const models = Array.isArray(parsedModels) ? parsedModels.filter((model): model is string => typeof model === 'string' && isChatModel(model)) : [];
+        const preferred = preferences.ok && typeof preferences.value.karkas_custom_model === 'string'
+          ? preferences.value.karkas_custom_model : '';
+        if (models.length) {
+          setAvailableModels(models);
+          setCustomModel(models.includes(preferred) ? preferred : models[0]);
+        }
+        localStorage.setItem('karkas_custom_ai_enabled', 'true');
+        setAwaitingApiKey(false);
+        awaitingKeyRef.current = false;
+      }).catch(() => undefined);
+      return () => { active = false; };
+    }
     const apiKey = localStorage.getItem('karkas_custom_api_key') || '';
     if (!apiKey) return;
 
@@ -185,9 +232,9 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   useEffect(() => () => verificationController.current?.abort(), []);
 
   const confirmChatTasks = () => {
-    if (!pendingChatTasks?.length) return;
+    if (!pendingChatTasks?.length && !pendingChatTabs.length) return;
 
-    const tasks = pendingChatTasks.map((task) => {
+    const tasks = (pendingChatTasks || []).map((task) => {
       const stepItems = task.stepList?.map((step, index) => ({
         id: `s-chat-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`,
         title: typeof step === 'string' ? step : step.title,
@@ -204,8 +251,9 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       };
     });
 
-    onInjectTasks(tasks);
+    onInjectTasks(tasks, pendingChatTabs);
     setPendingChatTasks(null);
+    setPendingChatTabs([]);
     setChatMessages((previous) => [
       ...previous,
       {
@@ -219,6 +267,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   const activeCount = currentTasks.filter((t) => !t.done).length;
   const completedCount = currentTasks.filter((t) => t.done).length;
   const deletedCount = deletedTasks.length;
+  const pendingChangeCount = (pendingChatTasks?.length || 0) + pendingChatTabs.length;
 
   // Sync initialPrompt
   useEffect(() => {
@@ -245,7 +294,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     if (requestInFlight.current) return;
 
     const savedApiKey = localStorage.getItem('karkas_custom_api_key') || '';
-    const customAiEnabled = localStorage.getItem('karkas_custom_ai_enabled') === 'true';
+    const desktopKeyAvailable = window.karkasDesktop ? await desktopHasAiKey() : false;
+    const customAiEnabled = desktopKeyAvailable || localStorage.getItem('karkas_custom_ai_enabled') === 'true';
 
     if (!resuming && shouldVerifyAsApiKey(requestText, awaitingKeyRef.current, queryText === undefined)) {
       requestInFlight.current = true;
@@ -262,10 +312,17 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
         const nextModel = models.includes('gemini-3.1-flash-lite')
           ? 'gemini-3.1-flash-lite'
           : models[0];
-        localStorage.setItem('karkas_custom_api_key', requestText.trim());
+        if (!window.karkasDesktop) localStorage.setItem('karkas_custom_api_key', requestText.trim());
         localStorage.setItem('karkas_custom_ai_enabled', 'true');
         localStorage.setItem('karkas_custom_model', nextModel);
         localStorage.setItem('karkas_available_models', JSON.stringify(models));
+        if (window.karkasDesktop) {
+          void window.karkasDesktop.preferences.update({
+            karkas_custom_ai_enabled: 'true',
+            karkas_custom_model: nextModel,
+            karkas_available_models: JSON.stringify(models),
+          });
+        }
         setAvailableModels(models);
         setCustomModel(nextModel);
         setAwaitingApiKey(false);
@@ -289,7 +346,9 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       return;
     }
 
-    if (!savedApiKey || !customAiEnabled) {
+    // The server may have its own Gemini key and also has a useful local rule-based
+    // fallback, so do not block analysis or planning when a device key is absent.
+    if (awaitingKeyRef.current && !resuming && ((!savedApiKey && !desktopKeyAvailable) || !customAiEnabled)) {
       setPrompt('');
       setAwaitingApiKey(true);
       awaitingKeyRef.current = true;
@@ -330,6 +389,12 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       /\b(додай|додати|створи|створити|запиши|записати|add|create|make)\b/i.test(requestText) ||
       /роз[іи]б|підзадач|break\s+down|subtasks?/i.test(requestText)
     );
+    // JavaScript's \b only recognizes Latin word characters. The legacy matcher
+    // above therefore misses commands such as “додай задачу” and “створи вкладку”.
+    const isWorkspaceMutationRequest = currentMode === 'chat' && (
+      /(?:додай|додати|створи|створити|запиши|записати|розбий|розбити|підзадач|вкладк|категорі|add|create|make|break\s+down|subtasks?)/iu.test(requestText)
+    );
+    const isTabMutationRequest = /(?:вкладк|категорі|tab|category)/iu.test(requestText);
 
     const activeList = currentTasks.filter((t) => !t.done);
     const doneList = currentTasks.filter((t) => t.done);
@@ -341,18 +406,19 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
 
       const controller = new AbortController();
       const requestTimeout = window.setTimeout(() => controller.abort(), 30000);
-      const res = await fetch('/api/ai/assist', {
+      const res = await karkasApiFetch('/api/ai/assist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
         body: JSON.stringify({
           prompt: requestText,
-          action: isTaskMutationRequest ? 'generate' : currentMode === 'chat' ? 'chat' : currentMode === 'analyze' ? 'analyze' : currentMode === 'generate' ? 'generate' : 'breakdown',
+          action: isWorkspaceMutationRequest ? 'generate' : currentMode === 'chat' ? 'chat' : currentMode === 'analyze' ? 'analyze' : currentMode === 'generate' ? 'generate' : 'breakdown',
           lang,
           tabs: tabs.map((tb) => tb.id),
           adaptiveProfile,
           currentTasks,
           conversation: currentMode === 'chat' ? chatMessages : undefined,
+          allowNewTabs: isTabMutationRequest,
           customApiKey: customEnabled ? customKey : undefined,
           selectedModel: customEnabled ? (storedModel || customModel) : undefined,
           fullAppContext: {
@@ -394,15 +460,16 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       if (!res.ok) throw new Error('API request failed');
       const data: AIResponse & { reply?: string } = await res.json();
       if (currentMode === 'chat') {
-        if (isTaskMutationRequest && Array.isArray(data.tasks) && data.tasks.length > 0) {
-          setPendingChatTasks(data.tasks);
+        if (isWorkspaceMutationRequest && (data.tasks?.length || data.tabs?.length)) {
+          setPendingChatTasks(data.tasks || []);
+          setPendingChatTabs(data.tabs || []);
         }
 
         setChatMessages((previous) => [
           ...previous,
           {
             role: 'assistant',
-            content: isTaskMutationRequest && data.tasks?.length
+            content: isWorkspaceMutationRequest && (data.tasks?.length || data.tabs?.length)
               ? `${data.summary || 'Готово.'}\n\nПідтвердити створення ${data.tasks.length} задач кнопкою нижче.`
               : data.reply || data.summary,
           },
@@ -495,7 +562,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   };
 
   const handleInjectAll = () => {
-    if (!response || !response.tasks.length) return;
+    if (!response || (!response.tasks.length && !response.tabs?.length)) return;
     sound.activate();
 
     const formattedTasks = response.tasks.map((task) => {
@@ -517,7 +584,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       };
     });
 
-    onInjectTasks(formattedTasks);
+    onInjectTasks(formattedTasks, response.tabs || []);
     setInjectedIds(response.tasks.map((_, i) => i));
     setTimeout(() => {
       onClose();
@@ -543,7 +610,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
         stepList: stepItems,
         note: task.note,
       },
-    ]);
+    ], response?.tabs || []);
     setInjectedIds((prev) => [...prev, index]);
   };
 
@@ -739,7 +806,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                       })()}
                     </div>
                   ))}
-                  {pendingChatTasks && !loading && (
+                  {pendingChangeCount > 0 && !loading && (
                     <button
                       type="button"
                       onClick={confirmChatTasks}
@@ -747,7 +814,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                     >
                       {lang === 'uk'
                         ? `Підтвердити створення (${pendingChatTasks.length})`
-                        : `Confirm creation (${pendingChatTasks.length})`}
+                        : `Confirm creation (${pendingChangeCount})`}
                     </button>
                   )}
                 </div>
@@ -788,14 +855,14 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                       </p>
                     </div>
 
-                    {response.tasks.length > 0 && (
+                    {(response.tasks.length > 0 || response.tabs?.length) && (
                       <button
                         id="ai-inject-all-btn"
                         onClick={handleInjectAll}
                         className="whitespace-nowrap px-3 py-1.5 bg-white text-black font-extrabold text-xs font-mono tracking-wider hover:bg-neutral-200 transition-colors flex items-center gap-1.5 shrink-0"
                       >
                         <Plus className="w-3.5 h-3.5" />
-                        <span>{t.aiSheet.injectAll} ({response.tasks.length})</span>
+                        <span>{t.aiSheet.injectAll} ({response.tasks.length + (response.tabs?.length || 0)})</span>
                       </button>
                     )}
                   </div>
@@ -815,6 +882,19 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                           </li>
                         ))}
                       </ul>
+                    </div>
+                  )}
+
+                  {response.tabs && response.tabs.length > 0 && (
+                    <div className="border border-sky-900/70 bg-sky-950/20 p-3 text-xs font-mono text-sky-200">
+                      <span className="text-[10px] uppercase tracking-wider text-sky-400">
+                        {lang === 'uk' ? 'Нові вкладки' : 'New tabs'}
+                      </span>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {response.tabs.map((tab) => (
+                          <span key={tab.id} className="border border-sky-800 bg-black/30 px-2 py-1">{tab.name}</span>
+                        ))}
+                      </div>
                     </div>
                   )}
 

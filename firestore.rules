@@ -6,23 +6,20 @@ service cloud.firestore {
     }
 
     function isOwner(userId) {
-      return isAuthenticated() && (request.auth.uid == userId || request.auth.token.email == 'Melychyn4@gmail.com');
-    }
-
-    function isSystemOwner() {
-      return isAuthenticated() && request.auth.token.email == 'Melychyn4@gmail.com';
+      return isAuthenticated() && request.auth.uid == userId;
     }
 
     match /users/{userId} {
-      allow read, write: if isOwner(userId) || isSystemOwner();
+      allow read, delete: if isOwner(userId);
+      allow create, update: if isOwner(userId) && request.resource.data.userId == userId;
 
       match /{allSubcollections=**} {
-        allow read, write: if isOwner(userId) || isSystemOwner();
+        allow read, write: if isOwner(userId);
       }
     }
 
     match /{document=**} {
-      allow read, write: if isSystemOwner();
+      allow read, write: if false;
     }
   }
 }

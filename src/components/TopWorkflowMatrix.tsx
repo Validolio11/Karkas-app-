@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { TaskTab, FilterMode, WorkflowStats } from '../types';
 import { sound } from '../utils/audio';
 import { Language, TRANSLATIONS } from '../utils/i18n';
-import { Volume2, VolumeX, ChevronDown, Plus, Globe, Settings2, X, Check, LayoutDashboard, History, Cloud, RefreshCw, Minus, Square, Copy } from 'lucide-react';
+import { Volume2, VolumeX, ChevronDown, Plus, Globe, Settings, Settings2, X, Check, LayoutDashboard, History, Cloud, RefreshCw, Minus, Square, Copy } from 'lucide-react';
 import { AIIcon, AIIconId } from './AIIconTemplates';
 import { User } from 'firebase/auth';
 
@@ -34,6 +34,7 @@ interface TopWorkflowMatrixProps {
   onDeleteTab: (id: string) => void;
   onOpenManageTabs: () => void;
   onOpenAccount: () => void;
+  onOpenSettings: () => void;
 }
 
 const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
@@ -64,6 +65,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
   onDeleteTab,
   onOpenManageTabs,
   onOpenAccount,
+  onOpenSettings,
 }) => {
   const t = TRANSLATIONS[lang];
   const [isInlineAdding, setIsInlineAdding] = useState(false);
@@ -84,8 +86,8 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
 
   const handleElectronMinimize = () => {
     sound.tick(400);
-    if (typeof window !== 'undefined' && (window as any).electronAPI) {
-      (window as any).electronAPI.minimize();
+    if (window.karkasDesktop) {
+      window.karkasDesktop.window.minimize();
     } else if (onMinimize) {
       onMinimize();
     }
@@ -93,8 +95,8 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
 
   const handleElectronMaximize = () => {
     sound.tick(500);
-    if (typeof window !== 'undefined' && (window as any).electronAPI) {
-      (window as any).electronAPI.maximize();
+    if (window.karkasDesktop) {
+      window.karkasDesktop.window.toggleMaximize();
     } else if (onToggleFullscreen) {
       onToggleFullscreen();
     }
@@ -102,8 +104,8 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
 
   const handleElectronClose = () => {
     sound.tick(300);
-    if (typeof window !== 'undefined' && (window as any).electronAPI) {
-      (window as any).electronAPI.close();
+    if (window.karkasDesktop) {
+      window.karkasDesktop.window.hide();
     } else if (onCloseWindow) {
       onCloseWindow();
     }
@@ -215,6 +217,21 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
             className="p-1 border border-neutral-800 text-neutral-400 hover:text-white hover:border-neutral-700 bg-neutral-900 transition-colors shrink-0 app-no-drag"
           >
             {soundEnabled ? <Volume2 className="w-3 h-3" /> : <VolumeX className="w-3 h-3" />}
+          </button>
+
+          {/* App Settings */}
+          <button
+            id="open-settings-modal-btn"
+            type="button"
+            onClick={() => {
+              sound.tick(550);
+              onOpenSettings();
+            }}
+            title={lang === 'uk' ? 'Налаштування застосунку' : 'App settings'}
+            aria-label={lang === 'uk' ? 'Відкрити налаштування застосунку' : 'Open app settings'}
+            className="p-1 border border-neutral-800 text-neutral-400 hover:text-white hover:border-neutral-700 bg-neutral-900 transition-colors shrink-0 app-no-drag"
+          >
+            <Settings className="w-3 h-3" />
           </button>
 
           {/* AI Copilot Summon Button with Dynamic Selected AIIcon */}
@@ -417,7 +434,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
 
             {/* Inline Quick Add Tab Input or Button */}
             {isInlineAdding ? (
-              <form onSubmit={handleInlineAdd} className="flex items-center gap-1 border border-white bg-black px-1 py-0.5 whitespace-nowrap">
+              <form onSubmit={handleInlineAdd} className="flex h-[34px] shrink-0 items-center gap-1 border border-white bg-black px-1 whitespace-nowrap">
                 <input
                   type="text"
                   autoFocus
@@ -451,7 +468,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
                   setIsInlineAdding(true);
                 }}
                 title={lang === 'uk' ? 'Додати нову вкладку' : 'Add new tab'}
-                className="flex items-center gap-1 text-xs font-mono tracking-wider px-2 py-1 border border-dashed border-neutral-700 text-neutral-400 hover:text-white hover:border-white bg-[#09090b]/60 whitespace-nowrap transition-colors"
+                className="flex h-[34px] shrink-0 items-center gap-1.5 px-3 text-xs font-mono tracking-wider border border-dashed border-neutral-700 text-neutral-400 hover:text-white hover:border-white bg-[#09090b]/60 whitespace-nowrap transition-colors cursor-pointer"
               >
                 <Plus className="w-3 h-3" />
                 <span>{t.addTab}</span>
@@ -467,9 +484,9 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
                 onOpenManageTabs();
               }}
               title={t.manageTabs}
-              className="p-1.5 border border-neutral-800 bg-[#09090b] text-neutral-500 hover:text-white hover:border-neutral-600 transition-colors whitespace-nowrap"
+              className="flex h-[34px] w-[34px] shrink-0 items-center justify-center border border-neutral-800 bg-[#09090b] text-neutral-500 hover:text-white hover:border-neutral-600 transition-colors whitespace-nowrap cursor-pointer"
             >
-              <Settings2 className="w-3 h-3" />
+              <Settings2 className="w-3.5 h-3.5" />
             </button>
           </div>
 

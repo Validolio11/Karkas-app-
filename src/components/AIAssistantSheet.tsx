@@ -214,6 +214,9 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     }
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       try {
+        if (mediaRecorderRef.current.state === 'recording') {
+          mediaRecorderRef.current.requestData();
+        }
         mediaRecorderRef.current.stop();
       } catch {}
     }
@@ -281,13 +284,19 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
           const nextPrompt = base ? `${base} ${spoken}` : spoken;
           setPrompt(nextPrompt);
           sound.tick(800);
+        } else {
+          setVoiceNotice(lang === 'uk' ? 'Мовлення не виявлено. Спробуйте ще раз.' : 'No speech detected. Please try again.');
+          sound.tick(300);
         }
       } else {
         const errData = await res.json().catch(() => ({}));
-        console.warn('Transcription service error:', errData);
+        setVoiceNotice(errData.error || (lang === 'uk' ? 'Помилка транскрипції аудіо' : 'Audio transcription failed'));
+        sound.tick(300);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Audio transcription error:', err);
+      setVoiceNotice(lang === 'uk' ? 'Помилка розпізнавання аудіо' : 'Audio recognition error');
+      sound.tick(300);
     } finally {
       setIsTranscribing(false);
     }
@@ -324,8 +333,11 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       recorder.onstop = async () => {
         const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
         audioChunksRef.current = [];
-        if (audioBlob.size > 500) {
+        if (audioBlob.size > 200) {
           await transcribeRecordedAudio(audioBlob);
+        } else {
+          setVoiceNotice(lang === 'uk' ? 'Запис занадто короткий' : 'Recording too short');
+          sound.tick(300);
         }
       };
 
@@ -350,67 +362,64 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     setVoiceNotice(null);
     promptBeforeRecordingRef.current = prompt;
 
-    // Check for native browser Web Speech API first
-    const SpeechRecognition =
-      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const isDesktop = Boolean((window as any).karkasDesktop);
 
-    if (SpeechRecognition) {
-      try {
-        const recognition = new SpeechRecognition();
-        recognition.lang = lang === 'uk' ? 'uk-UA' : 'en-US';
-        recognition.continuous = true;
-        recognition.interimResults = true;
-        recognition.maxAlternatives = 1;
+    // In Electron Desktop, Google Web Speech API is not supported by Chromium.
+    // Use MediaRecorder with Gemini transcription directly.
+    if (!isDesktop) {
+      const SpeechRecognition =
+        (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
-        let accumulatedFinal = '';
+      if (SpeechRecognition) {
+        try {
+          const recognition = new SpeechRecognition();
+          recognition.lang = lang === 'uk' ? 'uk-UA' : 'en-US';
+          recognition.continuous = true;
+          recognition.interimResults = true;
+          recognition.maxAlternatives = 1;
 
-        recognition.onstart = () => {
-          setIsListening(true);
-          sound.tick(750);
-        };
+          let accumulatedFinal = '';
 
-        recognition.onresult = (event: any) => {
-          let currentInterim = '';
-          for (let i = event.resultIndex; i < event.results.length; ++i) {
-            const transcript = event.results[i][0].transcript;
-            if (event.results[i].isFinal) {
-              accumulatedFinal += (accumulatedFinal ? ' ' : '') + transcript.trim();
-            } else {
-              currentInterim += transcript;
+          recognition.onstart = () => {
+            setIsListening(true);
+            sound.tick(750);
+          };
+
+          recognition.onresult = (event: any) => {
+            let currentInterim = '';
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
+              const transcript = event.results[i][0].transcript;
+              if (event.results[i].isFinal) {
+                accumulatedFinal += (accumulatedFinal ? ' ' : '') + transcript.trim();
+              } else {
+                currentInterim += transcript;
+              }
             }
-          }
-          const spoken = (accumulatedFinal + (currentInterim ? ' ' + currentInterim : '')).trim();
-          const base = promptBeforeRecordingRef.current.trim();
-          const nextPrompt = base ? `${base} ${spoken}` : spoken;
-          setPrompt(nextPrompt);
-        };
+            const spoken = (accumulatedFinal + (currentInterim ? ' ' + currentInterim : '')).trim();
+            const base = promptBeforeRecordingRef.current.trim();
+            const nextPrompt = base ? `${base} ${spoken}` : spoken;
+            setPrompt(nextPrompt);
+          };
 
-        recognition.onerror = async (event: any) => {
-          console.warn('SpeechRecognition error:', event.error);
-          if (event.error === 'not-allowed') {
+          recognition.onerror = async (event: any) => {
+            console.warn('SpeechRecognition error, trying MediaRecorder fallback:', event.error);
             stopVoiceInput();
-            setVoiceNotice(t.aiSheet.voicePermissionDenied);
-            sound.tick(300);
-            return;
-          }
-          if (event.error === 'network' || event.error === 'service-not-allowed' || event.error === 'no-speech') {
             if (event.error !== 'no-speech') {
-              stopVoiceInput();
               startMediaRecorderFallback();
             }
-          }
-        };
+          };
 
-        recognition.onend = () => {
-          setIsListening(false);
-          recognitionRef.current = null;
-        };
+          recognition.onend = () => {
+            setIsListening(false);
+            recognitionRef.current = null;
+          };
 
-        recognitionRef.current = recognition;
-        recognition.start();
-        return;
-      } catch (err) {
-        console.warn('SpeechRecognition initialization error, falling back to MediaRecorder:', err);
+          recognitionRef.current = recognition;
+          recognition.start();
+          return;
+        } catch (err) {
+          console.warn('SpeechRecognition initialization error, falling back to MediaRecorder:', err);
+        }
       }
     }
 

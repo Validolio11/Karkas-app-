@@ -95,7 +95,7 @@ const APP_ZOOM_KEY = 'karkas_app_zoom_percent';
 const MIN_APP_ZOOM = 75;
 const MAX_APP_ZOOM = 150;
 const DEFAULT_APP_ZOOM = 100;
-const APP_CURRENT_VERSION = '1.2.12';
+const APP_CURRENT_VERSION = '1.2.13';
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 
 function normalizeVersion(version: string): number[] {
@@ -1986,12 +1986,14 @@ export default function App() {
           id="win-minimized-taskbar-banner"
           className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-[#0d0d12]/95 border border-neutral-700 shadow-2xl px-4 py-2 flex items-center gap-3 backdrop-blur-md animate-in fade-in slide-in-from-bottom-3 duration-200"
         >
-          <div className="grid grid-cols-2 gap-[1.5px] w-3 h-3 text-neutral-300">
-            <div className="w-1.5 h-1.5 bg-neutral-300 rounded-[0.5px]" />
-            <div className="w-1.5 h-1.5 bg-neutral-300 rounded-[0.5px]" />
-            <div className="w-1.5 h-1.5 bg-neutral-300 rounded-[0.5px]" />
-            <div className="w-1.5 h-1.5 bg-neutral-300 rounded-[0.5px]" />
-          </div>
+          <img
+            src="/icon.png"
+            alt="KARKAS Logo"
+            className="w-4 h-4 rounded-[2px] object-cover shrink-0 shadow-sm"
+            onError={(e) => {
+              (e.currentTarget as HTMLElement).style.display = 'none';
+            }}
+          />
           <span className="text-xs font-mono text-neutral-300">
             {t.winTitlebar?.minimizedNotice || 'KARKAS window is minimized. Click to restore.'}
           </span>

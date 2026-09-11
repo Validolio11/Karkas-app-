@@ -172,6 +172,9 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
     }
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       try {
+        if (mediaRecorderRef.current.state === 'recording') {
+          mediaRecorderRef.current.requestData();
+        }
         mediaRecorderRef.current.stop();
       } catch {}
     }
@@ -210,10 +213,19 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
         if (data.text) {
           applyTranscribedText(data.text.trim());
           sound.tick(800);
+        } else {
+          setVoiceNotice(lang === 'uk' ? 'Мовлення не виявлено. Спробуйте ще раз.' : 'No speech detected. Please try again.');
+          sound.tick(300);
         }
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setVoiceNotice(errData.error || (lang === 'uk' ? 'Помилка транскрипції аудіо' : 'Audio transcription error'));
+        sound.tick(300);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Audio transcription error:', err);
+      setVoiceNotice(lang === 'uk' ? 'Помилка розпізнавання аудіо' : 'Audio transcription error');
+      sound.tick(300);
     } finally {
       setIsTranscribing(false);
     }
@@ -233,7 +245,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
 
   const startMediaRecorderFallback = async () => {
     if (!navigator.mediaDevices?.getUserMedia) {
-      setVoiceNotice(lang === 'uk' ? 'Мікрофон не підтримується цим браузером' : 'Microphone is not supported');
+      setVoiceNotice(lang === 'uk' ? 'Мікрофон не підтримується цим середовищем' : 'Microphone is not supported');
       sound.tick(300);
       return;
     }
@@ -260,8 +272,11 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
       recorder.onstop = async () => {
         const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
         audioChunksRef.current = [];
-        if (audioBlob.size > 500) {
+        if (audioBlob.size > 200) {
           await transcribeRecordedAudio(audioBlob);
+        } else {
+          setVoiceNotice(lang === 'uk' ? 'Запис занадто короткий' : 'Recording too short');
+          sound.tick(300);
         }
       };
 
@@ -291,70 +306,72 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
       ? title
       : content;
 
-    const SpeechRecognition =
-      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const isDesktop = Boolean((window as any).karkasDesktop);
 
-    if (SpeechRecognition) {
-      try {
-        const recognition = new SpeechRecognition();
-        recognition.lang = lang === 'uk' ? 'uk-UA' : 'en-US';
-        recognition.continuous = true;
-        recognition.interimResults = true;
-        recognition.maxAlternatives = 1;
+    // In Electron Desktop, Google Web Speech API is not supported by Chromium.
+    // Use MediaRecorder with Gemini transcription directly.
+    if (!isDesktop) {
+      const SpeechRecognition =
+        (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
-        let accumulatedFinal = '';
+      if (SpeechRecognition) {
+        try {
+          const recognition = new SpeechRecognition();
+          recognition.lang = lang === 'uk' ? 'uk-UA' : 'en-US';
+          recognition.continuous = true;
+          recognition.interimResults = true;
+          recognition.maxAlternatives = 1;
 
-        recognition.onstart = () => {
-          setIsListening(true);
-          sound.tick(750);
-        };
+          let accumulatedFinal = '';
 
-        recognition.onresult = (event: any) => {
-          let currentInterim = '';
-          for (let i = event.resultIndex; i < event.results.length; ++i) {
-            const transcript = event.results[i][0].transcript;
-            if (event.results[i].isFinal) {
-              accumulatedFinal += (accumulatedFinal ? ' ' : '') + transcript.trim();
-            } else {
-              currentInterim += transcript;
+          recognition.onstart = () => {
+            setIsListening(true);
+            sound.tick(750);
+          };
+
+          recognition.onresult = (event: any) => {
+            let currentInterim = '';
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
+              const transcript = event.results[i][0].transcript;
+              if (event.results[i].isFinal) {
+                accumulatedFinal += (accumulatedFinal ? ' ' : '') + transcript.trim();
+              } else {
+                currentInterim += transcript;
+              }
             }
-          }
 
-          const spoken = (accumulatedFinal + (currentInterim ? ' ' + currentInterim : '')).trim();
-          const base = contentBeforeRecordingRef.current.trim();
-          const combined = base ? `${base} ${spoken}` : spoken;
+            const spoken = (accumulatedFinal + (currentInterim ? ' ' + currentInterim : '')).trim();
+            const base = contentBeforeRecordingRef.current.trim();
+            const combined = base ? `${base} ${spoken}` : spoken;
 
-          if (editingNoteId) {
-            setEditContent(combined);
-          } else if (target === 'title') {
-            setTitle(combined);
-          } else {
-            setContent(combined);
-          }
-        };
+            if (editingNoteId) {
+              setEditContent(combined);
+            } else if (target === 'title') {
+              setTitle(combined);
+            } else {
+              setContent(combined);
+            }
+          };
 
-        recognition.onerror = (event: any) => {
-          console.warn('Speech recognition error:', event.error);
-          if (event.error === 'not-allowed') {
-            setVoiceNotice(lang === 'uk' ? 'Доступ до мікрофона заборонено' : 'Microphone permission denied');
-            sound.tick(300);
+          recognition.onerror = (event: any) => {
+            console.warn('Speech recognition error, falling back to MediaRecorder:', event.error);
             stopVoiceInput();
-          } else if (event.error === 'network' || event.error === 'service-not-allowed') {
-            stopVoiceInput();
-            startMediaRecorderFallback();
-          }
-        };
+            if (event.error !== 'no-speech') {
+              startMediaRecorderFallback();
+            }
+          };
 
-        recognition.onend = () => {
-          setIsListening(false);
-          recognitionRef.current = null;
-        };
+          recognition.onend = () => {
+            setIsListening(false);
+            recognitionRef.current = null;
+          };
 
-        recognitionRef.current = recognition;
-        recognition.start();
-        return;
-      } catch (e) {
-        console.warn('SpeechRecognition failed, falling back to MediaRecorder', e);
+          recognitionRef.current = recognition;
+          recognition.start();
+          return;
+        } catch (e) {
+          console.warn('SpeechRecognition failed, falling back to MediaRecorder', e);
+        }
       }
     }
 

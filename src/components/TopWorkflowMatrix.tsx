@@ -117,15 +117,16 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
     <header id="windows-app-header" className="sticky top-0 z-30 bg-[#070709]/98 backdrop-blur-md border-b border-neutral-800/90 select-none">
       {/* 1. NATIVE WINDOWS TITLE BAR (TOPMOST ROW WITH CONTROLS & CAPTION BUTTONS) */}
       <div id="windows-titlebar" className="h-9 px-3 bg-[#0a0a0d] border-b border-neutral-800/80 flex items-center justify-between gap-2 app-drag-region">
-        {/* Left: Windows 4-Tile Logo & Window Title */}
+        {/* Left: App Logo & Window Title */}
         <div className="flex items-center gap-2.5 shrink-0 app-drag-region">
-          {/* Windows 4-Square Icon */}
-          <div className="grid grid-cols-2 gap-[1.5px] w-3 h-3 text-neutral-300">
-            <div className="w-1.5 h-1.5 bg-neutral-300 rounded-[0.5px]" />
-            <div className="w-1.5 h-1.5 bg-neutral-300 rounded-[0.5px]" />
-            <div className="w-1.5 h-1.5 bg-neutral-300 rounded-[0.5px]" />
-            <div className="w-1.5 h-1.5 bg-neutral-300 rounded-[0.5px]" />
-          </div>
+          <img
+            src="/icon.png"
+            alt="KARKAS Logo"
+            className="w-4 h-4 rounded-[3px] object-cover shrink-0 shadow-sm border border-neutral-700/60"
+            onError={(e) => {
+              (e.currentTarget as HTMLElement).style.display = 'none';
+            }}
+          />
 
           <div className="flex items-center gap-1.5">
             <span className="text-xs font-mono font-extrabold tracking-wider text-neutral-200 uppercase">

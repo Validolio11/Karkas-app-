@@ -1,6 +1,6 @@
 const {
   app, BrowserWindow, ipcMain, Menu, shell, protocol, net, Tray,
-  nativeImage, screen, Notification, safeStorage, dialog,
+  nativeImage, screen, Notification, safeStorage, dialog, session,
 } = require('electron');
 const { pathToFileURL } = require('node:url');
 const path = require('node:path');
@@ -15,7 +15,7 @@ const { createSecretStore } = require('./secrets.cjs');
 
 const APP_SCHEME = 'karkas';
 const LEGACY_PORT = 14141;
-const MAX_IPC_BYTES = 2 * 1024 * 1024;
+const MAX_IPC_BYTES = 30 * 1024 * 1024;
 const isDevelopment = process.env.NODE_ENV === 'development' || !app.isPackaged;
 
 protocol.registerSchemesAsPrivileged([{
@@ -86,7 +86,13 @@ function on(channel, operation) {
 }
 
 function appIconPath() {
-  return app.isPackaged ? path.join(process.resourcesPath, 'icon.png') : path.join(__dirname, '../build/icon.png');
+  if (process.platform === 'win32') {
+    const ico = app.isPackaged ? path.join(process.resourcesPath, 'icon.ico') : path.join(__dirname, '../build/icon.ico');
+    if (fs.existsSync(ico)) return ico;
+  }
+  const png = app.isPackaged ? path.join(process.resourcesPath, 'icon.png') : path.join(__dirname, '../build/icon.png');
+  if (fs.existsSync(png)) return png;
+  return path.join(__dirname, '../public/icon.png');
 }
 
 function showAndFocusWindow() {
@@ -249,10 +255,11 @@ function downloadFile(fileUrl, destination) {
 async function invokeService(operation, body = {}, useStoredKey = false) {
   assertPayload(body);
   const requestBody = { ...body };
-  delete requestBody.customApiKey;
   if (useStoredKey && requestBody.customEnabled !== false) {
-    const storedKey = await secrets.getGeminiApiKey();
-    if (storedKey) requestBody.customApiKey = storedKey;
+    if (!requestBody.customApiKey) {
+      const storedKey = await secrets.getGeminiApiKey();
+      if (storedKey) requestBody.customApiKey = storedKey;
+    }
   }
   const { invokeDesktopApi } = require('../dist/server.cjs');
   return invokeDesktopApi(operation, requestBody);
@@ -364,10 +371,25 @@ async function createWindow() {
     const allowed = isDevelopment ? /^http:\/\/(localhost|127\.0\.0\.1):3000(?:\/|$)/.test(url) : url.startsWith(`${APP_SCHEME}://app/`);
     if (!allowed) event.preventDefault();
   });
+  const isMediaPermission = (permission) => {
+    return permission === 'media' || permission === 'audio-capture' || permission === 'microphone';
+  };
+  mainWindow.webContents.session.setPermissionCheckHandler((_webContents, permission) => {
+    return isMediaPermission(permission);
+  });
   mainWindow.webContents.session.setPermissionRequestHandler((_webContents, permission, callback) => {
-    if (permission === 'media') return callback(true);
+    if (isMediaPermission(permission)) return callback(true);
     callback(false);
   });
+  if (session.defaultSession) {
+    session.defaultSession.setPermissionCheckHandler((_webContents, permission) => {
+      return isMediaPermission(permission);
+    });
+    session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+      if (isMediaPermission(permission)) return callback(true);
+      callback(false);
+    });
+  }
   mainWindow.on('close', (event) => { if (!isQuitting) { event.preventDefault(); mainWindow.hide(); } });
   mainWindow.on('resize', queueWindowStateSave);
   mainWindow.on('move', queueWindowStateSave);

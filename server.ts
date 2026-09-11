@@ -1300,7 +1300,11 @@ export async function transcribeAudioHandler(req: any, res: any) {
     }
 
     if (!ai) {
-      return res.status(503).json({ error: "Gemini client not initialized. Please configure API key." });
+      return res.status(503).json({
+        error: lang === "uk"
+          ? "Gemini API ключ не налаштовано. Будь ласка, вкажіть ваш ключ у налаштуваннях AI."
+          : "Gemini client not initialized. Please configure your API key in AI settings."
+      });
     }
 
     const cleanBase64 = audioBase64.replace(/^data:[^;]+;base64,/, "").trim();
@@ -1311,7 +1315,7 @@ export async function transcribeAudioHandler(req: any, res: any) {
       ? "Точно транскрибуй усне мовлення з цього аудіозапису українською мовою. Поверни ВИКЛЮЧНО розпізнаний текст без лапок, вступних слів чи пояснень. Якщо аудіо тихе або без слів, поверни порожній рядок."
       : "Accurately transcribe the spoken language from this audio recording into plain text. Return ONLY the transcribed words without quotation marks, introductions, notes, or explanations. If audio is silent or unintelligible, return an empty string.";
 
-    const modelsToTry = ["gemini-3.5-transcribe", "gemini-3.8-flash", "gemini-2.5-flash", "gemini-flash-latest"];
+    const modelsToTry = ["gemini-2.5-flash", "gemini-3.8-flash", "gemini-flash-latest"];
     let transcription = "";
     let lastError: any = null;
 

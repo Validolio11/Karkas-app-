@@ -315,6 +315,7 @@ function registerIpc() {
   handle('karkas:ai:assist', (input) => invokeService('assist', input || {}, true));
   handle('karkas:ai:breakdown', (input) => invokeService('breakdown', input || {}, true));
   handle('karkas:ai:recommendations', (input) => invokeService('recommendations', input || {}, true));
+  handle('karkas:ai:transcribe-audio', (input) => invokeService('transcribeAudio', input || {}, true));
   handle('karkas:updates:check', () => invokeService('checkUpdate'));
   handle('karkas:updates:install', async ({ url, fileName }) => {
     if (typeof url !== 'string') throw new Error('Missing download URL');
@@ -363,7 +364,10 @@ async function createWindow() {
     const allowed = isDevelopment ? /^http:\/\/(localhost|127\.0\.0\.1):3000(?:\/|$)/.test(url) : url.startsWith(`${APP_SCHEME}://app/`);
     if (!allowed) event.preventDefault();
   });
-  mainWindow.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+  mainWindow.webContents.session.setPermissionRequestHandler((_webContents, permission, callback) => {
+    if (permission === 'media') return callback(true);
+    callback(false);
+  });
   mainWindow.on('close', (event) => { if (!isQuitting) { event.preventDefault(); mainWindow.hide(); } });
   mainWindow.on('resize', queueWindowStateSave);
   mainWindow.on('move', queueWindowStateSave);

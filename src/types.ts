@@ -37,6 +37,18 @@ export interface DeletedTask extends PSTask {
   deletedAt: number;
 }
 
+export interface NotepadNote {
+  id: string;
+  title: string;
+  content: string;
+  color?: string;
+  createdAt: number;
+  updatedAt?: number;
+  pinned?: boolean;
+}
+
+export type NoteSortOption = 'NEWEST' | 'OLDEST' | 'DATE';
+
 export type FilterMode = 'ALL' | 'ACTIVE' | 'DONE';
 
 export interface WorkflowStats {
@@ -223,6 +235,7 @@ declare global {
         assist: (input: unknown) => Promise<DesktopResult<{ status: number; body: any }>>;
         breakdown: (input: unknown) => Promise<DesktopResult<{ status: number; body: any }>>;
         recommendations: (input: unknown) => Promise<DesktopResult<{ status: number; body: any }>>;
+        transcribeAudio: (input: unknown) => Promise<DesktopResult<{ status: number; body: any }>>;
       };
       updates: {
         checkLatest: () => Promise<DesktopResult<{ status: number; body: any }>>;

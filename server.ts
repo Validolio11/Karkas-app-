@@ -20,7 +20,7 @@ app.use('/api', (req, res, next) => {
   }
   next();
 });
-app.use(express.json());
+app.use(express.json({ limit: "25mb" }));
 
 // Initialize Gemini Client
 let geminiClient: GoogleGenAI | null = null;
@@ -1279,12 +1279,91 @@ Language: ${isUk ? "Ukrainian" : "English"}.`,
 }
 app.post("/api/ai/recommendations", recommendationsHandler);
 
+// Audio transcription endpoint for voice dictation
+export async function transcribeAudioHandler(req: any, res: any) {
+  try {
+    const { audioBase64, mimeType = "audio/webm", lang = "uk", customApiKey } = req.body || {};
+    if (!audioBase64 || typeof audioBase64 !== "string") {
+      return res.status(400).json({ error: "audioBase64 is required" });
+    }
+
+    let ai = getGeminiClient();
+    if (customApiKey && typeof customApiKey === "string") {
+      ai = new GoogleGenAI({
+        apiKey: customApiKey,
+        httpOptions: {
+          headers: {
+            "User-Agent": "aistudio-build",
+          },
+        },
+      });
+    }
+
+    if (!ai) {
+      return res.status(503).json({ error: "Gemini client not initialized. Please configure API key." });
+    }
+
+    const cleanBase64 = audioBase64.replace(/^data:[^;]+;base64,/, "").trim();
+    const cleanMime = (mimeType || "audio/webm").split(";")[0].trim().toLowerCase();
+
+    const isUk = lang === "uk";
+    const prompt = isUk
+      ? "Точно транскрибуй усне мовлення з цього аудіозапису українською мовою. Поверни ВИКЛЮЧНО розпізнаний текст без лапок, вступних слів чи пояснень. Якщо аудіо тихе або без слів, поверни порожній рядок."
+      : "Accurately transcribe the spoken language from this audio recording into plain text. Return ONLY the transcribed words without quotation marks, introductions, notes, or explanations. If audio is silent or unintelligible, return an empty string.";
+
+    const modelsToTry = ["gemini-3.5-transcribe", "gemini-3.8-flash", "gemini-2.5-flash", "gemini-flash-latest"];
+    let transcription = "";
+    let lastError: any = null;
+
+    for (const model of modelsToTry) {
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents: [
+            {
+              role: "user",
+              parts: [
+                {
+                  inlineData: {
+                    mimeType: cleanMime,
+                    data: cleanBase64,
+                  },
+                },
+                {
+                  text: prompt,
+                },
+              ],
+            },
+          ],
+        });
+        transcription = (response.text || "").trim();
+        break;
+      } catch (err: any) {
+        lastError = err;
+        console.warn(`Model ${model} transcription attempt failed:`, err?.message);
+      }
+    }
+
+    if (!transcription && lastError) {
+      throw lastError;
+    }
+
+    const cleanText = transcription.replace(/^["'«“]+|["'»”]+$/g, "").trim();
+    return res.json({ text: cleanText });
+  } catch (err: any) {
+    console.error("Transcribe audio error:", err);
+    return res.status(500).json({ error: err.message || "Failed to transcribe audio" });
+  }
+}
+app.post("/api/ai/transcribe-audio", transcribeAudioHandler);
+
 const desktopHandlers: Record<string, (req: any, res: any) => Promise<any>> = {
   verifyKey: verifyKeyHandler,
   checkUpdate: checkUpdateHandler,
   assist: assistHandler,
   breakdown: breakdownTaskHandler,
   recommendations: recommendationsHandler,
+  transcribeAudio: transcribeAudioHandler,
 };
 
 /** Run an API service in-process for the Electron IPC bridge without opening a TCP listener. */

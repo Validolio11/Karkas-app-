@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { TaskTab, FilterMode, WorkflowStats } from '../types';
 import { sound } from '../utils/audio';
 import { Language, TRANSLATIONS } from '../utils/i18n';
-import { Volume2, VolumeX, ChevronDown, Plus, Globe, Settings, Settings2, X, Check, LayoutDashboard, History, Cloud, RefreshCw, Minus, Square, Copy } from 'lucide-react';
+import { Volume2, VolumeX, ChevronDown, Plus, Globe, Settings, Settings2, X, Check, LayoutDashboard, NotebookPen, History, Cloud, RefreshCw, Minus, Square, Copy } from 'lucide-react';
 import { AIIcon, AIIconId } from './AIIconTemplates';
 import { User } from 'firebase/auth';
 
@@ -16,6 +16,7 @@ interface TopWorkflowMatrixProps {
   lang: Language;
   aiIconVariant?: AIIconId;
   historyCount?: number;
+  notesCount?: number;
   user?: User | null;
   isSyncing?: boolean;
   autoSyncEnabled?: boolean;
@@ -47,6 +48,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
   lang,
   aiIconVariant,
   historyCount = 0,
+  notesCount = 0,
   user = null,
   isSyncing = false,
   autoSyncEnabled = true,
@@ -372,6 +374,28 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
             >
               <LayoutDashboard className={`w-3 h-3 ${selectedPhase === 'DASHBOARD' ? 'text-black' : 'text-neutral-400'}`} />
               <span className="font-bold">{t.dashboard || (lang === 'uk' ? 'ДАШБОРД' : 'DASHBOARD')}</span>
+            </button>
+
+            {/* NOTEPAD / БЛОКНОТ Tab Button */}
+            <button
+              id="phase-filter-notepad"
+              onClick={() => {
+                sound.tick(600);
+                onSelectPhase('NOTES');
+              }}
+              className={`flex items-center gap-1.5 text-xs font-mono tracking-wider px-3 py-2 border whitespace-nowrap transition-all shrink-0 cursor-pointer ${
+                selectedPhase === 'NOTES'
+                  ? 'border-white bg-white text-black font-extrabold'
+                  : 'border-neutral-800 bg-[#09090b] text-neutral-300 hover:text-white hover:border-neutral-600'
+              }`}
+            >
+              <NotebookPen className={`w-3 h-3 ${selectedPhase === 'NOTES' ? 'text-black' : 'text-neutral-400'}`} />
+              <span className="font-bold">{t.notepad || (lang === 'uk' ? 'БЛОКНОТ' : 'NOTEPAD')}</span>
+              {notesCount > 0 && (
+                <span className={`text-xs font-mono ${selectedPhase === 'NOTES' ? 'text-black font-bold' : 'text-neutral-500'}`}>
+                  {notesCount}
+                </span>
+              )}
             </button>
 
             {/* ALL Tab */}

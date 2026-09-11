@@ -14,7 +14,6 @@ import { sound } from '../utils/audio';
 import { Language, TRANSLATIONS, AI_PRESETS_UK, AI_PRESETS_EN } from '../utils/i18n';
 import {
   X,
-  CornerDownLeft,
   Plus,
   CheckCircle2,
   ListTree,
@@ -28,6 +27,11 @@ import {
   AlertTriangle,
   TrendingUp,
   FolderPlus,
+  Mic,
+  MicOff,
+  Loader2,
+  Square,
+  ArrowUp,
 } from 'lucide-react';
 import { AIIcon, AIIconId } from './AIIconTemplates';
 import { shouldVerifyAsApiKey } from '../utils/apiKey';
@@ -188,6 +192,231 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       ? 'gemini-3.1-flash-lite'
       : storedModel;
   });
+
+  // Voice dictation state
+  const [isListening, setIsListening] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
+
+  const recognitionRef = useRef<any>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const promptBeforeRecordingRef = useRef<string>('');
+
+  const stopVoiceInput = () => {
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch {}
+      recognitionRef.current = null;
+    }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try {
+        mediaRecorderRef.current.stop();
+      } catch {}
+    }
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+    }
+    setIsListening(false);
+  };
+
+  useEffect(() => {
+    if (!isListening) {
+      setRecordingDuration(0);
+      return;
+    }
+    const interval = setInterval(() => {
+      setRecordingDuration((prev) => prev + 1);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [isListening]);
+
+  useEffect(() => {
+    if (!isOpen && isListening) {
+      stopVoiceInput();
+    }
+  }, [isOpen]);
+
+  useEffect(() => {
+    return () => {
+      stopVoiceInput();
+    };
+  }, []);
+
+  const transcribeRecordedAudio = async (blob: Blob) => {
+    setIsTranscribing(true);
+    try {
+      const reader = new FileReader();
+      const base64Promise = new Promise<string>((resolve, reject) => {
+        reader.onloadend = () => {
+          const res = reader.result as string;
+          resolve(res);
+        };
+        reader.onerror = reject;
+      });
+      reader.readAsDataURL(blob);
+      const audioBase64 = await base64Promise;
+
+      const customApiKey = localStorage.getItem('karkas_custom_api_key') || undefined;
+      const res = await karkasApiFetch('/api/ai/transcribe-audio', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          audioBase64,
+          mimeType: blob.type,
+          lang,
+          customApiKey,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.text) {
+          const spoken = data.text.trim();
+          const base = promptBeforeRecordingRef.current.trim();
+          const nextPrompt = base ? `${base} ${spoken}` : spoken;
+          setPrompt(nextPrompt);
+          sound.tick(800);
+        }
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        console.warn('Transcription service error:', errData);
+      }
+    } catch (err) {
+      console.error('Audio transcription error:', err);
+    } finally {
+      setIsTranscribing(false);
+    }
+  };
+
+  const startMediaRecorderFallback = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setVoiceNotice(t.aiSheet.voiceNotSupported);
+      sound.tick(300);
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+      audioChunksRef.current = [];
+
+      let mimeType = '';
+      if (typeof MediaRecorder !== 'undefined') {
+        if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) mimeType = 'audio/webm;codecs=opus';
+        else if (MediaRecorder.isTypeSupported('audio/webm')) mimeType = 'audio/webm';
+        else if (MediaRecorder.isTypeSupported('audio/mp4')) mimeType = 'audio/mp4';
+      }
+
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          audioChunksRef.current.push(e.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+        audioChunksRef.current = [];
+        if (audioBlob.size > 500) {
+          await transcribeRecordedAudio(audioBlob);
+        }
+      };
+
+      recorder.start(250);
+      setIsListening(true);
+      sound.tick(750);
+    } catch (err: any) {
+      console.error('Microphone access failed:', err);
+      setVoiceNotice(t.aiSheet.voicePermissionDenied);
+      sound.tick(300);
+      setIsListening(false);
+    }
+  };
+
+  const handleToggleVoiceInput = async () => {
+    if (isListening) {
+      sound.tick(400);
+      stopVoiceInput();
+      return;
+    }
+
+    setVoiceNotice(null);
+    promptBeforeRecordingRef.current = prompt;
+
+    // Check for native browser Web Speech API first
+    const SpeechRecognition =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+    if (SpeechRecognition) {
+      try {
+        const recognition = new SpeechRecognition();
+        recognition.lang = lang === 'uk' ? 'uk-UA' : 'en-US';
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.maxAlternatives = 1;
+
+        let accumulatedFinal = '';
+
+        recognition.onstart = () => {
+          setIsListening(true);
+          sound.tick(750);
+        };
+
+        recognition.onresult = (event: any) => {
+          let currentInterim = '';
+          for (let i = event.resultIndex; i < event.results.length; ++i) {
+            const transcript = event.results[i][0].transcript;
+            if (event.results[i].isFinal) {
+              accumulatedFinal += (accumulatedFinal ? ' ' : '') + transcript.trim();
+            } else {
+              currentInterim += transcript;
+            }
+          }
+          const spoken = (accumulatedFinal + (currentInterim ? ' ' + currentInterim : '')).trim();
+          const base = promptBeforeRecordingRef.current.trim();
+          const nextPrompt = base ? `${base} ${spoken}` : spoken;
+          setPrompt(nextPrompt);
+        };
+
+        recognition.onerror = async (event: any) => {
+          console.warn('SpeechRecognition error:', event.error);
+          if (event.error === 'not-allowed') {
+            stopVoiceInput();
+            setVoiceNotice(t.aiSheet.voicePermissionDenied);
+            sound.tick(300);
+            return;
+          }
+          if (event.error === 'network' || event.error === 'service-not-allowed' || event.error === 'no-speech') {
+            if (event.error !== 'no-speech') {
+              stopVoiceInput();
+              startMediaRecorderFallback();
+            }
+          }
+        };
+
+        recognition.onend = () => {
+          setIsListening(false);
+          recognitionRef.current = null;
+        };
+
+        recognitionRef.current = recognition;
+        recognition.start();
+        return;
+      } catch (err) {
+        console.warn('SpeechRecognition initialization error, falling back to MediaRecorder:', err);
+      }
+    }
+
+    // Fallback: MediaRecorder with Gemini transcription
+    startMediaRecorderFallback();
+  };
 
   // Keep conversation history synchronized per account
   useEffect(() => {
@@ -1220,61 +1449,145 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
             </div>
 
             {/* Custom Prompt Input at the bottom of the sheet */}
-            <div className="px-4 sm:px-5 py-3 bg-[#08080a] border-t border-neutral-800 flex items-center gap-2">
-              <select
-                aria-label={lang === 'uk' ? 'Модель AI' : 'AI model'}
-                value={customModel}
-                disabled={availableModels.length === 0}
-                onChange={(e) => {
-                  const model = e.target.value;
-                  setCustomModel(model);
-                  localStorage.setItem('karkas_custom_model', model);
-                  sound.tick(400);
-                }}
-                className="max-w-[150px] bg-[#050507] border border-neutral-800 text-neutral-300 text-[10px] font-mono px-2 py-2.5 focus:outline-none focus:border-white disabled:opacity-50"
-              >
-                {availableModels.length === 0 ? (
-                  <option value="">Модель не налаштована</option>
-                ) : (
-                  availableModels.map((model) => (
-                    <option key={model} value={model}>{model}</option>
-                  ))
-                )}
-              </select>
-              <input
-                id="ai-prompt-input"
-                type={awaitingApiKey ? 'password' : 'text'}
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleGenerate();
-                }}
-                placeholder={
-                  awaitingApiKey
-                    ? (lang === 'uk' ? 'Вставте Gemini API-ключ сюди...' : 'Paste your Gemini API key here...')
-                    : mode === 'chat'
-                    ? (lang === 'uk' ? 'Напишіть запитання або дію (напр. «додай задачу X», «зміни пріоритет Y»)...' : 'Ask a question or request action (e.g. "add task X", "change priority of Y")...')
-                    : mode === 'analyze'
-                    ? (lang === 'uk' ? 'Уточніть фокус аналізу (напр. перевірити пріоритети, дедлайни)...' : 'Refine audit focus (e.g. check priorities, deadlines)...')
-                    : t.aiSheet.inputPlaceholder
-                }
-                className="flex-1 bg-[#050507] border border-neutral-800 text-white placeholder:text-neutral-500 text-xs font-mono px-3.5 py-2.5 focus:outline-none focus:border-white transition-colors"
-              />
-              <button
-                id="ai-generate-submit-btn"
-                onClick={() => handleGenerate()}
-                disabled={loading || !prompt.trim()}
-                className="px-4 py-2.5 bg-white text-black font-bold text-xs font-mono uppercase tracking-wider hover:bg-neutral-200 disabled:opacity-40 transition-all flex items-center gap-1.5 cursor-pointer shrink-0"
-              >
-                {loading ? (
-                  <span>...</span>
-                ) : (
-                  <>
-                    <span>{t.aiSheet.execute}</span>
-                    <CornerDownLeft className="w-3.5 h-3.5" />
-                  </>
-                )}
-              </button>
+            <div className="px-4 sm:px-5 py-3 bg-[#08080a] border-t border-neutral-800 space-y-2">
+              {/* Voice recording / transcription status indicator */}
+              {(isListening || isTranscribing || voiceNotice) && (
+                <div className="flex items-center justify-between px-3 py-1.5 bg-[#050507] border border-neutral-800 text-xs font-mono">
+                  {voiceNotice ? (
+                    <div className="flex items-center gap-2 text-amber-400 w-full justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                        <span className="text-[11px]">{voiceNotice}</span>
+                      </div>
+                      <button
+                        onClick={() => setVoiceNotice(null)}
+                        className="text-neutral-500 hover:text-white text-[10px] uppercase font-bold"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ) : isTranscribing ? (
+                    <div className="flex items-center gap-2 text-neutral-300">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-neutral-400" />
+                      <span className="text-[11px] text-neutral-300">{t.aiSheet.voiceTranscribing}</span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between w-full">
+                      <div className="flex items-center gap-2.5">
+                        <span className="relative flex h-2 w-2">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+                        </span>
+                        {/* Audio wave bars */}
+                        <div className="flex items-end gap-0.5 h-3.5">
+                          <span className="w-0.5 bg-red-400 h-2 animate-pulse" style={{ animationDuration: '600ms' }} />
+                          <span className="w-0.5 bg-red-400 h-3.5 animate-pulse" style={{ animationDuration: '400ms' }} />
+                          <span className="w-0.5 bg-red-400 h-1.5 animate-pulse" style={{ animationDuration: '700ms' }} />
+                          <span className="w-0.5 bg-red-400 h-3 animate-pulse" style={{ animationDuration: '500ms' }} />
+                        </div>
+                        <span className="text-[11px] text-red-300 font-bold uppercase tracking-wider">
+                          {t.aiSheet.voiceListening}
+                        </span>
+                        <span className="text-[10px] text-neutral-400 font-mono">
+                          {Math.floor(recordingDuration / 60).toString().padStart(2, '0')}:
+                          {(recordingDuration % 60).toString().padStart(2, '0')}
+                        </span>
+                      </div>
+                      <button
+                        onClick={stopVoiceInput}
+                        className="px-2 py-0.5 text-[10px] uppercase font-bold text-red-400 hover:text-white border border-red-900/60 hover:border-red-500 bg-red-950/40 transition-colors"
+                      >
+                        {t.aiSheet.voiceStop}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="flex items-center gap-2">
+                <select
+                  aria-label={lang === 'uk' ? 'Модель AI' : 'AI model'}
+                  value={customModel}
+                  disabled={availableModels.length === 0}
+                  onChange={(e) => {
+                    const model = e.target.value;
+                    setCustomModel(model);
+                    localStorage.setItem('karkas_custom_model', model);
+                    sound.tick(400);
+                  }}
+                  className="max-w-[150px] bg-[#050507] border border-neutral-800 text-neutral-300 text-[10px] font-mono px-2 py-2.5 focus:outline-none focus:border-white disabled:opacity-50"
+                >
+                  {availableModels.length === 0 ? (
+                    <option value="">Модель не налаштована</option>
+                  ) : (
+                    availableModels.map((model) => (
+                      <option key={model} value={model}>{model}</option>
+                    ))
+                  )}
+                </select>
+
+                <div className="relative flex-1 flex items-center">
+                  <input
+                    id="ai-prompt-input"
+                    type={awaitingApiKey ? 'password' : 'text'}
+                    value={prompt}
+                    onChange={(e) => setPrompt(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleGenerate();
+                    }}
+                    placeholder={
+                      awaitingApiKey
+                        ? (lang === 'uk' ? 'Вставте Gemini API-ключ сюди...' : 'Paste your Gemini API key here...')
+                        : mode === 'chat'
+                        ? (lang === 'uk' ? 'Напишіть запитання або дію (напр. «додай задачу X», «зміни пріоритет Y»)...' : 'Ask a question or request action (e.g. "add task X", "change priority of Y")...')
+                        : mode === 'analyze'
+                        ? (lang === 'uk' ? 'Уточніть фокус аналізу (напр. перевірити пріоритети, дедлайни)...' : 'Refine audit focus (e.g. check priorities, deadlines)...')
+                        : t.aiSheet.inputPlaceholder
+                    }
+                    className="w-full bg-[#050507] border border-neutral-800 text-white placeholder:text-neutral-500 text-xs font-mono pl-3.5 pr-10 py-2.5 focus:outline-none focus:border-white transition-colors"
+                  />
+                  {/* Voice dictation button embedded in input field */}
+                  <button
+                    id="ai-voice-dictation-btn"
+                    type="button"
+                    onClick={handleToggleVoiceInput}
+                    disabled={awaitingApiKey || isTranscribing}
+                    title={isListening ? t.aiSheet.voiceStop : t.aiSheet.voiceInput}
+                    aria-label={isListening ? t.aiSheet.voiceStop : t.aiSheet.voiceInput}
+                    className={`absolute right-1.5 p-1.5 rounded transition-all cursor-pointer ${
+                      isListening
+                        ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+                        : isTranscribing
+                        ? 'text-neutral-500 cursor-wait'
+                        : 'text-neutral-400 hover:text-white hover:bg-neutral-800/60'
+                    }`}
+                  >
+                    {isTranscribing ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-neutral-300" />
+                    ) : isListening ? (
+                      <Square className="w-3.5 h-3.5 fill-current text-red-400" />
+                    ) : (
+                      <Mic className="w-4 h-4" />
+                    )}
+                  </button>
+                </div>
+
+                <button
+                  id="ai-generate-submit-btn"
+                  type="button"
+                  onClick={() => handleGenerate()}
+                  disabled={loading || !prompt.trim()}
+                  title={t.aiSheet.execute}
+                  aria-label={t.aiSheet.execute}
+                  className="w-[38px] h-[38px] bg-white text-black hover:bg-neutral-200 disabled:opacity-30 disabled:hover:bg-white transition-all flex items-center justify-center cursor-pointer shrink-0"
+                >
+                  {loading ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-black" />
+                  ) : (
+                    <ArrowUp className="w-4 h-4 stroke-[2.5]" />
+                  )}
+                </button>
+              </div>
             </div>
 
             {/* Bottom Footer Hint */}

@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { PSTask, DeletedTask, TaskTab, FilterMode, WorkflowStats, TaskStepItem, AdaptiveProfile, AITaskUpdate } from './types';
+import { PSTask, DeletedTask, TaskTab, FilterMode, WorkflowStats, TaskStepItem, AdaptiveProfile, AITaskUpdate, NotepadNote } from './types';
 import { TaskCard } from './components/TaskCard';
 import { DashboardView } from './components/DashboardView';
+import { NotepadView } from './components/NotepadView';
 import { HistoryView } from './components/HistoryView';
 import { TopWorkflowMatrix } from './components/TopWorkflowMatrix';
 import { QuickAddDrawer } from './components/QuickAddDrawer';
@@ -44,7 +45,46 @@ import { sanitizeTasksTimerSafeguard } from './utils/taskOperations';
 
 const STORAGE_KEY = 'life_todo_tasks_v2';
 const DELETED_STORAGE_KEY = 'karkas_deleted_tasks_v2';
+const NOTEPAD_STORAGE_KEY = 'karkas_notepad_notes_v1';
 const TABS_KEY = 'life_todo_tabs_v2';
+
+const INITIAL_NOTES_UK: NotepadNote[] = [
+  {
+    id: 'note-welcome-1',
+    title: 'Швидкі ідеї та нагадування',
+    content: 'Тут зручно записувати все, що спадає на думку: списки покупок, думки для проектів або надиктовувати голосом через мікрофон.',
+    color: '#38bdf8',
+    createdAt: Date.now() - 3600000 * 2,
+    pinned: true,
+  },
+  {
+    id: 'note-welcome-2',
+    title: 'Голосове введення нотаток',
+    content: 'Натисніть на значок мікрофона біля форми запису, щоб надиктувати нотатку українською мовою без клавіатури.',
+    color: '#34d399',
+    createdAt: Date.now() - 3600000 * 24,
+    pinned: false,
+  },
+];
+
+const INITIAL_NOTES_EN: NotepadNote[] = [
+  {
+    id: 'note-welcome-1',
+    title: 'Quick ideas and reminders',
+    content: 'A handy place to jot down anything: project thoughts, quick reminders, or speak directly into the microphone.',
+    color: '#38bdf8',
+    createdAt: Date.now() - 3600000 * 2,
+    pinned: true,
+  },
+  {
+    id: 'note-welcome-2',
+    title: 'Voice notes dictation',
+    content: 'Click the microphone button to dictate notes hands-free using speech recognition.',
+    color: '#34d399',
+    createdAt: Date.now() - 3600000 * 24,
+    pinned: false,
+  },
+];
 const LANG_KEY = 'todo_app_lang';
 const AI_ICON_KEY = 'karkas_ai_icon_variant';
 const FIRE_ENABLED_KEY = 'karkas_fire_enabled';
@@ -55,7 +95,7 @@ const APP_ZOOM_KEY = 'karkas_app_zoom_percent';
 const MIN_APP_ZOOM = 75;
 const MAX_APP_ZOOM = 150;
 const DEFAULT_APP_ZOOM = 100;
-const APP_CURRENT_VERSION = '1.2.10';
+const APP_CURRENT_VERSION = '1.2.12';
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 
 function normalizeVersion(version: string): number[] {
@@ -201,10 +241,50 @@ export default function App() {
     if (typeof window !== 'undefined') {
       const hash = window.location.hash;
       if (hash === '#dashboard') return 'DASHBOARD';
+      if (hash === '#notes' || hash === '#notepad') return 'NOTES';
       if (hash === '#history') return 'HISTORY';
     }
     return 'ALL';
   });
+
+  const [notes, setNotes] = useState<NotepadNote[]>(() => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const saved = localStorage.getItem(NOTEPAD_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {
+      console.error('Failed to load notes from localStorage', e);
+    }
+    return lang === 'uk' ? INITIAL_NOTES_UK : INITIAL_NOTES_EN;
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(NOTEPAD_STORAGE_KEY, JSON.stringify(notes));
+    } catch (e) {
+      console.error('Failed to save notes to localStorage', e);
+    }
+  }, [notes]);
+
+  const handleAddNote = (newNote: Omit<NotepadNote, 'id' | 'createdAt'>) => {
+    const created: NotepadNote = {
+      ...newNote,
+      id: `note-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      createdAt: Date.now(),
+    };
+    setNotes((prev) => [created, ...prev]);
+  };
+
+  const handleUpdateNote = (id: string, updates: Partial<NotepadNote>) => {
+    setNotes((prev) => prev.map((n) => (n.id === id ? { ...n, ...updates } : n)));
+  };
+
+  const handleDeleteNote = (id: string) => {
+    setNotes((prev) => prev.filter((n) => n.id !== id));
+  };
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isAIOpen, setIsAIOpen] = useState(false);
   const [isManageTabsOpen, setIsManageTabsOpen] = useState(false);
@@ -655,14 +735,16 @@ export default function App() {
     }
   }, [lang]);
 
-  // Hash synchronization for Dashboard and History views
+  // Hash synchronization for Dashboard, Notes and History views
   useEffect(() => {
     if (typeof window !== 'undefined') {
       if (selectedPhase === 'DASHBOARD') {
         window.location.hash = '#dashboard';
+      } else if (selectedPhase === 'NOTES') {
+        window.location.hash = '#notes';
       } else if (selectedPhase === 'HISTORY') {
         window.location.hash = '#history';
-      } else if (window.location.hash === '#dashboard' || window.location.hash === '#history') {
+      } else if (window.location.hash === '#dashboard' || window.location.hash === '#notes' || window.location.hash === '#notepad' || window.location.hash === '#history') {
         history.replaceState(null, '', window.location.pathname);
       }
     }
@@ -672,8 +754,9 @@ export default function App() {
     const handleHashChange = () => {
       const hash = window.location.hash;
       if (hash === '#dashboard') setSelectedPhase('DASHBOARD');
+      else if (hash === '#notes' || hash === '#notepad') setSelectedPhase('NOTES');
       else if (hash === '#history') setSelectedPhase('HISTORY');
-      else if (selectedPhase === 'DASHBOARD' || selectedPhase === 'HISTORY') setSelectedPhase('ALL');
+      else if (selectedPhase === 'DASHBOARD' || selectedPhase === 'NOTES' || selectedPhase === 'HISTORY') setSelectedPhase('ALL');
     };
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
@@ -1330,6 +1413,7 @@ export default function App() {
     if (
       selectedPhase !== 'ALL' &&
       selectedPhase !== 'DASHBOARD' &&
+      selectedPhase !== 'NOTES' &&
       selectedPhase !== 'HISTORY' &&
       !validTabIds.has(selectedPhase)
     ) {
@@ -1869,6 +1953,7 @@ export default function App() {
         lang={lang}
         aiIconVariant={aiIconVariant}
         historyCount={tasks.filter((t) => t.done).length + deletedTasks.length}
+        notesCount={notes.length}
         user={currentUser}
         isSyncing={isSyncing}
         autoSyncEnabled={autoSyncEnabled}
@@ -1956,6 +2041,14 @@ export default function App() {
             onOpenAdd={() => setIsAddOpen(true)}
             onOpenManageTabs={() => setIsManageTabsOpen(true)}
             onAddTask={handleAddTask}
+          />
+        ) : selectedPhase === 'NOTES' ? (
+          <NotepadView
+            lang={lang}
+            notes={notes}
+            onAddNote={handleAddNote}
+            onUpdateNote={handleUpdateNote}
+            onDeleteNote={handleDeleteNote}
           />
         ) : selectedPhase === 'HISTORY' ? (
           <HistoryView
@@ -2207,9 +2300,11 @@ export default function App() {
           {/* Left: Quick Filter Status */}
           <div className="order-5 basis-full lg:order-1 lg:basis-auto flex flex-wrap items-center justify-center gap-2 text-xs font-mono text-neutral-400 app-no-drag">
             <span className="text-neutral-200 font-bold">
-              {filteredTasks.length} {t.shownCount}
+              {selectedPhase === 'NOTES'
+                ? `${notes.length} ${lang === 'uk' ? (notes.length === 1 ? 'нотатка' : notes.length < 5 ? 'нотатки' : 'нотаток') : (notes.length === 1 ? 'note' : 'notes')}`
+                : `${filteredTasks.length} ${t.shownCount}`}
             </span>
-            {tasks.some((t) => t.done) && (
+            {selectedPhase !== 'NOTES' && tasks.some((t) => t.done) && (
               <button
                 id="clear-completed-bottom-btn"
                 onClick={handleClearCompleted}
@@ -2230,7 +2325,7 @@ export default function App() {
               setIsAIOpen(true);
             }}
             title={t.swipeUpAI}
-            className="order-2 min-w-0 flex-1 flex items-center justify-center gap-2 px-2 sm:px-3.5 py-1.5 bg-neutral-900 border border-neutral-700 hover:border-white text-white font-mono text-xs font-bold tracking-wider transition-all active:scale-95 app-no-drag"
+            className="order-2 shrink-0 mx-auto flex items-center justify-center gap-2 px-3 sm:px-4 py-1.5 bg-neutral-900 border border-neutral-700 hover:border-white text-white font-mono text-xs font-bold tracking-wider transition-all active:scale-95 app-no-drag"
           >
             <AIIcon id={aiIconVariant} className="w-3.5 h-3.5 shrink-0 text-neutral-300" />
             <span className="sm:hidden truncate">KARKAS AI</span>

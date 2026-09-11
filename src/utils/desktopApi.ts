@@ -3,6 +3,7 @@ const routeMap = {
   '/api/ai/assist': 'assist',
   '/api/ai/breakdown-task': 'breakdown',
   '/api/ai/recommendations': 'recommendations',
+  '/api/ai/transcribe-audio': 'transcribeAudio',
   '/api/check-update': 'checkLatest',
 } as const;
 
@@ -32,7 +33,9 @@ export async function karkasApiFetch(input: string, init?: RequestInit): Promise
       ? await desktop.ai.assist(body)
       : operation === 'breakdown'
         ? await desktop.ai.breakdown(body)
-        : await desktop.ai.recommendations(body);
+        : operation === 'transcribeAudio'
+          ? await desktop.ai.transcribeAudio(body)
+          : await desktop.ai.recommendations(body);
 
   if ('error' in result) return responseFromDesktop(503, { code: result.error.code, error: result.error.message });
   return responseFromDesktop(result.value.status, result.value.body);

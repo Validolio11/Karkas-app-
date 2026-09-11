@@ -95,7 +95,7 @@ const APP_ZOOM_KEY = 'karkas_app_zoom_percent';
 const MIN_APP_ZOOM = 75;
 const MAX_APP_ZOOM = 150;
 const DEFAULT_APP_ZOOM = 100;
-const APP_CURRENT_VERSION = '1.2.14';
+const APP_CURRENT_VERSION = '1.2.15';
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 
 function normalizeVersion(version: string): number[] {

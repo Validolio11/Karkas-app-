@@ -1337,7 +1337,8 @@ export async function transcribeAudioHandler(req: any, res: any) {
       ? "Точно транскрибуй усне мовлення з цього аудіозапису українською мовою. Поверни ВИКЛЮЧНО розпізнаний текст без лапок, вступних слів чи пояснень. Якщо аудіо тихе або без слів, поверни порожній рядок."
       : "Accurately transcribe the spoken language from this audio recording into plain text. Return ONLY the transcribed words without quotation marks, introductions, notes, or explanations. If audio is silent or unintelligible, return an empty string.";
 
-    const defaultModels = ["gemini-2.5-flash", "gemini-3.8-flash", "gemini-flash-latest"];
+    // Prioritize user's preferred model (including gemini-3.8-flash) followed by fast low-latency models
+    const defaultModels = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-flash-latest"];
     const modelsToTry = preferredModel && typeof preferredModel === "string" && preferredModel.startsWith("gemini-")
       ? [preferredModel, ...defaultModels.filter((m) => m !== preferredModel)]
       : defaultModels;
@@ -1365,6 +1366,13 @@ export async function transcribeAudioHandler(req: any, res: any) {
               ],
             },
           ],
+          config: {
+            temperature: 0.1,
+            maxOutputTokens: 1000,
+            thinkingConfig: {
+              thinkingBudget: 0,
+            },
+          },
         });
         transcription = (response.text || "").trim();
         break;

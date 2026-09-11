@@ -254,7 +254,15 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
     }
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          sampleRate: 16000,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
       mediaStreamRef.current = stream;
       audioChunksRef.current = [];
 
@@ -265,7 +273,14 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
         else if (MediaRecorder.isTypeSupported('audio/mp4')) mimeType = 'audio/mp4';
       }
 
-      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      const recorderOptions: MediaRecorderOptions = {
+        audioBitsPerSecond: 32000,
+      };
+      if (mimeType) {
+        recorderOptions.mimeType = mimeType;
+      }
+
+      const recorder = new MediaRecorder(stream, recorderOptions);
       mediaRecorderRef.current = recorder;
 
       recorder.ondataavailable = (e) => {

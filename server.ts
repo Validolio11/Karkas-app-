@@ -1282,7 +1282,7 @@ app.post("/api/ai/recommendations", recommendationsHandler);
 // Audio transcription endpoint for voice dictation
 export async function transcribeAudioHandler(req: any, res: any) {
   try {
-    const { audioBase64, mimeType = "audio/webm", lang = "uk", customApiKey } = req.body || {};
+    const { audioBase64, mimeType = "audio/webm", lang = "uk", customApiKey, model: preferredModel } = req.body || {};
     if (!audioBase64 || typeof audioBase64 !== "string") {
       return res.status(400).json({ error: "audioBase64 is required" });
     }
@@ -1307,15 +1307,41 @@ export async function transcribeAudioHandler(req: any, res: any) {
       });
     }
 
-    const cleanBase64 = audioBase64.replace(/^data:[^;]+;base64,/, "").trim();
-    const cleanMime = (mimeType || "audio/webm").split(";")[0].trim().toLowerCase();
+    // Robustly clean base64 data regardless of data URL prefixes and codec parameters
+    let cleanBase64 = String(audioBase64 || "").trim();
+    const commaIndex = cleanBase64.indexOf(",");
+    if (cleanBase64.startsWith("data:") && commaIndex !== -1) {
+      cleanBase64 = cleanBase64.slice(commaIndex + 1);
+    } else if (cleanBase64.includes(";base64,")) {
+      cleanBase64 = cleanBase64.split(";base64,")[1];
+    }
+    // Remove any remaining metadata or whitespace/linebreaks
+    cleanBase64 = cleanBase64.replace(/^data:[^,]+,/, "").replace(/\s+/g, "");
+
+    // Normalize MIME type for Gemini inlineData
+    let cleanMime = "audio/webm";
+    if (audioBase64.startsWith("data:")) {
+      const mimeMatch = audioBase64.match(/^data:([^;,]+)/);
+      if (mimeMatch && mimeMatch[1]) {
+        cleanMime = mimeMatch[1].trim().toLowerCase();
+      }
+    } else if (mimeType && typeof mimeType === "string") {
+      cleanMime = mimeType.split(";")[0].trim().toLowerCase();
+    }
+    if (!cleanMime || cleanMime === "undefined" || cleanMime === "null") {
+      cleanMime = "audio/webm";
+    }
 
     const isUk = lang === "uk";
     const prompt = isUk
       ? "Точно транскрибуй усне мовлення з цього аудіозапису українською мовою. Поверни ВИКЛЮЧНО розпізнаний текст без лапок, вступних слів чи пояснень. Якщо аудіо тихе або без слів, поверни порожній рядок."
       : "Accurately transcribe the spoken language from this audio recording into plain text. Return ONLY the transcribed words without quotation marks, introductions, notes, or explanations. If audio is silent or unintelligible, return an empty string.";
 
-    const modelsToTry = ["gemini-2.5-flash", "gemini-3.8-flash", "gemini-flash-latest"];
+    const defaultModels = ["gemini-2.5-flash", "gemini-3.8-flash", "gemini-flash-latest"];
+    const modelsToTry = preferredModel && typeof preferredModel === "string" && preferredModel.startsWith("gemini-")
+      ? [preferredModel, ...defaultModels.filter((m) => m !== preferredModel)]
+      : defaultModels;
+
     let transcription = "";
     let lastError: any = null;
 

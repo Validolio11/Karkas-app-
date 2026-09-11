@@ -264,15 +264,17 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       reader.readAsDataURL(blob);
       const audioBase64 = await base64Promise;
 
+      const rawBase64 = audioBase64.includes(',') ? audioBase64.split(',')[1] : audioBase64;
       const customApiKey = localStorage.getItem('karkas_custom_api_key') || undefined;
       const res = await karkasApiFetch('/api/ai/transcribe-audio', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          audioBase64,
-          mimeType: blob.type,
+          audioBase64: rawBase64,
+          mimeType: blob.type || 'audio/webm',
           lang,
           customApiKey,
+          model: customModel || undefined,
         }),
       });
 

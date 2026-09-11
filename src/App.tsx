@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { PSTask, DeletedTask, TaskTab, FilterMode, WorkflowStats, TaskStepItem, AdaptiveProfile } from './types';
+import { PSTask, DeletedTask, TaskTab, FilterMode, WorkflowStats, TaskStepItem, AdaptiveProfile, AITaskUpdate } from './types';
 import { TaskCard } from './components/TaskCard';
 import { DashboardView } from './components/DashboardView';
 import { HistoryView } from './components/HistoryView';
@@ -1732,8 +1732,10 @@ export default function App() {
   };
 
   const handleInjectAITasks = (
-    newTasks: Omit<PSTask, 'id' | 'currentStep' | 'done' | 'pinned' | 'createdAt'>[],
+    newTasks: Omit<PSTask, 'id' | 'currentStep' | 'done' | 'pinned' | 'createdAt'>[] = [],
     requestedTabs: TaskTab[] = [],
+    taskUpdates: AITaskUpdate[] = [],
+    deletedTaskIds: string[] = [],
   ) => {
     const knownIds = new Set(tabs.map((tab) => tab.id));
     const knownNames = new Set(tabs.map((tab) => tab.name.trim().toLocaleLowerCase()));
@@ -1750,7 +1752,63 @@ export default function App() {
     if (tabsToAdd.length > 0) {
       setTabs((previous) => [...previous, ...tabsToAdd]);
     }
-    const items: PSTask[] = newTasks.map((t, i) => {
+
+    // Process Task Updates and Task Deletions
+    const updatesMap = new Map<string, AITaskUpdate>();
+    for (const up of taskUpdates) {
+      if (up && up.id) updatesMap.set(up.id, up);
+    }
+    const toDeleteSet = new Set(deletedTaskIds);
+
+    if (updatesMap.size > 0 || toDeleteSet.size > 0) {
+      setTasks((prev) => {
+        const deletedToArchive: DeletedTask[] = [];
+        const nextList = prev
+          .filter((t) => {
+            if (toDeleteSet.has(t.id)) {
+              deletedToArchive.push({ ...t, deletedAt: Date.now() });
+              return false;
+            }
+            return true;
+          })
+          .map((t) => {
+            const update = updatesMap.get(t.id);
+            if (!update) return t;
+            const updatedPhase = update.phase && availableTabIds.has(update.phase) ? update.phase : t.phase;
+            const updatedPriority = update.priority || t.priority;
+            const updatedTitle = update.title ? update.title.trim() : t.title;
+            const updatedNote = update.note !== undefined ? update.note : t.note;
+            const updatedDone = update.done !== undefined ? update.done : t.done;
+            let updatedStepList = t.stepList;
+            let updatedSteps = t.steps;
+            if (update.stepList && Array.isArray(update.stepList)) {
+              updatedStepList = update.stepList.map((s, idx) => ({
+                id: s.id || `s-${t.id}-${idx}-${Date.now()}`,
+                title: typeof s === 'string' ? s : s.title,
+                done: Boolean(s.done),
+              }));
+              updatedSteps = updatedStepList.length;
+            }
+            return {
+              ...t,
+              title: updatedTitle,
+              phase: updatedPhase,
+              priority: updatedPriority,
+              note: updatedNote,
+              done: updatedDone,
+              stepList: updatedStepList,
+              steps: updatedSteps,
+            };
+          });
+
+        if (deletedToArchive.length > 0) {
+          setDeletedTasks((prevDeleted) => [...deletedToArchive, ...prevDeleted]);
+        }
+        return nextList;
+      });
+    }
+
+    const items: PSTask[] = (newTasks || []).map((t, i) => {
       let phase = t.phase;
       if (phase === 'DASHBOARD' || phase === 'ALL' || !availableTabIds.has(phase)) {
         phase = tabs[0]?.id || 'focus';

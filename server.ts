@@ -128,6 +128,33 @@ export async function checkUpdateHandler(_req: any, res: any) {
 }
 app.get("/api/check-update", checkUpdateHandler);
 
+const UK_EN_TRANSLIT: Record<string, string> = {
+  а: 'a', б: 'b', в: 'v', г: 'h', ґ: 'g', д: 'd', е: 'e', є: 'ye', ж: 'zh', з: 'z', и: 'y', і: 'i',
+  ї: 'yi', й: 'y', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't', у: 'u',
+  ф: 'f', х: 'kh', ц: 'ts', ч: 'ch', ш: 'sh', щ: 'shch', ь: '', ю: 'yu', я: 'ya',
+  'робота': 'work', 'дім': 'home', 'спорт': 'health', 'здоровʼя': 'health', 'здоров\'я': 'health',
+  'покупки': 'buy', 'навчання': 'study', 'проєкт': 'project', 'проект': 'project',
+  'маркетинг': 'marketing', 'дизайн': 'design', 'фінанси': 'finance', 'фокус': 'focus'
+};
+
+export function slugifyTabId(rawName: string, requestedId?: string): string {
+  if (requestedId && /^[a-z0-9_-]{2,32}$/i.test(requestedId)) {
+    return requestedId.toLowerCase();
+  }
+  const clean = (rawName || '').trim().toLowerCase();
+  if (UK_EN_TRANSLIT[clean]) return UK_EN_TRANSLIT[clean];
+  
+  let transliterated = '';
+  for (const char of clean) {
+    transliterated += UK_EN_TRANSLIT[char] ?? char;
+  }
+  const slug = transliterated
+    .replace(/[^a-z0-9_-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 24);
+  return slug || `tab_${Date.now().toString(36)}`;
+}
+
 // Smart AI Assistant & Full App Context Analyzer Endpoint
 export async function assistHandler(req: any, res: any) {
   try {
@@ -160,8 +187,8 @@ export async function assistHandler(req: any, res: any) {
     if (action === "chat" && isSimpleGreeting) {
       return res.json({
         reply: isUk
-          ? "Привіт. Я поруч і знаю контекст твоїх задач. Розкажи, що зараз хочеш вирішити або що заважає рухатися далі."
-          : "Hi. I am here with the context of your tasks. Tell me what you want to solve or what is slowing you down.",
+          ? "Привіт. Я поруч і бачу весь контекст твоїх задач. Розкажи, що зараз плануєш зробити, яку задачу хочеш розбити чи змінити, або що викликає затримку."
+          : "Hi. I am here with full visibility into your tasks. Tell me what you want to plan, break down, edit, or what is slowing you down.",
         source: "greeting",
       });
     }
@@ -179,8 +206,7 @@ export async function assistHandler(req: any, res: any) {
       });
     }
 
-    // The client sends the complete state as fullAppContext. Older clients only
-    // send top-level fields, so accept both formats while preferring full context.
+    // The client sends the complete state as fullAppContext. Accept both formats.
     const suppliedContext = fullAppContext && typeof fullAppContext === 'object' ? fullAppContext : {};
     const contextActiveTasks = Array.isArray(suppliedContext.activeTasks) ? suppliedContext.activeTasks : [];
     const contextCompletedTasks = Array.isArray(suppliedContext.completedTasks) ? suppliedContext.completedTasks : [];
@@ -199,91 +225,218 @@ export async function assistHandler(req: any, res: any) {
     const effectiveDeletedTasks = deletedTasks.length > 0 ? deletedTasks : contextDeletedTasks;
     const effectiveStats = Object.keys(stats || {}).length > 0 ? stats : (suppliedContext.stats || {});
 
-    // Preserve tab names and colors for analysis, instead of only receiving IDs.
+    // Preserve tab names and colors for analysis
     const tabList = contextTabs.length > 0 ? contextTabs : (Array.isArray(tabs) ? tabs : []);
-
     const activeTabIds: string[] = tabList.map((t: any) => (typeof t === "string" ? t : t.id));
     const primaryTab = activeTabIds[0] || "focus";
 
+    const isTabCreationRequested = allowNewTabs || /(?:вкладк|категорі|розділ|напрямок|проєкт|проект|секці|tab|category|section|project)/iu.test(prompt);
+
     if (ai && action === "chat") {
       try {
-        const chatResponse = await generateGeminiContentWithFallback({
-          contents: `CURRENT USER MESSAGE: "${prompt}".
-CONVERSATION HISTORY:
-${JSON.stringify(Array.isArray(conversation) ? conversation.slice(-12) : [], null, 2)}
-CURRENT APPLICATION CONTEXT:
-${JSON.stringify({
-            activeTasks: effectiveActiveTasks,
-            completedTasks: effectiveCompletedTasks.slice(-20),
-            deletedTasks: effectiveDeletedTasks.slice(-10),
-            tabs: tabList,
-            stats: effectiveStats,
-            adaptiveProfile,
-          }, null, 2)}`,
-          config: {
-            systemInstruction: `You are Karkas AI, a practical conversational productivity coach embedded in the user's task app.
-Have a real dialogue. Answer the user's actual question first, then ask at most one useful follow-up question when needed.
-Use the application context to notice overload, avoidance, unfinished work, repeated patterns, time spent, and progress. Give concrete reasoning and small behavioral experiments, not generic motivational advice.
-Do not create a plan unless the user asks for one. Do not invent facts or claim to observe behavior that is not present in the context.
-You may suggest editing, completing, splitting, reprioritizing, or deleting tasks, but do not silently mutate app data.
+        const chatPrompt = `You are Karkas AI, an elite conversational task architect and productivity strategist embedded directly in the user's workspace.
 LANGUAGE: ${isUk ? "Ukrainian" : "English"}.
-            Return only a natural, concise answer. Markdown is allowed.`,
+CURRENT USER PROMPT: "${prompt}".
+RECENT CONVERSATION:
+${JSON.stringify(Array.isArray(conversation) ? conversation.slice(-10) : [], null, 2)}
+WORKSPACE CONTEXT:
+${JSON.stringify({
+          activeTasks: effectiveActiveTasks.map((t: any) => ({
+            id: t.id,
+            title: t.title,
+            phase: t.phase,
+            priority: t.priority,
+            progress: `${t.currentStep || 0}/${t.steps || 1}`,
+            stepList: t.stepList?.map((s: any) => typeof s === 'string' ? s : s.title) || [],
+            note: t.note || '',
+            timerRunning: !!t.timerRunning,
+          })),
+          completedTasksCount: effectiveCompletedTasks.length,
+          recentCompletedSample: effectiveCompletedTasks.slice(-8).map((t: any) => t.title),
+          availableTabs: tabList,
+          stats: effectiveStats,
+          adaptiveProfile,
+        }, null, 2)}
+
+INSTRUCTIONS:
+1. Provide a natural, concise, empowering conversational "reply".
+2. If the user asks to create, plan, add, break down, edit, update, rename, or delete tasks or tabs, YOU MUST ALSO POPULATE the structured JSON fields ("tasks", "tabs", "taskUpdates", "taskDeletions").
+3. "tasks": New tasks to create. Each task must have:
+   - "title": Actionable concise title
+   - "phase": One of available tab IDs: ${JSON.stringify(activeTabIds)} or a newly defined tab ID
+   - "priority": 1, 2, or 3
+   - "steps": 1 to 5
+   - "stepList": Array of sequential sub-steps with "title"
+   - "note": Short tactical note
+4. "tabs": New category tabs if needed. Each with "id" (lowercase ASCII slug) and "name".
+5. "taskUpdates": Edits to existing tasks matching their "id" (e.g. updating title, priority, phase, note, done, or stepList).
+6. "taskDeletions": Tasks to delete/archive by their "id".
+7. Return strictly valid JSON adhering to schema.`;
+
+        const chatResponse = await generateGeminiContentWithFallback({
+          contents: chatPrompt,
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                reply: { type: Type.STRING },
+                insights: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING },
+                },
+                tasks: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      title: { type: Type.STRING },
+                      phase: { type: Type.STRING },
+                      priority: { type: Type.INTEGER },
+                      steps: { type: Type.INTEGER },
+                      note: { type: Type.STRING },
+                      stepList: {
+                        type: Type.ARRAY,
+                        items: {
+                          type: Type.OBJECT,
+                          properties: {
+                            title: { type: Type.STRING },
+                          },
+                          required: ["title"],
+                        },
+                      },
+                    },
+                    required: ["title", "phase", "priority", "steps"],
+                  },
+                },
+                tabs: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      id: { type: Type.STRING },
+                      name: { type: Type.STRING },
+                    },
+                    required: ["id", "name"],
+                  },
+                },
+                taskUpdates: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      id: { type: Type.STRING },
+                      title: { type: Type.STRING },
+                      phase: { type: Type.STRING },
+                      priority: { type: Type.INTEGER },
+                      note: { type: Type.STRING },
+                      done: { type: Type.BOOLEAN },
+                    },
+                    required: ["id"],
+                  },
+                },
+              },
+              required: ["reply"],
+            },
           },
           customAi: ai,
           selectedModel,
         });
 
         if (chatResponse?.text) {
+          const parsed = JSON.parse(chatResponse.text || "{}");
+          const existingTabIds = new Set(activeTabIds);
+          const validatedTabs: { id: string; name: string }[] = [];
+          if (Array.isArray(parsed.tabs)) {
+            for (const rawTab of parsed.tabs.slice(0, 3)) {
+              const name = typeof rawTab?.name === 'string' ? rawTab.name.trim().slice(0, 32) : '';
+              if (!name) continue;
+              const baseId = slugifyTabId(name, rawTab.id);
+              let id = baseId;
+              let suffix = 2;
+              while (existingTabIds.has(id) || validatedTabs.some((tb) => tb.id === id)) {
+                id = `${baseId.slice(0, 24)}_${suffix++}`;
+              }
+              existingTabIds.add(id);
+              validatedTabs.push({ id, name });
+            }
+          }
+
+          const allowedTaskPhases = new Set([...activeTabIds, ...validatedTabs.map((tb) => tb.id)]);
+          const validatedTasks = (parsed.tasks || []).map((t: any, idx: number) => {
+            const rawStepList = Array.isArray(t.stepList) ? t.stepList : [];
+            const finalStepList = rawStepList.length > 0
+              ? rawStepList.map((s: any, sIdx: number) => ({
+                  id: `s-chat-gen-${idx}-${sIdx}-${Date.now().toString(36)}`,
+                  title: typeof s === "string" ? s : s.title || `Крок ${sIdx + 1}`,
+                  done: false,
+                }))
+              : Array.from({ length: Math.max(1, t.steps || 2) }, (_, sIdx) => ({
+                  id: `s-chat-gen-${idx}-${sIdx}-${Date.now().toString(36)}`,
+                  title: `${isUk ? "Етап" : "Step"} ${sIdx + 1}`,
+                  done: false,
+                }));
+
+            return {
+              title: t.title,
+              phase: allowedTaskPhases.has(t.phase) ? t.phase : primaryTab,
+              priority: (t.priority === 1 || t.priority === 2 || t.priority === 3) ? t.priority : 2,
+              steps: finalStepList.length,
+              stepList: finalStepList,
+              note: t.note || "",
+            };
+          });
+
           return res.json({
-            reply: chatResponse.text,
-            insights: [],
+            reply: parsed.reply,
+            summary: parsed.reply,
+            insights: parsed.insights || [],
+            tasks: validatedTasks,
+            tabs: validatedTabs,
+            taskUpdates: Array.isArray(parsed.taskUpdates) ? parsed.taskUpdates : [],
             source: "gemini-chat",
           });
         }
       } catch (chatError) {
-        console.warn("Gemini chat request failed, using local response.", chatError);
+        console.warn("Gemini chat request failed, smoothly falling back:", chatError);
       }
     }
 
-    // If Gemini client is available, leverage LLM with full context
+    // If Gemini client is available, leverage LLM for generate / analyze / breakdown
     if (ai) {
       try {
-        const systemInstruction = `You are an elite, tactical AI Task Architect and Productivity Strategist for the life & workflow application "Karkas".
-You have FULL, UNRESTRICTED visibility into the user's entire app state:
-- Active Tasks (with current step progress and sub-step checklists)
+        const isAnalyzeMode = action === "analyze";
+        const systemInstruction = `You are an elite, tactical AI Task Architect and Productivity Strategist for "KARKAS // TASK ARCHITECT".
+You have FULL real-time visibility into the user's workspace:
+- Active Tasks (with sub-steps, priority, and progress)
 - Completed Tasks history
-- Deleted / Archived tasks
-- User's dynamic category tabs
-- Overall completion metrics and priority distribution
-- Derived behavioral profile: completion pace, average task size, preferred categories, overloaded categories, and safe active-task limit
+- Category Tabs: ${JSON.stringify(tabList)}
+- Workflow statistics & metrics
 
-Tone: Minimalist, direct, tactical, street-smart, actionable, zero corporate fluff, no emojis in task titles.
-Adapt to the behavioral profile in the application context. Prefer the user's demonstrated pace and categories, reduce load when they are overloaded, and avoid recommending more simultaneous work than their safe active-task limit.
-LANGUAGE REQUIREMENT: ${isUk ? "All output (summary, insights, task titles, step titles, notes) MUST be in UKRAINIAN." : "All output must be in English."}
+GOAL: ${isAnalyzeMode ? "Deep diagnostic audit of bottlenecks, momentum, category balance, and concrete corrective action plan." : "Produce a high-impact tactical execution roadmap with concrete tasks and sub-steps."}
+TONE: Minimalist, direct, tactical, street-smart, actionable, zero corporate fluff, no emojis in task titles.
+LANGUAGE REQUIREMENT: ${isUk ? "All output (summary, insights, task titles, step titles, notes, diagnosis) MUST be in UKRAINIAN." : "All output must be in English."}
 AVAILABLE CATEGORY TABS: ${JSON.stringify(activeTabIds)}.
-Every task MUST set "phase" to one of these exact available tabs: ${JSON.stringify(activeTabIds)}.
-${allowNewTabs ? `The user explicitly requested a new category tab. You may return 1-3 NEW tabs in "tabs" only when needed. Each new tab must have a short human-readable "name" and a unique lowercase ASCII "id" (for example "fitness"). Never repeat an existing tab. Tasks may use a newly returned tab id.` : 'Do not create or rename tabs. Return an empty "tabs" array.'}
+${isTabCreationRequested ? `You may return 1-3 new tabs in "tabs" if organizing a new project area. Each new tab must have a short "name" and an ASCII "id".` : 'Do not create tabs unless clearly requested.'}
 
-When breaking down tasks or analyzing:
-1. Provide a punchy "summary" explaining the execution roadmap or strategic diagnosis.
-2. Provide an array of 2-3 "insights" (tactical advice on priorities, avoiding overload, and workflow optimization).
-3. Provide an array of 2-5 concrete "tasks". For each task:
-   - "title": Actionable, specific task name
-   - "phase": One of ${JSON.stringify(activeTabIds)}
-   - "priority": 1 (urgent), 2 (standard), or 3 (low)
-   - "steps": Number from 2 to 5 representing stages
-   - "note": Brief tip or key action note (max 8 words)
-   - "stepList": An array of concrete sequential sub-steps (2-5 items), each with "title" (e.g. ${isUk ? '"1. Підготувати драфт структури", "2. Узгодити вимоги", "3. Провести фінальну перевірку"' : '"1. Draft core structure", "2. Validate specs", "3. Quality check & sign-off"'}).
+Requirements:
+1. "summary": Punchy diagnosis or strategy summary (2-3 sentences).
+2. "insights": 2-4 tactical observations on priorities, workload distribution, and execution momentum.
+3. "tasks": 2-6 concrete actionable tasks with sub-steps.
+4. "tabs": Any new category tabs needed.
+5. "taskUpdates": Any adjustments to existing tasks (matching their "id", e.g. re-prioritizing or updating title/note).
+6. "workloadDiagnosis": Status assessment object (status badge, bottlenecks array, strengths array).
+7. "categoryHealth": Array assessing health per category tab (phase, phaseName, taskCount, status, recommendation).
 
-Adhere strictly to the requested JSON schema.`;
+Return valid JSON adhering to schema.`;
 
-        const fullAppContext = {
-          userQueryOrGoal: prompt,
+        const fullContextPayload = {
+          userPrompt: prompt,
           actionType: action,
           language: isUk ? "Ukrainian" : "English",
-          applicationOverview: {
-            totalTasks: (effectiveStats.total || effectiveActiveTasks.length + effectiveCompletedTasks.length),
-            completedCount: (effectiveStats.completed || effectiveCompletedTasks.length),
+          overview: {
+            totalTasks: effectiveStats.total || (effectiveActiveTasks.length + effectiveCompletedTasks.length),
+            completedCount: effectiveStats.completed || effectiveCompletedTasks.length,
             completionPercent: effectiveStats.percent ?? 0,
             activeCount: effectiveActiveTasks.length,
             urgentP1Count: effectiveActiveTasks.filter((t: any) => t.priority === 1).length,
@@ -296,15 +449,12 @@ Adhere strictly to the requested JSON schema.`;
             phase: t.phase,
             priority: t.priority,
             progress: `${t.currentStep || 0}/${t.steps || 1}`,
-            subSteps: t.stepList?.map((s: any) => s.title) || [],
+            subSteps: t.stepList?.map((s: any) => typeof s === 'string' ? s : s.title) || [],
             note: t.note || "",
-            pinned: !!t.pinned,
+            timerRunning: !!t.timerRunning,
+            timeSpentSeconds: t.timeSpentSeconds || 0,
           })),
-          recentCompletedTasks: effectiveCompletedTasks.slice(-10).map((t: any) => ({
-            title: t.title,
-            phase: t.phase,
-          })),
-          deletedArchiveSample: effectiveDeletedTasks.slice(-5).map((t: any) => ({
+          recentCompletedTasks: effectiveCompletedTasks.slice(-12).map((t: any) => ({
             title: t.title,
             phase: t.phase,
           })),
@@ -313,8 +463,8 @@ Adhere strictly to the requested JSON schema.`;
         const response = await generateGeminiContentWithFallback({
           contents: `USER REQUEST: "${prompt}".
 ACTION: ${action}.
-FULL APPLICATION REAL-TIME CONTEXT:
-${JSON.stringify(fullAppContext, null, 2)}`,
+WORKSPACE REAL-TIME CONTEXT:
+${JSON.stringify(fullContextPayload, null, 2)}`,
           config: {
             systemInstruction,
             responseMimeType: "application/json",
@@ -361,6 +511,43 @@ ${JSON.stringify(fullAppContext, null, 2)}`,
                     required: ["id", "name"],
                   },
                 },
+                taskUpdates: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      id: { type: Type.STRING },
+                      title: { type: Type.STRING },
+                      phase: { type: Type.STRING },
+                      priority: { type: Type.INTEGER },
+                      note: { type: Type.STRING },
+                      done: { type: Type.BOOLEAN },
+                    },
+                    required: ["id"],
+                  },
+                },
+                workloadDiagnosis: {
+                  type: Type.OBJECT,
+                  properties: {
+                    status: { type: Type.STRING },
+                    bottlenecks: { type: Type.ARRAY, items: { type: Type.STRING } },
+                    strengths: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  },
+                },
+                categoryHealth: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      phase: { type: Type.STRING },
+                      phaseName: { type: Type.STRING },
+                      taskCount: { type: Type.INTEGER },
+                      status: { type: Type.STRING },
+                      recommendation: { type: Type.STRING },
+                    },
+                    required: ["phase", "phaseName", "taskCount", "status"],
+                  },
+                },
               },
               required: ["summary", "tasks"],
             },
@@ -374,28 +561,22 @@ ${JSON.stringify(fullAppContext, null, 2)}`,
           const parsed = JSON.parse(rawText);
 
           const existingTabIds = new Set(activeTabIds);
-          const newTabIdMap = new Map<string, string>();
           const validatedTabs: { id: string; name: string }[] = [];
-          if (allowNewTabs && Array.isArray(parsed.tabs)) {
-            for (const rawTab of parsed.tabs.slice(0, 3)) {
+          if (Array.isArray(parsed.tabs)) {
+            for (const rawTab of parsed.tabs.slice(0, 4)) {
               const name = typeof rawTab?.name === 'string' ? rawTab.name.trim().slice(0, 32) : '';
               if (!name) continue;
-              const requestedId = typeof rawTab?.id === 'string' ? rawTab.id.trim() : '';
-              const baseId = (requestedId || name)
-                .toLowerCase()
-                .replace(/[^a-z0-9_-]+/g, '_')
-                .replace(/^_+|_+$/g, '')
-                .slice(0, 28) || 'tab';
+              const baseId = slugifyTabId(name, rawTab.id);
               let id = baseId;
               let suffix = 2;
-              while (existingTabIds.has(id) || validatedTabs.some((tab) => tab.id === id)) {
+              while (existingTabIds.has(id) || validatedTabs.some((tb) => tb.id === id)) {
                 id = `${baseId.slice(0, 24)}_${suffix++}`;
               }
-              newTabIdMap.set(requestedId, id);
+              existingTabIds.add(id);
               validatedTabs.push({ id, name });
             }
           }
-          const allowedTaskPhases = new Set([...activeTabIds, ...validatedTabs.map((tab) => tab.id)]);
+          const allowedTaskPhases = new Set([...activeTabIds, ...validatedTabs.map((tb) => tb.id)]);
 
           const validatedTasks = (parsed.tasks || []).map((t: any, idx: number) => {
             const rawStepList = Array.isArray(t.stepList) ? t.stepList : [];
@@ -413,7 +594,7 @@ ${JSON.stringify(fullAppContext, null, 2)}`,
 
             return {
               title: t.title,
-              phase: allowedTaskPhases.has(t.phase) ? t.phase : (newTabIdMap.get(t.phase) || primaryTab),
+              phase: allowedTaskPhases.has(t.phase) ? t.phase : primaryTab,
               priority: (t.priority === 1 || t.priority === 2 || t.priority === 3) ? t.priority : 2,
               steps: finalStepList.length,
               stepList: finalStepList,
@@ -422,10 +603,13 @@ ${JSON.stringify(fullAppContext, null, 2)}`,
           });
 
           return res.json({
-            summary: parsed.summary || (isUk ? "План сформовано з повного аналізу додатку." : "Plan formulated from full app analysis."),
+            summary: parsed.summary || (isUk ? "Аналіз та тактичний план сформовано." : "Analysis and tactical plan generated."),
             insights: parsed.insights || [],
             tasks: validatedTasks,
             tabs: validatedTabs,
+            taskUpdates: Array.isArray(parsed.taskUpdates) ? parsed.taskUpdates : [],
+            workloadDiagnosis: parsed.workloadDiagnosis,
+            categoryHealth: parsed.categoryHealth,
             analyzedContext: {
               activeCount: effectiveActiveTasks.length,
               completedCount: effectiveCompletedTasks.length,
@@ -435,7 +619,7 @@ ${JSON.stringify(fullAppContext, null, 2)}`,
           });
         }
       } catch (geminiError) {
-        console.warn("Gemini assist API call encountered temporary issue, seamlessly transitioning to local rule engine.", geminiError);
+        console.warn("Gemini assist encountered load, smoothly using heuristic engine:", geminiError);
       }
     }
 
@@ -444,156 +628,107 @@ ${JSON.stringify(fullAppContext, null, 2)}`,
       const completedCount = effectiveCompletedTasks.length;
       return res.json({
         reply: isUk
-          ? `Я тимчасово працюю без підключення до моделі. У контексті бачу ${activeCount} активних і ${completedCount} завершених задач. Опишіть конкретну проблему ще раз, коли AI-підключення буде доступне.`
-          : `I am temporarily working without a model connection. I can see ${activeCount} active and ${completedCount} completed tasks. Ask again when the AI connection is available.`,
+          ? `У черзі ${activeCount} активних задач і ${completedCount} завершених. Напишіть конкретну дію (напр. «додай задачу X», «створи вкладку Y», «проаналізуй мої задачі»).`
+          : `You have ${activeCount} active and ${completedCount} completed tasks. Tell me what action you need (e.g. "add task X", "create tab Y", "analyze my tasks").`,
         source: "local-chat-fallback",
       });
     }
 
-    // High quality rule-based Assistant fallback (instant, offline-resilient)
+    // High quality offline rule-based Assistant fallback
     const lower = prompt.toLowerCase();
-    let fallbackSummary = isUk ? "Сформовано структурований покроковий план дій." : "Formulated structured action plan.";
+    const isAnalyze = action === "analyze" || lower.includes("аналіз") || lower.includes("аудит") || lower.includes("прогрес") || lower.includes("звіт");
+    const p1Tasks = effectiveActiveTasks.filter((t: any) => t.priority === 1);
+    const p1Count = p1Tasks.length;
+
+    let fallbackSummary = "";
+    let fallbackInsights: string[] = [];
     let fallbackTasks: any[] = [];
-    const fallbackInsights: string[] = isUk
-      ? [
-          effectiveActiveTasks.length > 8
-            ? "У черзі багато завдань. Сфокусуйтеся на виконанні поточних перед додаванням нових."
-            : "Збалансоване навантаження. Розбивайте великі цілі на короткі спринти.",
-          "Використовуйте пріоритет P1 для дій із найвищим коефіцієнтом корисної дії.",
-        ]
-      : [
-          "Keep high-priority tasks contained to 2-3 active items at a time.",
-          "Batch similar category tasks to reduce mental friction.",
-        ];
+    const getPhaseFor = (preferred: string) => activeTabIds.includes(preferred) ? preferred : primaryTab;
 
-    const getPhaseFor = (preferred: string) => {
-      if (activeTabIds.includes(preferred)) return preferred;
-      return primaryTab;
-    };
+    if (isAnalyze) {
+      fallbackSummary = isUk
+        ? `Аудит робочого процесу: ${effectiveActiveTasks.length} активних завдань, ${effectiveCompletedTasks.length} виконано, ${p1Count} у терміновому пріоритеті P1.`
+        : `Workflow audit: ${effectiveActiveTasks.length} active tasks, ${effectiveCompletedTasks.length} completed, ${p1Count} urgent P1 items.`;
 
-    const isHealth = lower.includes("спорт") || lower.includes("тренув") || lower.includes("здоров") || lower.includes("gym") || lower.includes("fit") || lower.includes("сон");
-    const isBuy = lower.includes("купит") || lower.includes("покупк") || lower.includes("buy") || lower.includes("shop") || lower.includes("замовити");
-    const isStudy = lower.includes("навчан") || lower.includes("книг") || lower.includes("study") || lower.includes("learn") || lower.includes("курси") || lower.includes("read");
-
-    if (isHealth) {
-      fallbackSummary = isUk ? "План відновлення енергії та фізичної форми." : "Physical energy & vitality action plan.";
-      fallbackTasks = isUk
+      fallbackInsights = isUk
         ? [
-            {
-              title: "Кардіо або прогулянка 45 хв",
-              phase: getPhaseFor("health"),
-              priority: 1,
-              steps: 2,
-              stepList: [
-                { id: "s-1", title: "Розминка суглобів 5 хв", done: false },
-                { id: "s-2", title: "Основний темп у зоні 2", done: false },
-              ],
-              note: "Тримати пульс у зоні 2",
-            },
-            {
-              title: "Силове тренування на основні групи",
-              phase: getPhaseFor("health"),
-              priority: 1,
-              steps: 3,
-              stepList: [
-                { id: "s-3", title: "Динамічний розігрів", done: false },
-                { id: "s-4", title: "3 базові вправи по 4 підходи", done: false },
-                { id: "s-5", title: "Заминка та розтяжка", done: false },
-              ],
-              note: "Розминка обов'язково",
-            },
-            {
-              title: "Пити 2.5л води та електроліти",
-              phase: getPhaseFor("health"),
-              priority: 2,
-              steps: 3,
-              stepList: [
-                { id: "s-6", title: "Склянка води вранці", done: false },
-                { id: "s-7", title: "Пляшка води під час роботи", done: false },
-                { id: "s-8", title: "Ізотонік після тренування", done: false },
-              ],
-              note: "По склянці щогодини",
-            },
+            p1Count >= 3
+              ? `Увага: у вас ${p1Count} термінових завдань P1. Виберіть одне ключове та завершіть його перед іншими.`
+              : `Пріоритетне навантаження збалансоване (${p1Count} задач P1).`,
+            effectiveActiveTasks.length > 8
+              ? `Черга перевантажена (${effectiveActiveTasks.length} завдань). Рекомендується закрити або відкласти частину справ.`
+              : `Оптимальний обсяг черги завдань.`,
+            `Регулярно фіксуйте час виконання через вбудований таймер для точної оцінки спринтів.`,
           ]
         : [
-            {
-              title: "45-min Zone-2 cardio or brisk walk",
-              phase: getPhaseFor("health"),
-              priority: 1,
-              steps: 2,
-              stepList: [
-                { id: "s-1", title: "5 min warmup", done: false },
-                { id: "s-2", title: "Sustained Zone 2 pace", done: false },
-              ],
-              note: "Aerobic recovery zone",
-            },
-            {
-              title: "Full-body functional resistance workout",
-              phase: getPhaseFor("health"),
-              priority: 1,
-              steps: 3,
-              stepList: [
-                { id: "s-3", title: "Joint mobility warmup", done: false },
-                { id: "s-4", title: "3 compound exercises", done: false },
-                { id: "s-5", title: "Cooldown & stretch", done: false },
-              ],
-              note: "Thorough warmup first",
-            },
+            p1Count >= 3
+              ? `Warning: ${p1Count} urgent P1 items active. Single-thread on top deliverable first.`
+              : `Priority balance is healthy (${p1Count} P1 tasks).`,
+            `Capture sub-steps on complex tasks to reduce cognitive friction.`,
           ];
-    } else if (isBuy) {
-      fallbackSummary = isUk ? "Список необхідних закупівель." : "Targeted shopping checklist.";
+
       fallbackTasks = isUk
         ? [
             {
-              title: "Замовити базові продукти на тиждень",
-              phase: getPhaseFor("buy"),
+              title: p1Tasks[0] ? `Сфокусуватися на «${p1Tasks[0].title.slice(0, 35)}»` : "Закрити головне пріоритетне завдання дня",
+              phase: p1Tasks[0]?.phase || primaryTab,
               priority: 1,
               steps: 2,
               stepList: [
-                { id: "s-b1", title: "Ревізія холодильника", done: false },
-                { id: "s-b2", title: "Оформлення кошика", done: false },
+                { id: "s-an-1", title: "Запустити 25-хв фокус-спринт без перемикання", done: false },
+                { id: "s-an-2", title: "Зафіксувати результат та закрити задачу", done: false },
               ],
-              note: "Овочі, білок, крупи",
+              note: "Головний фокус",
             },
             {
-              title: "Побутові дрібниці та засоби для дому",
-              phase: getPhaseFor("buy"),
+              title: "Провести ревізію та оптимізацію черги завдань",
+              phase: primaryTab,
               priority: 2,
               steps: 2,
               stepList: [
-                { id: "s-b3", title: "Список побутової хімії", done: false },
-                { id: "s-b4", title: "Замовлення або покупка", done: false },
+                { id: "s-an-3", title: "Перевірити неактуальні завдання та архівувати", done: false },
+                { id: "s-an-4", title: "Перерозподілити пріоритети на тиждень", done: false },
               ],
-              note: "Перевірити запаси",
+              note: "Гігієна робочого простору",
             },
           ]
         : [
             {
-              title: "Weekly whole-foods grocery order",
-              phase: getPhaseFor("buy"),
+              title: "Knock out top priority deliverable",
+              phase: primaryTab,
               priority: 1,
               steps: 2,
               stepList: [
-                { id: "s-b1", title: "Pantry check", done: false },
-                { id: "s-b2", title: "Submit order", done: false },
+                { id: "s-an-1", title: "Start 25-min focus sprint", done: false },
+                { id: "s-an-2", title: "Review outputs and mark complete", done: false },
               ],
-              note: "Proteins, greens, grains",
+              note: "Prime focus",
             },
           ];
     } else {
       fallbackSummary = isUk ? `Тактичний план виконання для «${prompt}».` : `Tactical execution sequence for "${prompt}".`;
+      fallbackInsights = isUk
+        ? [
+            "Розбивайте великі завдання на 2-4 конкретних підкроки для прискорення прогресу.",
+            "Зосередьтеся на P1 завданнях перед відкриттям нових етапів.",
+          ]
+        : [
+            "Decompose multi-stage operations into smaller micro-steps.",
+            "Focus on urgent P1 items before starting secondary tabs.",
+          ];
+
       fallbackTasks = isUk
         ? [
             {
-              title: `Окреслити ключовий результат для «${prompt}»`,
+              title: `Окреслити ключовий результат для «${prompt.slice(0, 40)}»`,
               phase: getPhaseFor("focus"),
               priority: 1,
               steps: 2,
               stepList: [
-                { id: "s-g1", title: "Сформулювати кінцевий критерій готовності", done: false },
+                { id: "s-g1", title: "Сформулювати критерій готовності", done: false },
                 { id: "s-g2", title: "Підготувати необхідні матеріали", done: false },
               ],
-              note: "Чіткі критерії успіху",
+              note: "Чіткий орієнтир",
             },
             {
               title: `Основна ударна робота (Sprint Block)`,
@@ -608,27 +743,27 @@ ${JSON.stringify(fullAppContext, null, 2)}`,
               note: "Без відволікань",
             },
             {
-              title: `Підбити підсумки та зафіксувати статус`,
+              title: `Підбити підсумки та перевірити якість`,
               phase: getPhaseFor("focus"),
               priority: 2,
               steps: 1,
               stepList: [
-                { id: "s-g6", title: "Перевірити якість та закрити задачу", done: false },
+                { id: "s-g6", title: "Перевірити результат за чеклістом", done: false },
               ],
-              note: "Оновити чергу завдань",
+              note: "Фінальний контроль",
             },
           ]
         : [
             {
-              title: `Clarify critical deliverable for "${prompt}"`,
+              title: `Clarify deliverable for "${prompt.slice(0, 40)}"`,
               phase: getPhaseFor("focus"),
               priority: 1,
               steps: 2,
               stepList: [
                 { id: "s-g1", title: "Define completion criteria", done: false },
-                { id: "s-g2", title: "Gather assets", done: false },
+                { id: "s-g2", title: "Gather required assets", done: false },
               ],
-              note: "Define definition of done",
+              note: "Scope definition",
             },
             {
               title: `Deep execution sprint block`,
@@ -640,14 +775,14 @@ ${JSON.stringify(fullAppContext, null, 2)}`,
                 { id: "s-g4", title: "Core implementation", done: false },
                 { id: "s-g5", title: "Review outputs", done: false },
               ],
-              note: "Single-task focus mode",
+              note: "Single-task focus",
             },
           ];
     }
 
     const quotedTabName = prompt.match(/["«]([^"»]{1,32})["»]/)?.[1]?.trim();
-    const fallbackTabs = allowNewTabs
-      ? [{ id: `tab_${Date.now().toString(36)}`, name: quotedTabName || (isUk ? 'Нова вкладка' : 'New tab') }]
+    const fallbackTabs = isTabCreationRequested
+      ? [{ id: slugifyTabId(quotedTabName || (isUk ? 'Новий напрямок' : 'New area')), name: quotedTabName || (isUk ? 'Новий напрямок' : 'New area') }]
       : [];
 
     return res.json({

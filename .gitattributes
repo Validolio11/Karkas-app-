@@ -1,0 +1,4 @@
+# GitHub Linguist language statistics override
+electron/*.cjs linguist-language=TypeScript
+electron/*.test.cjs linguist-language=TypeScript
+dist/* linguist-vendored

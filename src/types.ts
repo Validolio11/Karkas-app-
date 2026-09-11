@@ -68,6 +68,62 @@ export interface SuggestedTask {
   reason?: string;
 }
 
+export interface AITaskUpdate {
+  id: string;
+  title?: string;
+  phase?: string;
+  priority?: 1 | 2 | 3;
+  steps?: number;
+  stepList?: TaskStepItem[];
+  done?: boolean;
+  note?: string;
+}
+
+export interface AIDeletedTaskRef {
+  id: string;
+  reason?: string;
+}
+
+export interface AIResponse {
+  summary: string;
+  insights?: string[];
+  reply?: string;
+  tasks?: {
+    title: string;
+    phase: string;
+    priority: 1 | 2 | 3;
+    steps: number;
+    stepList?: { id?: string; title: string; done?: boolean }[];
+    note?: string;
+  }[];
+  tabs?: {
+    id: string;
+    name: string;
+    color?: string;
+  }[];
+  taskUpdates?: AITaskUpdate[];
+  taskDeletions?: AIDeletedTaskRef[];
+  workloadDiagnosis?: {
+    status?: string;
+    bottlenecks?: string[];
+    strengths?: string[];
+    recommendedLimit?: number;
+  };
+  categoryHealth?: {
+    phase: string;
+    phaseName: string;
+    taskCount: number;
+    status: 'balanced' | 'overloaded' | 'empty' | 'stagnant';
+    recommendation?: string;
+  }[];
+  source?: string;
+  analyzedContext?: {
+    activeCount: number;
+    completedCount: number;
+    tabsCount: number;
+  };
+}
+
 export type AnalyticsPeriod = 'ALL_TIME' | 'THIS_YEAR' | 'LAST_YEAR' | 'THIS_MONTH' | 'LAST_30_DAYS';
 
 export interface AIRecommendation {

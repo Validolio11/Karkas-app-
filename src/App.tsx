@@ -5,6 +5,7 @@ import { PSTask, DeletedTask, TaskTab, FilterMode, WorkflowStats, TaskStepItem, 
 import { TaskCard } from './components/TaskCard';
 import { DashboardView } from './components/DashboardView';
 import { NotepadView } from './components/NotepadView';
+import { loadNotepadNotes, restoreNotepadNote } from './utils/notepadStorage';
 import { HistoryView } from './components/HistoryView';
 import { TopWorkflowMatrix } from './components/TopWorkflowMatrix';
 import { QuickAddDrawer } from './components/QuickAddDrawer';
@@ -97,7 +98,7 @@ const APP_ZOOM_KEY = 'karkas_app_zoom_percent';
 const MIN_APP_ZOOM = 75;
 const MAX_APP_ZOOM = 150;
 const DEFAULT_APP_ZOOM = 100;
-const APP_CURRENT_VERSION = '1.2.17';
+const APP_CURRENT_VERSION = '1.2.18';
 
 function normalizeVersion(version: string): number[] {
   const cleaned = String(version || '').trim().replace(/^v/i, '').split('-')[0];
@@ -228,27 +229,22 @@ export default function App() {
     return 'ALL';
   });
 
-  const [notes, setNotes] = useState<NotepadNote[]>(() => {
-    if (typeof window === 'undefined') return [];
-    try {
-      const saved = localStorage.getItem(NOTEPAD_STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
-      }
-    } catch (e) {
-      console.error('Failed to load notes from localStorage', e);
-    }
-    return lang === 'uk' ? INITIAL_NOTES_UK : INITIAL_NOTES_EN;
-  });
+  const [initialNotes] = useState(() => loadNotepadNotes(
+    localStorage, NOTEPAD_STORAGE_KEY, lang === 'uk' ? INITIAL_NOTES_UK : INITIAL_NOTES_EN,
+  ));
+  const [notes, setNotes] = useState<NotepadNote[]>(initialNotes.notes);
+  const [notesStorageError, setNotesStorageError] = useState(!initialNotes.canPersist);
 
   useEffect(() => {
+    if (!initialNotes.canPersist) return;
     try {
       localStorage.setItem(NOTEPAD_STORAGE_KEY, JSON.stringify(notes));
+      setNotesStorageError(false);
     } catch (e) {
       console.error('Failed to save notes to localStorage', e);
+      setNotesStorageError(true);
     }
-  }, [notes]);
+  }, [notes, initialNotes.canPersist]);
 
   const handleAddNote = (newNote: Omit<NotepadNote, 'id' | 'createdAt'>) => {
     const created: NotepadNote = {
@@ -370,6 +366,7 @@ export default function App() {
   // Global Keyboard Shortcuts (Escape, Ctrl+N, Ctrl+Shift+F, '/')
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement)?.closest('dialog[open]')) return;
       const targetTag = (e.target as HTMLElement)?.tagName?.toLowerCase();
       const isInputFocused =
         targetTag === 'input' || targetTag === 'textarea' || (e.target as HTMLElement)?.isContentEditable;
@@ -1896,7 +1893,7 @@ export default function App() {
           className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-[#0d0d12]/95 border border-neutral-700 shadow-2xl px-4 py-2 flex items-center gap-3 backdrop-blur-md animate-in fade-in slide-in-from-bottom-3 duration-200"
         >
           <img
-            src="/icon.png"
+            src="/icon.png?v=karkas-app-icon-2"
             alt="KARKAS Logo"
             className="w-4 h-4 rounded-[2px] object-cover shrink-0 shadow-sm"
             onError={(e) => {
@@ -1960,6 +1957,8 @@ export default function App() {
             onAddNote={handleAddNote}
             onUpdateNote={handleUpdateNote}
             onDeleteNote={handleDeleteNote}
+            onRestoreNote={(note) => setNotes((prev) => restoreNotepadNote(prev, note))}
+            storageError={notesStorageError}
           />
         ) : selectedPhase === 'HISTORY' ? (
           <HistoryView

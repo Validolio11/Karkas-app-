@@ -5,17 +5,16 @@ import { PSTask, TaskTab } from '../types';
 import { sound } from '../utils/audio';
 import { getTaskTotalSeconds, getTaskRemainingSeconds } from '../utils/taskTimer';
 import { Language, TRANSLATIONS } from '../utils/i18n';
+import { AIIcon } from './AIIconTemplates';
 import {
   Pin,
   Trash2,
   Check,
   ArrowRight,
-  SquareCode,
   ChevronDown,
   ChevronUp,
   Plus,
   X,
-  Sparkles,
   LoaderCircle,
   Play,
   Pause,
@@ -558,7 +557,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                 title={t.askAI}
                 className="p-1 text-neutral-400 hover:text-emerald-400 hover:bg-neutral-800 transition-colors"
               >
-                <SquareCode className="w-3.5 h-3.5" />
+                <AIIcon className="w-3.5 h-3.5" />
               </button>
 
               {/* Delete */}
@@ -794,7 +793,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                       {isBreakingDown ? (
                         <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
                       ) : (
-                        <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                        <AIIcon className="h-3.5 w-3.5" />
                       )}
                       <span>{isBreakingDown ? t.stepsSection.aiBreakingDown : t.stepsSection.aiBreakdownBtn}</span>
                     </button>

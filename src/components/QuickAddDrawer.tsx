@@ -3,7 +3,8 @@ import { motion, AnimatePresence } from 'motion/react';
 import { TaskTab } from '../types';
 import { sound } from '../utils/audio';
 import { Language, TRANSLATIONS } from '../utils/i18n';
-import { Plus, SquareCode, X } from 'lucide-react';
+import { Plus, X } from 'lucide-react';
+import { AIIcon } from './AIIconTemplates';
 
 interface QuickAddDrawerProps {
   isOpen: boolean;
@@ -349,7 +350,7 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
                   onClick={handleAskAI}
                   className="flex items-center gap-1.5 px-3 py-2.5 bg-[#08080a] border border-neutral-800 text-xs font-mono text-neutral-400 hover:text-white hover:border-neutral-600 transition-colors cursor-pointer"
                 >
-                  <SquareCode className="w-3.5 h-3.5 text-neutral-300" />
+                  <AIIcon className="w-3.5 h-3.5" />
                   <span>{t.quickAdd.aiBreakdown}</span>
                 </button>
               )}

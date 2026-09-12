@@ -34,6 +34,15 @@ interface NotepadViewProps {
   onAddNote: (note: Omit<NotepadNote, 'id' | 'createdAt'>) => void;
   onUpdateNote: (id: string, updates: Partial<NotepadNote>) => void;
   onDeleteNote: (id: string) => void;
+  onRestoreNote: (note: NotepadNote) => void;
+  storageError?: boolean;
+}
+
+interface NoteVoiceSession {
+  target: 'content' | 'title';
+  noteId: string | null;
+  abortController: AbortController;
+  stopping: boolean;
 }
 
 export const NOTE_COLOR_PRESETS = [
@@ -53,6 +62,8 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
   onAddNote,
   onUpdateNote,
   onDeleteNote,
+  onRestoreNote,
+  storageError = false,
 }) => {
   const t = TRANSLATIONS[lang];
   const nv = t.notepadView;
@@ -81,18 +92,27 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
 
   // Undo delete safety state
   const [recentlyDeletedNote, setRecentlyDeletedNote] = useState<NotepadNote | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<NotepadNote | null>(null);
+  const deleteDialogRef = useRef<HTMLDialogElement | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (pendingDelete) deleteDialogRef.current?.showModal();
+    else deleteDialogRef.current?.close();
+  }, [pendingDelete]);
 
   // Voice recording state
   const [isListening, setIsListening] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isVoiceStarting, setIsVoiceStarting] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
 
   const recognitionRef = useRef<any>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
-  const contentBeforeRecordingRef = useRef<string>('');
+  const voiceSessionRef = useRef<NoteVoiceSession | null>(null);
+  const voiceMountedRef = useRef(true);
 
   const titleInputRef = useRef<HTMLInputElement | null>(null);
   const contentTextareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -122,14 +142,17 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
 
   // Clean up recording on unmount
   useEffect(() => {
+    voiceMountedRef.current = true;
     return () => {
-      stopVoiceInput();
+      voiceMountedRef.current = false;
+      cancelVoiceInput();
     };
   }, []);
 
   // Keyboard navigation shortcuts within NotepadView
   useEffect(() => {
     const handleLocalKeyDown = (e: KeyboardEvent) => {
+      if (pendingDelete) return;
       const targetTag = (e.target as HTMLElement)?.tagName?.toLowerCase();
       const isInput = targetTag === 'input' || targetTag === 'textarea' || (e.target as HTMLElement)?.isContentEditable;
 
@@ -143,6 +166,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
           return;
         }
         if (isComposerOpen) {
+          cancelVoiceInput();
           setIsComposerOpen(false);
           return;
         }
@@ -161,31 +185,74 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
 
     window.addEventListener('keydown', handleLocalKeyDown);
     return () => window.removeEventListener('keydown', handleLocalKeyDown);
-  }, [isListening, editingNoteId, isComposerOpen, searchQuery]);
+  }, [isListening, editingNoteId, isComposerOpen, searchQuery, pendingDelete]);
+
+  const isVoiceBusy = () => voiceSessionRef.current !== null;
+
+  const isCurrentVoiceSession = (session: NoteVoiceSession) =>
+    voiceMountedRef.current && voiceSessionRef.current === session;
+
+  const releaseMicrophone = () => {
+    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+    mediaStreamRef.current = null;
+  };
+
+  const finishVoiceSession = (session: NoteVoiceSession) => {
+    if (!isCurrentVoiceSession(session)) return;
+    voiceSessionRef.current = null;
+    recognitionRef.current = null;
+    mediaRecorderRef.current = null;
+    releaseMicrophone();
+    setIsListening(false);
+    setIsVoiceStarting(false);
+    setIsTranscribing(false);
+  };
+
+  // Cancellation invalidates callbacks before stopping devices. A delayed permission
+  // prompt or desktop transcription response must never write into another draft.
+  const cancelVoiceInput = () => {
+    const session = voiceSessionRef.current;
+    voiceSessionRef.current = null;
+    session?.abortController.abort();
+    const recognition = recognitionRef.current;
+    recognitionRef.current = null;
+    try { recognition?.abort(); } catch {}
+    const recorder = mediaRecorderRef.current;
+    mediaRecorderRef.current = null;
+    if (recorder && recorder.state !== 'inactive') {
+      try { recorder.stop(); } catch {}
+    }
+    releaseMicrophone();
+    if (voiceMountedRef.current) {
+      setIsListening(false);
+      setIsVoiceStarting(false);
+      setIsTranscribing(false);
+    }
+  };
 
   const stopVoiceInput = () => {
+    const session = voiceSessionRef.current;
+    if (!session || session.stopping) return;
+    session.stopping = true;
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
-      } catch {}
-      recognitionRef.current = null;
-    }
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        setIsTranscribing(true);
+      } catch { finishVoiceSession(session); }
+    } else if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       try {
-        if (mediaRecorderRef.current.state === 'recording') {
-          mediaRecorderRef.current.requestData();
-        }
+        setIsTranscribing(true);
         mediaRecorderRef.current.stop();
-      } catch {}
-    }
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-      mediaStreamRef.current = null;
+      } catch { finishVoiceSession(session); }
+      releaseMicrophone();
+    } else {
+      cancelVoiceInput();
     }
     setIsListening(false);
   };
 
-  const transcribeRecordedAudio = async (blob: Blob) => {
+  const transcribeRecordedAudio = async (blob: Blob, session: NoteVoiceSession) => {
+    if (!isCurrentVoiceSession(session)) return;
     setIsTranscribing(true);
     try {
       const reader = new FileReader();
@@ -195,12 +262,14 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
       });
       reader.readAsDataURL(blob);
       const audioBase64 = await base64Promise;
+      if (!isCurrentVoiceSession(session)) return;
 
       const rawBase64 = audioBase64.includes(',') ? audioBase64.split(',')[1] : audioBase64;
       const customApiKey = localStorage.getItem('karkas_custom_api_key') || undefined;
       const customModel = localStorage.getItem('karkas_custom_model') || undefined;
       const res = await karkasApiFetch('/api/ai/transcribe-audio', {
         method: 'POST',
+        signal: session.abortController.signal,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           audioBase64: rawBase64,
@@ -213,8 +282,9 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
 
       if (res.ok) {
         const data = await res.json();
+        if (!isCurrentVoiceSession(session)) return;
         if (data.text) {
-          applyTranscribedText(data.text.trim());
+          applyTranscribedText(data.text.trim(), session);
           sound.tick(800);
         } else {
           setVoiceNotice(lang === 'uk' ? 'Мовлення не виявлено. Спробуйте ще раз.' : 'No speech detected. Please try again.');
@@ -222,34 +292,40 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
         }
       } else {
         const errData = await res.json().catch(() => ({}));
+        if (!isCurrentVoiceSession(session)) return;
         setVoiceNotice(errData.error || (lang === 'uk' ? 'Помилка транскрипції аудіо' : 'Audio transcription error'));
         sound.tick(300);
       }
     } catch (err: any) {
+      if (!isCurrentVoiceSession(session)) return;
       console.error('Audio transcription error:', err);
       setVoiceNotice(lang === 'uk' ? 'Помилка розпізнавання аудіо' : 'Audio transcription error');
       sound.tick(300);
     } finally {
-      setIsTranscribing(false);
+      finishVoiceSession(session);
     }
   };
 
-  const applyTranscribedText = (spoken: string) => {
-    if (editingNoteId) {
+  const applyTranscribedText = (spoken: string, session: NoteVoiceSession) => {
+    if (!spoken || !isCurrentVoiceSession(session)) return;
+    if (session.noteId) {
       setEditContent((prev) => (prev ? `${prev} ${spoken}` : spoken));
       return;
     }
-    if (voiceTarget === 'title') {
+    if (session.target === 'title') {
       setTitle((prev) => (prev ? `${prev} ${spoken}` : spoken));
     } else {
       setContent((prev) => (prev ? `${prev} ${spoken}` : spoken));
     }
   };
 
-  const startMediaRecorderFallback = async () => {
-    if (!navigator.mediaDevices?.getUserMedia) {
+  const startMediaRecorderFallback = async (session: NoteVoiceSession) => {
+    if (!isCurrentVoiceSession(session)) return;
+    setIsVoiceStarting(true);
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
       setVoiceNotice(lang === 'uk' ? 'Мікрофон не підтримується цим середовищем' : 'Microphone is not supported');
       sound.tick(300);
+      finishVoiceSession(session);
       return;
     }
 
@@ -263,8 +339,12 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
           autoGainControl: true,
         },
       });
+      if (!isCurrentVoiceSession(session)) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
       mediaStreamRef.current = stream;
-      audioChunksRef.current = [];
+      const audioChunks: Blob[] = [];
 
       let mimeType = '';
       if (typeof MediaRecorder !== 'undefined') {
@@ -284,45 +364,58 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
       mediaRecorderRef.current = recorder;
 
       recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+        if (isCurrentVoiceSession(session) && e.data.size > 0) audioChunks.push(e.data);
       };
 
       recorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
-        audioChunksRef.current = [];
+        if (!isCurrentVoiceSession(session)) return;
+        setIsListening(false);
+        mediaRecorderRef.current = null;
+        releaseMicrophone();
+        const audioBlob = new Blob(audioChunks, { type: recorder.mimeType || 'audio/webm' });
         if (audioBlob.size > 200) {
-          await transcribeRecordedAudio(audioBlob);
+          await transcribeRecordedAudio(audioBlob, session);
         } else {
           setVoiceNotice(lang === 'uk' ? 'Запис занадто короткий' : 'Recording too short');
           sound.tick(300);
+          finishVoiceSession(session);
         }
       };
 
+      recorder.onerror = () => {
+        if (!isCurrentVoiceSession(session)) return;
+        setVoiceNotice(lang === 'uk' ? 'Помилка запису аудіо' : 'Audio recording error');
+        cancelVoiceInput();
+      };
+
       recorder.start(250);
+      setIsVoiceStarting(false);
       setIsListening(true);
       sound.tick(750);
     } catch (err) {
+      if (!isCurrentVoiceSession(session)) return;
       console.error('Microphone access failed:', err);
       setVoiceNotice(lang === 'uk' ? 'Доступ до мікрофона заблоковано' : 'Microphone access blocked');
       sound.tick(300);
-      setIsListening(false);
+      finishVoiceSession(session);
     }
   };
 
-  const handleToggleVoiceInput = (target: 'content' | 'title' = 'content') => {
-    setVoiceTarget(target);
-    if (isListening) {
-      sound.tick(400);
-      stopVoiceInput();
+  const handleToggleVoiceInput = (target: 'content' | 'title' = 'content', noteId: string | null = null) => {
+    // The ref guards rapid clicks before React commits the busy state.
+    if (voiceSessionRef.current) {
+      if (isListening) {
+        sound.tick(400);
+        stopVoiceInput();
+      }
       return;
     }
 
+    const session: NoteVoiceSession = { target, noteId, abortController: new AbortController(), stopping: false };
+    voiceSessionRef.current = session;
+    setVoiceTarget(target);
+    setIsVoiceStarting(true);
     setVoiceNotice(null);
-    contentBeforeRecordingRef.current = editingNoteId
-      ? editContent
-      : target === 'title'
-      ? title
-      : content;
 
     const isDesktop = Boolean((window as any).karkasDesktop);
 
@@ -337,66 +430,65 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
           const recognition = new SpeechRecognition();
           recognition.lang = lang === 'uk' ? 'uk-UA' : 'en-US';
           recognition.continuous = true;
-          recognition.interimResults = true;
+          recognition.interimResults = false;
           recognition.maxAlternatives = 1;
 
-          let accumulatedFinal = '';
-
           recognition.onstart = () => {
+            if (!isCurrentVoiceSession(session) || recognitionRef.current !== recognition) return;
+            setIsVoiceStarting(false);
             setIsListening(true);
             sound.tick(750);
           };
 
           recognition.onresult = (event: any) => {
-            let currentInterim = '';
+            if (!isCurrentVoiceSession(session) || recognitionRef.current !== recognition) return;
+            const finalTranscripts: string[] = [];
             for (let i = event.resultIndex; i < event.results.length; ++i) {
               const transcript = event.results[i][0].transcript;
               if (event.results[i].isFinal) {
-                accumulatedFinal += (accumulatedFinal ? ' ' : '') + transcript.trim();
-              } else {
-                currentInterim += transcript;
+                finalTranscripts.push(transcript.trim());
               }
             }
-
-            const spoken = (accumulatedFinal + (currentInterim ? ' ' + currentInterim : '')).trim();
-            const base = contentBeforeRecordingRef.current.trim();
-            const combined = base ? `${base} ${spoken}` : spoken;
-
-            if (editingNoteId) {
-              setEditContent(combined);
-            } else if (target === 'title') {
-              setTitle(combined);
-            } else {
-              setContent(combined);
-            }
+            // Append finalized speech to the latest text so typing while dictating
+            // is preserved instead of replacing it with a stale initial value.
+            applyTranscribedText(finalTranscripts.join(' '), session);
           };
 
           recognition.onerror = (event: any) => {
+            if (!isCurrentVoiceSession(session) || recognitionRef.current !== recognition) return;
             console.warn('Speech recognition error, falling back to MediaRecorder:', event.error);
-            stopVoiceInput();
-            if (event.error !== 'no-speech') {
-              startMediaRecorderFallback();
+            recognitionRef.current = null;
+            try { recognition.abort(); } catch {}
+            setIsListening(false);
+            if (event.error !== 'no-speech' && !session.stopping) {
+              startMediaRecorderFallback(session);
+            } else {
+              finishVoiceSession(session);
             }
           };
 
           recognition.onend = () => {
-            setIsListening(false);
-            recognitionRef.current = null;
+            if (recognitionRef.current !== recognition) return;
+            finishVoiceSession(session);
           };
 
           recognitionRef.current = recognition;
           recognition.start();
           return;
         } catch (e) {
+          const recognition = recognitionRef.current;
+          recognitionRef.current = null;
+          try { recognition?.abort(); } catch {}
           console.warn('SpeechRecognition failed, falling back to MediaRecorder', e);
         }
       }
     }
 
-    startMediaRecorderFallback();
+    startMediaRecorderFallback(session);
   };
 
   const handleSaveNewNote = () => {
+    if (isVoiceBusy()) return;
     if (!title.trim() && !content.trim()) return;
 
     sound.tick(700);
@@ -412,10 +504,17 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
     setTitle('');
     setContent('');
     setIsComposerOpen(false);
-    stopVoiceInput();
+    cancelVoiceInput();
   };
 
   const handleStartEdit = (note: NotepadNote) => {
+    if (editingNoteId && editingNoteId !== note.id) {
+      setActionNotice(lang === 'uk' ? 'Збережіть або скасуйте поточне редагування перед переходом до іншої нотатки.' : 'Save or cancel the current edit before editing another note.');
+      editTitleInputRef.current?.focus();
+      return;
+    }
+    cancelVoiceInput();
+    setActionNotice(null);
     sound.tick(500);
     setEditingNoteId(note.id);
     setEditTitle(note.title);
@@ -431,10 +530,11 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
     setEditingNoteId(null);
     setEditTitle('');
     setEditContent('');
-    stopVoiceInput();
+    cancelVoiceInput();
   };
 
   const handleSaveEdit = () => {
+    if (isVoiceBusy()) return;
     if (!editingNoteId) return;
     if (!editTitle.trim() && !editContent.trim()) return;
 
@@ -447,10 +547,14 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
     });
 
     setEditingNoteId(null);
-    stopVoiceInput();
+    cancelVoiceInput();
   };
 
-  const handleDeleteWithUndo = (note: NotepadNote) => {
+  const handleConfirmDelete = () => {
+    if (!pendingDelete) return;
+    const note = notes.find((item) => item.id === pendingDelete.id);
+    setPendingDelete(null);
+    if (!note) return;
     sound.tick(400);
     setRecentlyDeletedNote(note);
     onDeleteNote(note.id);
@@ -459,21 +563,21 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
   const handleRestoreDeletedNote = () => {
     if (!recentlyDeletedNote) return;
     sound.tick(700);
-    onAddNote({
-      title: recentlyDeletedNote.title,
-      content: recentlyDeletedNote.content,
-      color: recentlyDeletedNote.color,
-      pinned: recentlyDeletedNote.pinned,
-    });
+    onRestoreNote(recentlyDeletedNote);
     setRecentlyDeletedNote(null);
   };
 
-  const handleCopyNote = (note: NotepadNote) => {
+  const handleCopyNote = async (note: NotepadNote) => {
     sound.tick(600);
     const textToCopy = `${note.title}\n\n${note.content}`.trim();
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(textToCopy);
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
+      await navigator.clipboard.writeText(textToCopy);
+    } catch {
+      setActionNotice(lang === 'uk' ? 'Не вдалося скопіювати нотатку. Перевірте дозвіл на доступ до буфера обміну.' : 'Could not copy the note. Check clipboard permission.');
+      return;
     }
+    setActionNotice(null);
     setCopiedId(note.id);
     setTimeout(() => {
       setCopiedId((curr) => (curr === note.id ? null : curr));
@@ -530,9 +634,30 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
   }, [notes, searchQuery, selectedColorFilter, sortOption]);
 
   const pinnedCount = useMemo(() => notes.filter((n) => n.pinned).length, [notes]);
+  const hasFilters = Boolean(searchQuery.trim()) || selectedColorFilter !== 'ALL';
 
   return (
     <div className="w-full space-y-4">
+      {storageError && (
+        <p role="alert" className="border border-rose-800 bg-rose-950/20 p-3 text-xs text-rose-200">
+          {lang === 'uk' ? 'Не вдалося зберегти нотатки на пристрої. Скопіюйте важливий текст перед закриттям додатка.' : 'Notes could not be saved on this device. Copy important text before closing the app.'}
+        </p>
+      )}
+      {actionNotice && (
+        <div role="status" className="flex items-center justify-between gap-3 border border-amber-800 bg-amber-950/20 p-3 text-xs text-amber-200">
+          <span>{actionNotice}</span>
+          <button type="button" onClick={() => setActionNotice(null)} aria-label={lang === 'uk' ? 'Закрити' : 'Close'}><X className="w-4 h-4" /></button>
+        </div>
+      )}
+      {!isComposerOpen && (isVoiceStarting || isListening || isTranscribing || voiceNotice) && (
+        <p role="status" className="border border-neutral-700 p-3 text-xs text-neutral-300">
+          {voiceNotice || (isVoiceStarting
+            ? (lang === 'uk' ? 'Запуск мікрофона…' : 'Starting microphone…')
+            : isTranscribing
+            ? (lang === 'uk' ? 'Розпізнавання голосу… Дочекайтеся завершення перед збереженням.' : 'Transcribing… Wait for completion before saving.')
+            : (lang === 'uk' ? 'Триває запис. Зупиніть його перед збереженням.' : 'Recording. Stop before saving.'))}
+        </p>
+      )}
       {/* 1. Primary Hierarchy: Search Bar & New Note Trigger (Matches KARKAS App-wide Pattern) */}
       <div className="flex items-center gap-2.5">
         <div className="relative flex-1">
@@ -560,6 +685,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
           type="button"
           onClick={() => {
             sound.tick(600);
+            cancelVoiceInput();
             setIsComposerOpen((prev) => !prev);
             setTimeout(() => {
               if (!isComposerOpen) titleInputRef.current?.focus();
@@ -773,17 +899,17 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
               </div>
 
               {/* Voice Recording Live Feedback */}
-              {(isListening || isTranscribing || voiceNotice) && (
+              {(isVoiceStarting || isListening || isTranscribing || voiceNotice) && (
                 <div className="flex items-center justify-between px-3 py-1.5 bg-[#060608] border border-neutral-800 text-xs font-mono">
                   {voiceNotice ? (
                     <div className="flex items-center gap-2 text-amber-400">
                       <AlertTriangle className="w-3 h-3 shrink-0" />
                       <span className="text-[11px]">{voiceNotice}</span>
                     </div>
-                  ) : isTranscribing ? (
+                  ) : isTranscribing || isVoiceStarting ? (
                     <div className="flex items-center gap-2 text-neutral-300">
                       <Loader2 className="w-3 h-3 animate-spin text-neutral-400" />
-                      <span className="text-[11px]">{lang === 'uk' ? 'ШІ транскрибує голос...' : 'Transcribing voice...'}</span>
+                      <span className="text-[11px]">{isVoiceStarting ? (lang === 'uk' ? 'Запуск мікрофона…' : 'Starting microphone…') : (lang === 'uk' ? 'ШІ транскрибує голос...' : 'Transcribing voice...')}</span>
                     </div>
                   ) : (
                     <div className="flex items-center justify-between w-full">
@@ -839,7 +965,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
                     onClick={() => {
                       sound.tick(400);
                       setIsComposerOpen(false);
-                      stopVoiceInput();
+                      cancelVoiceInput();
                     }}
                     className="px-3 py-1.5 border border-neutral-800 text-neutral-400 hover:text-white text-xs font-mono uppercase tracking-wider transition-colors cursor-pointer"
                   >
@@ -848,7 +974,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
                   <button
                     type="button"
                     onClick={() => handleSaveNewNote()}
-                    disabled={!title.trim() && !content.trim()}
+                    disabled={isVoiceStarting || isListening || isTranscribing || (!title.trim() && !content.trim())}
                     className="px-3.5 py-1.5 bg-white text-black font-extrabold text-xs font-mono uppercase tracking-wider hover:bg-neutral-200 disabled:opacity-40 transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
                   >
                     <Check className="w-3 h-3" />
@@ -868,18 +994,18 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
             <NotebookPen className="w-4 h-4" />
           </div>
           <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-neutral-200">
-            {searchQuery ? nv.emptySearch : nv.emptyTitle}
+            {hasFilters ? nv.emptySearch : nv.emptyTitle}
           </h3>
           <p className="text-xs font-mono text-neutral-500 max-w-sm mx-auto">
-            {searchQuery ? nv.emptySearchDesc : nv.emptyDesc}
+            {hasFilters ? nv.emptySearchDesc : nv.emptyDesc}
           </p>
-          {searchQuery ? (
+          {hasFilters ? (
             <button
               type="button"
-              onClick={() => setSearchQuery('')}
+              onClick={() => { setSearchQuery(''); setSelectedColorFilter('ALL'); }}
               className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 bg-neutral-800 border border-neutral-700 text-white font-bold text-xs font-mono tracking-wider hover:bg-neutral-700 transition-colors cursor-pointer"
             >
-              {lang === 'uk' ? 'Очистити пошук' : 'Clear search'}
+              {lang === 'uk' ? 'Скинути фільтри' : 'Reset filters'}
             </button>
           ) : (
             <button
@@ -958,7 +1084,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
                   <div className="flex items-center justify-between pt-1">
                     <button
                       type="button"
-                      onClick={() => handleToggleVoiceInput('content')}
+                      onClick={() => handleToggleVoiceInput('content', note.id)}
                       className={`px-2.5 py-1 border text-xs font-mono uppercase flex items-center gap-1.5 cursor-pointer ${
                         isListening
                           ? 'border-red-500 bg-red-950/40 text-red-400'
@@ -980,7 +1106,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
                       <button
                         type="button"
                         onClick={handleSaveEdit}
-                        disabled={!editTitle.trim() && !editContent.trim()}
+                        disabled={isVoiceStarting || isListening || isTranscribing || (!editTitle.trim() && !editContent.trim())}
                         className="px-3 py-1 bg-white text-black font-extrabold text-xs font-mono uppercase hover:bg-neutral-200 disabled:opacity-40 cursor-pointer"
                       >
                         {nv.updateNote}
@@ -1057,7 +1183,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
 
                       <button
                         type="button"
-                        onClick={() => handleDeleteWithUndo(note)}
+                        onClick={() => setPendingDelete(note)}
                         title={nv.deleteNote}
                         className="p-1 text-neutral-500 hover:text-rose-400 hover:bg-neutral-800 transition-colors cursor-pointer"
                       >
@@ -1101,6 +1227,36 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
           })}
         </div>
       )}
+
+      <dialog
+        ref={deleteDialogRef}
+        aria-labelledby="delete-note-title"
+        aria-describedby="delete-note-description"
+        onCancel={() => setPendingDelete(null)}
+        onClose={() => setPendingDelete(null)}
+        onClick={(event) => { if (event.target === event.currentTarget) setPendingDelete(null); }}
+        className="fixed m-auto w-[calc(100%-2rem)] max-w-md border border-neutral-700 bg-[#101014] p-0 text-neutral-100 shadow-2xl backdrop:bg-black/70"
+      >
+        <div className="space-y-4 p-5 font-mono">
+          <h2 id="delete-note-title" className="flex items-center gap-2 text-sm font-bold">
+            <AlertTriangle className="h-5 w-5 shrink-0 text-rose-400" />
+            {lang === 'uk' ? 'Видалити нотатку?' : 'Delete note?'}
+          </h2>
+          <p id="delete-note-description" className="text-xs leading-relaxed text-neutral-300">
+            {lang === 'uk' ? 'Нотатку «' : 'The note “'}
+            <span className="font-bold break-words">{pendingDelete?.title}</span>
+            {lang === 'uk' ? '» буде видалено. Після видалення ви матимете 8 секунд, щоб відновити її кнопкою «Скасувати».' : '” will be deleted. You will have 8 seconds to restore it using Undo.'}
+          </p>
+          <div className="flex justify-end gap-2">
+            <button autoFocus type="button" onClick={() => setPendingDelete(null)} className="border border-neutral-600 px-3 py-2 text-xs hover:bg-neutral-800">
+              {nv.cancel}
+            </button>
+            <button type="button" onClick={handleConfirmDelete} className="bg-rose-600 px-3 py-2 text-xs font-bold text-white hover:bg-rose-500">
+              {lang === 'uk' ? 'Видалити' : 'Delete'}
+            </button>
+          </div>
+        </div>
+      </dialog>
 
       {/* Undo Toast for deleted note */}
       <AnimatePresence>

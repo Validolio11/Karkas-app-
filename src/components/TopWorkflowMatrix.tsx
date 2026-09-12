@@ -120,7 +120,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
         {/* Left: App Logo & Window Title */}
         <div className="flex items-center gap-2.5 shrink-0 app-drag-region">
           <img
-            src="/icon.png"
+            src="/icon.png?v=karkas-app-icon-2"
             alt="KARKAS Logo"
             className="w-4 h-4 rounded-[3px] object-cover shrink-0 shadow-sm border border-neutral-700/60"
             onError={(e) => {

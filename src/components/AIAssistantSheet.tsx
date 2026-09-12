@@ -18,7 +18,6 @@ import {
   Plus,
   CheckCircle2,
   ListTree,
-  Sparkles,
   Layers,
   Lightbulb,
   Edit3,
@@ -1018,7 +1017,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   <div className="flex items-start justify-between gap-3 border-b border-neutral-800 pb-3">
                     <div className="space-y-1">
                       <div className="text-[10px] font-mono uppercase text-neutral-400 tracking-widest flex items-center gap-1.5">
-                        <Sparkles className="w-3 h-3 text-white" />
+                        <AIIcon className="w-3 h-3" />
                         <span>{mode === 'analyze' ? (lang === 'uk' ? 'ДІАГНОСТИКА ПРОЦЕСУ' : 'WORKFLOW AUDIT') : t.aiSheet.strategyHeader}</span>
                       </div>
                       <p className="text-xs sm:text-sm font-bold text-neutral-100 leading-relaxed">

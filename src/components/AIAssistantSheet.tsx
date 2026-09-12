@@ -11,6 +11,7 @@ import {
   AIResponse,
 } from '../types';
 import { sound } from '../utils/audio';
+import { createVoiceDictation, type VoicePhase } from '../utils/voiceDictation';
 import { Language, TRANSLATIONS, AI_PRESETS_UK, AI_PRESETS_EN } from '../utils/i18n';
 import {
   X,
@@ -193,255 +194,51 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       : storedModel;
   });
 
-  // Voice dictation state
-  const [isListening, setIsListening] = useState(false);
-  const [isTranscribing, setIsTranscribing] = useState(false);
+  // Each dictation owns its microphone, socket, buffered audio and cancellation.
+  const [voicePhase, setVoicePhase] = useState<VoicePhase>('idle');
+  const [voiceLevel, setVoiceLevel] = useState(0);
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
+  const voiceRef = useRef<ReturnType<typeof createVoiceDictation> | null>(null);
+  const isListening = ['starting', 'connecting', 'listening', 'recording'].includes(voicePhase);
+  const isTranscribing = voicePhase === 'finishing';
 
-  const recognitionRef = useRef<any>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
-  const promptBeforeRecordingRef = useRef<string>('');
-
-  const stopVoiceInput = () => {
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.stop();
-      } catch {}
-      recognitionRef.current = null;
-    }
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      try {
-        if (mediaRecorderRef.current.state === 'recording') {
-          mediaRecorderRef.current.requestData();
-        }
-        mediaRecorderRef.current.stop();
-      } catch {}
-    }
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-      mediaStreamRef.current = null;
-    }
-    setIsListening(false);
-  };
+  const stopVoiceInput = () => voiceRef.current?.stop();
 
   useEffect(() => {
-    if (!isListening) {
-      setRecordingDuration(0);
-      return;
-    }
-    const interval = setInterval(() => {
-      setRecordingDuration((prev) => prev + 1);
-    }, 1000);
+    if (!isListening) { setRecordingDuration(0); return; }
+    const interval = setInterval(() => setRecordingDuration(value => value + 1), 1000);
     return () => clearInterval(interval);
   }, [isListening]);
 
   useEffect(() => {
-    if (!isOpen && isListening) {
-      stopVoiceInput();
+    if (!isOpen) {
+      voiceRef.current?.cancel();
+      voiceRef.current = null;
+      setVoicePhase('idle');
+      setVoiceLevel(0);
     }
   }, [isOpen]);
 
-  useEffect(() => {
-    return () => {
-      stopVoiceInput();
-    };
-  }, []);
+  useEffect(() => () => { voiceRef.current?.cancel(); }, []);
 
-  const transcribeRecordedAudio = async (blob: Blob) => {
-    setIsTranscribing(true);
-    try {
-      const reader = new FileReader();
-      const base64Promise = new Promise<string>((resolve, reject) => {
-        reader.onloadend = () => {
-          const res = reader.result as string;
-          resolve(res);
-        };
-        reader.onerror = reject;
-      });
-      reader.readAsDataURL(blob);
-      const audioBase64 = await base64Promise;
-
-      const rawBase64 = audioBase64.includes(',') ? audioBase64.split(',')[1] : audioBase64;
-      const customApiKey = localStorage.getItem('karkas_custom_api_key') || undefined;
-      const res = await karkasApiFetch('/api/ai/transcribe-audio', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          audioBase64: rawBase64,
-          mimeType: blob.type || 'audio/webm',
-          lang,
-          customApiKey,
-          model: customModel || undefined,
-        }),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        if (data.text) {
-          const spoken = data.text.trim();
-          const base = promptBeforeRecordingRef.current.trim();
-          const nextPrompt = base ? `${base} ${spoken}` : spoken;
-          setPrompt(nextPrompt);
-          sound.tick(800);
-        } else {
-          setVoiceNotice(lang === 'uk' ? 'Мовлення не виявлено. Спробуйте ще раз.' : 'No speech detected. Please try again.');
-          sound.tick(300);
-        }
-      } else {
-        const errData = await res.json().catch(() => ({}));
-        setVoiceNotice(errData.error || (lang === 'uk' ? 'Помилка транскрипції аудіо' : 'Audio transcription failed'));
-        sound.tick(300);
-      }
-    } catch (err: any) {
-      console.error('Audio transcription error:', err);
-      setVoiceNotice(lang === 'uk' ? 'Помилка розпізнавання аудіо' : 'Audio recognition error');
-      sound.tick(300);
-    } finally {
-      setIsTranscribing(false);
-    }
-  };
-
-  const startMediaRecorderFallback = async () => {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setVoiceNotice(t.aiSheet.voiceNotSupported);
-      sound.tick(300);
-      return;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          sampleRate: 16000,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
-      mediaStreamRef.current = stream;
-      audioChunksRef.current = [];
-
-      let mimeType = '';
-      if (typeof MediaRecorder !== 'undefined') {
-        if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) mimeType = 'audio/webm;codecs=opus';
-        else if (MediaRecorder.isTypeSupported('audio/webm')) mimeType = 'audio/webm';
-        else if (MediaRecorder.isTypeSupported('audio/mp4')) mimeType = 'audio/mp4';
-      }
-
-      const recorderOptions: MediaRecorderOptions = {
-        audioBitsPerSecond: 32000,
-      };
-      if (mimeType) {
-        recorderOptions.mimeType = mimeType;
-      }
-
-      const recorder = new MediaRecorder(stream, recorderOptions);
-      mediaRecorderRef.current = recorder;
-
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          audioChunksRef.current.push(e.data);
-        }
-      };
-
-      recorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
-        audioChunksRef.current = [];
-        if (audioBlob.size > 200) {
-          await transcribeRecordedAudio(audioBlob);
-        } else {
-          setVoiceNotice(lang === 'uk' ? 'Запис занадто короткий' : 'Recording too short');
-          sound.tick(300);
-        }
-      };
-
-      recorder.start(250);
-      setIsListening(true);
-      sound.tick(750);
-    } catch (err: any) {
-      console.error('Microphone access failed:', err);
-      setVoiceNotice(t.aiSheet.voicePermissionDenied);
-      sound.tick(300);
-      setIsListening(false);
-    }
-  };
-
-  const handleToggleVoiceInput = async () => {
-    if (isListening) {
-      sound.tick(400);
-      stopVoiceInput();
-      return;
-    }
-
+  const handleToggleVoiceInput = () => {
+    if (isListening) { stopVoiceInput(); return; }
+    if (isTranscribing || voiceRef.current) return;
     setVoiceNotice(null);
-    promptBeforeRecordingRef.current = prompt;
-
-    const isDesktop = Boolean((window as any).karkasDesktop);
-
-    // In Electron Desktop, Google Web Speech API is not supported by Chromium.
-    // Use MediaRecorder with Gemini transcription directly.
-    if (!isDesktop) {
-      const SpeechRecognition =
-        (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-
-      if (SpeechRecognition) {
-        try {
-          const recognition = new SpeechRecognition();
-          recognition.lang = lang === 'uk' ? 'uk-UA' : 'en-US';
-          recognition.continuous = true;
-          recognition.interimResults = true;
-          recognition.maxAlternatives = 1;
-
-          let accumulatedFinal = '';
-
-          recognition.onstart = () => {
-            setIsListening(true);
-            sound.tick(750);
-          };
-
-          recognition.onresult = (event: any) => {
-            let currentInterim = '';
-            for (let i = event.resultIndex; i < event.results.length; ++i) {
-              const transcript = event.results[i][0].transcript;
-              if (event.results[i].isFinal) {
-                accumulatedFinal += (accumulatedFinal ? ' ' : '') + transcript.trim();
-              } else {
-                currentInterim += transcript;
-              }
-            }
-            const spoken = (accumulatedFinal + (currentInterim ? ' ' + currentInterim : '')).trim();
-            const base = promptBeforeRecordingRef.current.trim();
-            const nextPrompt = base ? `${base} ${spoken}` : spoken;
-            setPrompt(nextPrompt);
-          };
-
-          recognition.onerror = async (event: any) => {
-            console.warn('SpeechRecognition error, trying MediaRecorder fallback:', event.error);
-            stopVoiceInput();
-            if (event.error !== 'no-speech') {
-              startMediaRecorderFallback();
-            }
-          };
-
-          recognition.onend = () => {
-            setIsListening(false);
-            recognitionRef.current = null;
-          };
-
-          recognitionRef.current = recognition;
-          recognition.start();
-          return;
-        } catch (err) {
-          console.warn('SpeechRecognition initialization error, falling back to MediaRecorder:', err);
-        }
-      }
-    }
-
-    // Fallback: MediaRecorder with Gemini transcription
-    startMediaRecorderFallback();
+    const base = prompt.trim();
+    const dictation = createVoiceDictation({
+      lang,
+      onPhase: phase => {
+        setVoicePhase(phase);
+        if (phase === 'idle') voiceRef.current = null;
+      },
+      onLevel: setVoiceLevel,
+      onText: spoken => setPrompt(base ? `${base} ${spoken}` : spoken),
+      onError: setVoiceNotice,
+    });
+    voiceRef.current = dictation;
+    void dictation.start();
   };
 
   // Keep conversation history synchronized per account
@@ -568,6 +365,9 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   }, [initialPrompt]);
 
   const handleGenerate = async (queryText?: string, selectedMode?: AIMode, resuming = false) => {
+    voiceRef.current?.cancel();
+    voiceRef.current = null;
+    setVoicePhase('idle');
     const textToQuery = queryText !== undefined ? queryText : prompt;
     const currentMode = selectedMode || mode;
     const requestText = textToQuery.trim() || (
@@ -674,13 +474,14 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     const activeList = currentTasks.filter((t) => !t.done);
     const doneList = currentTasks.filter((t) => t.done);
 
+    let requestTimeout: number | undefined;
     try {
       const customKey = localStorage.getItem('karkas_custom_api_key') || '';
       const storedModel = localStorage.getItem('karkas_custom_model') || '';
       const customEnabled = localStorage.getItem('karkas_custom_ai_enabled') === 'true';
 
       const controller = new AbortController();
-      const requestTimeout = window.setTimeout(() => controller.abort(), 35000);
+      requestTimeout = window.setTimeout(() => controller.abort(), 35000);
       const res = await karkasApiFetch('/api/ai/assist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -692,7 +493,12 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
           tabs: tabs.map((tb) => tb.id),
           adaptiveProfile,
           currentTasks,
-          conversation: currentMode === 'chat' ? chatMessages : undefined,
+          conversation: currentMode === 'chat' ? chatMessages.slice(-10) : undefined,
+          pendingChanges: currentMode === 'chat' ? {
+            tasks: pendingChatTasks, tabs: pendingChatTabs,
+            taskUpdates: pendingChatUpdates,
+            taskDeletions: pendingChatDeletions.map(id => ({ id })),
+          } : undefined,
           allowNewTabs: isTabMutation,
           customApiKey: customEnabled ? customKey : undefined,
           selectedModel: customEnabled ? (storedModel || customModel) : undefined,
@@ -707,17 +513,10 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
               timeSpentSeconds: t.timeSpentSeconds || 0,
               createdAt: t.createdAt,
               timerRunning: Boolean(t.timerRunning),
-              stepList: t.stepList?.map((s) => s.title) || [],
+              stepList: t.stepList || [],
               note: t.note,
             })),
-            completedTasks: doneList.map((t) => ({
-              id: t.id,
-              title: t.title,
-              phase: t.phase,
-              completedAt: t.completedAt,
-              timeSpentSeconds: t.timeSpentSeconds || 0,
-              createdAt: t.createdAt,
-            })),
+            completedTasks: doneList,
             deletedTasks: deletedTasks.slice(0, 15).map((t) => ({
               id: t.id,
               title: t.title,
@@ -738,13 +537,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       if (!res.ok) throw new Error('API request failed');
       const data: AIResponse = await res.json();
       if (currentMode === 'chat') {
-        const hasMutations =
-          (data.tasks && data.tasks.length > 0) ||
-          (data.tabs && data.tabs.length > 0) ||
-          (data.taskUpdates && data.taskUpdates.length > 0) ||
-          (data.taskDeletions && data.taskDeletions.length > 0);
-
-        if (hasMutations) {
+        {
           setPendingChatTasks(data.tasks || []);
           setPendingChatTabs((data.tabs || []).map((tb) => ({ id: tb.id, name: tb.name, color: tb.color || '#6366f1' })));
           setPendingChatUpdates(data.taskUpdates || []);
@@ -777,7 +570,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
             role: 'assistant',
             content: isUk
               ? `Зараз працюю в локальному режимі. У вас ${activeCount} активних задач і ${completedCount} завершених. Напишіть конкретну дію, наприклад «додай задачу X» або «проаналізуй мої задачі».`
-              : `Running in local mode. You have ${activeCount} active and ${completedCount} completed tasks. Try specific commands like "add task X" or "analyze my workflow".`,
+              : 'Could not reach AI. No changes were applied. Check your connection and retry.',
           },
         ]);
         return;
@@ -839,6 +632,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
         source: 'local-fallback',
       });
     } finally {
+      window.clearTimeout(requestTimeout);
       requestInFlight.current = false;
       setLoading(false);
     }
@@ -846,9 +640,9 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
 
   const handleInjectAll = () => {
     if (!response) return;
-    const taskList = response.tasks || [];
+    const taskList = (response.tasks || []).filter((_, index) => !injectedIds.includes(index));
     const tabList: TaskTab[] = (response.tabs || []).map((t) => ({ id: t.id, name: t.name, color: t.color || '#6366f1' }));
-    const updateList = response.taskUpdates || [];
+    const updateList = (response.taskUpdates || []).filter(update => !appliedUpdateIds.includes(update.id));
     const deleteList = (response.taskDeletions || []).map((d) => d.id);
 
     if (!taskList.length && !tabList.length && !updateList.length && !deleteList.length) return;
@@ -874,8 +668,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     });
 
     onInjectTasks(formattedTasks, tabList, updateList, deleteList);
-    setInjectedIds(taskList.map((_, i) => i));
-    setAppliedUpdateIds(updateList.map((u) => u.id));
+    setInjectedIds((response.tasks || []).map((_, i) => i));
+    setAppliedUpdateIds((response.taskUpdates || []).map((u) => u.id));
     setTimeout(() => {
       onClose();
     }, 500);
@@ -1162,6 +956,13 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                         </div>
                       )}
 
+                      {pendingChatDeletions.length > 0 && (
+                        <div className="space-y-1 text-xs text-red-300">
+                          <div>{lang === 'uk' ? 'Видалення завдань:' : 'Tasks to delete:'}</div>
+                          {pendingChatDeletions.map(id => <div key={id}>{currentTasks.find(task => task.id === id)?.title || id}</div>)}
+                        </div>
+                      )}
+
                       {/* Pending Updates / Edits */}
                       {pendingChatUpdates.length > 0 && (
                         <div className="space-y-1.5">
@@ -1225,14 +1026,14 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                       </p>
                     </div>
 
-                    {((response.tasks && response.tasks.length > 0) || (response.tabs && response.tabs.length > 0) || (response.taskUpdates && response.taskUpdates.length > 0)) && (
+                    {((response.tasks && response.tasks.length > 0) || (response.tabs && response.tabs.length > 0) || (response.taskUpdates && response.taskUpdates.length > 0) || (response.taskDeletions && response.taskDeletions.length > 0)) && (
                       <button
                         id="ai-inject-all-btn"
                         onClick={handleInjectAll}
                         className="whitespace-nowrap px-3 py-1.5 bg-white text-black font-extrabold text-xs font-mono tracking-wider hover:bg-neutral-200 transition-colors flex items-center gap-1.5 shrink-0"
                       >
                         <Plus className="w-3.5 h-3.5" />
-                        <span>{t.aiSheet.injectAll} ({(response.tasks?.length || 0) + (response.tabs?.length || 0) + (response.taskUpdates?.length || 0)})</span>
+                        <span>{t.aiSheet.injectAll} ({(response.tasks?.length || 0) + (response.tabs?.length || 0) + (response.taskUpdates?.length || 0) + (response.taskDeletions?.length || 0)})</span>
                       </button>
                     )}
                   </div>
@@ -1339,6 +1140,13 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                     </div>
                   )}
 
+                  {!!response.taskDeletions?.length && (
+                    <div className="space-y-1 text-xs text-red-300">
+                      <div>{lang === 'uk' ? 'Видалення завдань:' : 'Tasks to delete:'}</div>
+                      {response.taskDeletions.map(({ id }) => <div key={id}>{currentTasks.find(task => task.id === id)?.title || id}</div>)}
+                    </div>
+                  )}
+
                   {/* Proposed Task Edits / Updates */}
                   {response.taskUpdates && response.taskUpdates.length > 0 && (
                     <div className="space-y-2">
@@ -1355,6 +1163,10 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                               <div className="space-y-0.5 text-xs">
                                 <div className="text-neutral-400 line-through text-[11px]">{existing?.title || up.id}</div>
                                 <div className="text-white font-bold">{up.title || existing?.title}</div>
+                                {up.stepList !== undefined && <div className="text-neutral-300">
+                                  {lang === 'uk' ? 'Підзавдання після зміни' : 'Subtasks after update'}: {up.stepList.length}
+                                  {up.stepList.map((step, index) => <div key={step.id || index}>{step.done ? '?' : '?'} {step.title}</div>)}
+                                </div>}
                                 {up.priority && <span className="text-[10px] text-amber-400">P{up.priority} </span>}
                                 {up.note && <span className="text-[10px] text-neutral-400">// {up.note}</span>}
                               </div>
@@ -1505,14 +1317,19 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                           <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
                         </span>
                         {/* Audio wave bars */}
-                        <div className="flex items-end gap-0.5 h-3.5">
-                          <span className="w-0.5 bg-red-400 h-2 animate-pulse" style={{ animationDuration: '600ms' }} />
-                          <span className="w-0.5 bg-red-400 h-3.5 animate-pulse" style={{ animationDuration: '400ms' }} />
-                          <span className="w-0.5 bg-red-400 h-1.5 animate-pulse" style={{ animationDuration: '700ms' }} />
-                          <span className="w-0.5 bg-red-400 h-3 animate-pulse" style={{ animationDuration: '500ms' }} />
+                        <div className="flex items-end gap-0.5 h-3.5" role="meter" aria-label={lang === 'uk' ? 'Рівень мікрофона' : 'Microphone level'} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(voiceLevel * 100)}>
+                          {[0.65, 1, 0.8, 0.55].map((scale, index) => (
+                            <span key={index} className="w-0.5 bg-red-400 transition-[height] duration-75" style={{ height: `${Math.max(2, voiceLevel * 14 * scale)}px` }} />
+                          ))}
                         </div>
                         <span className="text-[11px] text-red-300 font-bold uppercase tracking-wider">
-                          {t.aiSheet.voiceListening}
+                          {voicePhase === 'starting'
+                            ? (lang === 'uk' ? 'Запускаю мікрофон…' : 'Starting microphone…')
+                            : voicePhase === 'connecting'
+                              ? (lang === 'uk' ? 'Слухаю · підключаю розпізнавання…' : 'Listening · connecting…')
+                              : voicePhase === 'recording'
+                                ? (lang === 'uk' ? 'Записую · текст після зупинки' : 'Recording · text after stop')
+                                : t.aiSheet.voiceListening}
                         </span>
                         <span className="text-[10px] text-neutral-400 font-mono">
                           {Math.floor(recordingDuration / 60).toString().padStart(2, '0')}:
@@ -1557,7 +1374,12 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                     id="ai-prompt-input"
                     type={awaitingApiKey ? 'password' : 'text'}
                     value={prompt}
-                    onChange={(e) => setPrompt(e.target.value)}
+                    onChange={(e) => {
+                      voiceRef.current?.cancel();
+                      voiceRef.current = null;
+                      setVoicePhase('idle');
+                      setPrompt(e.target.value);
+                    }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') handleGenerate();
                     }}

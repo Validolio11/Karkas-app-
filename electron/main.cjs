@@ -8,7 +8,7 @@ const http = require('node:http');
 const https = require('node:https');
 const fs = require('node:fs');
 const os = require('node:os');
-const { spawn } = require('node:child_process');
+const { launchUpdateInstaller } = require('./update-installer.cjs');
 const { beginBrowserGoogleLogin } = require('./browser-auth.cjs');
 const { createDesktopStorage } = require('./storage.cjs');
 const { createSecretStore } = require('./secrets.cjs');
@@ -37,6 +37,7 @@ let secrets = null;
 let loginController = null;
 let isQuitting = false;
 let persistWindowTimer = null;
+let updateInProgress = false;
 
 const ok = (value) => ({ ok: true, value });
 const fail = (error) => ({
@@ -322,19 +323,28 @@ function registerIpc() {
   handle('karkas:ai:assist', (input) => invokeService('assist', input || {}, true));
   handle('karkas:ai:breakdown', (input) => invokeService('breakdown', input || {}, true));
   handle('karkas:ai:recommendations', (input) => invokeService('recommendations', input || {}, true));
+  handle('karkas:ai:voice-token', (input) => invokeService('voiceToken', input || {}, true));
   handle('karkas:ai:transcribe-audio', (input) => invokeService('transcribeAudio', input || {}, true));
   handle('karkas:updates:check', () => invokeService('checkUpdate'));
   handle('karkas:updates:install', async ({ url, fileName }) => {
+    if (updateInProgress) throw new Error('An update is already in progress');
+    if (process.platform !== 'win32' || !app.isPackaged) throw new Error('Automatic installation requires the installed Windows app');
     if (typeof url !== 'string') throw new Error('Missing download URL');
     const parsed = new URL(url);
     if (!['https:', 'http:'].includes(parsed.protocol)) throw new Error('Unsupported download URL');
     const safeName = path.basename(typeof fileName === 'string' && fileName ? fileName : `Karkas-Setup-${Date.now()}.exe`);
+    if (!safeName.toLowerCase().endsWith('.exe') || !parsed.pathname.toLowerCase().endsWith('.exe')) throw new Error('Missing Windows installer asset');
     const destination = path.join(app.getPath('temp') || os.tmpdir(), `${Date.now()}-${safeName}`);
-    await downloadFile(url, destination);
-    const installer = spawn(destination, ['/S'], { detached: true, stdio: 'ignore', windowsHide: true });
-    installer.unref();
-    isQuitting = true;
-    setTimeout(() => app.quit(), 500);
+    updateInProgress = true;
+    try {
+      await downloadFile(url, destination);
+      await persistWindowState();
+      await launchUpdateInstaller(destination, { quit: quitApplication });
+    } catch (error) {
+      updateInProgress = false;
+      await fs.promises.unlink(destination).catch(() => {});
+      throw error;
+    }
   });
 
   handle('karkas:system:open-external', async ({ url }) => {

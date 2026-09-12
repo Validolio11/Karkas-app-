@@ -1,3 +1,4 @@
+import { applyAITaskUpdate } from './utils/aiTaskUpdates';
 import React, { useState, useEffect, useMemo } from 'react';
 import { PSTask, DeletedTask, TaskTab, FilterMode, WorkflowStats, TaskStepItem, AdaptiveProfile, AITaskUpdate, NotepadNote } from './types';
 import { TaskCard } from './components/TaskCard';
@@ -95,7 +96,7 @@ const APP_ZOOM_KEY = 'karkas_app_zoom_percent';
 const MIN_APP_ZOOM = 75;
 const MAX_APP_ZOOM = 150;
 const DEFAULT_APP_ZOOM = 100;
-const APP_CURRENT_VERSION = '1.2.15';
+const APP_CURRENT_VERSION = '1.2.16';
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 
 function normalizeVersion(version: string): number[] {
@@ -1858,31 +1859,7 @@ export default function App() {
           .map((t) => {
             const update = updatesMap.get(t.id);
             if (!update) return t;
-            const updatedPhase = update.phase && availableTabIds.has(update.phase) ? update.phase : t.phase;
-            const updatedPriority = update.priority || t.priority;
-            const updatedTitle = update.title ? update.title.trim() : t.title;
-            const updatedNote = update.note !== undefined ? update.note : t.note;
-            const updatedDone = update.done !== undefined ? update.done : t.done;
-            let updatedStepList = t.stepList;
-            let updatedSteps = t.steps;
-            if (update.stepList && Array.isArray(update.stepList)) {
-              updatedStepList = update.stepList.map((s, idx) => ({
-                id: s.id || `s-${t.id}-${idx}-${Date.now()}`,
-                title: typeof s === 'string' ? s : s.title,
-                done: Boolean(s.done),
-              }));
-              updatedSteps = updatedStepList.length;
-            }
-            return {
-              ...t,
-              title: updatedTitle,
-              phase: updatedPhase,
-              priority: updatedPriority,
-              note: updatedNote,
-              done: updatedDone,
-              stepList: updatedStepList,
-              steps: updatedSteps,
-            };
+            return applyAITaskUpdate(t, update, availableTabIds);
           });
 
         if (deletedToArchive.length > 0) {

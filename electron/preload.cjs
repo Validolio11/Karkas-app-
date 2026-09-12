@@ -55,6 +55,7 @@ contextBridge.exposeInMainWorld('karkasDesktop', {
     assist: (input) => invoke('karkas:ai:assist', input),
     breakdown: (input) => invoke('karkas:ai:breakdown', input),
     recommendations: (input) => invoke('karkas:ai:recommendations', input),
+    voiceToken: (input) => invoke('karkas:ai:voice-token', input),
     transcribeAudio: (input) => invoke('karkas:ai:transcribe-audio', input),
   },
   updates: {

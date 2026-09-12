@@ -1,7 +1,8 @@
 import express from "express";
+import { taskMutationProperties, taskActionInstructions, validateTaskMutations } from "./server/aiActions";
 import path from "path";
 import dotenv from "dotenv";
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Modality, Type } from "@google/genai";
 import { verifyGeminiKey } from "./server/geminiKeyVerification";
 
 dotenv.config();
@@ -172,6 +173,7 @@ export async function assistHandler(req: any, res: any) {
       customApiKey,
       selectedModel,
       conversation = [],
+      pendingChanges,
       fullAppContext,
       allowNewTabs = false,
     } = req.body;
@@ -239,6 +241,9 @@ LANGUAGE: ${isUk ? "Ukrainian" : "English"}.
 CURRENT USER PROMPT: "${prompt}".
 RECENT CONVERSATION:
 ${JSON.stringify(Array.isArray(conversation) ? conversation.slice(-10) : [], null, 2)}
+PENDING UNAPPLIED PROPOSAL:
+${JSON.stringify(pendingChanges || {})}
+If the user revises this proposal, return the entire revised proposal. If they cancel it, return empty action arrays. Never assume it has been applied; actual application happens via the UI button.
 WORKSPACE CONTEXT:
 ${JSON.stringify({
           activeTasks: effectiveActiveTasks.map((t: any) => ({
@@ -247,12 +252,12 @@ ${JSON.stringify({
             phase: t.phase,
             priority: t.priority,
             progress: `${t.currentStep || 0}/${t.steps || 1}`,
-            stepList: t.stepList?.map((s: any) => typeof s === 'string' ? s : s.title) || [],
+            stepList: t.stepList || [],
             note: t.note || '',
             timerRunning: !!t.timerRunning,
           })),
           completedTasksCount: effectiveCompletedTasks.length,
-          recentCompletedSample: effectiveCompletedTasks.slice(-8).map((t: any) => t.title),
+          completedTasks: effectiveCompletedTasks,
           availableTabs: tabList,
           stats: effectiveStats,
           adaptiveProfile,
@@ -268,7 +273,7 @@ INSTRUCTIONS:
    - "steps": 1 to 5
    - "stepList": Array of sequential sub-steps with "title"
    - "note": Short tactical note
-4. "tabs": New category tabs if needed. Each with "id" (lowercase ASCII slug) and "name".
+4. "tabs": Create only when explicitly requested. Each with "id" (lowercase ASCII slug) and "name".
 5. "taskUpdates": Edits to existing tasks matching their "id" (e.g. updating title, priority, phase, note, done, or stepList).
 6. "taskDeletions": Tasks to delete/archive by their "id".
 7. Return strictly valid JSON adhering to schema.`;
@@ -276,6 +281,7 @@ INSTRUCTIONS:
         const chatResponse = await generateGeminiContentWithFallback({
           contents: chatPrompt,
           config: {
+            systemInstruction: taskActionInstructions,
             responseMimeType: "application/json",
             responseSchema: {
               type: Type.OBJECT,
@@ -320,21 +326,7 @@ INSTRUCTIONS:
                     required: ["id", "name"],
                   },
                 },
-                taskUpdates: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      id: { type: Type.STRING },
-                      title: { type: Type.STRING },
-                      phase: { type: Type.STRING },
-                      priority: { type: Type.INTEGER },
-                      note: { type: Type.STRING },
-                      done: { type: Type.BOOLEAN },
-                    },
-                    required: ["id"],
-                  },
-                },
+                ...taskMutationProperties,
               },
               required: ["reply"],
             },
@@ -347,7 +339,7 @@ INSTRUCTIONS:
           const parsed = JSON.parse(chatResponse.text || "{}");
           const existingTabIds = new Set(activeTabIds);
           const validatedTabs: { id: string; name: string }[] = [];
-          if (Array.isArray(parsed.tabs)) {
+          if (isTabCreationRequested && Array.isArray(parsed.tabs)) {
             for (const rawTab of parsed.tabs.slice(0, 3)) {
               const name = typeof rawTab?.name === 'string' ? rawTab.name.trim().slice(0, 32) : '';
               if (!name) continue;
@@ -363,7 +355,7 @@ INSTRUCTIONS:
           }
 
           const allowedTaskPhases = new Set([...activeTabIds, ...validatedTabs.map((tb) => tb.id)]);
-          const validatedTasks = (parsed.tasks || []).map((t: any, idx: number) => {
+          const validatedTasks = (Array.isArray(parsed.tasks) ? parsed.tasks : []).map((t: any, idx: number) => {
             const rawStepList = Array.isArray(t.stepList) ? t.stepList : [];
             const finalStepList = rawStepList.length > 0
               ? rawStepList.map((s: any, sIdx: number) => ({
@@ -371,7 +363,7 @@ INSTRUCTIONS:
                   title: typeof s === "string" ? s : s.title || `Крок ${sIdx + 1}`,
                   done: false,
                 }))
-              : Array.from({ length: Math.max(1, t.steps || 2) }, (_, sIdx) => ({
+              : Array.from({ length: Math.min(50, Math.max(1, Number(t.steps) || 2)) }, (_, sIdx) => ({
                   id: `s-chat-gen-${idx}-${sIdx}-${Date.now().toString(36)}`,
                   title: `${isUk ? "Етап" : "Step"} ${sIdx + 1}`,
                   done: false,
@@ -393,7 +385,7 @@ INSTRUCTIONS:
             insights: parsed.insights || [],
             tasks: validatedTasks,
             tabs: validatedTabs,
-            taskUpdates: Array.isArray(parsed.taskUpdates) ? parsed.taskUpdates : [],
+            ...validateTaskMutations(parsed, [...effectiveActiveTasks, ...effectiveCompletedTasks]),
             source: "gemini-chat",
           });
         }
@@ -403,7 +395,7 @@ INSTRUCTIONS:
     }
 
     // If Gemini client is available, leverage LLM for generate / analyze / breakdown
-    if (ai) {
+    if (ai && action !== "chat") {
       try {
         const isAnalyzeMode = action === "analyze";
         const systemInstruction = `You are an elite, tactical AI Task Architect and Productivity Strategist for "KARKAS // TASK ARCHITECT".
@@ -422,12 +414,13 @@ ${isTabCreationRequested ? `You may return 1-3 new tabs in "tabs" if organizing 
 Requirements:
 1. "summary": Punchy diagnosis or strategy summary (2-3 sentences).
 2. "insights": 2-4 tactical observations on priorities, workload distribution, and execution momentum.
-3. "tasks": 2-6 concrete actionable tasks with sub-steps.
+3. "tasks": New top-level tasks only when requested; use an empty array for edits or breakdowns of existing tasks.
 4. "tabs": Any new category tabs needed.
 5. "taskUpdates": Any adjustments to existing tasks (matching their "id", e.g. re-prioritizing or updating title/note).
 6. "workloadDiagnosis": Status assessment object (status badge, bottlenecks array, strengths array).
 7. "categoryHealth": Array assessing health per category tab (phase, phaseName, taskCount, status, recommendation).
 
+${taskActionInstructions}
 Return valid JSON adhering to schema.`;
 
         const fullContextPayload = {
@@ -449,15 +442,12 @@ Return valid JSON adhering to schema.`;
             phase: t.phase,
             priority: t.priority,
             progress: `${t.currentStep || 0}/${t.steps || 1}`,
-            subSteps: t.stepList?.map((s: any) => typeof s === 'string' ? s : s.title) || [],
+            subSteps: t.stepList || [],
             note: t.note || "",
             timerRunning: !!t.timerRunning,
             timeSpentSeconds: t.timeSpentSeconds || 0,
           })),
-          recentCompletedTasks: effectiveCompletedTasks.slice(-12).map((t: any) => ({
-            title: t.title,
-            phase: t.phase,
-          })),
+          completedTasks: effectiveCompletedTasks,
         };
 
         const response = await generateGeminiContentWithFallback({
@@ -511,21 +501,7 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
                     required: ["id", "name"],
                   },
                 },
-                taskUpdates: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      id: { type: Type.STRING },
-                      title: { type: Type.STRING },
-                      phase: { type: Type.STRING },
-                      priority: { type: Type.INTEGER },
-                      note: { type: Type.STRING },
-                      done: { type: Type.BOOLEAN },
-                    },
-                    required: ["id"],
-                  },
-                },
+                ...taskMutationProperties,
                 workloadDiagnosis: {
                   type: Type.OBJECT,
                   properties: {
@@ -562,7 +538,7 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
 
           const existingTabIds = new Set(activeTabIds);
           const validatedTabs: { id: string; name: string }[] = [];
-          if (Array.isArray(parsed.tabs)) {
+          if (isTabCreationRequested && Array.isArray(parsed.tabs)) {
             for (const rawTab of parsed.tabs.slice(0, 4)) {
               const name = typeof rawTab?.name === 'string' ? rawTab.name.trim().slice(0, 32) : '';
               if (!name) continue;
@@ -578,7 +554,7 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
           }
           const allowedTaskPhases = new Set([...activeTabIds, ...validatedTabs.map((tb) => tb.id)]);
 
-          const validatedTasks = (parsed.tasks || []).map((t: any, idx: number) => {
+          const validatedTasks = (Array.isArray(parsed.tasks) ? parsed.tasks : []).map((t: any, idx: number) => {
             const rawStepList = Array.isArray(t.stepList) ? t.stepList : [];
             const finalStepList = rawStepList.length > 0
               ? rawStepList.map((s: any, sIdx: number) => ({
@@ -586,7 +562,7 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
                   title: typeof s === "string" ? s : s.title || `Крок ${sIdx + 1}`,
                   done: false,
                 }))
-              : Array.from({ length: Math.max(1, t.steps || 2) }, (_, sIdx) => ({
+              : Array.from({ length: Math.min(50, Math.max(1, Number(t.steps) || 2)) }, (_, sIdx) => ({
                   id: `s-gen-${idx}-${sIdx}-${Date.now().toString(36)}`,
                   title: `${isUk ? "Етап" : "Step"} ${sIdx + 1}`,
                   done: false,
@@ -607,7 +583,7 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
             insights: parsed.insights || [],
             tasks: validatedTasks,
             tabs: validatedTabs,
-            taskUpdates: Array.isArray(parsed.taskUpdates) ? parsed.taskUpdates : [],
+            ...validateTaskMutations(parsed, [...effectiveActiveTasks, ...effectiveCompletedTasks]),
             workloadDiagnosis: parsed.workloadDiagnosis,
             categoryHealth: parsed.categoryHealth,
             analyzedContext: {
@@ -629,7 +605,7 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
       return res.json({
         reply: isUk
           ? `У черзі ${activeCount} активних задач і ${completedCount} завершених. Напишіть конкретну дію (напр. «додай задачу X», «створи вкладку Y», «проаналізуй мої задачі»).`
-          : `You have ${activeCount} active and ${completedCount} completed tasks. Tell me what action you need (e.g. "add task X", "create tab Y", "analyze my tasks").`,
+          : `AI is unavailable. No changes were prepared or applied. Check your connection and API key, then retry.`,
         source: "local-chat-fallback",
       });
     }
@@ -1279,10 +1255,68 @@ Language: ${isUk ? "Ukrainian" : "English"}.`,
 }
 app.post("/api/ai/recommendations", recommendationsHandler);
 
+const LIVE_TRANSCRIPTION_MODEL = "gemini-3.5-transcribe-live";
+const LIVE_TRANSCRIPTION_CONFIG = {
+  responseModalities: [Modality.TEXT],
+  inputAudioTranscription: {
+    languageCodes: ["uk-UA", "en-US"],
+  },
+};
+
+type VoiceTokenClient = Pick<GoogleGenAI, "authTokens">;
+
+export async function createVoiceToken(ai: VoiceTokenClient, now = Date.now()) {
+  const authToken = await ai.authTokens.create({
+    config: {
+      // Ephemeral-token support in the installed SDK is served through v1alpha.
+      httpOptions: { apiVersion: "v1alpha" },
+      uses: 1,
+      expireTime: new Date(now + 5 * 60 * 1000).toISOString(),
+      newSessionExpireTime: new Date(now + 60 * 1000).toISOString(),
+      liveConnectConstraints: {
+        model: LIVE_TRANSCRIPTION_MODEL,
+        config: LIVE_TRANSCRIPTION_CONFIG,
+      },
+    },
+  });
+
+  if (!authToken.name) throw new Error("Gemini did not return an ephemeral token");
+  return {
+    token: authToken.name,
+    model: LIVE_TRANSCRIPTION_MODEL,
+    config: LIVE_TRANSCRIPTION_CONFIG,
+  };
+}
+
+// Issue a constrained, single-use credential so the renderer can connect to
+// Gemini Live without ever receiving the long-lived API key.
+export async function voiceTokenHandler(req: any, res: any) {
+  try {
+    const { customApiKey } = req.body || {};
+    let ai = getGeminiClient();
+    if (customApiKey && typeof customApiKey === "string") {
+      ai = new GoogleGenAI({
+        apiKey: customApiKey,
+        httpOptions: { headers: { "User-Agent": "aistudio-build" } },
+      });
+    }
+
+    if (!ai) {
+      return res.status(503).json({ error: "Gemini API key is not configured." });
+    }
+
+    return res.json(await createVoiceToken(ai));
+  } catch (err: any) {
+    console.error("Voice token error:", err);
+    return res.status(500).json({ error: "Failed to create voice token" });
+  }
+}
+app.post("/api/ai/voice-token", voiceTokenHandler);
+
 // Audio transcription endpoint for voice dictation
 export async function transcribeAudioHandler(req: any, res: any) {
   try {
-    const { audioBase64, mimeType = "audio/webm", lang = "uk", customApiKey, model: preferredModel } = req.body || {};
+    const { audioBase64, mimeType = "audio/webm", lang = "uk", customApiKey } = req.body || {};
     if (!audioBase64 || typeof audioBase64 !== "string") {
       return res.status(400).json({ error: "audioBase64 is required" });
     }
@@ -1337,18 +1371,16 @@ export async function transcribeAudioHandler(req: any, res: any) {
       ? "Точно транскрибуй усне мовлення з цього аудіозапису українською мовою. Поверни ВИКЛЮЧНО розпізнаний текст без лапок, вступних слів чи пояснень. Якщо аудіо тихе або без слів, поверни порожній рядок."
       : "Accurately transcribe the spoken language from this audio recording into plain text. Return ONLY the transcribed words without quotation marks, introductions, notes, or explanations. If audio is silent or unintelligible, return an empty string.";
 
-    // Prioritize user's preferred model (including gemini-3.8-flash) followed by fast low-latency models
-    const defaultModels = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-flash-latest"];
-    const modelsToTry = preferredModel && typeof preferredModel === "string" && preferredModel.startsWith("gemini-")
-      ? [preferredModel, ...defaultModels.filter((m) => m !== preferredModel)]
-      : defaultModels;
+    // Batch transcription deliberately uses fast, broadly available models and
+    // does not inherit the chat model selected by the user.
+    const modelsToTry = ["gemini-2.5-flash", "gemini-flash-latest"];
 
     let transcription = "";
     let lastError: any = null;
 
     for (const model of modelsToTry) {
       try {
-        const response = await ai.models.generateContent({
+        const response = await Promise.race([ai.models.generateContent({
           model,
           contents: [
             {
@@ -1368,12 +1400,13 @@ export async function transcribeAudioHandler(req: any, res: any) {
           ],
           config: {
             temperature: 0.1,
-            maxOutputTokens: 1000,
             thinkingConfig: {
               thinkingBudget: 0,
             },
           },
-        });
+        }), new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`Gemini model ${model} timed out`)), 15000)
+        )]);
         transcription = (response.text || "").trim();
         break;
       } catch (err: any) {
@@ -1401,6 +1434,7 @@ const desktopHandlers: Record<string, (req: any, res: any) => Promise<any>> = {
   assist: assistHandler,
   breakdown: breakdownTaskHandler,
   recommendations: recommendationsHandler,
+  voiceToken: voiceTokenHandler,
   transcribeAudio: transcribeAudioHandler,
 };
 

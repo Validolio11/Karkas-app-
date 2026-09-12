@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Download, CheckCircle2, X, RefreshCw, HardDrive, ShieldCheck, Sparkles, ArrowRight } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Download, CheckCircle2, X, RefreshCw, HardDrive, Sparkles } from 'lucide-react';
 import { sound } from '../utils/audio';
 import { karkasApiFetch } from '../utils/desktopApi';
 
@@ -58,24 +58,23 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
   const [release, setRelease] = useState<ReleaseData | null>(null);
   const [isChecking, setIsChecking] = useState(false);
   const [isInstalling, setIsInstalling] = useState(false);
-  const [installProgress, setInstallProgress] = useState(0);
   const [installStep, setInstallStep] = useState<string>('');
-  const [downloadedMb, setDownloadedMb] = useState<number>(0);
-  const [totalMb, setTotalMb] = useState<number>(58.4);
+  const [totalMb, setTotalMb] = useState<number | null>(null);
   const [isCompleted, setIsCompleted] = useState(false);
-  const progressTimerRef = useRef<any>(null);
+  const [installError, setInstallError] = useState('');
 
   // Background silent version analyzer
   useEffect(() => {
     if (!isOpen) {
-      if (progressTimerRef.current) clearInterval(progressTimerRef.current);
       setIsInstalling(false);
       setIsCompleted(false);
-      setInstallProgress(0);
+      setInstallError('');
       return;
     }
 
     let isMounted = true;
+    setRelease(null);
+    setTotalMb(null);
     setIsChecking(true);
 
     const fetchLatestSilently = async () => {
@@ -141,103 +140,41 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
   const exeAsset = release?.assets?.find((a) =>
     typeof a.name === 'string' && a.name.toLowerCase().endsWith('.exe')
   );
-  const downloadUrl =
-    exeAsset?.browser_download_url ||
-    release?.html_url ||
-    'https://github.com/Validolio11/Karkas-app-/releases/latest';
   const fileName = exeAsset?.name || `Karkas-Setup-${versionTag}.exe`;
 
-  // Zero-interaction automated installation after user confirmation
   const handleApproveAndInstall = async () => {
+    if (isInstalling || isChecking) return;
+    setInstallError('');
+    if (!exeAsset?.browser_download_url) {
+      setInstallError(isUk ? 'Інсталятор для Windows недоступний. Закрийте вікно та перевірте оновлення ще раз.' : 'The Windows installer is unavailable. Close this window and check again.');
+      return;
+    }
     sound.tick(650);
     setIsInstalling(true);
     setIsCompleted(false);
-    setInstallProgress(0);
-    setDownloadedMb(0);
+    setInstallStep(isUk ? 'Завантаження інсталяційного пакету...' : 'Downloading update package...');
 
-    const step1 = isUk ? 'Завантаження інсталяційного пакету...' : 'Downloading update package...';
-    const step2 = isUk ? 'Перевірка цілісності та цифрового підпису...' : 'Verifying package integrity...';
-    const step3 = isUk ? 'Автоматичне встановлення компонентів...' : 'Automatically installing update...';
-    const step4 = isUk ? 'Оновлення завершено! Перезапуск...' : 'Update completed! Relaunching...';
-
-    setInstallStep(step1);
-
-    if (progressTimerRef.current) clearInterval(progressTimerRef.current);
-
-    // If running in desktop Electron environment, use native silent auto-updater
-    if (window.karkasDesktop) {
-      const totalTarget = totalMb || 58.4;
-      let currentPct = 0;
-
-      progressTimerRef.current = setInterval(() => {
-        currentPct += Math.random() * 5 + 3.5;
-        if (currentPct < 90) {
-          setInstallProgress(Math.floor(currentPct));
-          setDownloadedMb(Number(((currentPct / 100) * totalTarget).toFixed(1)));
-          if (currentPct < 45) setInstallStep(step1);
-          else if (currentPct < 75) setInstallStep(step2);
-          else setInstallStep(step3);
-        }
-      }, 100);
-
-      try {
-        const result = await window.karkasDesktop.updates.downloadAndInstall({ url: downloadUrl, fileName });
+    try {
+      if (window.karkasDesktop) {
+        const result = await window.karkasDesktop.updates.downloadAndInstall({ url: exeAsset.browser_download_url, fileName });
         if ('error' in result) throw new Error(result.error.message);
-        if (progressTimerRef.current) clearInterval(progressTimerRef.current);
-        setInstallProgress(100);
-        setDownloadedMb(totalTarget);
-        setInstallStep(step4);
-        setIsCompleted(true);
-        sound.activate();
-      } catch (err) {
-        console.error('Electron silent update error:', err);
-      }
-      return;
-    }
-
-    // Web / browser zero-friction fallback: stream download directly without popup windows
-    const totalTarget = totalMb || 58.4;
-    let currentPct = 0;
-
-    progressTimerRef.current = setInterval(() => {
-      currentPct += Math.random() * 4.5 + 3;
-
-      if (currentPct >= 100) {
-        currentPct = 100;
-        clearInterval(progressTimerRef.current);
-        setInstallProgress(100);
-        setDownloadedMb(totalTarget);
-        setInstallStep(step4);
-        setIsCompleted(true);
-        sound.activate();
-
-        // Trigger direct file download without opening blank windows
-        try {
-          const a = document.createElement('a');
-          a.href = downloadUrl;
-          a.download = fileName;
-          a.style.display = 'none';
-          document.body.appendChild(a);
-          a.click();
-          setTimeout(() => {
-            document.body.removeChild(a);
-          }, 1000);
-        } catch (e) {
-          console.error('Download stream error:', e);
-        }
+        setInstallStep(isUk ? 'Інсталятор запущено. Додаток закриється та відкриється після оновлення.' : 'Installer started. The app will close and reopen after the update.');
       } else {
-        setInstallProgress(Math.floor(currentPct));
-        setDownloadedMb(Number(((currentPct / 100) * totalTarget).toFixed(1)));
-
-        if (currentPct < 40) {
-          setInstallStep(step1);
-        } else if (currentPct < 75) {
-          setInstallStep(step2);
-        } else {
-          setInstallStep(step3);
-        }
+        const anchor = document.createElement('a');
+        anchor.href = exeAsset.browser_download_url;
+        anchor.download = fileName;
+        anchor.style.display = 'none';
+        document.body.appendChild(anchor);
+        try { anchor.click(); } finally { anchor.remove(); }
+        setInstallStep(isUk ? 'Завантаження передано браузеру. Відкрийте завантажений інсталятор для оновлення.' : 'Download requested in your browser. Open the downloaded installer to update.');
       }
-    }, 90);
+      setIsCompleted(true);
+      sound.activate();
+    } catch (err) {
+      setInstallError(err instanceof Error ? err.message : (isUk ? 'Не вдалося запустити оновлення. Спробуйте ще раз.' : 'Unable to start the update. Please try again.'));
+    } finally {
+      setIsInstalling(false);
+    }
   };
 
   return (
@@ -263,7 +200,6 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
               type="button"
               onClick={() => {
                 sound.tick(300);
-                if (progressTimerRef.current) clearInterval(progressTimerRef.current);
                 onClose();
               }}
               className="text-neutral-500 hover:text-white p-1 transition-colors cursor-pointer"
@@ -287,7 +223,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
                 </span>
               ) : (
                 <span className="text-[9px] px-1.5 py-0.5 bg-emerald-950 border border-emerald-500/40 text-emerald-400 font-bold uppercase">
-                  {isUk ? 'НАЙНОВІША ВЕРСІЯ' : 'UP TO DATE'}
+                  {isChecking ? (isUk ? 'ПЕРЕВІРКА...' : 'CHECKING...') : !release ? (isUk ? 'НЕ ПЕРЕВІРЕНО' : 'NOT CHECKED') : (isUk ? 'НАЙНОВІША ВЕРСІЯ' : 'UP TO DATE')}
                 </span>
               )}
             </div>
@@ -297,58 +233,21 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
               {isUk ? 'Розмір пакету' : 'Package Size'}
             </div>
             <div className="text-xs font-bold text-neutral-300 mt-0.5">
-              {totalMb} МБ
+              {totalMb === null ? '—' : `${totalMb} MB`}
             </div>
           </div>
         </div>
 
-        {/* Installation Progress Area (Visible when installing or completed) */}
+        {/* The desktop bridge reports handoff, not installation completion. */}
         {isInstalling || isCompleted ? (
-          <div className="bg-[#050507] border border-neutral-800/90 p-4 mb-4">
-            <div className="flex items-center justify-between text-xs mb-2">
-              <span className="font-bold text-neutral-300 flex items-center gap-1.5">
-                {isCompleted ? (
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                ) : (
-                  <RefreshCw className="w-3.5 h-3.5 text-amber-400 animate-spin" />
-                )}
-                <span>
-                  {isInstalling
-                    ? installStep
-                    : isUk
-                    ? 'Оновлення встановлено без участі користувача'
-                    : 'Update installed automatically'}
-                </span>
-              </span>
-              <span className="font-mono font-black text-white text-xs">
-                {installProgress}%
-              </span>
-            </div>
-
-            {/* Progress Track */}
-            <div className="w-full h-3 bg-neutral-950 border border-neutral-800 overflow-hidden relative">
-              <div
-                className={`h-full transition-all duration-150 ${
-                  isCompleted
-                    ? 'bg-emerald-500'
-                    : 'bg-gradient-to-r from-amber-500 to-emerald-400'
-                }`}
-                style={{ width: `${installProgress}%` }}
-              />
-            </div>
-
-            {/* Transfer stats line */}
-            <div className="flex items-center justify-between text-[10px] text-neutral-500 mt-2 font-mono">
-              <span>
-                {downloadedMb} МБ / {totalMb} МБ
-              </span>
-              <span>
-                {isCompleted
-                  ? isUk
-                    ? '100% Завершено'
-                    : '100% Completed'
-                  : '~15.2 МБ/с'}
-              </span>
+          <div role="status" aria-live="polite" className="bg-[#050507] border border-neutral-800/90 p-4 mb-4">
+            <div className="flex items-center gap-2 text-xs font-bold text-neutral-300">
+              {isCompleted ? (
+                <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+              ) : (
+                <RefreshCw className="w-4 h-4 shrink-0 text-amber-400 animate-spin" />
+              )}
+              <span>{installStep}</span>
             </div>
           </div>
         ) : (
@@ -367,14 +266,16 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
                     : `Install or reinstall version ${versionTag}?`}
                 </div>
                 <p className="text-[11px] text-neutral-400 leading-relaxed">
-                  {isUk
-                    ? 'Після вашого затвердження додаток автоматично завантажить та встановить нову версію без вашої участі.'
-                    : 'Once confirmed, the application will automatically download and install the new version without any further action.'}
+                  {window.karkasDesktop
+                    ? (isUk ? 'Додаток завантажить оновлення, закриється та відкриється після встановлення.' : 'The app will download the update, close, and reopen after installation.')
+                    : (isUk ? 'Завантажте інсталятор та відкрийте його для оновлення додатка Windows.' : 'Download and open the installer to update the Windows app.')}
                 </p>
               </div>
             </div>
           </div>
         )}
+
+        {installError && <p role="alert" className="mb-4 text-xs text-red-400">{installError}</p>}
 
         {/* Action Controls */}
         <div className="flex items-center gap-3">
@@ -384,10 +285,11 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
                 id="update-confirm-btn"
                 type="button"
                 onClick={handleApproveAndInstall}
+                disabled={isChecking}
                 className="flex-1 py-3 px-4 border border-white bg-white hover:bg-neutral-200 text-black font-black uppercase text-xs tracking-wider transition-all cursor-pointer flex items-center justify-center gap-2 shadow-md active:scale-98"
               >
                 <Download className="w-4 h-4" />
-                <span>{isUk ? 'Встановити зараз' : 'Install Now'}</span>
+                <span>{isChecking ? (isUk ? 'Перевірка...' : 'Checking...') : window.karkasDesktop ? (isUk ? 'Встановити зараз' : 'Install Now') : (isUk ? 'Завантажити' : 'Download')}</span>
               </button>
               <button
                 id="update-cancel-btn"
@@ -419,8 +321,8 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
               <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-400" />
               <span>
                 {isUk
-                  ? 'Автоматичне встановлення, зачекайте...'
-                  : 'Automatic installation in progress...'}
+                  ? 'Підготовка оновлення, зачекайте...'
+                  : 'Preparing the update, please wait...'}
               </span>
             </div>
           )}

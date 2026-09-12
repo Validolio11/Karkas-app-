@@ -86,7 +86,7 @@ export interface AITaskUpdate {
   phase?: string;
   priority?: 1 | 2 | 3;
   steps?: number;
-  stepList?: TaskStepItem[];
+  stepList?: { id?: string; title: string; done?: boolean }[];
   done?: boolean;
   note?: string;
 }
@@ -235,6 +235,7 @@ declare global {
         assist: (input: unknown) => Promise<DesktopResult<{ status: number; body: any }>>;
         breakdown: (input: unknown) => Promise<DesktopResult<{ status: number; body: any }>>;
         recommendations: (input: unknown) => Promise<DesktopResult<{ status: number; body: any }>>;
+        voiceToken: (input: unknown) => Promise<DesktopResult<{ status: number; body: any }>>;
         transcribeAudio: (input: unknown) => Promise<DesktopResult<{ status: number; body: any }>>;
       };
       updates: {

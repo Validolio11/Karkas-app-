@@ -1,3 +1,4 @@
+import { pauseTaskTimer } from './taskTimer';
 import type { AITaskUpdate, PSTask, TaskStepItem } from '../types';
 
 /** Apply only supported AI fields; stepList is the complete replacement checklist. */
@@ -57,13 +58,7 @@ export function applyAITaskUpdate(
       next.done = next.currentStep === next.steps;
     }
     next.completedAt = next.done ? (task.completedAt ?? now) : undefined;
-    if (next.done) {
-      if (task.timerRunning && typeof task.timerStartedAt === 'number') {
-        next.timeSpentSeconds = (task.timeSpentSeconds || 0) + Math.max(0, Math.floor((now - task.timerStartedAt) / 1000));
-      }
-      next.timerRunning = false;
-      next.timerStartedAt = undefined;
-    }
+    if (next.done) return pauseTaskTimer(next, now);
   }
   return next;
 }

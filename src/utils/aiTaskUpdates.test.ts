@@ -11,6 +11,15 @@ const task = (overrides: Partial<PSTask> = {}): PSTask => ({
   ...overrides,
 });
 
+test('AI completion preserves countdown remainder and caps credited time at expiry', () => {
+  const running = task({ timerRunning: true, timerStartedAt: 1000, timeSpentSeconds: 50,
+    countdownDurationSeconds: 3600, countdownRemainingSeconds: 30 });
+  const result = applyAITaskUpdate(running, { id: running.id, done: true }, tabs, 61000);
+  assert.equal(result.timeSpentSeconds, 80);
+  assert.equal(result.countdownRemainingSeconds, 0);
+  assert.equal(result.timerRunning, false);
+});
+
 test('adding a subtask preserves existing identities and completed progress', () => {
   const original = task();
   const result = applyAITaskUpdate(original, { id: original.id, stepList: [

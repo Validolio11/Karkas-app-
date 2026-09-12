@@ -19,6 +19,7 @@ import {
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { PSTask, TaskTab, DeletedTask } from '../types';
+import { serializeTaskForCloud } from '../utils/cloudTaskSerialization';
 import { assertCloudPayloadWithinLimit, isSyncMutationApplied, mergeWorkspace, recordSyncMutation, sameWorkspace, type SyncMutationIdentity, type WorkspaceState } from '../utils/syncState';
 import {
   buildCloudShadowPlan,
@@ -313,33 +314,7 @@ export async function saveUserCloudData(
     email: currentUser.email ?? null,
     displayName: currentUser.displayName ?? null,
     photoURL: currentUser.photoURL ?? null,
-    tasks: (merged.tasks || []).map((t) => {
-      const taskObj: Record<string, any> = {
-        id: t.id,
-        title: t.title,
-        phase: t.phase,
-        priority: t.priority,
-        steps: t.steps,
-        currentStep: t.currentStep,
-        done: Boolean(t.done),
-        pinned: Boolean(t.pinned),
-        createdAt: t.createdAt || Date.now(),
-      };
-      if (t.note !== undefined && t.note !== null) taskObj.note = t.note;
-      if (t.completedAt !== undefined && t.completedAt !== null) taskObj.completedAt = t.completedAt;
-      if (typeof t.timeSpentSeconds === 'number') taskObj.timeSpentSeconds = t.timeSpentSeconds;
-      if (t.timerRunning !== undefined) taskObj.timerRunning = Boolean(t.timerRunning);
-      if (typeof t.timerStartedAt === 'number') taskObj.timerStartedAt = t.timerStartedAt;
-      if (t.autoPausedOverdue !== undefined) taskObj.autoPausedOverdue = Boolean(t.autoPausedOverdue);
-      if (t.stepList && Array.isArray(t.stepList)) {
-        taskObj.stepList = t.stepList.map((st) => ({
-          id: st.id,
-          title: st.title,
-          done: Boolean(st.done),
-        }));
-      }
-      return taskObj;
-    }),
+    tasks: (merged.tasks || []).map((task) => serializeTaskForCloud(task)),
     tabs: (merged.tabs || []).map((tb) => {
       const tabObj: Record<string, any> = {
         id: tb.id,
@@ -348,34 +323,7 @@ export async function saveUserCloudData(
       if (tb.color) tabObj.color = tb.color;
       return tabObj;
     }),
-    deletedTasks: (merged.deletedTasks || []).map((t) => {
-      const delObj: Record<string, any> = {
-        id: t.id,
-        title: t.title,
-        phase: t.phase,
-        priority: t.priority,
-        steps: t.steps,
-        currentStep: t.currentStep,
-        done: Boolean(t.done),
-        pinned: Boolean(t.pinned),
-        createdAt: t.createdAt || Date.now(),
-        deletedAt: t.deletedAt || Date.now(),
-      };
-      if (t.note !== undefined && t.note !== null) delObj.note = t.note;
-      if (t.completedAt !== undefined && t.completedAt !== null) delObj.completedAt = t.completedAt;
-      if (typeof t.timeSpentSeconds === 'number') delObj.timeSpentSeconds = t.timeSpentSeconds;
-      if (t.timerRunning !== undefined) delObj.timerRunning = Boolean(t.timerRunning);
-      if (typeof t.timerStartedAt === 'number') delObj.timerStartedAt = t.timerStartedAt;
-      if (t.autoPausedOverdue !== undefined) delObj.autoPausedOverdue = Boolean(t.autoPausedOverdue);
-      if (t.stepList && Array.isArray(t.stepList)) {
-        delObj.stepList = t.stepList.map((st) => ({
-          id: st.id,
-          title: st.title,
-          done: Boolean(st.done),
-        }));
-      }
-      return delObj;
-    }),
+    deletedTasks: (merged.deletedTasks || []).map((task) => serializeTaskForCloud(task)),
     settings: {
       soundEnabled: Boolean(merged.settings?.soundEnabled),
       fireEnabled: Boolean(merged.settings?.fireEnabled),

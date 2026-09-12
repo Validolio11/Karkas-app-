@@ -1,7 +1,9 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence, useMotionValue, useTransform } from 'motion/react';
 import { PSTask, TaskTab } from '../types';
 import { sound } from '../utils/audio';
+import { getTaskTotalSeconds, getTaskRemainingSeconds } from '../utils/taskTimer';
 import { Language, TRANSLATIONS } from '../utils/i18n';
 import {
   Pin,
@@ -45,6 +47,8 @@ interface TaskCardProps {
   onToggleTimer?: (taskId: string) => void;
   onResetTimer?: (taskId: string) => void;
   onUpdateTimeSpent?: (taskId: string, newTotalSeconds: number) => void;
+  onConfigureCountdown?: (taskId: string, seconds: number) => void;
+  onClearCountdown?: (taskId: string) => void;
 }
 
 function formatTime(totalSeconds: number): string {
@@ -112,6 +116,8 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
   onToggleTimer,
   onResetTimer,
   onUpdateTimeSpent,
+  onConfigureCountdown,
+  onClearCountdown,
 }) => {
   const t = TRANSLATIONS[lang];
   const [isSlashing, setIsSlashing] = useState(false);
@@ -125,27 +131,31 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
   const [editHours, setEditHours] = useState(0);
   const [editMinutes, setEditMinutes] = useState(0);
   const [editSeconds, setEditSeconds] = useState(0);
+  const [isConfiguringTimer, setIsConfiguringTimer] = useState(false);
+  const [countdownMinutes, setCountdownMinutes] = useState('60');
   const [now, setNow] = useState(Date.now());
   const x = useMotionValue(0);
 
   // Live stopwatch interval (only ticks when timer is running)
   useEffect(() => {
+    setNow(Date.now());
     if (!task.timerRunning) return;
     const interval = setInterval(() => {
       setNow(Date.now());
     }, 1000);
     return () => clearInterval(interval);
-  }, [task.timerRunning]);
+  }, [task.timerRunning, task.timerStartedAt]);
 
   // Compute live seconds spent on task
-  const currentElapsedSeconds = useMemo(() => {
-    const base = task.timeSpentSeconds || 0;
-    if (task.timerRunning && task.timerStartedAt) {
-      const live = Math.floor((now - task.timerStartedAt) / 1000);
-      return Math.max(0, base + live);
-    }
-    return base;
-  }, [task.timeSpentSeconds, task.timerRunning, task.timerStartedAt, now]);
+  const currentElapsedSeconds = getTaskTotalSeconds(task, now);
+  const hasCountdown = (task.countdownDurationSeconds || 0) > 0;
+  const remainingSeconds = getTaskRemainingSeconds(task, now) ?? 0;
+  const countdownFinished = hasCountdown && remainingSeconds === 0;
+  const timerToggleLabel = task.timerRunning
+    ? t.timer.pause
+    : countdownFinished ? (lang === 'uk' ? 'Повторити таймер' : 'Restart countdown') : t.timer.start;
+  const validCountdownMinutes = Number.isInteger(Number(countdownMinutes))
+    && Number(countdownMinutes) >= 1 && Number(countdownMinutes) <= 1440;
 
   const matchedTab = tabs.find((tb) => tb.id === task.phase);
   const phaseLabel = (t.phases as any)[task.phase] || matchedTab?.name || task.phase;
@@ -401,7 +411,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
             </div>
 
             {/* Right side: Stopwatch / Timer & Quick Micro-Actions */}
-            <div className="flex items-center gap-1.5 sm:gap-2">
+            <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
               {/* Task Stopwatch / Timer Widget */}
               <div
                 id={`task-timer-widget-${task.id}`}
@@ -422,7 +432,8 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                     e.stopPropagation();
                     if (onToggleTimer) onToggleTimer(task.id);
                   }}
-                  title={task.timerRunning ? t.timer.pause : t.timer.start}
+                  title={timerToggleLabel}
+                  aria-label={timerToggleLabel}
                   className={`p-0.5 transition-transform active:scale-90 flex items-center justify-center ${
                     task.timerRunning
                       ? 'text-emerald-400 hover:text-emerald-300'
@@ -451,11 +462,39 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                       : 'text-neutral-500'
                   }`}
                 >
-                  {formatTime(currentElapsedSeconds)}
+                  {formatTime(hasCountdown ? remainingSeconds : currentElapsedSeconds)}
                 </span>
 
+                {hasCountdown && (
+                  <span className="flex flex-col gap-0.5 border-l border-neutral-700 pl-1.5 text-[10px] leading-tight text-neutral-400">
+                    <span className={countdownFinished ? 'text-amber-300' : ''} role="status">
+                      {countdownFinished
+                        ? (lang === 'uk' ? 'Час вийшов' : 'Time is up')
+                        : (lang === 'uk' ? 'Залишилось' : 'Remaining')}
+                    </span>
+                    <span>{lang === 'uk' ? 'Всього' : 'Total'}: {formatTime(currentElapsedSeconds)}</span>
+                  </span>
+                )}
+
+                {onConfigureCountdown && (
+                  <button
+                    type="button"
+                    id={`task-timer-configure-${task.id}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setCountdownMinutes(String(Math.max(1, Math.round((task.countdownDurationSeconds || 3600) / 60))));
+                      setIsConfiguringTimer(true);
+                    }}
+                    title={lang === 'uk' ? 'Налаштувати зворотний відлік' : 'Set countdown'}
+                    aria-label={lang === 'uk' ? 'Налаштувати зворотний відлік' : 'Set countdown'}
+                    className="p-1 text-neutral-400 transition-colors hover:text-white"
+                  >
+                    <Timer className="h-3.5 w-3.5" />
+                  </button>
+                )}
+
                 {/* Reset Button (shows when paused and has recorded time) */}
-                {currentElapsedSeconds > 0 && !task.timerRunning && onResetTimer && (
+                {!hasCountdown && currentElapsedSeconds > 0 && !task.timerRunning && onResetTimer && (
                   <button
                     type="button"
                     id={`task-timer-reset-${task.id}`}
@@ -867,6 +906,75 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
           </motion.div>
         )}
       </AnimatePresence>
+
+      {isConfiguringTimer && onConfigureCountdown && createPortal(
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4"
+          onClick={(e) => { e.stopPropagation(); setIsConfiguringTimer(false); }}
+          onKeyDown={(e) => { if (e.key === 'Escape') setIsConfiguringTimer(false); }}
+        >
+          <form
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={`countdown-title-${task.id}`}
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!validCountdownMinutes) return;
+              onConfigureCountdown(task.id, Number(countdownMinutes) * 60);
+              setIsConfiguringTimer(false);
+            }}
+            className="flex w-full max-w-sm flex-col gap-4 border border-neutral-800 bg-[#0c0c0e] p-5 font-mono shadow-2xl"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <h4 id={`countdown-title-${task.id}`} className="flex items-center gap-2 text-sm font-bold text-neutral-100">
+                <Timer className="h-4 w-4" />
+                {lang === 'uk' ? 'Таймер завдання' : 'Task countdown'}
+              </h4>
+              <button type="button" onClick={() => setIsConfiguringTimer(false)}
+                aria-label={t.timer.cancel} className="p-1 text-neutral-400 hover:text-white">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <p className="text-xs leading-relaxed text-neutral-400">
+              {lang === 'uk'
+                ? 'Зворотний відлік зупиниться на нулі. Витрачений час додасться до загального часу завдання.'
+                : 'The countdown stops at zero. Time spent is added to the task’s total time.'}
+            </p>
+            <label htmlFor={`countdown-minutes-${task.id}`} className="text-xs text-neutral-300">
+              {lang === 'uk' ? 'Тривалість у хвилинах (1–1440)' : 'Duration in minutes (1–1440)'}
+            </label>
+            <input id={`countdown-minutes-${task.id}`} type="number" min="1" max="1440" step="1"
+              required autoFocus value={countdownMinutes}
+              onChange={(e) => setCountdownMinutes(e.target.value)}
+              className="w-full border border-neutral-700 bg-neutral-950 px-3 py-2 text-white focus:border-white focus:outline-none" />
+            <div className="grid grid-cols-3 gap-2">
+              {[15, 25, 60].map((minutes) => (
+                <button key={minutes} type="button" onClick={() => setCountdownMinutes(String(minutes))}
+                  aria-pressed={Number(countdownMinutes) === minutes}
+                  className={`border px-2 py-2 text-xs transition-colors ${Number(countdownMinutes) === minutes ? 'border-white text-white' : 'border-neutral-700 text-neutral-400 hover:border-neutral-400 hover:text-white'}`}>
+                  {minutes} {lang === 'uk' ? 'хв' : 'min'}
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-neutral-800 pt-3">
+              {hasCountdown && onClearCountdown && (
+                <button type="button" onClick={() => { onClearCountdown(task.id); setIsConfiguringTimer(false); }}
+                  className="mr-auto py-1.5 text-xs text-neutral-400 hover:text-white">
+                  {lang === 'uk' ? 'Секундомір' : 'Stopwatch'}
+                </button>
+              )}
+              <button type="button" onClick={() => setIsConfiguringTimer(false)}
+                className="px-2 py-1.5 text-xs text-neutral-400 hover:text-white">{t.timer.cancel}</button>
+              <button type="submit" disabled={!validCountdownMinutes}
+                className="border border-white bg-white px-3 py-1.5 text-xs font-bold text-black hover:bg-neutral-200 disabled:opacity-40">
+                {lang === 'uk' ? 'Почати' : 'Start'}
+              </button>
+            </div>
+          </form>
+        </div>,
+        document.body,
+      )}
 
       {/* Time Adjustment Modal */}
       {isEditingTime && (

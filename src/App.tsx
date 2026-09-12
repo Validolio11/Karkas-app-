@@ -1,3 +1,4 @@
+import { pauseTaskTimer, startTaskTimer, configureTaskCountdown, clearTaskCountdown } from './utils/taskTimer';
 import { applyAITaskUpdate } from './utils/aiTaskUpdates';
 import React, { useState, useEffect, useMemo } from 'react';
 import { PSTask, DeletedTask, TaskTab, FilterMode, WorkflowStats, TaskStepItem, AdaptiveProfile, AITaskUpdate, NotepadNote } from './types';
@@ -96,8 +97,7 @@ const APP_ZOOM_KEY = 'karkas_app_zoom_percent';
 const MIN_APP_ZOOM = 75;
 const MAX_APP_ZOOM = 150;
 const DEFAULT_APP_ZOOM = 100;
-const APP_CURRENT_VERSION = '1.2.16';
-const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+const APP_CURRENT_VERSION = '1.2.17';
 
 function normalizeVersion(version: string): number[] {
   const cleaned = String(version || '').trim().replace(/^v/i, '').split('-')[0];
@@ -206,34 +206,14 @@ export default function App() {
     return sanitizeTasksTimerSafeguard(loaded);
   });
 
-  // Periodic safeguard check for forgotten running timers (e.g., left running overnight)
+  // Reconcile deadlines globally, including tasks hidden by filters or tabs.
   useEffect(() => {
     const interval = setInterval(() => {
-      setTasks((prev) => {
-        let hasChanges = false;
-        const now = Date.now();
-        const todayStr = new Date(now).toDateString();
-        const updated = prev.map((t) => {
-          if (t.timerRunning && t.timerStartedAt) {
-            const elapsedMs = now - t.timerStartedAt;
-            const startedDateStr = new Date(t.timerStartedAt).toDateString();
-            if (elapsedMs > TWO_HOURS_MS) {
-              hasChanges = true;
-              const cappedSeconds = Math.min(Math.floor(elapsedMs / 1000), 7200);
-              return {
-                ...t,
-                timeSpentSeconds: (t.timeSpentSeconds || 0) + cappedSeconds,
-                timerRunning: false,
-                timerStartedAt: undefined,
-                autoPausedOverdue: true,
-              };
-            }
-          }
-          return t;
-        });
-        return hasChanges ? updated : prev;
+      setTasks(previous => {
+        const updated = sanitizeTasksTimerSafeguard(previous);
+        return updated.some((task, index) => task !== previous[index]) ? updated : previous;
       });
-    }, 60000);
+    }, 1000);
     return () => clearInterval(interval);
   }, []);
 
@@ -1454,15 +1434,7 @@ export default function App() {
             : Math.max(0, t.steps - 1);
 
           // If completing task while timer is running, bank elapsed time and pause
-          let updatedTimeSpent = t.timeSpentSeconds || 0;
-          let timerRunning = t.timerRunning;
-          let timerStartedAt = t.timerStartedAt;
-          if (nextDone && t.timerRunning && t.timerStartedAt) {
-            const elapsed = Math.floor((Date.now() - t.timerStartedAt) / 1000);
-            updatedTimeSpent += Math.max(0, elapsed);
-            timerRunning = false;
-            timerStartedAt = undefined;
-          }
+          const settledTimer = nextDone ? pauseTaskTimer(t) : t;
 
           return {
             ...t,
@@ -1470,9 +1442,10 @@ export default function App() {
             stepList: updatedStepList,
             currentStep: completedCount,
             completedAt: nextDone ? (t.completedAt || Date.now()) : undefined,
-            timeSpentSeconds: updatedTimeSpent,
-            timerRunning,
-            timerStartedAt,
+            timeSpentSeconds: settledTimer.timeSpentSeconds,
+            timerRunning: settledTimer.timerRunning,
+            timerStartedAt: settledTimer.timerStartedAt,
+            countdownRemainingSeconds: settledTimer.countdownRemainingSeconds,
           };
         }
         return t;
@@ -1481,34 +1454,22 @@ export default function App() {
   };
 
   const handleToggleTimer = (id: string) => {
-    setTasks((prev) =>
-      prev.map((t) => {
-        if (t.id === id) {
-          const isCurrentlyRunning = !!t.timerRunning;
-          if (isCurrentlyRunning) {
-            // Pause timer and bank elapsed seconds
-            const sessionElapsed = t.timerStartedAt ? Math.floor((Date.now() - t.timerStartedAt) / 1000) : 0;
-            const newTotal = (t.timeSpentSeconds || 0) + Math.max(0, sessionElapsed);
-            sound.tick(400);
-            return {
-              ...t,
-              timeSpentSeconds: newTotal,
-              timerRunning: false,
-              timerStartedAt: undefined,
-            };
-          } else {
-            // Start / resume timer
-            sound.tick(650);
-            return {
-              ...t,
-              timerRunning: true,
-              timerStartedAt: Date.now(),
-            };
-          }
-        }
-        return t;
-      })
-    );
+    sound.tick(500);
+    const now = Date.now();
+    setTasks(previous => previous.map(task => task.id === id
+      ? task.timerRunning ? pauseTaskTimer(task, now) : startTaskTimer(task, now)
+      : task));
+  };
+
+  const handleConfigureCountdown = (id: string, seconds: number) => {
+    if (!Number.isFinite(seconds) || seconds < 60 || seconds > 86400) return;
+    const now = Date.now();
+    setTasks(previous => previous.map(task => task.id === id ? configureTaskCountdown(task, seconds, now) : task));
+  };
+
+  const handleClearCountdown = (id: string) => {
+    const now = Date.now();
+    setTasks(previous => previous.map(task => task.id === id ? clearTaskCountdown(task, now) : task));
   };
 
   const handleResetTimer = (id: string) => {
@@ -1534,7 +1495,8 @@ export default function App() {
       prev.map((t) => {
         if (t.id === id) {
           return {
-            ...t,
+            ...pauseTaskTimer(t),
+            timerRunning: t.timerRunning,
             timeSpentSeconds: Math.max(0, newTotalSeconds),
             timerStartedAt: t.timerRunning ? Date.now() : undefined,
             autoPausedOverdue: false,
@@ -1554,15 +1516,7 @@ export default function App() {
             ? t.stepList.map((s, idx) => ({ ...s, done: idx < step }))
             : undefined;
 
-          let updatedTimeSpent = t.timeSpentSeconds || 0;
-          let timerRunning = t.timerRunning;
-          let timerStartedAt = t.timerStartedAt;
-          if (nextDone && t.timerRunning && t.timerStartedAt) {
-            const elapsed = Math.floor((Date.now() - t.timerStartedAt) / 1000);
-            updatedTimeSpent += Math.max(0, elapsed);
-            timerRunning = false;
-            timerStartedAt = undefined;
-          }
+          const settledTimer = nextDone ? pauseTaskTimer(t) : t;
 
           return {
             ...t,
@@ -1570,9 +1524,10 @@ export default function App() {
             stepList: updatedStepList,
             done: nextDone,
             completedAt: nextDone ? (t.completedAt || Date.now()) : undefined,
-            timeSpentSeconds: updatedTimeSpent,
-            timerRunning,
-            timerStartedAt,
+            timeSpentSeconds: settledTimer.timeSpentSeconds,
+            timerRunning: settledTimer.timerRunning,
+            timerStartedAt: settledTimer.timerStartedAt,
+            countdownRemainingSeconds: settledTimer.countdownRemainingSeconds,
           };
         }
         return t;
@@ -1610,15 +1565,7 @@ export default function App() {
           const completedCount = updatedStepList.filter((s) => s.done).length;
           const isAllDone = completedCount === updatedStepList.length && updatedStepList.length > 0;
 
-          let updatedTimeSpent = t.timeSpentSeconds || 0;
-          let timerRunning = t.timerRunning;
-          let timerStartedAt = t.timerStartedAt;
-          if (isAllDone && !t.done && t.timerRunning && t.timerStartedAt) {
-            const elapsed = Math.floor((Date.now() - t.timerStartedAt) / 1000);
-            updatedTimeSpent += Math.max(0, elapsed);
-            timerRunning = false;
-            timerStartedAt = undefined;
-          }
+          const settledTimer = isAllDone && !t.done ? pauseTaskTimer(t) : t;
 
           return {
             ...t,
@@ -1627,9 +1574,10 @@ export default function App() {
             currentStep: completedCount,
             done: isAllDone,
             completedAt: isAllDone ? (t.completedAt || Date.now()) : undefined,
-            timeSpentSeconds: updatedTimeSpent,
-            timerRunning,
-            timerStartedAt,
+            timeSpentSeconds: settledTimer.timeSpentSeconds,
+            timerRunning: settledTimer.timerRunning,
+            timerStartedAt: settledTimer.timerStartedAt,
+            countdownRemainingSeconds: settledTimer.countdownRemainingSeconds,
           };
         }
         return t;
@@ -1668,15 +1616,7 @@ export default function App() {
           const completedCount = nextList.filter((s) => s.done).length;
           const isAllDone = nextList.length > 0 && completedCount === nextList.length;
 
-          let updatedTimeSpent = t.timeSpentSeconds || 0;
-          let timerRunning = t.timerRunning;
-          let timerStartedAt = t.timerStartedAt;
-          if (isAllDone && !t.done && t.timerRunning && t.timerStartedAt) {
-            const elapsed = Math.floor((Date.now() - t.timerStartedAt) / 1000);
-            updatedTimeSpent += Math.max(0, elapsed);
-            timerRunning = false;
-            timerStartedAt = undefined;
-          }
+          const settledTimer = isAllDone && !t.done ? pauseTaskTimer(t) : t;
 
           return {
             ...t,
@@ -1685,9 +1625,10 @@ export default function App() {
             currentStep: completedCount,
             done: isAllDone,
             completedAt: isAllDone ? (t.completedAt || Date.now()) : undefined,
-            timeSpentSeconds: updatedTimeSpent,
-            timerRunning,
-            timerStartedAt,
+            timeSpentSeconds: settledTimer.timeSpentSeconds,
+            timerRunning: settledTimer.timerRunning,
+            timerStartedAt: settledTimer.timerStartedAt,
+            countdownRemainingSeconds: settledTimer.countdownRemainingSeconds,
           };
         }
         return t;
@@ -1736,16 +1677,7 @@ export default function App() {
   const handleDelete = (id: string) => {
     const taskToDelete = tasks.find((t) => t.id === id);
     if (taskToDelete) {
-      let finalTimeSpent = taskToDelete.timeSpentSeconds || 0;
-      if (taskToDelete.timerRunning && taskToDelete.timerStartedAt) {
-        finalTimeSpent += Math.max(0, Math.floor((Date.now() - taskToDelete.timerStartedAt) / 1000));
-      }
-      const sanitizedToDelete: PSTask = {
-        ...taskToDelete,
-        timeSpentSeconds: finalTimeSpent,
-        timerRunning: false,
-        timerStartedAt: undefined,
-      };
+      const sanitizedToDelete = pauseTaskTimer(taskToDelete);
       setRecentlyDeleted(sanitizedToDelete);
       const deletedItem: DeletedTask = {
         ...sanitizedToDelete,
@@ -1851,7 +1783,7 @@ export default function App() {
         const nextList = prev
           .filter((t) => {
             if (toDeleteSet.has(t.id)) {
-              deletedToArchive.push({ ...t, deletedAt: Date.now() });
+              deletedToArchive.push({ ...pauseTaskTimer(t), deletedAt: Date.now() });
               return false;
             }
             return true;
@@ -2170,6 +2102,8 @@ export default function App() {
                       onDeleteStepItem={handleDeleteStepItem}
                       onAIBreakdown={handleAIBreakdownTask}
                       isBreakingDown={breakingDownTaskId === task.id}
+                      onConfigureCountdown={handleConfigureCountdown}
+                      onClearCountdown={handleClearCountdown}
                       onToggleTimer={handleToggleTimer}
                       onResetTimer={handleResetTimer}
                       onUpdateTimeSpent={handleUpdateTimeSpent}

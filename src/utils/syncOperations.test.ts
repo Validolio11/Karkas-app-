@@ -14,6 +14,14 @@ const state = (tasks: PSTask[] = []): WorkspaceState => ({
 });
 const identity = { clientId: 'desktop-a', sequence: 1 };
 
+test('countdown settings, remaining session and accumulated total survive workspace synchronization', () => {
+  const base = state([task('timer')]);
+  const next = state([{ ...task('timer'), countdownDurationSeconds: 3600,
+    countdownRemainingSeconds: 2400, timeSpentSeconds: 7200, timerRunning: false }]);
+  const serialized = JSON.parse(JSON.stringify(diffWorkspaceMutation(base, next, identity)));
+  assert.deepEqual(applyWorkspaceMutation(base, serialized), next);
+});
+
 test('workspace mutation round-trips edits, additions, tombstones and settings', () => {
   const base = state([task('edit'), task('delete'), task('purge')]);
   base.deletedTasks = [{ ...task('purge'), deletedAt: 5 }];

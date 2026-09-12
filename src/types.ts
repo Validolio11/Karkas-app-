@@ -30,6 +30,8 @@ export interface PSTask {
   timeSpentSeconds?: number; // Total accumulated seconds spent on this task
   timerRunning?: boolean; // Is stopwatch currently active
   timerStartedAt?: number; // Timestamp (ms) when current stopwatch session started
+  countdownDurationSeconds?: number; // Configured focus session duration
+  countdownRemainingSeconds?: number; // Remaining at the last start/pause; live elapsed is derived
   autoPausedOverdue?: boolean; // Timer was auto-paused due to session cap or inactivity safeguard
 }
 

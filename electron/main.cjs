@@ -12,11 +12,14 @@ const { launchUpdateInstaller } = require('./update-installer.cjs');
 const { beginBrowserGoogleLogin } = require('./browser-auth.cjs');
 const { createDesktopStorage } = require('./storage.cjs');
 const { createSecretStore } = require('./secrets.cjs');
+const { resolveIconPaths } = require('./app-icons.cjs');
 
 const APP_SCHEME = 'karkas';
 const LEGACY_PORT = 14141;
 const MAX_IPC_BYTES = 30 * 1024 * 1024;
 const isDevelopment = process.env.NODE_ENV === 'development' || !app.isPackaged;
+
+if (process.platform === 'win32') app.setAppUserModelId('com.karkas.app');
 
 protocol.registerSchemesAsPrivileged([{
   scheme: APP_SCHEME,
@@ -86,14 +89,22 @@ function on(channel, operation) {
   });
 }
 
+function appIcons() {
+  return resolveIconPaths({
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    appRoot: path.resolve(__dirname, '..'),
+  });
+}
+
 function appIconPath() {
-  if (process.platform === 'win32') {
-    const ico = app.isPackaged ? path.join(process.resourcesPath, 'icon.ico') : path.join(__dirname, '../build/icon.ico');
-    if (fs.existsSync(ico)) return ico;
-  }
-  const png = app.isPackaged ? path.join(process.resourcesPath, 'icon.png') : path.join(__dirname, '../build/icon.png');
-  if (fs.existsSync(png)) return png;
-  return path.join(__dirname, '../public/icon.png');
+  return appIcons().window;
+}
+
+function windowIcon() {
+  const icon = nativeImage.createFromPath(appIconPath());
+  if (icon.isEmpty()) throw new Error('Unable to decode the Karkas window icon');
+  return icon;
 }
 
 function showAndFocusWindow() {
@@ -140,9 +151,8 @@ function validSavedBounds(bounds) {
 
 function createTray() {
   if (tray) return;
-  let icon = nativeImage.createFromPath(appIconPath());
-  if (!icon.isEmpty()) icon = icon.resize({ width: 16, height: 16 });
-  tray = new Tray(icon);
+  // Pass ICO directly on Windows so the shell selects the matching DPI frame.
+  tray = new Tray(appIcons().tray);
   tray.setToolTip('Karkas');
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Відкрити Karkas', click: showAndFocusWindow },
@@ -369,7 +379,7 @@ async function createWindow() {
   const savedBounds = validSavedBounds(preferences.window?.bounds);
   mainWindow = new BrowserWindow({
     ...(savedBounds || { width: 1280, height: 850 }), minWidth: 760, minHeight: 540, show: false,
-    backgroundColor: '#09090b', icon: appIconPath(), frame: false, autoHideMenuBar: true, title: 'Karkas',
+    backgroundColor: '#09090b', icon: windowIcon(), frame: false, autoHideMenuBar: true, title: 'Karkas',
     webPreferences: { zoomFactor: 1, nodeIntegration: false, contextIsolation: true, sandbox: true, preload: path.join(__dirname, 'preload.cjs') },
   });
   mainWindow.removeMenu();

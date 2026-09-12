@@ -1,7 +1,7 @@
 {
   "name": "karkas-app",
   "private": true,
-  "version": "1.2.16",
+  "version": "1.2.17",
   "description": "Karkas Application",
   "author": "Melychyn",
   "type": "module",
@@ -15,7 +15,8 @@
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "test": "node --import tsx --test electron/*.test.cjs src/utils/*.test.ts server/*.test.ts",
-    "build:win": "npm run build && electron-builder --win --x64 --publish never"
+    "icons:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate-icons.ps1",
+    "build:win": "npm run icons:win && npm run build && electron-builder --win --x64 --publish never"
   },
   "build": {
     "appId": "com.karkas.app",

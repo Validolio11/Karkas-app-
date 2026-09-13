@@ -1,7 +1,7 @@
 {
   "name": "karkas-app",
   "private": true,
-  "version": "1.2.20",
+  "version": "1.2.21",
   "description": "Karkas Application",
   "author": "Melychyn",
   "type": "module",
@@ -50,6 +50,7 @@
       ]
     },
     "nsis": {
+      "artifactName": "Karkas-Setup-${version}.${ext}",
       "oneClick": true,
       "perMachine": false,
       "allowElevation": true,

@@ -27,10 +27,12 @@ test('preload exposes only the grouped Karkas desktop bridge', async () => {
   exposed.karkasDesktop.window.setZoomFactor(9);
   await exposed.karkasDesktop.workspace.loadAccount('user-1');
   await exposed.karkasDesktop.ai.assist({ prompt: 'hello' });
+  await exposed.karkasDesktop.system.getAppVersion();
   assert.equal(zoomFactor, 1.5);
   assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
     ['send', 'karkas:window:minimize', null],
     ['invoke', 'karkas:workspace:load-account', { ownerId: 'user-1' }],
     ['invoke', 'karkas:ai:assist', { prompt: 'hello' }],
+    ['invoke', 'karkas:system:get-version', null],
   ]);
 });

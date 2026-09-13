@@ -362,6 +362,7 @@ function registerIpc() {
     if (!['https:', 'http:'].includes(parsed.protocol)) throw new Error('Unsupported external URL');
     await shell.openExternal(parsed.toString());
   });
+  handle('karkas:system:get-version', () => app.getVersion());
   handle('karkas:system:notify', ({ title, body }) => {
     if (!Notification.isSupported()) throw new Error('System notifications are unavailable');
     new Notification({ title: String(title).slice(0, 120), body: String(body).slice(0, 1000), icon: appIconPath() }).show();

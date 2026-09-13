@@ -245,6 +245,7 @@ declare global {
         downloadAndInstall: (input: { url: string; fileName?: string }) => Promise<DesktopResult<void>>;
       };
       system: {
+        getAppVersion: () => Promise<DesktopResult<string>>;
         openExternal: (url: string) => Promise<DesktopResult<void>>;
         showNotification: (input: { title: string; body: string }) => Promise<DesktopResult<void>>;
         getStartupEnabled: () => Promise<DesktopResult<boolean>>;

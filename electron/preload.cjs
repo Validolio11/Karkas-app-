@@ -63,6 +63,7 @@ contextBridge.exposeInMainWorld('karkasDesktop', {
     downloadAndInstall: (input) => invoke('karkas:updates:install', input),
   },
   system: {
+    getAppVersion: () => invoke('karkas:system:get-version'),
     openExternal: (url) => invoke('karkas:system:open-external', { url }),
     showNotification: (input) => invoke('karkas:system:notify', input),
     getStartupEnabled: () => invoke('karkas:system:get-startup'),

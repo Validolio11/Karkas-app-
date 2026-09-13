@@ -29,6 +29,9 @@ jobs:
         id: pkg
         run: |
           $ver = (Get-Content package.json | ConvertFrom-Json).version
+          if ("${{ github.event_name }}" -eq "push" -and "${{ github.ref_name }}" -ne "v$ver") {
+            throw "Release tag ${{ github.ref_name }} does not match package.json version $ver"
+          }
           echo "version=$ver" >> $env:GITHUB_OUTPUT
         shell: powershell
 
@@ -42,6 +45,16 @@ jobs:
         run: |
           npm run lint
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $expectedVersion = "${{ steps.pkg.outputs.version }}"
+          $actualVersion = (Get-Item 'release/win-unpacked/Karkas.exe').VersionInfo.FileVersion
+          if ($actualVersion -ne $expectedVersion) {
+            throw "Packaged executable version $actualVersion does not match package.json version $expectedVersion"
+          }
+          $installer = Get-Item "release/Karkas-Setup-$expectedVersion.exe"
+          $updateMetadata = Get-Content 'release/latest.yml' -Raw
+          if (-not $updateMetadata.Contains($installer.Name)) {
+            throw "latest.yml does not reference the published installer $($installer.Name)"
+          }
           $testFiles = Get-ChildItem electron, src/utils, server -Filter '*.test.*' -File
           node --import tsx --test $testFiles.FullName
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

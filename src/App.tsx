@@ -45,6 +45,7 @@ import { mergeWorkspace, normalizeWorkspaceForStorage, sameWorkspace, type Works
 import { diffWorkspaceOperations } from './utils/syncOperations';
 import { karkasApiFetch } from './utils/desktopApi';
 import { sanitizeTasksTimerSafeguard } from './utils/taskOperations';
+import packageMetadata from '../package.json';
 
 const STORAGE_KEY = 'life_todo_tasks_v2';
 const DELETED_STORAGE_KEY = 'karkas_deleted_tasks_v2';
@@ -98,7 +99,7 @@ const APP_ZOOM_KEY = 'karkas_app_zoom_percent';
 const MIN_APP_ZOOM = 75;
 const MAX_APP_ZOOM = 150;
 const DEFAULT_APP_ZOOM = 100;
-const APP_CURRENT_VERSION = '1.2.18';
+const APP_BUILD_VERSION = packageMetadata.version;
 
 function normalizeVersion(version: string): number[] {
   const cleaned = String(version || '').trim().replace(/^v/i, '').split('-')[0];
@@ -279,17 +280,21 @@ export default function App() {
     }
   });
   const [availableNewRelease, setAvailableNewRelease] = useState<{ tag_name: string; name?: string } | null>(null);
+  const [appCurrentVersion, setAppCurrentVersion] = useState(APP_BUILD_VERSION);
 
   useEffect(() => {
     const desktop = window.karkasDesktop;
     if (!desktop) return;
     let active = true;
-    Promise.all([desktop.preferences.get(), desktop.system.getStartupEnabled()]).then(([preferences, startup]) => {
+    Promise.all([desktop.preferences.get(), desktop.system.getStartupEnabled(), desktop.system.getAppVersion()]).then(([preferences, startup, version]) => {
       if (!active) return;
       if (preferences.ok && preferences.value.zoomPercent != null) {
         setAppZoomPercent(normalizeAppZoom(preferences.value.zoomPercent));
       }
       if (startup.ok) setLaunchAtStartup(startup.value);
+      if (version.ok && typeof version.value === 'string' && version.value.trim()) {
+        setAppCurrentVersion(version.value.trim());
+      }
       setDesktopPreferencesReady(true);
     }).catch(() => setDesktopPreferencesReady(true));
     const unsubscribe = desktop.window.onCommand((command) => {
@@ -326,7 +331,7 @@ export default function App() {
         if (res.ok) {
           const data = await res.json();
           if (data && data.tag_name) {
-            if (compareVersions(data.tag_name, APP_CURRENT_VERSION) > 0) {
+            if (compareVersions(data.tag_name, appCurrentVersion) > 0) {
               const dismissed = sessionStorage.getItem('karkas_dismissed_update');
               if (dismissed !== data.tag_name) {
                 setAvailableNewRelease(data);
@@ -340,7 +345,7 @@ export default function App() {
     }, 2500);
 
     return () => clearTimeout(timer);
-  }, []);
+  }, [appCurrentVersion]);
   const [aiIconVariant, setAiIconVariant] = useState<AIIconId>(() => {
     return getSavedAIIconId();
   });
@@ -2199,12 +2204,12 @@ export default function App() {
             sound.tick(600);
             setIsUpdateOpen(true);
           }}
-          title={lang === 'uk' ? `Центр оновлень (v${APP_CURRENT_VERSION})` : `System update center (v${APP_CURRENT_VERSION})`}
+          title={lang === 'uk' ? `Центр оновлень (v${appCurrentVersion})` : `System update center (v${appCurrentVersion})`}
           className="px-2 py-1 border border-neutral-800 bg-[#08080a]/95 text-neutral-400 hover:text-white hover:border-neutral-600 transition-all cursor-pointer flex items-center gap-1.5 text-xs font-mono tracking-wider uppercase backdrop-blur-md shadow-md app-no-drag pointer-events-auto"
         >
           <RefreshCw className="w-3.5 h-3.5 text-emerald-400" />
           <span className="hidden sm:inline font-bold text-neutral-300">
-            v{APP_CURRENT_VERSION}
+            v{appCurrentVersion}
           </span>
         </button>
       </div>
@@ -2311,7 +2316,7 @@ export default function App() {
         isOpen={isUpdateOpen}
         onClose={() => setIsUpdateOpen(false)}
         lang={lang}
-        currentVersion={APP_CURRENT_VERSION}
+        currentVersion={appCurrentVersion}
       />
 
       {/* Device-local application settings */}

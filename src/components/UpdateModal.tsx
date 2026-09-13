@@ -316,16 +316,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
               <CheckCircle2 className="w-4 h-4" />
               <span>{isUk ? 'Готово' : 'Done'}</span>
             </button>
-          ) : (
-            <div className="w-full py-2.5 text-center text-xs text-neutral-400 font-mono flex items-center justify-center gap-2">
-              <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-400" />
-              <span>
-                {isUk
-                  ? 'Підготовка оновлення, зачекайте...'
-                  : 'Preparing the update, please wait...'}
-              </span>
-            </div>
-          )}
+          ) : null}
         </div>
       </div>
     </div>

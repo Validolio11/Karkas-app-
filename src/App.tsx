@@ -1844,7 +1844,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#030303] text-[#f4f4f5] flex flex-col selection:bg-white selection:text-black relative overflow-x-hidden">
+    <div className="min-h-screen bg-[#030303] text-[#f4f4f5] flex flex-col selection:bg-white selection:text-black relative overflow-x-clip">
       {/* Dynamic Fire Embers & Sparks Background */}
       <FireParticlesBackground enabled={fireEnabled} />
 
@@ -2296,6 +2296,8 @@ export default function App() {
         isSyncing={isSyncing}
         lastSyncTime={lastSyncTime}
         autoSyncEnabled={autoSyncEnabled}
+        syncStatus={syncStatus}
+        syncError={syncError}
         onClose={() => setIsAccountOpen(false)}
         onLoginWithGoogle={handleLoginWithGoogle}
         onLogout={handleLogout}

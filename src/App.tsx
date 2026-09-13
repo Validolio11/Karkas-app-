@@ -41,7 +41,7 @@ import { onAuthStateChanged, User } from 'firebase/auth';
 import { AccountModal } from './components/AccountModal';
 import { UpdateModal } from './components/UpdateModal';
 import { SettingsModal } from './components/SettingsModal';
-import { mergeWorkspace, sameWorkspace, type WorkspaceState } from './utils/syncState';
+import { mergeWorkspace, normalizeWorkspaceForStorage, sameWorkspace, type WorkspaceState } from './utils/syncState';
 import { diffWorkspaceOperations } from './utils/syncOperations';
 import { karkasApiFetch } from './utils/desktopApi';
 import { sanitizeTasksTimerSafeguard } from './utils/taskOperations';
@@ -756,7 +756,7 @@ export default function App() {
   const autoSyncEnabledRef = React.useRef(autoSyncEnabled);
   autoSyncEnabledRef.current = autoSyncEnabled;
   const accountKey = (uid: string | null) => 'karkas_workspace:' + (uid || 'guest');
-  const readWorkspace = (): WorkspaceState => ({
+  const readWorkspace = (): WorkspaceState => normalizeWorkspaceForStorage({
     tasks: currentTasksRef.current,
     tabs: currentTabsRef.current,
     deletedTasks: currentDeletedTasksRef.current,

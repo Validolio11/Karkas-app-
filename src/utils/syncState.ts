@@ -15,6 +15,27 @@ export interface SyncMutationIdentity {
 
 export const MAX_CLOUD_PAYLOAD_BYTES = 900 * 1024;
 
+/**
+ * React state may retain optional object properties with an `undefined` value.
+ * JSON persistence omits those properties, so normalize the live workspace to
+ * the same shape before sending it across the desktop IPC boundary.
+ */
+export function normalizeWorkspaceForStorage(workspace: WorkspaceState): WorkspaceState {
+  const normalize = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map((child) => child === undefined ? null : normalize(child));
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(
+        Object.entries(value)
+          .filter(([, child]) => child !== undefined)
+          .map(([key, child]) => [key, normalize(child)]),
+      );
+    }
+    return value;
+  };
+
+  return normalize(workspace) as WorkspaceState;
+}
+
 export function cloudPayloadSizeBytes(value: unknown): number {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }

@@ -6,6 +6,7 @@ import {
   cloudPayloadSizeBytes,
   isSyncMutationApplied,
   mergeWorkspace,
+  normalizeWorkspaceForStorage,
   recordSyncMutation,
   sameWorkspace,
   type WorkspaceState,
@@ -19,6 +20,32 @@ const task = (id: string, title = id): PSTask => ({
 const state = (tasks: PSTask[] = []): WorkspaceState => ({
   tasks, tabs: [{ id: 'work', name: 'Work' }], deletedTasks: [],
   settings: { soundEnabled: true, fireEnabled: true, lang: 'uk', aiIconVariant: 'quantum' },
+});
+
+test('storage normalization removes undefined optional fields recursively', () => {
+  const workspace = state([{
+    ...task('optional-fields'),
+    note: undefined,
+    timerStartedAt: undefined,
+    stepList: [{ id: 'step-1', title: 'Keep me', done: false, ignored: undefined } as any],
+  }]);
+
+  const normalized = normalizeWorkspaceForStorage(workspace);
+
+  assert.deepEqual(normalized.tasks[0], {
+    ...task('optional-fields'),
+    stepList: [{ id: 'step-1', title: 'Keep me', done: false }],
+  });
+  assert.doesNotThrow(() => JSON.stringify(normalized));
+});
+
+test('storage normalization applies JSON null semantics to undefined array entries', () => {
+  const workspace = state();
+  (workspace.tasks as unknown[]).push(undefined);
+
+  const normalized = normalizeWorkspaceForStorage(workspace);
+
+  assert.equal((normalized.tasks as unknown[])[0], null);
 });
 
 test('offline task edits survive reconnect while remote edits to other fields survive', () => {

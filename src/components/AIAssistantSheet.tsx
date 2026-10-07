@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, useDragControls } from 'motion/react';
 import {
   PSTask,
   TaskTab,
@@ -39,6 +39,8 @@ import { verifyApiKey, keyVerificationMessage } from '../utils/verifyApiKey';
 import { desktopHasAiKey, karkasApiFetch } from '../utils/desktopApi';
 import { loadAIChatHistory, saveAIChatHistory } from '../services/chatHistory';
 import type { PersistedAIChatMessage } from '../services/chatHistory';
+import { getPendingTaskIndexes } from './workflowViewModel';
+import { useDialogKeyboard } from './useDialogKeyboard';
 
 interface AIAssistantSheetProps {
   isOpen: boolean;
@@ -109,6 +111,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   accountId = null,
 }) => {
   const t = TRANSLATIONS[lang];
+  const dragControls = useDragControls();
+  useDialogKeyboard(isOpen, onClose, 'ps-ai-sheet');
   const presets = lang === 'uk' ? AI_PRESETS_UK : AI_PRESETS_EN;
   const personalizedPresets = useMemo(() => {
     if (!adaptiveProfile || adaptiveProfile.trackedTasks === 0) return presets;
@@ -166,6 +170,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   const [pendingChatTabs, setPendingChatTabs] = useState<TaskTab[]>([]);
   const [pendingChatUpdates, setPendingChatUpdates] = useState<AITaskUpdate[]>([]);
   const [pendingChatDeletions, setPendingChatDeletions] = useState<string[]>([]);
+  const pendingChatConfirmed = useRef(false);
 
   const [awaitingApiKey, setAwaitingApiKey] = useState(false);
   const [keyStatus, setKeyStatus] = useState<string | null>(null);
@@ -175,7 +180,31 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   const verificationController = useRef<AbortController | null>(null);
   const backgroundVerification = useRef<AbortController | null>(null);
   const [injectedIds, setInjectedIds] = useState<number[]>([]);
+  const injectedIdsRef = useRef<number[]>([]);
   const [appliedUpdateIds, setAppliedUpdateIds] = useState<string[]>([]);
+  const appliedUpdateIdsRef = useRef<string[]>([]);
+  const appliedTabIdsRef = useRef(new Set<string>());
+  const appliedDeletionIdsRef = useRef(new Set<string>());
+  const assistController = useRef<AbortController | null>(null);
+  const requestGeneration = useRef(0);
+  const closeAfterInject = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    requestGeneration.current += 1;
+    assistController.current?.abort();
+    assistController.current = null;
+    verificationController.current?.abort();
+    requestInFlight.current = false;
+    setLoading(false);
+    return () => {
+      requestGeneration.current += 1;
+      assistController.current?.abort();
+      assistController.current = null;
+      verificationController.current?.abort();
+      requestInFlight.current = false;
+      if (closeAfterInject.current) clearTimeout(closeAfterInject.current);
+    };
+  }, [isOpen, accountId]);
 
   const [availableModels, setAvailableModels] = useState<string[]>(() => {
     try {
@@ -246,6 +275,19 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     hydratedAccountRef.current = accountId;
     skipPersistRef.current = true;
     setChatMessages(loadAIChatHistory(accountId));
+    pendingRequest.current = null;
+    pendingChatConfirmed.current = false;
+    setPendingChatTasks([]);
+    setPendingChatTabs([]);
+    setPendingChatUpdates([]);
+    setPendingChatDeletions([]);
+    setResponse(null);
+    injectedIdsRef.current = [];
+    appliedUpdateIdsRef.current = [];
+    appliedTabIdsRef.current.clear();
+    appliedDeletionIdsRef.current.clear();
+    setInjectedIds([]);
+    setAppliedUpdateIds([]);
   }, [accountId]);
 
   useEffect(() => {
@@ -306,7 +348,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     (pendingChatDeletions?.length || 0);
 
   const confirmChatChanges = () => {
-    if (pendingChangeCount === 0) return;
+    if (pendingChangeCount === 0 || pendingChatConfirmed.current) return;
+    pendingChatConfirmed.current = true;
 
     const tasks = (pendingChatTasks || []).map((task) => {
       const stepItems = task.stepList?.map((step, index) => ({
@@ -377,9 +420,11 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
 
     if (!requestText) return;
     if (requestInFlight.current) return;
+    const generation = requestGeneration.current;
 
     const savedApiKey = localStorage.getItem('karkas_custom_api_key') || '';
     const desktopKeyAvailable = window.karkasDesktop ? await desktopHasAiKey() : false;
+    if (generation !== requestGeneration.current || requestInFlight.current) return;
     const customAiEnabled = desktopKeyAvailable || localStorage.getItem('karkas_custom_ai_enabled') === 'true';
 
     if (!resuming && shouldVerifyAsApiKey(requestText, awaitingKeyRef.current, queryText === undefined)) {
@@ -422,10 +467,12 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
         awaitingKeyRef.current = true;
         setKeyStatus(keyVerificationMessage(error, lang));
       } finally {
-        requestInFlight.current = false;
-        setLoading(false);
+        if (generation === requestGeneration.current) {
+          requestInFlight.current = false;
+          setLoading(false);
+        }
       }
-      if (requestToResume) {
+      if (requestToResume && generation === requestGeneration.current) {
         await handleGenerate(requestToResume.text, requestToResume.mode, true);
       }
       return;
@@ -460,6 +507,10 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     requestInFlight.current = true;
     setLoading(true);
     setResponse(null);
+    injectedIdsRef.current = [];
+    appliedUpdateIdsRef.current = [];
+    appliedTabIdsRef.current.clear();
+    appliedDeletionIdsRef.current.clear();
     setInjectedIds([]);
     setAppliedUpdateIds([]);
     if (currentMode === 'chat' && !resuming) {
@@ -474,12 +525,14 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     const doneList = currentTasks.filter((t) => t.done);
 
     let requestTimeout: number | undefined;
+    const controller = new AbortController();
+    assistController.current?.abort();
+    assistController.current = controller;
     try {
       const customKey = localStorage.getItem('karkas_custom_api_key') || '';
       const storedModel = localStorage.getItem('karkas_custom_model') || '';
       const customEnabled = localStorage.getItem('karkas_custom_ai_enabled') === 'true';
 
-      const controller = new AbortController();
       requestTimeout = window.setTimeout(() => controller.abort(), 35000);
       const res = await karkasApiFetch('/api/ai/assist', {
         method: 'POST',
@@ -535,8 +588,11 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
 
       if (!res.ok) throw new Error('API request failed');
       const data: AIResponse = await res.json();
+      if (assistController.current !== controller) return;
+      if (controller.signal.aborted) throw new Error('AI request timed out');
       if (currentMode === 'chat') {
         {
+          pendingChatConfirmed.current = false;
           setPendingChatTasks(data.tasks || []);
           setPendingChatTabs((data.tabs || []).map((tb) => ({ id: tb.id, name: tb.name, color: tb.color || '#6366f1' })));
           setPendingChatUpdates(data.taskUpdates || []);
@@ -555,6 +611,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       }
       sound.activate();
     } catch (err) {
+      if (assistController.current !== controller) return;
       console.error('AI query error:', err);
       const isUk = lang === 'uk';
       const mainPhase = tabs[0]?.id || 'focus';
@@ -632,17 +689,19 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       });
     } finally {
       window.clearTimeout(requestTimeout);
-      requestInFlight.current = false;
-      setLoading(false);
+      if (assistController.current === controller) {
+        requestInFlight.current = false;
+        setLoading(false);
+      }
     }
   };
 
   const handleInjectAll = () => {
     if (!response) return;
-    const taskList = (response.tasks || []).filter((_, index) => !injectedIds.includes(index));
-    const tabList: TaskTab[] = (response.tabs || []).map((t) => ({ id: t.id, name: t.name, color: t.color || '#6366f1' }));
-    const updateList = (response.taskUpdates || []).filter(update => !appliedUpdateIds.includes(update.id));
-    const deleteList = (response.taskDeletions || []).map((d) => d.id);
+    const taskList = getPendingTaskIndexes(response.tasks?.length || 0, injectedIdsRef.current).map(index => response.tasks![index]);
+    const tabList: TaskTab[] = (response.tabs || []).filter(tab => !appliedTabIdsRef.current.has(tab.id)).map((t) => ({ id: t.id, name: t.name, color: t.color || '#6366f1' }));
+    const updateList = (response.taskUpdates || []).filter(update => !appliedUpdateIdsRef.current.includes(update.id));
+    const deleteList = (response.taskDeletions || []).map((d) => d.id).filter(id => !appliedDeletionIdsRef.current.has(id));
 
     if (!taskList.length && !tabList.length && !updateList.length && !deleteList.length) return;
     sound.activate();
@@ -666,15 +725,21 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       };
     });
 
+    injectedIdsRef.current = (response.tasks || []).map((_, i) => i);
+    appliedUpdateIdsRef.current = (response.taskUpdates || []).map((u) => u.id);
+    tabList.forEach(tab => appliedTabIdsRef.current.add(tab.id));
+    deleteList.forEach(id => appliedDeletionIdsRef.current.add(id));
     onInjectTasks(formattedTasks, tabList, updateList, deleteList);
-    setInjectedIds((response.tasks || []).map((_, i) => i));
-    setAppliedUpdateIds((response.taskUpdates || []).map((u) => u.id));
-    setTimeout(() => {
+    setInjectedIds(injectedIdsRef.current);
+    setAppliedUpdateIds(appliedUpdateIdsRef.current);
+    closeAfterInject.current = setTimeout(() => {
       onClose();
     }, 500);
   };
 
   const handleInjectSingle = (task: NonNullable<AIResponse['tasks']>[0], index: number) => {
+    if (injectedIdsRef.current.includes(index)) return;
+    injectedIdsRef.current = [...injectedIdsRef.current, index];
     sound.tick(600);
     const stepItems: TaskStepItem[] | undefined = task.stepList && task.stepList.length > 0
       ? task.stepList.map((st, idx) => ({
@@ -684,7 +749,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
         }))
       : undefined;
 
-    const tabList: TaskTab[] = (response?.tabs || []).map((t) => ({ id: t.id, name: t.name, color: t.color || '#6366f1' }));
+    const tabList: TaskTab[] = (response?.tabs || []).filter(tab => !appliedTabIdsRef.current.has(tab.id)).map((t) => ({ id: t.id, name: t.name, color: t.color || '#6366f1' }));
+    tabList.forEach(tab => appliedTabIdsRef.current.add(tab.id));
 
     onInjectTasks([
       {
@@ -696,14 +762,23 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
         note: task.note,
       },
     ], tabList);
-    setInjectedIds((prev) => [...prev, index]);
+    setInjectedIds(injectedIdsRef.current);
   };
 
   const handleApplySingleUpdate = (update: AITaskUpdate) => {
+    if (appliedUpdateIdsRef.current.includes(update.id)) return;
+    appliedUpdateIdsRef.current = [...appliedUpdateIdsRef.current, update.id];
     sound.tick(650);
     onInjectTasks([], [], [update], []);
-    setAppliedUpdateIds((prev) => [...prev, update.id]);
+    setAppliedUpdateIds(appliedUpdateIdsRef.current);
   };
+
+  const remainingResponseActions = response
+    ? getPendingTaskIndexes(response.tasks?.length || 0, injectedIds).length
+      + (response.taskUpdates || []).filter(update => !appliedUpdateIds.includes(update.id)).length
+      + (response.tabs || []).filter(tab => !appliedTabIdsRef.current.has(tab.id)).length
+      + (response.taskDeletions || []).filter(deletion => !appliedDeletionIdsRef.current.has(deletion.id)).length
+    : 0;
 
   return (
     <AnimatePresence>
@@ -721,11 +796,16 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
           {/* Sheet Surface */}
           <motion.div
             id="ps-ai-sheet"
+            role="dialog"
+            aria-modal="true"
+            aria-label={t.aiSheet.header}
             initial={{ y: '100%' }}
             animate={{ y: 0 }}
             exit={{ y: '100%' }}
             transition={{ type: 'spring', damping: 28, stiffness: 300 }}
             drag="y"
+            dragControls={dragControls}
+            dragListener={false}
             dragConstraints={{ top: 0 }}
             dragElastic={0.2}
             onDragEnd={(_, info) => {
@@ -733,104 +813,114 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                 onClose();
               }
             }}
-            className="relative z-10 w-full max-w-2xl bg-[#0c0c0e] border-t border-x border-neutral-800 max-h-[88vh] flex flex-col shadow-2xl font-mono"
+            className="relative z-10 w-full max-w-2xl bg-[#0c0c0e] border-t border-x border-neutral-800 max-h-[88dvh] flex flex-col shadow-2xl font-mono"
           >
             {/* Drag Handle */}
-            <div className="w-full flex items-center justify-center pt-2.5 pb-1 cursor-grab active:cursor-grabbing">
+            <div
+              aria-hidden="true"
+              onPointerDown={(event) => dragControls.start(event)}
+              style={{ touchAction: 'none' }}
+              className="w-full shrink-0 flex items-center justify-center pt-2.5 pb-2 cursor-grab active:cursor-grabbing"
+            >
               <div className="w-10 h-1 bg-neutral-700 rounded-full" />
             </div>
 
             {/* Header */}
-            <div className="flex items-center justify-between px-4 sm:px-5 py-3 border-b border-neutral-800">
-              <div className="flex items-center gap-2">
-                <AIIcon id={aiIconVariant} className="w-4 h-4 text-white" />
-                <span className="text-xs sm:text-sm font-bold uppercase tracking-wider font-mono text-white">
+            <div className="flex shrink-0 items-center justify-between gap-2 px-4 sm:px-5 py-3 border-b border-neutral-800">
+              <div className="min-w-0 flex items-center gap-2">
+                <AIIcon id={aiIconVariant} className="w-4 h-4 shrink-0 text-white" />
+                <span className="min-w-0 break-words text-xs sm:text-sm font-bold uppercase tracking-wider font-mono text-white">
                   {t.aiSheet.header}
                 </span>
               </div>
               <button
                 id="close-ai-sheet-btn"
+                aria-label={lang === 'uk' ? 'Закрити ШІ-помічника' : 'Close AI assistant'}
                 onClick={onClose}
-                className="p-1.5 text-neutral-400 hover:text-white border border-neutral-800 hover:border-neutral-600 transition-colors cursor-pointer"
+                className="shrink-0 p-1.5 text-neutral-400 hover:text-white border border-neutral-800 hover:border-neutral-600 transition-colors cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             {/* Action Modes Selector */}
-            <div className="grid grid-cols-4 gap-1 px-4 sm:px-5 pt-3 pb-2 border-b border-neutral-800">
+            <div className="shrink-0 grid grid-cols-2 sm:grid-cols-4 gap-1 px-4 sm:px-5 pt-3 pb-2 border-b border-neutral-800">
               <button
                 id="ai-mode-chat-btn"
+                aria-pressed={mode === 'chat'}
                 type="button"
                 onClick={() => {
                   sound.tick(450);
                   setMode('chat');
                 }}
-                className={`py-1.5 px-2 text-[10px] sm:text-xs font-mono font-bold tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                className={`min-w-0 py-1.5 px-2 text-xs font-mono font-bold tracking-normal sm:tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
                   mode === 'chat'
                     ? 'bg-white text-black border-white'
                     : 'bg-[#08080a] text-neutral-400 border-neutral-800 hover:text-white hover:border-neutral-700'
                 }`}
               >
                 <span className="text-sm leading-none">◌</span>
-                <span className="truncate">{lang === 'uk' ? 'ЧАТ' : 'CHAT'}</span>
+                <span className="min-w-0 whitespace-normal break-words leading-snug">{lang === 'uk' ? 'ЧАТ' : 'CHAT'}</span>
               </button>
 
               <button
                 id="ai-mode-breakdown-btn"
+                aria-pressed={mode === 'breakdown'}
                 type="button"
                 onClick={() => {
                   sound.tick(500);
                   setMode('breakdown');
                 }}
-                className={`py-1.5 px-2 text-[10px] sm:text-xs font-mono font-bold tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                className={`min-w-0 py-1.5 px-2 text-xs font-mono font-bold tracking-normal sm:tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
                   mode === 'breakdown'
                     ? 'bg-white text-black border-white'
                     : 'bg-[#08080a] text-neutral-400 border-neutral-800 hover:text-white hover:border-neutral-700'
                 }`}
               >
                 <ListTree className="w-3.5 h-3.5 shrink-0" />
-                <span className="truncate">{t.aiSheet.modes.breakdown}</span>
+                <span className="min-w-0 whitespace-normal break-words leading-snug">{t.aiSheet.modes.breakdown}</span>
               </button>
 
               <button
                 id="ai-mode-analyze-btn"
+                aria-pressed={mode === 'analyze'}
                 type="button"
                 onClick={() => {
                   sound.tick(550);
                   setMode('analyze');
                   handleGenerate(prompt, 'analyze');
                 }}
-                className={`py-1.5 px-2 text-[10px] sm:text-xs font-mono font-bold tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                className={`min-w-0 py-1.5 px-2 text-xs font-mono font-bold tracking-normal sm:tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
                   mode === 'analyze'
                     ? 'bg-white text-black border-white'
                     : 'bg-[#08080a] text-neutral-400 border-neutral-800 hover:text-white hover:border-neutral-700'
                 }`}
               >
                 <TrendingUp className="w-3.5 h-3.5 shrink-0" />
-                <span className="truncate">{t.aiSheet.modes.analyze}</span>
+                <span className="min-w-0 whitespace-normal break-words leading-snug">{t.aiSheet.modes.analyze}</span>
               </button>
 
               <button
                 id="ai-mode-generate-btn"
+                aria-pressed={mode === 'generate'}
                 type="button"
                 onClick={() => {
                   sound.tick(600);
                   setMode('generate');
                 }}
-                className={`py-1.5 px-2 text-[10px] sm:text-xs font-mono font-bold tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                className={`min-w-0 py-1.5 px-2 text-xs font-mono font-bold tracking-normal sm:tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
                   mode === 'generate'
                     ? 'bg-white text-black border-white'
                     : 'bg-[#08080a] text-neutral-400 border-neutral-800 hover:text-white hover:border-neutral-700'
                 }`}
               >
                 <Layers className="w-3.5 h-3.5 shrink-0" />
-                <span className="truncate">{t.aiSheet.modes.generate}</span>
+                <span className="min-w-0 whitespace-normal break-words leading-snug">{t.aiSheet.modes.generate}</span>
               </button>
             </div>
 
             {/* Content Container (Scrollable) */}
-            <div className="flex-1 overflow-y-auto p-4 sm:p-5 flex flex-col gap-4">
+            <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 sm:p-5 flex flex-col gap-4">
               {/* Presets Chips */}
               <div>
                 <div className="text-[10px] font-mono uppercase tracking-widest text-neutral-400 mb-2">
@@ -859,7 +949,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   {chatMessages.map((message, index) => (
                     <div
                       key={`${message.role}-${index}`}
-                      className={`max-w-[92%] border p-3 text-xs leading-relaxed whitespace-pre-wrap ${
+                      className={`max-w-[92%] border p-3 text-xs leading-relaxed whitespace-pre-wrap break-words ${
                         message.role === 'user'
                           ? 'self-end bg-white text-black border-white'
                           : 'self-start bg-[#111116] text-neutral-200 border-neutral-800'
@@ -997,7 +1087,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
               )}
 
               {loading && (
-                <div className="p-8 border border-neutral-800 bg-black/40 flex flex-col items-center justify-center gap-3">
+                <div role="status" aria-live="polite" className="p-8 border border-neutral-800 bg-black/40 flex flex-col items-center justify-center gap-3 text-center">
                   <div className="w-6 h-6 border-2 border-white border-t-transparent animate-spin rounded-full" />
                   <span className="text-xs font-mono tracking-widest text-neutral-300 uppercase animate-pulse">
                     {mode === 'chat'
@@ -1014,7 +1104,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
               {response && !loading && (
                 <div className="border border-neutral-800 bg-[#0d0d10] p-4 flex flex-col gap-4">
                   {/* Strategy Summary & Inject All */}
-                  <div className="flex items-start justify-between gap-3 border-b border-neutral-800 pb-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3 border-b border-neutral-800 pb-3">
                     <div className="space-y-1">
                       <div className="text-[10px] font-mono uppercase text-neutral-400 tracking-widest flex items-center gap-1.5">
                         <AIIcon className="w-3 h-3" />
@@ -1023,16 +1113,22 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                       <p className="text-xs sm:text-sm font-bold text-neutral-100 leading-relaxed">
                         {response.summary}
                       </p>
+                      {response.source === 'local-fallback' && (
+                        <p role="status" className="text-xs text-amber-300">
+                          {lang === 'uk' ? 'Локальні рекомендації: ШІ-запит не завершився.' : 'Local recommendations: the AI request did not complete.'}
+                        </p>
+                      )}
                     </div>
 
                     {((response.tasks && response.tasks.length > 0) || (response.tabs && response.tabs.length > 0) || (response.taskUpdates && response.taskUpdates.length > 0) || (response.taskDeletions && response.taskDeletions.length > 0)) && (
                       <button
                         id="ai-inject-all-btn"
+                        disabled={remainingResponseActions === 0}
                         onClick={handleInjectAll}
-                        className="whitespace-nowrap px-3 py-1.5 bg-white text-black font-extrabold text-xs font-mono tracking-wider hover:bg-neutral-200 transition-colors flex items-center gap-1.5 shrink-0"
+                        className="whitespace-nowrap px-3 py-1.5 bg-white text-black font-extrabold text-xs font-mono tracking-wider hover:bg-neutral-200 transition-colors flex items-center gap-1.5 shrink-0 disabled:opacity-50 disabled:cursor-default"
                       >
                         <Plus className="w-3.5 h-3.5" />
-                        <span>{t.aiSheet.injectAll} ({(response.tasks?.length || 0) + (response.tabs?.length || 0) + (response.taskUpdates?.length || 0) + (response.taskDeletions?.length || 0)})</span>
+                        <span>{remainingResponseActions === 0 ? t.aiSheet.added : `${t.aiSheet.injectAll} (${remainingResponseActions})`}</span>
                       </button>
                     )}
                   </div>
@@ -1286,7 +1382,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
             </div>
 
             {/* Custom Prompt Input at the bottom of the sheet */}
-            <div className="px-4 sm:px-5 py-3 bg-[#08080a] border-t border-neutral-800 space-y-2">
+            <div className="shrink-0 px-4 sm:px-5 py-3 bg-[#08080a] border-t border-neutral-800 space-y-2">
               {/* Voice recording / transcription status indicator */}
               {(isListening || isTranscribing || voiceNotice) && (
                 <div className="flex items-center justify-between px-3 py-1.5 bg-[#050507] border border-neutral-800 text-xs font-mono">
@@ -1309,8 +1405,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                       <span className="text-[11px] text-neutral-300">{t.aiSheet.voiceTranscribing}</span>
                     </div>
                   ) : (
-                    <div className="flex items-center justify-between w-full">
-                      <div className="flex items-center gap-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2 w-full">
+                      <div className="min-w-0 flex flex-wrap items-center gap-2.5">
                         <span className="relative flex h-2 w-2">
                           <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
                           <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
@@ -1346,7 +1442,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                 </div>
               )}
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <select
                   aria-label={lang === 'uk' ? 'Модель AI' : 'AI model'}
                   value={customModel}
@@ -1357,10 +1453,10 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                     localStorage.setItem('karkas_custom_model', model);
                     sound.tick(400);
                   }}
-                  className="max-w-[150px] bg-[#050507] border border-neutral-800 text-neutral-300 text-[10px] font-mono px-2 py-2.5 focus:outline-none focus:border-white disabled:opacity-50"
+                  className="w-full sm:w-auto sm:max-w-[150px] bg-[#050507] border border-neutral-800 text-neutral-300 text-xs font-mono px-2 py-2.5 focus:outline-none focus:border-white disabled:opacity-50"
                 >
                   {availableModels.length === 0 ? (
-                    <option value="">Модель не налаштована</option>
+                    <option value="">{lang === 'uk' ? 'Модель не налаштована' : 'Model not configured'}</option>
                   ) : (
                     availableModels.map((model) => (
                       <option key={model} value={model}>{model}</option>
@@ -1368,9 +1464,10 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   )}
                 </select>
 
-                <div className="relative flex-1 flex items-center">
+                <div className="relative flex-1 min-w-0 flex items-center">
                   <input
                     id="ai-prompt-input"
+                    aria-label={awaitingApiKey ? (lang === 'uk' ? 'Gemini API-ключ' : 'Gemini API key') : t.aiSheet.inputPlaceholder}
                     type={awaitingApiKey ? 'password' : 'text'}
                     value={prompt}
                     onChange={(e) => {
@@ -1438,7 +1535,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
             </div>
 
             {/* Bottom Footer Hint */}
-            <div className="px-4 sm:px-5 py-2.5 bg-black border-t border-neutral-800 flex items-center justify-between text-[10px] font-mono text-neutral-400">
+            <div className="shrink-0 px-4 sm:px-5 py-2.5 bg-black border-t border-neutral-800 flex flex-wrap items-center justify-between gap-2 text-[10px] font-mono text-neutral-400">
               <span>{t.aiSheet.dismissHint}</span>
               <span>{t.aiSheet.footerTag}</span>
             </div>

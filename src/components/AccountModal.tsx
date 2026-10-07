@@ -18,6 +18,7 @@ import {
   History
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { useDialogKeyboard } from './useDialogKeyboard';
 
 const CopyableDomain: React.FC<{ domain: string; lang: string }> = ({ domain, lang }) => {
   const [copied, setCopied] = useState(false);
@@ -82,6 +83,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
 }) => {
   const t = TRANSLATIONS[lang];
   const acc = t.account;
+  useDialogKeyboard(isOpen, onClose, 'account-dialog');
 
   const [authLoading, setAuthLoading] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; text: React.ReactNode } | null>(null);
@@ -97,7 +99,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
       sound.activate();
       setFeedbackMsg({
         type: 'success',
-        text: lang === 'uk' ? 'Успішний вхід! Завдання привʼязано до вашого Google акаунта.' : 'Successfully connected Google Account!',
+        text: lang === 'uk' ? 'Вхід виконано. Статус збереження показано в блоці синхронізації.' : 'Signed in. Check the sync section for your backup status.',
       });
     } catch (err: any) {
       console.error('Login error:', err);
@@ -276,6 +278,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
 
       {/* Modal Dialog */}
       <motion.div
+        id="account-dialog"
         initial={{ opacity: 0, scale: 0.95, y: 10 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 10 }}
@@ -316,6 +319,8 @@ export const AccountModal: React.FC<AccountModalProps> = ({
           <AnimatePresence>
             {feedbackMsg && (
               <motion.div
+                role="status"
+                aria-live="polite"
                 initial={{ opacity: 0, height: 0 }}
                 animate={{ opacity: 1, height: 'auto' }}
                 exit={{ opacity: 0, height: 0 }}
@@ -330,7 +335,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
                 ) : (
                   <AlertCircle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
                 )}
-                <span>{feedbackMsg.text}</span>
+                <div className="min-w-0 flex-1 [overflow-wrap:anywhere]">{feedbackMsg.text}</div>
               </motion.div>
             )}
           </AnimatePresence>
@@ -472,6 +477,12 @@ export const AccountModal: React.FC<AccountModalProps> = ({
                     : (lang === 'uk' ? 'ПІДКЛЮЧЕННЯ...' : 'CONNECTING...')
                   : acc.signInWithGoogle}</span>
               </button>
+
+              <p className="text-[11px] font-mono text-neutral-400 text-center leading-relaxed">
+                {lang === 'uk'
+                  ? 'Після входу додаток перевіряє хмарну копію, зберігає локальні дані й узгоджує зміни. Результат показано в статусі синхронізації.'
+                  : 'After sign-in, the app checks your cloud backup, preserves local data and reconciles changes. Check the sync status for the result.'}
+              </p>
 
             </div>
           )}

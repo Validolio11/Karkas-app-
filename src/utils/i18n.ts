@@ -235,7 +235,7 @@ export const TRANSLATIONS = {
     },
     tabsModal: {
       title: 'КЕРУВАННЯ ВКЛАДКАМИ ТА КАТЕГОРІЯМИ',
-      desc: 'Додавайте, перейменовуйте або видаляйте будь-які вкладки (Маски, Експорт, Робота, Дім тощо). Завдання з видалених вкладок автоматично перейдуть у доступну категорію.',
+      desc: 'Додавайте або видаляйте вкладки для своїх завдань: Робота, Дім, Проєкти тощо. Завдання з видалених вкладок автоматично перейдуть у доступну категорію.',
       addNew: 'ДОДАТИ НОВУ ВКЛАДКУ',
       addBtn: 'ДОДАТИ',
       inputPlaceholder: 'Назва нової вкладки (напр. Проєкти, Спорт, Фінанси)...',
@@ -273,7 +273,7 @@ export const TRANSLATIONS = {
       lastSynced: 'Остання синхронізація:',
       never: 'Ще не синхронізовано',
       justNow: 'Щойно',
-      localDataNotice: 'Увійдіть з обліковим записом Google, щоб захистити ваші завдання від втрати при перевстановленні Windows, чистиці кешу або зміні пристрою.',
+      localDataNotice: 'Увійдіть з обліковим записом Google, щоб захистити ваші завдання від втрати при перевстановленні Windows, очищенні кешу або зміні пристрою.',
       restoreSuccess: 'Усі завдання, вкладки та історію успішно відновлено з вашого Google акаунта!',
       syncSuccess: 'Завдання та налаштування успішно збережено в хмарі Google!',
       syncing: 'СИНХРОНІЗАЦІЯ...',
@@ -557,7 +557,7 @@ export const TRANSLATIONS = {
     },
     tabsModal: {
       title: 'MANAGE TABS & CATEGORIES',
-      desc: 'Add, rename, or remove any tabs (e.g. Masks, Export, Work, Home, etc.). Tasks from removed tabs safely migrate to the primary tab.',
+      desc: 'Add or remove tabs for your tasks, such as Work, Home, or Projects. Tasks from removed tabs safely migrate to the primary tab.',
       addNew: 'ADD NEW TAB',
       addBtn: 'ADD',
       inputPlaceholder: 'New tab name (e.g. Projects, Fitness, Finance)...',

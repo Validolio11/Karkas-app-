@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Download, CheckCircle2, X, RefreshCw, HardDrive, Sparkles } from 'lucide-react';
 import { sound } from '../utils/audio';
 import { karkasApiFetch } from '../utils/desktopApi';
+import { useDialogKeyboard } from './useDialogKeyboard';
 
 interface ReleaseAsset {
   name: string;
@@ -62,6 +63,11 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
   const [totalMb, setTotalMb] = useState<number | null>(null);
   const [isCompleted, setIsCompleted] = useState(false);
   const [installError, setInstallError] = useState('');
+  useDialogKeyboard(isOpen, () => { if (!isInstalling) onClose(); }, 'update-modal-card');
+
+  useEffect(() => {
+    if (isInstalling) document.getElementById('update-install-status')?.focus();
+  }, [isInstalling]);
 
   // Background silent version analyzer
   useEffect(() => {
@@ -184,19 +190,27 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
     >
       <div
         id="update-modal-card"
-        className="relative w-full max-w-md bg-[#09090b] border border-neutral-800 shadow-2xl p-5 font-mono text-neutral-200 selection:bg-white selection:text-black"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="update-modal-title"
+        onKeyDown={(event) => {
+          // The visible close control is unavailable during installer handoff.
+          if (isInstalling && event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); }
+        }}
+        className="relative w-full max-w-md max-h-[90dvh] overflow-y-auto bg-[#09090b] border border-neutral-800 shadow-2xl p-5 font-mono text-neutral-200 selection:bg-white selection:text-black"
       >
         {/* Top Header */}
         <div className="flex items-center justify-between pb-3 border-b border-neutral-800 mb-4">
           <div className="flex items-center gap-2">
             <HardDrive className="w-4 h-4 text-emerald-400" />
-            <h3 className="text-xs font-black uppercase tracking-widest text-white">
+            <h3 id="update-modal-title" className="text-xs font-black uppercase tracking-widest text-white">
               {isUk ? 'Оновлення системи Karkas' : 'Karkas System Update'}
             </h3>
           </div>
           {!isInstalling && (
             <button
               id="update-modal-close-btn"
+              aria-label={isUk ? 'Закрити оновлення' : 'Close update'}
               type="button"
               onClick={() => {
                 sound.tick(300);
@@ -240,7 +254,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
 
         {/* The desktop bridge reports handoff, not installation completion. */}
         {isInstalling || isCompleted ? (
-          <div role="status" aria-live="polite" className="bg-[#050507] border border-neutral-800/90 p-4 mb-4">
+          <div id="update-install-status" tabIndex={0} role="status" aria-live="polite" className="bg-[#050507] border border-neutral-800/90 p-4 mb-4 focus-visible:outline-2 focus-visible:outline-white">
             <div className="flex items-center gap-2 text-xs font-bold text-neutral-300">
               {isCompleted ? (
                 <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />

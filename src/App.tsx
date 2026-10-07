@@ -44,7 +44,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { mergeWorkspace, normalizeWorkspaceForStorage, sameWorkspace, type WorkspaceState } from './utils/syncState';
 import { diffWorkspaceOperations } from './utils/syncOperations';
 import { karkasApiFetch } from './utils/desktopApi';
-import { sanitizeTasksTimerSafeguard } from './utils/taskOperations';
+import { sanitizeTasksTimerSafeguard, toggleTaskDone, setTaskProgress, toggleTaskStep, addTaskStep, deleteTaskStep, setTaskTimeSpent, setTaskSteps, materializeStepList } from './utils/taskOperations';
 import packageMetadata from '../package.json';
 
 const STORAGE_KEY = 'life_todo_tasks_v2';
@@ -147,6 +147,10 @@ export default function App() {
   });
 
   const t = TRANSLATIONS[lang];
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const breakdownRequestRef = React.useRef<AbortController | null>(null);
+  useEffect(() => { document.documentElement.lang = lang; }, [lang]);
+  useEffect(() => () => breakdownRequestRef.current?.abort(), []);
 
   // Tabs state: supports adding, deleting, and renaming tabs
   const [tabs, setTabs] = useState<TaskTab[]>(() => {
@@ -453,12 +457,14 @@ export default function App() {
   // Auto-break down a specific task via AI
   const handleAIBreakdownTask = async (taskId: string) => {
     const targetTask = tasks.find((t) => t.id === taskId);
-    if (!targetTask || breakingDownTaskId) return;
+    if (!targetTask || breakingDownTaskId || breakdownRequestRef.current) return;
 
     setBreakingDownTaskId(taskId);
     sound.activate();
 
     const requestController = new AbortController();
+    breakdownRequestRef.current = requestController;
+    const requestGeneration = authGenerationRef.current;
     const requestTimeout = window.setTimeout(() => requestController.abort(), 12_000);
 
     try {
@@ -505,63 +511,29 @@ export default function App() {
           done: false,
         }));
 
-      setTasks((prev) =>
-          prev.map((t) => {
-            if (t.id === taskId) {
-              return {
-                ...t,
-                stepList: newStepItems,
-                steps: newStepItems.length,
-                currentStep: 0,
-                done: false,
-                note: data.note || t.note,
-                priority: data.suggestedPriority === 1 || data.suggestedPriority === 2 || data.suggestedPriority === 3
-                  ? data.suggestedPriority
-                  : t.priority,
-              };
-            }
-            return t;
-          })
-        );
+      if (requestController.signal.aborted || requestGeneration !== authGenerationRef.current) return;
+      setTasks(prev => prev.map(task => {
+        if (task.id !== taskId) return task;
+        const existing = materializeStepList(task, lang === 'uk' ? 'Крок' : 'Step');
+        const titles = new Set(existing.map(step => step.title.trim().toLowerCase()));
+        const additions = newStepItems.filter(step => {
+          const key = step.title.trim().toLowerCase();
+          if (!key || titles.has(key)) return false;
+          titles.add(key); return true;
+        });
+        return { ...setTaskSteps(task, [...existing, ...additions], Date.now()),
+          note: task.note || data.note,
+          priority: [1, 2, 3].includes(data.suggestedPriority) ? data.suggestedPriority : task.priority };
+      }));
+      if (data.source === 'engine') setActionNotice(lang === 'uk' ? 'Зовнішній ШІ недоступний. Кроки запропоновано за локальними правилами; перевірте їх.' : 'External AI is unavailable. Steps use local rules; review them.');
       sound.activate();
     } catch (err) {
+      if (requestGeneration !== authGenerationRef.current) return;
       console.error('Task breakdown error:', err);
-      // Resilient fallback breakdown if network or API key is absent
-      const isUk = lang === 'uk';
-      const fallbackSteps: TaskStepItem[] = [
-        {
-          id: `s-${taskId}-${Date.now()}-0`,
-          title: isUk ? `Підготовка та збір контексту` : `Preparation & context review`,
-          done: false,
-        },
-        {
-          id: `s-${taskId}-${Date.now()}-1`,
-          title: isUk ? `Основне виконання завдання` : `Primary execution phase`,
-          done: false,
-        },
-        {
-          id: `s-${taskId}-${Date.now()}-2`,
-          title: isUk ? `Фінальна перевірка та закриття` : `Verification & completion`,
-          done: false,
-        },
-      ];
-      setTasks((prev) =>
-        prev.map((t) => {
-          if (t.id === taskId) {
-            return {
-              ...t,
-              stepList: fallbackSteps,
-              steps: fallbackSteps.length,
-              currentStep: 0,
-              done: false,
-            };
-          }
-          return t;
-        })
-      );
-      sound.activate();
+      setActionNotice(lang === 'uk' ? 'Не вдалося створити кроки. Ваші дані збережено; повторіть спробу.' : 'Could not create steps. Your work is preserved; retry.');
     } finally {
       window.clearTimeout(requestTimeout);
+      breakdownRequestRef.current = null;
       setBreakingDownTaskId(null);
     }
   };
@@ -1406,67 +1378,22 @@ export default function App() {
 
   // Task Actions
   const handleToggleDone = (id: string) => {
-    setTasks((prev) =>
-      prev.map((t) => {
-        if (t.id === id) {
-          const nextDone = !t.done;
-          let updatedStepList: { id: string; title: string; done: boolean }[] | undefined = undefined;
-
-          if (t.stepList && t.stepList.length > 0) {
-            if (nextDone) {
-              updatedStepList = t.stepList.map((s) => ({ ...s, done: true }));
-            } else {
-              // Reopening: uncheck the last completed step so progress accurately reflects reopening
-              const lastDoneIdx = t.stepList.map((s) => s.done).lastIndexOf(true);
-              if (lastDoneIdx >= 0) {
-                updatedStepList = t.stepList.map((s, idx) => ({
-                  ...s,
-                  done: idx === lastDoneIdx ? false : s.done,
-                }));
-              } else {
-                updatedStepList = t.stepList.map((s) => ({ ...s, done: false }));
-              }
-            }
-          }
-
-          const completedCount = updatedStepList
-            ? updatedStepList.filter((s) => s.done).length
-            : nextDone
-            ? t.steps
-            : Math.max(0, t.steps - 1);
-
-          // If completing task while timer is running, bank elapsed time and pause
-          const settledTimer = nextDone ? pauseTaskTimer(t) : t;
-
-          return {
-            ...t,
-            done: nextDone,
-            stepList: updatedStepList,
-            currentStep: completedCount,
-            completedAt: nextDone ? (t.completedAt || Date.now()) : undefined,
-            timeSpentSeconds: settledTimer.timeSpentSeconds,
-            timerRunning: settledTimer.timerRunning,
-            timerStartedAt: settledTimer.timerStartedAt,
-            countdownRemainingSeconds: settledTimer.countdownRemainingSeconds,
-          };
-        }
-        return t;
-      })
-    );
+    const now = Date.now();
+    setTasks(prev => prev.map(task => task.id === id ? toggleTaskDone(task, now, lang === 'uk' ? 'Крок' : 'Step') : task));
   };
 
   const handleToggleTimer = (id: string) => {
     sound.tick(500);
     const now = Date.now();
     setTasks(previous => previous.map(task => task.id === id
-      ? task.timerRunning ? pauseTaskTimer(task, now) : startTaskTimer(task, now)
+      ? task.timerRunning ? pauseTaskTimer(task, now) : task.done ? task : startTaskTimer(task, now)
       : task));
   };
 
   const handleConfigureCountdown = (id: string, seconds: number) => {
     if (!Number.isFinite(seconds) || seconds < 60 || seconds > 86400) return;
     const now = Date.now();
-    setTasks(previous => previous.map(task => task.id === id ? configureTaskCountdown(task, seconds, now) : task));
+    setTasks(previous => previous.map(task => task.id === id && !task.done ? configureTaskCountdown(task, seconds, now) : task));
   };
 
   const handleClearCountdown = (id: string) => {
@@ -1475,12 +1402,14 @@ export default function App() {
   };
 
   const handleResetTimer = (id: string) => {
+    const task = tasks.find(task => task.id === id);
+    if ((task?.timeSpentSeconds || task?.timerRunning) && !window.confirm(lang === 'uk' ? 'Скинути весь записаний час цього завдання до нуля?' : 'Reset all recorded time for this task to zero?')) return;
     sound.tick(300);
     setTasks((prev) =>
       prev.map((t) => {
         if (t.id === id) {
           return {
-            ...t,
+            ...pauseTaskTimer(t),
             timeSpentSeconds: 0,
             timerRunning: false,
             timerStartedAt: undefined,
@@ -1491,151 +1420,34 @@ export default function App() {
     );
   };
 
-  const handleUpdateTimeSpent = (id: string, newTotalSeconds: number) => {
+  const handleUpdateTimeSpent = (id: string, seconds: number) => {
     sound.tick(500);
-    setTasks((prev) =>
-      prev.map((t) => {
-        if (t.id === id) {
-          return {
-            ...pauseTaskTimer(t),
-            timerRunning: t.timerRunning,
-            timeSpentSeconds: Math.max(0, newTotalSeconds),
-            timerStartedAt: t.timerRunning ? Date.now() : undefined,
-            autoPausedOverdue: false,
-          };
-        }
-        return t;
-      })
-    );
+    const now = Date.now();
+    setTasks(prev => prev.map(task => task.id === id ? setTaskTimeSpent(task, seconds, now) : task));
   };
 
   const handleUpdateStep = (id: string, step: number) => {
-    setTasks((prev) =>
-      prev.map((t) => {
-        if (t.id === id) {
-          const nextDone = step >= t.steps;
-          const updatedStepList = t.stepList
-            ? t.stepList.map((s, idx) => ({ ...s, done: idx < step }))
-            : undefined;
-
-          const settledTimer = nextDone ? pauseTaskTimer(t) : t;
-
-          return {
-            ...t,
-            currentStep: step,
-            stepList: updatedStepList,
-            done: nextDone,
-            completedAt: nextDone ? (t.completedAt || Date.now()) : undefined,
-            timeSpentSeconds: settledTimer.timeSpentSeconds,
-            timerRunning: settledTimer.timerRunning,
-            timerStartedAt: settledTimer.timerStartedAt,
-            countdownRemainingSeconds: settledTimer.countdownRemainingSeconds,
-          };
-        }
-        return t;
-      })
-    );
+    const now = Date.now();
+    const label = lang === 'uk' ? 'Крок' : 'Step';
+    setTasks(prev => prev.map(task => task.id === id ? setTaskProgress(task, step, now, label) : task));
   };
 
   const handleToggleStepItem = (taskId: string, stepIndex: number) => {
-    setTasks((prev) =>
-      prev.map((t) => {
-        if (t.id === taskId) {
-          const defaultCount = Math.max(1, t.steps || 1);
-          // If task doesn't have custom stepList yet, create from count
-          const currentList =
-            t.stepList && t.stepList.length > 0
-              ? [...t.stepList]
-              : Array.from({ length: defaultCount }, (_, idx) => ({
-                  id: `s-${t.id}-${idx}`,
-                  title: `${lang === 'uk' ? 'Крок' : 'Step'} ${idx + 1}`,
-                  done: idx < t.currentStep,
-                }));
-
-          while (stepIndex >= currentList.length) {
-            const idx = currentList.length;
-            currentList.push({
-              id: `s-${t.id}-${idx}-${Date.now()}`,
-              title: `${lang === 'uk' ? 'Крок' : 'Step'} ${idx + 1}`,
-              done: false,
-            });
-          }
-
-          const updatedStepList = currentList.map((item, idx) =>
-            idx === stepIndex ? { ...item, done: !item.done } : item
-          );
-          const completedCount = updatedStepList.filter((s) => s.done).length;
-          const isAllDone = completedCount === updatedStepList.length && updatedStepList.length > 0;
-
-          const settledTimer = isAllDone && !t.done ? pauseTaskTimer(t) : t;
-
-          return {
-            ...t,
-            stepList: updatedStepList,
-            steps: updatedStepList.length,
-            currentStep: completedCount,
-            done: isAllDone,
-            completedAt: isAllDone ? (t.completedAt || Date.now()) : undefined,
-            timeSpentSeconds: settledTimer.timeSpentSeconds,
-            timerRunning: settledTimer.timerRunning,
-            timerStartedAt: settledTimer.timerStartedAt,
-            countdownRemainingSeconds: settledTimer.countdownRemainingSeconds,
-          };
-        }
-        return t;
-      })
-    );
+    const now = Date.now();
+    const label = lang === 'uk' ? 'Крок' : 'Step';
+    setTasks(prev => prev.map(task => task.id === taskId ? toggleTaskStep(task, stepIndex, now, label) : task));
   };
 
   const handleAddStepItem = (taskId: string, stepTitle: string) => {
-    setTasks((prev) =>
-      prev.map((t) => {
-        if (t.id === taskId) {
-          const currentList = t.stepList || [];
-          const newStepItem = {
-            id: `s-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-            title: stepTitle,
-            done: false,
-          };
-          const nextList = [...currentList, newStepItem];
-          return {
-            ...t,
-            stepList: nextList,
-            steps: nextList.length,
-            done: false,
-          };
-        }
-        return t;
-      })
-    );
+    const now = Date.now();
+    const label = lang === 'uk' ? 'Крок' : 'Step';
+    setTasks(prev => prev.map(task => task.id === taskId ? addTaskStep(task, { id: `s-${now}-${Math.random().toString(36).slice(2, 6)}`, title: stepTitle, done: false }, now, label) : task));
   };
 
   const handleDeleteStepItem = (taskId: string, stepIndex: number) => {
-    setTasks((prev) =>
-      prev.map((t) => {
-        if (t.id === taskId && t.stepList) {
-          const nextList = t.stepList.filter((_, idx) => idx !== stepIndex);
-          const completedCount = nextList.filter((s) => s.done).length;
-          const isAllDone = nextList.length > 0 && completedCount === nextList.length;
-
-          const settledTimer = isAllDone && !t.done ? pauseTaskTimer(t) : t;
-
-          return {
-            ...t,
-            stepList: nextList,
-            steps: Math.max(1, nextList.length),
-            currentStep: completedCount,
-            done: isAllDone,
-            completedAt: isAllDone ? (t.completedAt || Date.now()) : undefined,
-            timeSpentSeconds: settledTimer.timeSpentSeconds,
-            timerRunning: settledTimer.timerRunning,
-            timerStartedAt: settledTimer.timerStartedAt,
-            countdownRemainingSeconds: settledTimer.countdownRemainingSeconds,
-          };
-        }
-        return t;
-      })
-    );
+    const now = Date.now();
+    const label = lang === 'uk' ? 'Крок' : 'Step';
+    setTasks(prev => prev.map(task => task.id === taskId ? deleteTaskStep(task, stepIndex, now, label) : task));
   };
 
   const handleCyclePriority = (id: string) => {
@@ -1712,11 +1524,13 @@ export default function App() {
   };
 
   const handlePermanentDeleteTask = (id: string) => {
+    if (!window.confirm(lang === 'uk' ? 'Назавжди видалити це завдання з історії? Відновити його буде неможливо.' : 'Permanently delete this task from history? It cannot be restored.')) return;
     sound.tick(300);
     setDeletedTasks((prev) => prev.filter((d) => d.id !== id));
   };
 
   const handleClearDeletedHistory = () => {
+    if (deletedTasks.length && !window.confirm(lang === 'uk' ? 'Назавжди очистити історію видалених завдань? Відновити їх буде неможливо.' : 'Permanently clear deleted history? These tasks cannot be restored.')) return;
     sound.tick(250);
     setDeletedTasks([]);
   };
@@ -1837,6 +1651,10 @@ export default function App() {
   };
 
   const handleResetDefaults = () => {
+    if (tasks.length && !window.confirm(lang === 'uk' ? 'Замінити поточні завдання початковим набором? Ваші завдання буде збережено в історії видалених.' : 'Replace current tasks with the initial set? Your tasks will be saved in deleted history.')) return;
+    const now = Date.now();
+    const archived = tasks.map(task => ({ ...pauseTaskTimer(task, now), deletedAt: now }));
+    setDeletedTasks(prev => [...archived, ...prev.filter(task => !archived.some(item => item.id === task.id))]);
     sound.activate();
     setTabs(lang === 'uk' ? DEFAULT_TABS_UK : DEFAULT_TABS_EN);
     setTasks(lang === 'uk' ? INITIAL_LIFE_TASKS_UK : INITIAL_LIFE_TASKS_EN);
@@ -1891,6 +1709,9 @@ export default function App() {
         onOpenSettings={() => setIsSettingsOpen(true)}
       />
 
+      {actionNotice && <div role="status" className="relative z-20 max-w-6xl w-full mx-auto px-4 py-3 text-sm bg-amber-950/40 border border-amber-800 text-amber-100">
+        {actionNotice}<button className="underline ml-3" onClick={() => setActionNotice(null)}>{lang === 'uk' ? 'Закрити' : 'Dismiss'}</button>
+      </div>}
       {/* Minimized Window Taskbar Floating Notification */}
       {isWindowMinimized && (
         <div
@@ -2175,7 +1996,8 @@ export default function App() {
               ? (lang === 'uk' ? 'Вимкнути анімацію вогню' : 'Turn off fire animation')
               : (lang === 'uk' ? 'Увімкнути анімацію вогню' : 'Turn on fire animation')
           }
-          className={`px-2 py-1 border transition-all cursor-pointer flex items-center gap-1.5 text-xs font-mono tracking-wider uppercase backdrop-blur-md shadow-md app-no-drag pointer-events-auto ${
+          aria-pressed={fireEnabled}
+          className={`min-h-11 px-2 py-1 border transition-all cursor-pointer flex items-center gap-1.5 text-xs font-mono tracking-wider uppercase backdrop-blur-md shadow-md app-no-drag pointer-events-auto ${
             fireEnabled
               ? 'border-neutral-700 bg-neutral-900/95 text-neutral-200 hover:border-white hover:text-white'
               : 'border-neutral-800 bg-[#08080a]/95 text-neutral-500 hover:text-neutral-300 hover:border-neutral-700'
@@ -2205,7 +2027,7 @@ export default function App() {
             setIsUpdateOpen(true);
           }}
           title={lang === 'uk' ? `Центр оновлень (v${appCurrentVersion})` : `System update center (v${appCurrentVersion})`}
-          className="px-2 py-1 border border-neutral-800 bg-[#08080a]/95 text-neutral-400 hover:text-white hover:border-neutral-600 transition-all cursor-pointer flex items-center gap-1.5 text-xs font-mono tracking-wider uppercase backdrop-blur-md shadow-md app-no-drag pointer-events-auto"
+          className="min-h-11 px-2 py-1 border border-neutral-800 bg-[#08080a]/95 text-neutral-400 hover:text-white hover:border-neutral-600 transition-all cursor-pointer flex items-center gap-1.5 text-xs font-mono tracking-wider uppercase backdrop-blur-md shadow-md app-no-drag pointer-events-auto"
         >
           <RefreshCw className="w-3.5 h-3.5 text-emerald-400" />
           <span className="hidden sm:inline font-bold text-neutral-300">
@@ -2219,7 +2041,8 @@ export default function App() {
             <span className="text-neutral-200 font-bold">
               {selectedPhase === 'NOTES'
                 ? `${notes.length} ${lang === 'uk' ? (notes.length === 1 ? 'нотатка' : notes.length < 5 ? 'нотатки' : 'нотаток') : (notes.length === 1 ? 'note' : 'notes')}`
-                : `${filteredTasks.length} ${t.shownCount}`}
+                : selectedPhase === 'HISTORY' ? `${tasks.filter(task => task.done).length + deletedTasks.length} ${lang === 'uk' ? 'В ІСТОРІЇ' : 'IN HISTORY'}`
+                : selectedPhase === 'DASHBOARD' ? `${tasks.length} ${lang === 'uk' ? 'ЗАВДАНЬ' : 'TASKS'}` : `${filteredTasks.length} ${t.shownCount}`}
             </span>
             {selectedPhase !== 'NOTES' && tasks.some((t) => t.done) && (
               <button
@@ -2241,12 +2064,11 @@ export default function App() {
               setAiPromptSeed('');
               setIsAIOpen(true);
             }}
-            title={t.swipeUpAI}
-            className="order-2 shrink-0 mx-auto flex items-center justify-center gap-2 px-3 sm:px-4 py-1.5 bg-neutral-900 border border-neutral-700 hover:border-white text-white font-mono text-xs font-bold tracking-wider transition-all active:scale-95 app-no-drag"
+            aria-label={lang === 'uk' ? 'Відкрити ШІ-планувальник' : 'Open AI planner'}
+            className="order-2 min-h-11 shrink-0 mx-auto flex items-center justify-center gap-2 px-3 sm:px-4 py-1.5 bg-neutral-900 border border-neutral-700 hover:border-white text-white font-mono text-xs font-bold tracking-wider transition-all active:scale-95 app-no-drag"
           >
             <AIIcon id={aiIconVariant} className="w-3.5 h-3.5 shrink-0 text-neutral-300" />
-            <span className="sm:hidden truncate">KARKAS AI</span>
-            <span className="hidden sm:inline truncate">{t.swipeUpAI}</span>
+            <span className="whitespace-nowrap">KARKAS AI</span>
           </button>
 
           {/* Right: Quick Add Button */}
@@ -2256,7 +2078,7 @@ export default function App() {
               sound.tick(600);
               setIsAddOpen((prev) => !prev);
             }}
-            className="order-3 shrink-0 flex items-center gap-1 px-3 py-1.5 bg-white text-black font-extrabold font-mono text-xs tracking-wider hover:bg-neutral-200 transition-all active:scale-95 app-no-drag"
+            className="order-3 min-h-11 shrink-0 flex items-center gap-1 px-3 py-1.5 bg-white text-black font-extrabold font-mono text-xs tracking-wider hover:bg-neutral-200 transition-all active:scale-95 app-no-drag"
           >
             <Plus className="w-3.5 h-3.5" />
             <span>{t.addOp}</span>

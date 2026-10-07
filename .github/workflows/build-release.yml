@@ -23,7 +23,7 @@ jobs:
           node-version: 22
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Extract version from package.json
         id: pkg
@@ -55,7 +55,7 @@ jobs:
           if (-not $updateMetadata.Contains($installer.Name)) {
             throw "latest.yml does not reference the published installer $($installer.Name)"
           }
-          $testFiles = Get-ChildItem electron, src/utils, server -Filter '*.test.*' -File
+          $testFiles = Get-ChildItem electron, src/utils, src/components, server -Filter '*.test.*' -File
           node --import tsx --test $testFiles.FullName
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:ELECTRON_RUN_AS_NODE = '1'
@@ -82,7 +82,7 @@ jobs:
         with:
           tag_name: "v${{ steps.pkg.outputs.version }}"
           name: "KARKAS v${{ steps.pkg.outputs.version }}"
-          body: "Official release installer for KARKAS v${{ steps.pkg.outputs.version }}"
+          body_path: RELEASE-NOTES.md
           files: |
             release/*.exe
             release/*.blockmap

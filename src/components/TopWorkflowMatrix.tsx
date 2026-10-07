@@ -116,9 +116,9 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
   return (
     <header id="windows-app-header" className="sticky top-0 z-30 bg-[#070709]/98 backdrop-blur-md border-b border-neutral-800/90 select-none">
       {/* 1. NATIVE WINDOWS TITLE BAR (TOPMOST ROW WITH CONTROLS & CAPTION BUTTONS) */}
-      <div id="windows-titlebar" className="h-9 px-3 bg-[#0a0a0d] border-b border-neutral-800/80 flex items-center justify-between gap-2 app-drag-region">
+      <div id="windows-titlebar" className="min-h-9 px-3 bg-[#0a0a0d] border-b border-neutral-800/80 flex flex-wrap items-center justify-between gap-x-2 app-drag-region">
         {/* Left: App Logo & Window Title */}
-        <div className="flex items-center gap-2.5 shrink-0 app-drag-region">
+        <div className="flex items-center gap-2.5 min-w-0 flex-1 lg:flex-none app-drag-region">
           <img
             src="/icon.png?v=karkas-app-icon-2"
             alt="KARKAS Logo"
@@ -129,7 +129,8 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
           />
 
           <div className="flex items-center gap-1.5">
-            <span className="text-xs font-mono font-extrabold tracking-wider text-neutral-200 uppercase">
+            <span className="text-xs font-mono font-extrabold tracking-wider text-neutral-200 uppercase sm:hidden">{t.appTitle}</span>
+            <span className="text-xs font-mono font-extrabold tracking-wider text-neutral-200 uppercase hidden sm:inline">
               {t.winTitlebar?.appTitle || 'KARKAS // TASK ARCHITECT'}
             </span>
             <span className="text-xs font-mono font-bold tracking-widest text-neutral-400 px-1 py-0.2 bg-neutral-900 border border-neutral-800 rounded-[2px] hidden sm:inline-block">
@@ -139,10 +140,11 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
         </div>
 
         {/* Center & Right: App Action Buttons integrated right inside the Windows Title Bar Header */}
-        <div className="flex items-center gap-1.5 sm:gap-2 flex-1 justify-end min-w-0 app-drag-region">
+        <div className="order-last flex flex-wrap items-center gap-1.5 sm:gap-2 w-full justify-end min-w-0 pb-1.5 lg:order-none lg:w-auto lg:flex-1 lg:pb-0 app-drag-region">
           {/* Cloud Account & Auto-Sync Trigger */}
           <button
             id="open-account-modal-btn"
+            aria-label={t.account.title}
             onClick={() => {
               sound.tick(500);
               onOpenAccount();
@@ -215,6 +217,8 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
           {/* Sound Toggle */}
           <button
             id="sound-toggle-btn"
+            aria-label={soundEnabled ? (lang === 'uk' ? 'Вимкнути звук' : 'Mute sound') : (lang === 'uk' ? 'Увімкнути звук' : 'Unmute sound')}
+            aria-pressed={soundEnabled}
             onClick={onToggleSound}
             title={soundEnabled ? (lang === 'uk' ? 'Вимкнути звук' : 'Mute sound') : (lang === 'uk' ? 'Увімкнути звук' : 'Unmute sound')}
             className="p-1 border border-neutral-800 text-neutral-400 hover:text-white hover:border-neutral-700 bg-neutral-900 transition-colors shrink-0 app-no-drag"
@@ -240,6 +244,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
           {/* AI Copilot Summon Button with Dynamic Selected AIIcon */}
           <button
             id="summon-ai-btn"
+            aria-label={lang === 'uk' ? 'Відкрити ШІ-планувальник' : 'Open AI planner'}
             onClick={() => {
               sound.activate();
               onOpenAI();
@@ -254,6 +259,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
           {/* Quick Add Toggle Button */}
           <button
             id="top-quick-add-btn"
+            aria-expanded={isAddOpen}
             onClick={() => {
               sound.tick(600);
               onToggleAdd();
@@ -269,13 +275,15 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
           </button>
 
           {/* Windows Titlebar Divider */}
-          <div className="w-[1px] h-4 bg-neutral-800 shrink-0 mx-0.5" />
+          <div className="hidden lg:block w-[1px] h-4 bg-neutral-800 shrink-0 mx-0.5" />
+        </div>
 
           {/* 2. AUTHENTIC WINDOWS WINDOW CONTROL BUTTONS (MINIMIZE, MAXIMIZE/RESTORE, CLOSE) */}
-          <div className="flex items-center -mr-3 h-9 app-no-drag">
+          <div className="flex items-center shrink-0 -mr-3 h-9 app-no-drag">
             {/* Minimize Button */}
             <button
               id="win-btn-minimize"
+              aria-label={t.winTitlebar?.minimize || 'Minimize'}
               type="button"
               onClick={handleElectronMinimize}
               title={t.winTitlebar?.minimize || 'Minimize'}
@@ -287,6 +295,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
             {/* Maximize / Restore Button */}
             <button
               id="win-btn-maximize"
+              aria-label={isFullscreen ? (t.winTitlebar?.restore || 'Restore') : (t.winTitlebar?.maximize || 'Maximize')}
               type="button"
               onClick={handleElectronMaximize}
               title={isFullscreen ? (t.winTitlebar?.restore || 'Restore') : (t.winTitlebar?.maximize || 'Maximize')}
@@ -302,6 +311,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
             {/* Close Button with Signature Windows Red Hover */}
             <button
               id="win-btn-close"
+              aria-label={t.winTitlebar?.close || 'Close'}
               type="button"
               onClick={handleElectronClose}
               title={t.winTitlebar?.close || 'Close'}
@@ -310,7 +320,6 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
               <X className="w-3.5 h-3.5 stroke-[2.5]" />
             </button>
           </div>
-        </div>
       </div>
 
       {/* 2. WORKFLOW MATRIX BAR & TABS (DOCKED DIRECTLY UNDER WINDOWS TITLE BAR) */}
@@ -318,7 +327,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
         {/* Visual Timeline & Progress Matrix Bar */}
         <div className="mb-2">
           <div className="flex items-center justify-between flex-wrap gap-3 text-xs font-mono text-neutral-400 mb-3">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="text-white font-bold">{stats.completed}/{stats.total} {t.delivered}</span>
               <span className="text-neutral-600">//</span>
               <span>{stats.percent}% {t.complete}</span>
@@ -330,6 +339,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
                   <button
                     key={f}
                     id={`filter-btn-${f.toLowerCase()}`}
+                    aria-pressed={activeFilter === f}
                     onClick={() => {
                       sound.tick(500);
                       onSetFilter(f);
@@ -479,6 +489,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
                 <button
                   type="button"
                   onClick={() => setIsInlineAdding(false)}
+                  aria-label={lang === 'uk' ? 'Скасувати додавання вкладки' : 'Cancel adding tab'}
                   className="p-1 text-neutral-400 hover:text-white"
                 >
                   <X className="w-2.5 h-2.5" />
@@ -504,6 +515,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
             <button
               type="button"
               id="manage-tabs-btn"
+              aria-label={t.manageTabs}
               onClick={() => {
                 sound.tick(600);
                 onOpenManageTabs();

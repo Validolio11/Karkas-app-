@@ -12,6 +12,7 @@ import {
 import { sound } from '../utils/audio';
 import { X, Plus, Trash2, SquareCode, FolderKanban, RefreshCw } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { useDialogKeyboard } from './useDialogKeyboard';
 
 interface ManageTabsModalProps {
   isOpen: boolean;
@@ -37,6 +38,7 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
   const [newTabName, setNewTabName] = useState('');
   const [activeColor, setActiveColor] = useState<string>(() => getRandomTabColor());
   const t = TRANSLATIONS[lang];
+  useDialogKeyboard(isOpen, onClose, 'manage-tabs-dialog');
 
   useEffect(() => {
     if (isOpen) {
@@ -65,10 +67,14 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
     <AnimatePresence>
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
         <motion.div
+          id="manage-tabs-dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-label={t.tabsModal.title}
           initial={{ opacity: 0, scale: 0.96 }}
           animate={{ opacity: 1, scale: 1 }}
           exit={{ opacity: 0, scale: 0.96 }}
-          className="w-full max-w-lg bg-[#0c0c0e] border border-neutral-800 shadow-2xl p-5 sm:p-6 flex flex-col gap-4 text-neutral-100 font-mono"
+          className="w-full max-w-lg max-h-[90dvh] overflow-y-auto bg-[#0c0c0e] border border-neutral-800 shadow-2xl p-5 sm:p-6 flex flex-col gap-4 text-neutral-100 font-mono"
         >
           {/* Header */}
           <div className="flex items-center justify-between border-b border-neutral-800/80 pb-3">
@@ -79,6 +85,7 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
               </h2>
             </div>
             <button
+              aria-label={lang === 'uk' ? 'Закрити налаштування вкладок' : 'Close tab settings'}
               onClick={() => {
                 sound.tick(400);
                 onClose();
@@ -115,12 +122,13 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
                 </span>
               </button>
 
-              <div className="relative flex-1">
+              <div className="relative flex-1 min-w-0">
                 <input
                   type="text"
                   value={newTabName}
                   onChange={(e) => setNewTabName(e.target.value)}
                   placeholder={t.tabsModal.inputPlaceholder}
+                  aria-label={t.tabsModal.inputPlaceholder}
                   maxLength={24}
                   className="w-full bg-[#08080a] border border-neutral-700 px-3 py-2 text-xs font-mono text-white placeholder:text-neutral-500 placeholder:font-normal focus:outline-none focus:border-white transition-all"
                 />
@@ -139,7 +147,7 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
 
           {/* Active Tabs List */}
           <div className="flex flex-col gap-1.5 max-h-56 overflow-y-auto pr-1">
-            <span className="text-[10px] font-mono tracking-widest text-neutral-500 uppercase">
+            <span className="text-[11px] font-mono tracking-widest text-neutral-400 uppercase">
               {t.tabsModal.currentTabs} ({tabs.length})
             </span>
             <div className="grid grid-cols-1 gap-1.5">
@@ -152,15 +160,15 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
                     key={tab.id}
                     className="flex items-center justify-between px-3 py-2 bg-[#08080a] border border-neutral-800/90 hover:border-neutral-700 transition-colors"
                   >
-                    <div className="flex items-center gap-2.5">
+                    <div className="flex-1 min-w-0 flex items-center gap-2.5">
                       <span
                         className="w-2.5 h-2.5 shrink-0 border border-white/20 shadow-sm"
                         style={{ backgroundColor: tab.color || '#38bdf8' }}
                       />
-                      <span className="text-xs font-mono font-bold uppercase tracking-wider text-neutral-200">
+                      <span title={tab.name} className="min-w-0 truncate text-xs font-mono font-bold uppercase tracking-wider text-neutral-200">
                         {tab.name}
                       </span>
-                      <span className="text-[10px] font-mono text-neutral-500">
+                      <span className="shrink-0 whitespace-nowrap text-[11px] font-mono text-neutral-400">
                         [{count} {lang === 'uk' ? 'справ' : 'tasks'}]
                       </span>
                     </div>
@@ -173,7 +181,8 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
                         onDeleteTab(tab.id);
                       }}
                       title={canDelete ? t.deleteTab : t.tabsModal.cantDeleteLast}
-                      className={`p-1.5 text-xs font-mono transition-colors flex items-center gap-1 cursor-pointer ${
+                      aria-label={`${t.deleteTab}: ${tab.name}`}
+                      className={`shrink-0 p-1.5 text-xs font-mono transition-colors flex items-center gap-1 cursor-pointer ${
                         canDelete
                           ? 'text-neutral-400 hover:text-red-400 hover:bg-red-950/20'
                           : 'text-neutral-700 cursor-not-allowed'

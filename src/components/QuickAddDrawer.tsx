@@ -5,6 +5,7 @@ import { sound } from '../utils/audio';
 import { Language, TRANSLATIONS } from '../utils/i18n';
 import { Plus, X } from 'lucide-react';
 import { AIIcon } from './AIIconTemplates';
+import { hasQuickAddDraftContent, readQuickAddDraft, saveQuickAddDraft } from './quickAddDraft';
 
 interface QuickAddDrawerProps {
   isOpen: boolean;
@@ -19,7 +20,7 @@ interface QuickAddDrawerProps {
     steps: number;
     stepList?: { id: string; title: string; done: boolean }[];
     note?: string;
-  }) => void;
+  }) => void | boolean;
   onOpenAIWithPrompt: (prompt: string) => void;
 }
 
@@ -33,9 +34,13 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
   onOpenAIWithPrompt,
 }) => {
   const t = TRANSLATIONS[lang];
-  const [title, setTitle] = useState('');
-  const [note, setNote] = useState('');
+  const [savedDraft] = useState(() => {
+    try { return readQuickAddDraft(localStorage); } catch { return null; }
+  });
+  const [title, setTitle] = useState(savedDraft?.title || '');
+  const [note, setNote] = useState(savedDraft?.note || '');
   const [phase, setPhase] = useState<string>(() => {
+    if (savedDraft?.phase && tabs.some(tab => tab.id === savedDraft.phase)) return savedDraft.phase;
     if (
       selectedPhase &&
       selectedPhase !== 'ALL' &&
@@ -46,15 +51,21 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
     }
     return tabs[0]?.id || 'focus';
   });
-  const [priority, setPriority] = useState<1 | 2 | 3>(2);
-  const [showStepsSection, setShowStepsSection] = useState(false);
-  const [customSteps, setCustomSteps] = useState<string[]>([]);
-  const [steps, setSteps] = useState(1);
+  const [priority, setPriority] = useState<1 | 2 | 3>(savedDraft?.priority || 2);
+  const [showStepsSection, setShowStepsSection] = useState(!!savedDraft?.customSteps.length);
+  const [customSteps, setCustomSteps] = useState<string[]>(savedDraft?.customSteps || []);
+  const [steps, setSteps] = useState(savedDraft?.steps || 1);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    try { saveQuickAddDraft(localStorage, { title, note, phase, priority, steps, customSteps }); } catch { /* Preserve the in-memory draft when storage is unavailable. */ }
+  }, [title, note, phase, priority, steps, customSteps]);
+
+  useEffect(() => {
     if (isOpen) {
-      if (
+      const hasContent = hasQuickAddDraftContent({ title, note, customSteps });
+      const hasValidPhase = tabs.some(tab => tab.id === phase);
+      if ((!hasContent || !hasValidPhase) &&
         selectedPhase &&
         selectedPhase !== 'ALL' &&
         selectedPhase !== 'DASHBOARD' &&
@@ -64,7 +75,8 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
       } else if (!tabs.some((tb) => tb.id === phase) || phase === 'DASHBOARD' || phase === 'ALL') {
         setPhase(tabs[0]?.id || 'focus');
       }
-      setTimeout(() => inputRef.current?.focus(), 50);
+      const timer = setTimeout(() => inputRef.current?.focus(), 50);
+      return () => clearTimeout(timer);
     }
   }, [isOpen, selectedPhase, tabs]);
 
@@ -104,7 +116,7 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
         ? phase
         : tabs[0]?.id || 'focus';
 
-    onAddTask({
+    const accepted = onAddTask({
       title: title.trim(),
       phase: effectivePhase,
       priority,
@@ -112,10 +124,13 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
       stepList: validStepList.length > 0 ? validStepList : undefined,
       note: note.trim() || undefined,
     });
+    if (accepted === false) return;
+    try { saveQuickAddDraft(localStorage, { title: '', note: '', phase, priority, steps: 1, customSteps: [] }); } catch { /* Storage is optional. */ }
 
     setTitle('');
     setNote('');
     setCustomSteps([]);
+    setSteps(1);
     setShowStepsSection(false);
     onClose();
   };
@@ -123,10 +138,7 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
   const handleAskAI = () => {
     if (!title.trim()) return;
     onOpenAIWithPrompt(title.trim());
-    setTitle('');
-    setNote('');
-    setCustomSteps([]);
-    setShowStepsSection(false);
+    // Preserve the draft if the assistant is cancelled.
     onClose();
   };
 
@@ -139,9 +151,9 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
           animate={{ height: 'auto', opacity: 1 }}
           exit={{ height: 0, opacity: 0 }}
           transition={{ duration: 0.22, ease: 'easeOut' }}
-          className="overflow-hidden bg-[#0c0c0e] border-b border-neutral-800 font-mono"
+          className="relative z-10 overflow-hidden bg-[#0c0c0e] border-b border-neutral-800 font-mono"
         >
-          <form onSubmit={handleSubmit} className="p-5 sm:p-8 max-w-4xl mx-auto flex flex-col gap-5">
+          <form onSubmit={handleSubmit} onKeyDown={(e) => { if (e.key === 'Escape') onClose(); }} className="p-5 sm:p-8 max-w-4xl mx-auto flex flex-col gap-5 [&_button]:min-h-11 [&_input]:min-h-11 sm:[&_button]:min-h-0 sm:[&_input]:min-h-0">
             {/* Title Input */}
             <div className="flex items-center gap-2">
               <input
@@ -151,13 +163,15 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder={t.quickAdd.titlePlaceholder}
+                aria-label={t.quickAdd.titlePlaceholder}
                 className="min-w-0 flex-1 bg-[#08080a] border border-neutral-700 text-white placeholder:text-neutral-500 placeholder:font-normal placeholder:normal-case px-3.5 py-3 text-sm leading-relaxed font-mono tracking-normal focus:outline-none focus:border-white transition-colors"
               />
               <button
                 type="button"
                 id="quick-add-close-btn"
+                aria-label={lang === 'uk' ? 'Закрити створення завдання' : 'Close task creation'}
                 onClick={onClose}
-                className="p-2.5 border border-neutral-800 text-neutral-400 hover:text-white hover:border-neutral-600 transition-colors cursor-pointer"
+                className="min-w-11 sm:min-w-0 p-2.5 border border-neutral-800 text-neutral-400 hover:text-white hover:border-neutral-600 transition-colors cursor-pointer shrink-0 flex items-center justify-center"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -171,6 +185,7 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
                 placeholder={t.quickAdd.notePlaceholder}
+                aria-label={t.quickAdd.notePlaceholder}
                 className="w-full bg-[#08080a] border border-neutral-800 text-neutral-200 placeholder:text-neutral-500 placeholder:font-normal px-3.5 py-3 text-sm leading-relaxed font-mono focus:outline-none focus:border-neutral-400 transition-colors"
               />
             </div>
@@ -190,11 +205,12 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
                       key={tb.id}
                       type="button"
                       id={`quick-add-tab-${tb.id.toLowerCase()}`}
+                      aria-pressed={isSelected}
                       onClick={() => {
                         sound.tick(600);
                         setPhase(tb.id);
                       }}
-                      className={`px-2 py-1 text-xs font-mono border transition-all flex items-center gap-1.5 ${
+                      className={`max-w-full min-w-0 px-2 py-1 text-xs font-mono border transition-all flex items-center gap-1.5 ${
                         isSelected
                           ? 'border-white bg-white text-black font-extrabold'
                           : 'border-neutral-800 text-neutral-400 hover:text-neutral-200 bg-neutral-900/60'
@@ -206,7 +222,7 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
                           style={{ backgroundColor: tb.color }}
                         />
                       )}
-                      <span>{displayName}</span>
+                      <span className="min-w-0 [overflow-wrap:anywhere]">{displayName}</span>
                     </button>
                   );
                 })}
@@ -235,6 +251,7 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
                           setPriority(pri);
                         }}
                         title={tooltip}
+                        aria-pressed={isSelected}
                         className={`flex items-center gap-1 px-2 py-1 text-xs font-mono border transition-all ${
                           isSelected
                             ? pri === 1
@@ -268,10 +285,11 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
 
             {/* Optional Custom Steps & Descriptions Section */}
             <div className="pt-4 border-t border-neutral-800/80">
-              <div className="flex items-center justify-between gap-3 mb-3">
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
                 <button
                   type="button"
                   id="toggle-steps-section-btn"
+                  aria-expanded={showStepsSection}
                   onClick={() => {
                     sound.tick(500);
                     if (!showStepsSection && customSteps.length === 0) {
@@ -279,10 +297,10 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
                     }
                     setShowStepsSection(!showStepsSection);
                   }}
-                  className="flex items-center gap-1.5 text-xs font-mono text-neutral-300 hover:text-white transition-colors"
+                  className="min-w-0 max-w-full flex items-center gap-1.5 text-left text-xs font-mono text-neutral-300 hover:text-white transition-colors"
                 >
                   <span className="text-neutral-500">[{showStepsSection ? '−' : '+'}]</span>
-                  <span className="font-bold uppercase tracking-wider">{t.stepsSection.optionalTitle}</span>
+                  <span className="min-w-0 break-words font-bold uppercase tracking-wider">{t.stepsSection.optionalTitle}</span>
                   {customSteps.length > 0 && (
                     <span className="text-xs px-1.5 py-1 bg-neutral-800 text-neutral-300 border border-neutral-700">
                       {customSteps.length}
@@ -323,13 +341,14 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
                           value={stepText}
                           onChange={(e) => handleUpdateStepText(idx, e.target.value)}
                           placeholder={`${t.stepsSection.stepPlaceholder} ${idx + 1}`}
+                          aria-label={`${t.stepsSection.stepPlaceholder} ${idx + 1}`}
                           className="min-w-0 flex-1 bg-[#101014] border border-neutral-800 focus:border-neutral-400 text-white placeholder:text-neutral-500 px-3 py-2.5 text-sm leading-relaxed font-mono transition-colors"
                         />
                         <button
                           type="button"
                           onClick={() => handleRemoveStepInput(idx)}
-                          className="p-1.5 text-neutral-500 hover:text-rose-400 border border-transparent hover:border-neutral-800 transition-colors"
-                          title="Видалити цей крок"
+                          className="min-w-11 sm:min-w-0 shrink-0 p-1.5 text-neutral-400 hover:text-rose-400 border border-transparent hover:border-neutral-800 transition-colors flex items-center justify-center"
+                          title={lang === 'uk' ? 'Видалити цей крок' : 'Delete this step'}
                         >
                           <X className="w-3.5 h-3.5" />
                         </button>
@@ -342,7 +361,7 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
             </div>
 
             {/* Action Buttons */}
-            <div className="flex flex-wrap items-center justify-end gap-3 pt-2">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-3 pt-2">
               {title.trim() && (
                 <button
                   type="button"
@@ -358,7 +377,8 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({
               <button
                 type="submit"
                 id="quick-add-submit-btn"
-                className="flex items-center gap-1.5 px-4 py-2.5 bg-white text-black font-extrabold text-xs font-mono tracking-wider hover:bg-neutral-200 transition-colors"
+                disabled={!title.trim()}
+                className="flex items-center justify-center gap-1.5 px-4 py-2.5 bg-white text-black font-extrabold text-xs font-mono tracking-wider hover:bg-neutral-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>{t.quickAdd.submitBtn}</span>

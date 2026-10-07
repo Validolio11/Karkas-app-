@@ -9,6 +9,7 @@ import {
   AnalyticsPeriod,
 } from '../types';
 import { Language, TRANSLATIONS } from '../utils/i18n';
+import { getRollingWindows, selectPeriodTasks } from './workflowViewModel';
 import { sound } from '../utils/audio';
 import {
   CheckCircle2,
@@ -169,48 +170,8 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
     const currentYear = now.getFullYear();
     const currentMonth = now.getMonth();
 
-    // Determine timestamp range
-    let isTimestampInPeriod = (_ts: number): boolean => true;
-
-    if (selectedPeriod === 'THIS_YEAR') {
-      const start = new Date(currentYear, 0, 1).getTime();
-      const end = new Date(currentYear, 11, 31, 23, 59, 59, 999).getTime();
-      isTimestampInPeriod = (ts) => ts >= start && ts <= end;
-    } else if (selectedPeriod === 'LAST_YEAR') {
-      const start = new Date(currentYear - 1, 0, 1).getTime();
-      const end = new Date(currentYear - 1, 11, 31, 23, 59, 59, 999).getTime();
-      isTimestampInPeriod = (ts) => ts >= start && ts <= end;
-    } else if (selectedPeriod === 'THIS_MONTH') {
-      const start = new Date(currentYear, currentMonth, 1).getTime();
-      const end = new Date(currentYear, currentMonth + 1, 0, 23, 59, 59, 999).getTime();
-      isTimestampInPeriod = (ts) => ts >= start && ts <= end;
-    } else if (selectedPeriod === 'LAST_30_DAYS') {
-      const start = Date.now() - 30 * 24 * 60 * 60 * 1000;
-      isTimestampInPeriod = (ts) => ts >= start;
-    } else {
-      // ALL_TIME
-      isTimestampInPeriod = () => true;
-    }
-
-    // Helper to evaluate if task belongs to period
-    const taskBelongsToPeriod = (task: PSTask | DeletedTask): boolean => {
-      const c = task.createdAt || 0;
-      const comp = task.completedAt || 0;
-      const del = (task as DeletedTask).deletedAt || 0;
-      return (
-        (c > 0 && isTimestampInPeriod(c)) ||
-        (comp > 0 && isTimestampInPeriod(comp)) ||
-        (del > 0 && isTimestampInPeriod(del))
-      );
-    };
-
-    const activeInPeriod = tasks.filter((t) => !t.done && taskBelongsToPeriod(t));
-    const completedInPeriod = tasks.filter((t) => t.done && taskBelongsToPeriod(t));
-    const deletedInPeriod = deletedTasks.filter((t) => taskBelongsToPeriod(t));
-
-    // Distinguish deleted completed vs deleted uncompleted (dropped)
-    const deletedCompleted = deletedInPeriod.filter((t) => t.done);
-    const droppedInPeriod = deletedInPeriod.filter((t) => !t.done);
+    const { activeInPeriod, completedInPeriod, deletedCompleted, droppedInPeriod, createdInPeriod } =
+      selectPeriodTasks(tasks, deletedTasks, selectedPeriod, now);
 
     const totalDelivered = completedInPeriod.length + deletedCompleted.length;
     const totalDropped = droppedInPeriod.length;
@@ -310,7 +271,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
           return ts >= mStart && ts <= mEnd;
         }).length;
 
-        const mCreated = [...activeInPeriod, ...completedInPeriod, ...deletedInPeriod].filter((t) => {
+        const mCreated = createdInPeriod.filter((t) => {
           const ts = t.createdAt || 0;
           return ts >= mStart && ts <= mEnd;
         }).length;
@@ -324,7 +285,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
       }
     } else {
       // 4 Weekly intervals based on actual task timestamps
-      const nowMs = Date.now();
+      const nowMs = now.getTime();
       let pStart = nowMs - 30 * 24 * 60 * 60 * 1000;
       let pEnd = nowMs;
 
@@ -344,26 +305,27 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
         pEnd = nowMs;
       }
 
-      const intervalDuration = (pEnd - pStart) / 4;
+      const windows = getRollingWindows(pEnd, (pEnd - pStart) / (24 * 60 * 60 * 1000));
 
       for (let w = 1; w <= 4; w++) {
         const label = lang === 'uk' ? `Т-${w}` : `W${w}`;
-        const wStart = pStart + (w - 1) * intervalDuration;
-        const wEnd = pStart + w * intervalDuration;
+        const window = windows[w - 1];
+        const inWindow = (ts: number) =>
+          (window.includeStart ? ts >= window.start : ts > window.start) && ts <= window.end;
 
         const wDelivered = [...completedInPeriod, ...deletedCompleted].filter((t) => {
           const ts = t.completedAt || t.createdAt || 0;
-          return ts >= wStart && ts <= wEnd;
+          return inWindow(ts);
         }).length;
 
         const wDropped = droppedInPeriod.filter((t) => {
           const ts = t.deletedAt || t.createdAt || 0;
-          return ts >= wStart && ts <= wEnd;
+          return inWindow(ts);
         }).length;
 
-        const wCreated = [...activeInPeriod, ...completedInPeriod, ...deletedInPeriod].filter((t) => {
+        const wCreated = createdInPeriod.filter((t) => {
           const ts = t.createdAt || 0;
-          return ts >= wStart && ts <= wEnd;
+          return inWindow(ts);
         }).length;
 
         velocityBars.push({
@@ -429,6 +391,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
 
     return {
       totalTracked,
+      totalCreated: createdInPeriod.length,
       totalDelivered,
       totalDropped,
       totalActive,
@@ -476,10 +439,15 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
   const [lastSlotType, setLastSlotType] = useState<DailySlotType | null>(null);
   const [isLoadingRecs, setIsLoadingRecs] = useState<boolean>(false);
   const [addedTaskTitles, setAddedTaskTitles] = useState<string[]>([]);
+  const addedTitlesRef = useRef(new Set<string>());
+  const recommendationsRequest = useRef<AbortController | null>(null);
 
   // Fetch AI Recommendations tailored to current period
   const fetchRecommendations = useCallback(
     async (force: boolean = false, periodToUse: AnalyticsPeriod = selectedPeriod) => {
+      recommendationsRequest.current?.abort();
+      const controller = new AbortController();
+      recommendationsRequest.current = controller;
       const { slotId, slotType } = getDailyAnalysisSlot();
       const cacheKey = `${AI_ANALYSIS_STORAGE_KEY_PREFIX}${periodToUse}`;
 
@@ -496,6 +464,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
               setRecommendation(cached.recommendation);
               setLastAnalyzedAt(cached.timestamp);
               setLastSlotType(cached.slotType);
+              setIsLoadingRecs(false);
               return;
             }
           }
@@ -515,6 +484,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
         const customEnabled = localStorage.getItem('karkas_custom_ai_enabled') === 'true';
 
         const res = await karkasApiFetch('/api/ai/recommendations', {
+          signal: controller.signal,
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -526,7 +496,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
             customApiKey: customEnabled ? customKey : undefined,
             selectedModel: customEnabled ? customModel : undefined,
             periodMetrics: {
-              totalCreated: analyticsData.totalTracked,
+              totalCreated: analyticsData.totalCreated,
               totalCompleted: analyticsData.totalDelivered,
               totalDeleted: analyticsData.totalDropped,
               totalActive: analyticsData.totalActive,
@@ -539,6 +509,8 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
 
         if (!res.ok) throw new Error('Failed to fetch recommendations');
         const data: AIRecommendation = await res.json();
+        if (controller.signal.aborted) return;
+        if (!Array.isArray(data.suggestedTasks)) throw new Error('Invalid recommendation response');
         setRecommendation(data);
         const timestamp = Date.now();
         setLastAnalyzedAt(timestamp);
@@ -552,8 +524,9 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
           lang,
           period: periodToUse,
         };
-        localStorage.setItem(cacheKey, JSON.stringify(cacheEntry));
+        try { localStorage.setItem(cacheKey, JSON.stringify(cacheEntry)); } catch { /* Cache is optional. */ }
       } catch (err) {
+        if (controller.signal.aborted) return;
         console.warn('Could not load server AI recommendations, using local analytics fallback:', err);
         const isUk = lang === 'uk';
         const primaryTab = currentTabs[0]?.id || 'focus';
@@ -621,20 +594,25 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
           lang,
           period: periodToUse,
         };
-        localStorage.setItem(cacheKey, JSON.stringify(fallbackCache));
+        try { localStorage.setItem(cacheKey, JSON.stringify(fallbackCache)); } catch { /* Cache is optional. */ }
       } finally {
-        setIsLoadingRecs(false);
+        if (recommendationsRequest.current === controller) setIsLoadingRecs(false);
       }
     },
     [lang, selectedPeriod, analyticsData]
   );
 
   useEffect(() => {
+    setRecommendation(null);
+    setAddedTaskTitles([]);
+    addedTitlesRef.current.clear();
     fetchRecommendations(false, selectedPeriod);
+    return () => recommendationsRequest.current?.abort();
   }, [selectedPeriod, lang]);
 
   const handleAddSuggestedTask = (st: SuggestedTask) => {
-    if (!onAddTask) return;
+    if (!onAddTask || !st.title.trim() || addedTitlesRef.current.has(st.title)) return;
+    addedTitlesRef.current.add(st.title);
     sound.activate();
     const effectivePhase =
       st.phase && st.phase !== 'DASHBOARD' && st.phase !== 'ALL' && tabs.some((tb) => tb.id === st.phase)
@@ -674,7 +652,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
           <div className="flex items-center gap-2">
             <div className="h-1.5 w-1.5 bg-white" />
             <div>
-              <h2 className="text-sm font-bold uppercase tracking-wider text-white font-mono flex items-center gap-2">
+              <h2 className="text-sm font-bold uppercase tracking-wider text-white font-mono flex flex-wrap items-center gap-2">
                 <span>{tAnalytics.title}</span>
               </h2>
             </div>
@@ -708,11 +686,12 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
               <button
                 key={p.id}
                 id={`period-btn-${p.id}`}
+                aria-pressed={isSelected}
                 onClick={() => {
                   sound.tick(550);
                   setSelectedPeriod(p.id);
                 }}
-                className={`px-3 py-2 text-xs font-mono font-bold tracking-wider uppercase whitespace-nowrap transition-colors cursor-pointer ${
+                className={`shrink-0 px-3 py-2 text-xs font-mono font-bold tracking-wider uppercase whitespace-nowrap transition-colors cursor-pointer ${
                   isSelected
                     ? 'bg-white text-black'
                     : 'text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200'
@@ -885,22 +864,22 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
                 }}
                 className="group cursor-pointer px-2 py-4 transition-colors hover:bg-white/[0.025]"
               >
-                <div className="flex items-center justify-between text-xs mb-1.5 font-mono">
-                  <div className="flex items-center gap-2">
+                <div className="flex items-center justify-between gap-2 text-xs mb-1.5 font-mono">
+                  <div className="flex flex-wrap items-center gap-2 min-w-0">
                     {tp.color && (
                       <span
                         className="w-2 h-2 shrink-0 border border-white/20 shadow-sm"
                         style={{ backgroundColor: tp.color }}
                       />
                     )}
-                    <span className="font-bold text-white group-hover:text-neutral-200 transition-colors">
+                    <span className="font-bold text-white group-hover:text-neutral-200 transition-colors break-words min-w-0">
                       {tp.name}
                     </span>
                     <span className="text-xs text-neutral-400">
                       ({tp.delivered}/{tp.total})
                     </span>
                   </div>
-                  <div className="flex items-center gap-1.5 text-xs text-neutral-400">
+                  <div className="flex items-center shrink-0 gap-1.5 text-xs text-neutral-400">
                     <span className="font-bold text-neutral-300">{tp.percent}%</span>
                     <ArrowRight className="w-3 h-3 text-neutral-400 group-hover:text-white transition-transform group-hover:translate-x-0.5" />
                   </div>
@@ -979,7 +958,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
                       <div className="min-w-0 flex-1">
                         <p className="font-bold text-sm break-words text-white font-sans">{task.title}</p>
                         {task.note && (
-                          <p className="text-xs text-neutral-400 truncate mt-0.5 font-mono">{task.note}</p>
+                          <p title={task.note} className="text-xs text-neutral-400 break-words line-clamp-2 mt-0.5 font-mono">{task.note}</p>
                         )}
                       </div>
                     </div>
@@ -1067,11 +1046,15 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
         </div>
 
         {/* Schedule & Last Analysis Status Bar */}
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-1 border-b border-neutral-800/60 pb-3 text-xs font-mono text-neutral-400">
-          <div className="flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-neutral-600" />
+        <div role="status" aria-live="polite" className="mb-3 flex flex-wrap items-center justify-between gap-1 border-b border-neutral-800/60 pb-3 text-xs font-mono text-neutral-400">
+          <div className="flex items-start gap-1.5 min-w-0">
+            <span className={`mt-1 w-1.5 h-1.5 shrink-0 rounded-full ${isLoadingRecs ? 'bg-neutral-400 animate-pulse' : recommendation?.source === 'engine' ? 'bg-amber-400' : 'bg-neutral-600'}`} />
             <span>
-              {lang === 'uk'
+              {isLoadingRecs
+                ? (lang === 'uk' ? 'Аналізуємо вибраний період…' : 'Analyzing the selected period…')
+                : recommendation?.source === 'engine'
+                ? (lang === 'uk' ? 'Локальний аналіз: рекомендації сформовано з ваших даних.' : 'Local analysis: recommendations use your task data.')
+                : lang === 'uk'
                 ? `Враховано ${analyticsData.totalTracked} завдань`
                 : `Analyzed ${analyticsData.totalTracked} tasks`}
             </span>

@@ -23,6 +23,63 @@ app.use('/api', (req, res, next) => {
 });
 app.use(express.json({ limit: "25mb" }));
 
+const isRecord = (value: unknown): value is Record<string, any> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+const nonEmptyText = (value: unknown): value is string =>
+  typeof value === 'string' && value.trim().length > 0;
+const textOr = (value: unknown, fallback = ''): string => nonEmptyText(value) ? value.trim() : fallback;
+const priorityOr = (value: unknown, fallback = 2): number =>
+  value === 1 || value === 2 || value === 3 ? value : fallback;
+
+// Shared by HTTP handlers and the desktop IPC bridge, which bypasses middleware.
+function requestValidationError(body: unknown): string | undefined {
+  if (!isRecord(body)) return 'JSON object is required';
+  const contexts = [body];
+  if (body.fullAppContext !== undefined) {
+    if (!isRecord(body.fullAppContext)) return 'Invalid fullAppContext';
+    contexts.push(body.fullAppContext);
+  }
+  for (const context of contexts) {
+    for (const key of ['tasks', 'currentTasks', 'allTasks', 'activeTasks', 'completedTasks', 'deletedTasks']) {
+      if (context[key] !== undefined && (!Array.isArray(context[key]) ||
+        !context[key].every((task: unknown) => isRecord(task) && nonEmptyText(task.title)))) {
+        return `Invalid ${key}: expected tasks with non-empty titles`;
+      }
+    }
+    if (context.tabs !== undefined && (!Array.isArray(context.tabs) ||
+      !context.tabs.every((tab: unknown) => nonEmptyText(tab) || (isRecord(tab) && nonEmptyText(tab.id))))) return 'Invalid tabs';
+    if (context.stats !== undefined && !isRecord(context.stats)) return 'Invalid stats';
+  }
+  if (body.periodMetrics !== undefined) {
+    if (!isRecord(body.periodMetrics)) return 'Invalid periodMetrics';
+    for (const key of ['totalCreated', 'totalCompleted', 'totalDeleted', 'totalActive', 'successRate']) {
+      const value = body.periodMetrics[key];
+      if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value) || value < 0 ||
+        (key === 'successRate' ? value > 100 : !Number.isInteger(value)))) return `Invalid periodMetrics.${key}`;
+    }
+  }
+}
+
+function cleanAndParseJson(rawText: string): Record<string, any> {
+  const cleaned = rawText.trim().replace(/^```(?:json)?\s*/i, '').replace(/```$/, '').trim();
+  const parsed = JSON.parse(cleaned);
+  if (!isRecord(parsed)) throw new Error('Expected an AI response object');
+  return parsed;
+}
+
+function normalizedSteps(value: unknown, count: unknown, isUk: boolean, prefix: string, min = 1, max = 50) {
+  const entries = Array.isArray(value) ? value.filter((step) => nonEmptyText(step) ||
+    (isRecord(step) && nonEmptyText(step.title))).slice(0, max) : [];
+  const stepCount = entries.length || (typeof count === 'number' && Number.isFinite(count)
+    ? Math.min(max, Math.max(min, Math.trunc(count))) : 3);
+  return Array.from({ length: Math.max(min, stepCount) }, (_, index) => ({
+    id: `${prefix}-${index}-${Date.now().toString(36)}`,
+    title: textOr(typeof entries[index] === 'string' ? entries[index] : entries[index]?.title,
+      `${isUk ? 'Етап' : 'Step'} ${index + 1}`),
+    done: false,
+  }));
+}
+
 // Initialize Gemini Client
 let geminiClient: GoogleGenAI | null = null;
 function getGeminiClient(): GoogleGenAI | null {
@@ -159,6 +216,8 @@ export function slugifyTabId(rawName: string, requestedId?: string): string {
 // Smart AI Assistant & Full App Context Analyzer Endpoint
 export async function assistHandler(req: any, res: any) {
   try {
+    const validationError = requestValidationError(req.body);
+    if (validationError) return res.status(400).json({ error: validationError });
     const {
       prompt,
       currentTasks = [],
@@ -178,7 +237,7 @@ export async function assistHandler(req: any, res: any) {
       allowNewTabs = false,
     } = req.body;
 
-    if (!prompt || typeof prompt !== "string") {
+    if (!nonEmptyText(prompt)) {
       return res.status(400).json({ error: "Prompt is required" });
     }
 
@@ -336,7 +395,7 @@ INSTRUCTIONS:
         });
 
         if (chatResponse?.text) {
-          const parsed = JSON.parse(chatResponse.text || "{}");
+          const parsed = cleanAndParseJson(chatResponse.text || "{}");
           const existingTabIds = new Set(activeTabIds);
           const validatedTabs: { id: string; name: string }[] = [];
           if (isTabCreationRequested && Array.isArray(parsed.tabs)) {
@@ -355,34 +414,24 @@ INSTRUCTIONS:
           }
 
           const allowedTaskPhases = new Set([...activeTabIds, ...validatedTabs.map((tb) => tb.id)]);
-          const validatedTasks = (Array.isArray(parsed.tasks) ? parsed.tasks : []).map((t: any, idx: number) => {
-            const rawStepList = Array.isArray(t.stepList) ? t.stepList : [];
-            const finalStepList = rawStepList.length > 0
-              ? rawStepList.map((s: any, sIdx: number) => ({
-                  id: `s-chat-gen-${idx}-${sIdx}-${Date.now().toString(36)}`,
-                  title: typeof s === "string" ? s : s.title || `Крок ${sIdx + 1}`,
-                  done: false,
-                }))
-              : Array.from({ length: Math.min(50, Math.max(1, Number(t.steps) || 2)) }, (_, sIdx) => ({
-                  id: `s-chat-gen-${idx}-${sIdx}-${Date.now().toString(36)}`,
-                  title: `${isUk ? "Етап" : "Step"} ${sIdx + 1}`,
-                  done: false,
-                }));
+          const validatedTasks = (Array.isArray(parsed.tasks) ? parsed.tasks : [])
+            .filter((t: unknown) => isRecord(t) && nonEmptyText(t.title)).slice(0, 50).map((t: any, idx: number) => {
+            const finalStepList = normalizedSteps(t.stepList, t.steps, isUk, `s-chat-gen-${idx}`);
 
             return {
-              title: t.title,
+              title: t.title.trim(),
               phase: allowedTaskPhases.has(t.phase) ? t.phase : primaryTab,
               priority: (t.priority === 1 || t.priority === 2 || t.priority === 3) ? t.priority : 2,
               steps: finalStepList.length,
               stepList: finalStepList,
-              note: t.note || "",
+              note: textOr(t.note),
             };
           });
 
           return res.json({
-            reply: parsed.reply,
-            summary: parsed.reply,
-            insights: parsed.insights || [],
+            reply: textOr(parsed.reply, isUk ? 'Пропозицію сформовано.' : 'Proposal prepared.'),
+            summary: textOr(parsed.reply, isUk ? 'Пропозицію сформовано.' : 'Proposal prepared.'),
+            insights: Array.isArray(parsed.insights) ? parsed.insights.filter(nonEmptyText).slice(0, 10) : [],
             tasks: validatedTasks,
             tabs: validatedTabs,
             ...validateTaskMutations(parsed, [...effectiveActiveTasks, ...effectiveCompletedTasks]),
@@ -428,8 +477,8 @@ Return valid JSON adhering to schema.`;
           actionType: action,
           language: isUk ? "Ukrainian" : "English",
           overview: {
-            totalTasks: effectiveStats.total || (effectiveActiveTasks.length + effectiveCompletedTasks.length),
-            completedCount: effectiveStats.completed || effectiveCompletedTasks.length,
+            totalTasks: effectiveStats.total ?? (effectiveActiveTasks.length + effectiveCompletedTasks.length),
+            completedCount: effectiveStats.completed ?? effectiveCompletedTasks.length,
             completionPercent: effectiveStats.percent ?? 0,
             activeCount: effectiveActiveTasks.length,
             urgentP1Count: effectiveActiveTasks.filter((t: any) => t.priority === 1).length,
@@ -534,7 +583,7 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
 
         if (response && response.text) {
           const rawText = response.text || "{}";
-          const parsed = JSON.parse(rawText);
+          const parsed = cleanAndParseJson(rawText);
 
           const existingTabIds = new Set(activeTabIds);
           const validatedTabs: { id: string; name: string }[] = [];
@@ -554,33 +603,23 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
           }
           const allowedTaskPhases = new Set([...activeTabIds, ...validatedTabs.map((tb) => tb.id)]);
 
-          const validatedTasks = (Array.isArray(parsed.tasks) ? parsed.tasks : []).map((t: any, idx: number) => {
-            const rawStepList = Array.isArray(t.stepList) ? t.stepList : [];
-            const finalStepList = rawStepList.length > 0
-              ? rawStepList.map((s: any, sIdx: number) => ({
-                  id: `s-gen-${idx}-${sIdx}-${Date.now().toString(36)}`,
-                  title: typeof s === "string" ? s : s.title || `Крок ${sIdx + 1}`,
-                  done: false,
-                }))
-              : Array.from({ length: Math.min(50, Math.max(1, Number(t.steps) || 2)) }, (_, sIdx) => ({
-                  id: `s-gen-${idx}-${sIdx}-${Date.now().toString(36)}`,
-                  title: `${isUk ? "Етап" : "Step"} ${sIdx + 1}`,
-                  done: false,
-                }));
+          const validatedTasks = (Array.isArray(parsed.tasks) ? parsed.tasks : [])
+            .filter((t: unknown) => isRecord(t) && nonEmptyText(t.title)).slice(0, 50).map((t: any, idx: number) => {
+            const finalStepList = normalizedSteps(t.stepList, t.steps, isUk, `s-gen-${idx}`);
 
             return {
-              title: t.title,
+              title: t.title.trim(),
               phase: allowedTaskPhases.has(t.phase) ? t.phase : primaryTab,
               priority: (t.priority === 1 || t.priority === 2 || t.priority === 3) ? t.priority : 2,
               steps: finalStepList.length,
               stepList: finalStepList,
-              note: t.note || "",
+              note: textOr(t.note),
             };
           });
 
           return res.json({
-            summary: parsed.summary || (isUk ? "Аналіз та тактичний план сформовано." : "Analysis and tactical plan generated."),
-            insights: parsed.insights || [],
+            summary: textOr(parsed.summary, isUk ? "Аналіз та тактичний план сформовано." : "Analysis and tactical plan generated."),
+            insights: Array.isArray(parsed.insights) ? parsed.insights.filter(nonEmptyText).slice(0, 10) : [],
             tasks: validatedTasks,
             tabs: validatedTabs,
             ...validateTaskMutations(parsed, [...effectiveActiveTasks, ...effectiveCompletedTasks]),
@@ -783,6 +822,8 @@ app.post("/api/ai/assist", assistHandler);
 // Dedicated Single-Task AI Breakdown into Sub-steps Endpoint
 export async function breakdownTaskHandler(req: any, res: any) {
   try {
+    const validationError = requestValidationError(req.body);
+    if (validationError) return res.status(400).json({ error: validationError });
     const rawTask = req.body.task || (req.body.title ? {
       id: req.body.taskId || req.body.id,
       title: req.body.title,
@@ -795,7 +836,7 @@ export async function breakdownTaskHandler(req: any, res: any) {
     const { allTasks = [], tabs = [], lang = "uk", fullAppContext, customApiKey, selectedModel, currentSteps = [] } = req.body;
     const task = rawTask;
 
-    if (!task || !task.title) {
+    if (!isRecord(task) || !nonEmptyText(task.title)) {
       return res.status(400).json({ error: "Task with title is required" });
     }
 
@@ -850,7 +891,7 @@ Return valid JSON adhering to schema.`;
 - Existing Steps: ${JSON.stringify(Array.isArray(currentSteps) ? currentSteps : [])}
 
 APP CONTEXT:
-- Other active tasks: ${JSON.stringify(allTasks.slice(0, 8).map((t: any) => t.title))}
+- Other active tasks: ${JSON.stringify(effectiveAllTasks.slice(0, 8).map((t: any) => t.title))}
 - Available categories: ${JSON.stringify(activeTabIds)}
 - Language: ${isUk ? 'Ukrainian' : 'English'}`,
           config: {
@@ -882,23 +923,18 @@ APP CONTEXT:
         });
 
         if (response && response.text) {
-          const parsed = JSON.parse(response.text || "{}");
-          const rawSteps = Array.isArray(parsed.stepList) ? parsed.stepList : [];
-          const generatedList = rawSteps.map((s: any, idx: number) => ({
-            id: `s-ai-${Date.now()}-${idx}-${Math.random().toString(36).substr(2, 3)}`,
-            title: typeof s === "string" ? s : s.title || `Крок ${idx + 1}`,
-            done: false,
-          }));
-
-          const finalStepCount = generatedList.length > 0 ? generatedList.length : Math.max(2, parsed.steps || 3);
+          const parsed = cleanAndParseJson(response.text || "{}");
+          if (!Array.isArray(parsed.stepList) || !parsed.stepList.some((step: unknown) =>
+            nonEmptyText(step) || (isRecord(step) && nonEmptyText(step.title)))) throw new Error('Invalid generated breakdown');
+          const generatedList = normalizedSteps(parsed.stepList, parsed.steps, isUk, 's-ai', 2, 5);
 
           return res.json({
             taskId: task.id,
-            steps: finalStepCount,
+            steps: generatedList.length,
             stepList: generatedList,
-            note: parsed.note || task.note || "",
-            suggestedPriority: parsed.suggestedPriority || task.priority || 2,
-            explanation: parsed.explanation || (isUk ? "Завдання розбито на послідовні кроки." : "Task broken into sequential steps."),
+            note: textOr(parsed.note, textOr(task.note)),
+            suggestedPriority: priorityOr(parsed.suggestedPriority, priorityOr(task.priority)),
+            explanation: textOr(parsed.explanation, isUk ? "Завдання розбито на послідовні кроки." : "Task broken into sequential steps."),
             source: "gemini",
           });
         }
@@ -925,8 +961,8 @@ APP CONTEXT:
       taskId: task.id,
       steps: fallbackList.length,
       stepList: fallbackList,
-      note: task.note || (isUk ? "Послідовне виконання за етапами" : "Execute step-by-step"),
-      suggestedPriority: task.priority || 2,
+      note: textOr(task.note, isUk ? "Послідовне виконання за етапами" : "Execute step-by-step"),
+      suggestedPriority: priorityOr(task.priority),
       explanation: isUk ? "Завдання розбито на 3 базові етапи." : "Task partitioned into 3 distinct stages.",
       source: "heuristic-engine",
     });
@@ -940,6 +976,8 @@ app.post("/api/ai/breakdown-task", breakdownTaskHandler);
 // AI Dashboard Recommendations & Period Productivity Analysis Endpoint
 export async function recommendationsHandler(req: any, res: any) {
   try {
+    const validationError = requestValidationError(req.body);
+    if (validationError) return res.status(400).json({ error: validationError });
     const {
       tasks = [],
       deletedTasks = [],
@@ -976,18 +1014,20 @@ export async function recommendationsHandler(req: any, res: any) {
     const p2Count = activeTasks.filter((t: any) => t.priority === 2).length;
 
     // Period label humanized
+    const currentYear = new Date().getFullYear();
+    const lastYear = currentYear - 1;
     const periodNames: Record<string, string> = isUk
       ? {
           ALL_TIME: "За весь час",
-          THIS_YEAR: "Цей рік (2026)",
-          LAST_YEAR: "Минулий рік (2025)",
+          THIS_YEAR: `Цей рік (${currentYear})`,
+          LAST_YEAR: `Минулий рік (${lastYear})`,
           THIS_MONTH: "Цей місяць",
           LAST_30_DAYS: "Останні 30 днів",
         }
       : {
           ALL_TIME: "All Time",
-          THIS_YEAR: "This Year (2026)",
-          LAST_YEAR: "Last Year (2025)",
+          THIS_YEAR: `This Year (${currentYear})`,
+          LAST_YEAR: `Last Year (${lastYear})`,
           THIS_MONTH: "This Month",
           LAST_30_DAYS: "Last 30 Days",
         };
@@ -1001,6 +1041,16 @@ export async function recommendationsHandler(req: any, res: any) {
       : isYearPeriod
       ? { S: 150, APlus: 100, A: 60, B: 30 }
       : { S: 30, APlus: 20, A: 12, B: 6 };
+
+    const totalAll = periodMetrics?.totalCreated ?? (tasks.length + deletedTasks.length);
+    const completedAll = periodMetrics?.totalCompleted ?? completedTasks.length;
+    const deletedAll = periodMetrics?.totalDeleted ?? deletedTasks.length;
+    const successRate = periodMetrics?.successRate ?? Math.round(
+      (completedAll / (completedAll + deletedAll || 1)) * 100);
+    const productivityGrade = successRate >= 90 && completedAll >= minDeliveredForGrade.S ? 'S'
+      : successRate >= 80 && completedAll >= minDeliveredForGrade.APlus ? 'A+'
+      : successRate >= 65 && completedAll >= minDeliveredForGrade.A ? 'A'
+      : successRate >= 50 && completedAll >= minDeliveredForGrade.B ? 'B' : 'C';
 
     if (ai) {
       try {
@@ -1099,23 +1149,26 @@ Language: ${isUk ? "Ukrainian" : "English"}.`,
 
         if (response && response.text) {
           const raw = response.text || "{}";
-          const parsed = JSON.parse(raw);
-          const validatedSuggestedTasks = (parsed.suggestedTasks || []).map((st: any) => ({
-            ...st,
+          const parsed = cleanAndParseJson(raw);
+          if (!Array.isArray(parsed.suggestedTasks)) throw new Error('Invalid generated recommendations');
+          const validatedSuggestedTasks = parsed.suggestedTasks
+            .filter((st: unknown) => isRecord(st) && nonEmptyText(st.title)).slice(0, 3).map((st: any) => ({
+            title: st.title.trim(),
             phase: activeTabIds.includes(st.phase) ? st.phase : primaryTab,
-            priority: st.priority === 1 || st.priority === 2 || st.priority === 3 ? st.priority : 2,
-            steps: st.steps >= 1 && st.steps <= 4 ? st.steps : 2,
-            note: st.note || "",
+            priority: priorityOr(st.priority),
+            steps: Number.isInteger(st.steps) && st.steps >= 1 && st.steps <= 3 ? st.steps : 2,
+            note: textOr(st.note),
+            reason: textOr(st.reason),
           }));
 
           return res.json({
-            focusAdvice: parsed.focusAdvice || (isUk ? "Закрийте пріоритетне завдання для імпульсу." : "Finish top priority task for momentum."),
-            optimizationTip: parsed.optimizationTip || (isUk ? "Групуйте дрібні задачі в 25-хвилинні спринти." : "Batch minor tasks in 25-min sprints."),
-            workloadStatus: parsed.workloadStatus || (isUk ? "🎯 ЧІТКИЙ ФОКУС" : "🎯 SHARP FOCUS"),
-            periodRetrospective: parsed.periodRetrospective || "",
-            dropoffAnalysis: parsed.dropoffAnalysis || "",
-            futureStrategy: parsed.futureStrategy || "",
-            productivityGrade: parsed.productivityGrade || "A",
+            focusAdvice: textOr(parsed.focusAdvice, isUk ? "Закрийте пріоритетне завдання для імпульсу." : "Finish top priority task for momentum."),
+            optimizationTip: textOr(parsed.optimizationTip, isUk ? "Групуйте дрібні задачі в 25-хвилинні спринти." : "Batch minor tasks in 25-min sprints."),
+            workloadStatus: textOr(parsed.workloadStatus, isUk ? "🎯 ЧІТКИЙ ФОКУС" : "🎯 SHARP FOCUS"),
+            periodRetrospective: textOr(parsed.periodRetrospective),
+            dropoffAnalysis: textOr(parsed.dropoffAnalysis),
+            futureStrategy: textOr(parsed.futureStrategy),
+            productivityGrade,
             suggestedTasks: validatedSuggestedTasks,
             source: "gemini",
           });
@@ -1132,28 +1185,9 @@ Language: ${isUk ? "Ukrainian" : "English"}.`,
     let periodRetrospective = "";
     let dropoffAnalysis = "";
     let futureStrategy = "";
-    let productivityGrade = "A";
     let suggestedTasks: any[] = [];
 
     const p1Active = activeTasks.find((t: any) => t.priority === 1);
-    const totalAll = (periodMetrics?.totalCreated || (activeTasks.length + completedTasks.length + deletedTasks.length)) || 1;
-    const completedAll = periodMetrics?.totalCompleted ?? completedTasks.length;
-    const deletedAll = periodMetrics?.totalDeleted ?? deletedTasks.length;
-    const successRate = periodMetrics?.successRate ?? Math.round((completedAll / (completedAll + deletedAll || 1)) * 100);
-
-    if (completedAll < minDeliveredForGrade.B) {
-      productivityGrade = "C";
-    } else if (successRate >= 90 && completedAll >= minDeliveredForGrade.S) {
-      productivityGrade = "S";
-    } else if (successRate >= 80 && completedAll >= minDeliveredForGrade.APlus) {
-      productivityGrade = "A+";
-    } else if (successRate >= 65 && completedAll >= minDeliveredForGrade.A) {
-      productivityGrade = "A";
-    } else if (successRate >= 50 && completedAll >= minDeliveredForGrade.B) {
-      productivityGrade = "B";
-    } else {
-      productivityGrade = "C";
-    }
 
     if (completedAll < minDeliveredForGrade.B) {
       workloadStatus = isUk ? "⚠️ НИЗЬКИЙ ОБСЯГ" : "⚠️ LOW VOLUME";

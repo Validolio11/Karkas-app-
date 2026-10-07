@@ -22,3 +22,18 @@ test('deleted task retains countdown state and deletion timestamp', () => {
   assert.equal(value.deletedAt, 50);
   assert.equal(value.countdownRemainingSeconds, 900);
 });
+
+test('active timers including timestamp zero survive cloud serialization', () => {
+  const value = serializeTaskForCloud({ ...task, timerRunning: true, timerStartedAt: 0 });
+  assert.equal(value.timerRunning, true);
+  assert.equal(value.timerStartedAt, 0);
+  assert.equal(value.countdownRemainingSeconds, 900);
+});
+
+test('non-finite timer values are omitted from the cloud payload', () => {
+  const value = serializeTaskForCloud({ ...task, timeSpentSeconds: NaN, timerStartedAt: Infinity,
+    countdownDurationSeconds: Infinity, countdownRemainingSeconds: NaN });
+  for (const key of ['timeSpentSeconds', 'timerStartedAt', 'countdownDurationSeconds', 'countdownRemainingSeconds']) {
+    assert.equal(key in value, false);
+  }
+});

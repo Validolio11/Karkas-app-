@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence, useMotionValue, useTransform } from 'motion/react';
 import { PSTask, TaskTab } from '../types';
@@ -6,6 +6,7 @@ import { sound } from '../utils/audio';
 import { getTaskTotalSeconds, getTaskRemainingSeconds } from '../utils/taskTimer';
 import { Language, TRANSLATIONS } from '../utils/i18n';
 import { AIIcon } from './AIIconTemplates';
+import { useDialogKeyboard } from './useDialogKeyboard';
 import {
   Pin,
   Trash2,
@@ -133,6 +134,9 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
   const [isConfiguringTimer, setIsConfiguringTimer] = useState(false);
   const [countdownMinutes, setCountdownMinutes] = useState('60');
   const [now, setNow] = useState(Date.now());
+  const countdownTriggerRef = useRef<HTMLButtonElement>(null);
+  useDialogKeyboard(isEditingTime, () => setIsEditingTime(false), `task-time-dialog-${task.id}`);
+  useDialogKeyboard(isConfiguringTimer, () => setIsConfiguringTimer(false), `task-countdown-dialog-${task.id}`, countdownTriggerRef);
   const x = useMotionValue(0);
 
   // Live stopwatch interval (only ticks when timer is running)
@@ -152,6 +156,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
   const countdownFinished = hasCountdown && remainingSeconds === 0;
   const timerToggleLabel = task.timerRunning
     ? t.timer.pause
+    : task.done ? (lang === 'uk' ? 'Спершу поверніть завдання в роботу' : 'Reopen the task before starting its timer')
     : countdownFinished ? (lang === 'uk' ? 'Повторити таймер' : 'Restart countdown') : t.timer.start;
   const validCountdownMinutes = Number.isInteger(Number(countdownMinutes))
     && Number(countdownMinutes) >= 1 && Number(countdownMinutes) <= 1440;
@@ -276,7 +281,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
           task.timerRunning
             ? 'border-emerald-500/90 shadow-[0_0_20px_rgba(52,211,153,0.3)] ring-1 ring-emerald-500/50 animate-pulse'
             : task.done
-            ? 'border-neutral-800/80 bg-[#080808]/90 opacity-70'
+            ? 'border-neutral-800/80 bg-[#080808]/90'
             : task.pinned
             ? 'border-neutral-500 shadow-[0_0_15px_rgba(255,255,255,0.05)]'
             : 'border-neutral-800 hover:border-neutral-700'
@@ -427,13 +432,14 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                 <button
                   type="button"
                   id={`task-timer-toggle-${task.id}`}
+                  disabled={task.done && !task.timerRunning}
                   onClick={(e) => {
                     e.stopPropagation();
                     if (onToggleTimer) onToggleTimer(task.id);
                   }}
                   title={timerToggleLabel}
                   aria-label={timerToggleLabel}
-                  className={`p-0.5 transition-transform active:scale-90 flex items-center justify-center ${
+                  className={`min-w-8 min-h-8 transition-transform active:scale-90 flex items-center justify-center disabled:opacity-40 ${
                     task.timerRunning
                       ? 'text-emerald-400 hover:text-emerald-300'
                       : 'text-neutral-400 hover:text-white'
@@ -479,12 +485,14 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   <button
                     type="button"
                     id={`task-timer-configure-${task.id}`}
+                    disabled={task.done}
+                    ref={countdownTriggerRef}
                     onClick={(e) => {
                       e.stopPropagation();
                       setCountdownMinutes(String(Math.max(1, Math.round((task.countdownDurationSeconds || 3600) / 60))));
                       setIsConfiguringTimer(true);
                     }}
-                    title={lang === 'uk' ? 'Налаштувати зворотний відлік' : 'Set countdown'}
+                    title={task.done ? (lang === 'uk' ? 'Спершу поверніть завдання в роботу' : 'Reopen the task before starting its timer') : (lang === 'uk' ? 'Налаштувати зворотний відлік' : 'Set countdown')}
                     aria-label={lang === 'uk' ? 'Налаштувати зворотний відлік' : 'Set countdown'}
                     className="p-1 text-neutral-400 transition-colors hover:text-white"
                   >
@@ -630,21 +638,18 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
             ) : (
               <>
                 <h3
-                  onClick={() => {
-                    sound.slice();
-                    onToggleDone(task.id);
-                  }}
                   className={`text-sm sm:text-base font-bold tracking-tight cursor-pointer leading-relaxed break-words transition-all ${
                     task.done
-                      ? 'line-through text-neutral-500 decoration-neutral-600 decoration-2'
+                      ? 'line-through text-neutral-400 decoration-neutral-600 decoration-2'
                       : 'text-neutral-100 hover:text-white'
                   }`}
                 >
-                  {task.title}
+                  <button type="button" className="w-full text-left [overflow-wrap:anywhere]" aria-pressed={task.done}
+                    onClick={() => { sound.slice(); onToggleDone(task.id); }}>{task.title}</button>
                 </h3>
 
                 {task.note && (
-                  <div className="mt-2 text-sm leading-relaxed break-words font-mono text-neutral-300">
+                  <div className="mt-2 text-sm leading-relaxed break-words [overflow-wrap:anywhere] font-mono text-neutral-300">
                     <span>{task.note}</span>
                   </div>
                 )}
@@ -689,7 +694,12 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                     <button
                       key={i}
                       id={`task-${task.id}-step-${stepNum}`}
-                      onClick={(e) => handleStepClick(e, stepNum)}
+                      onClick={(e) => {
+                        if (hasStepList && onToggleStepItem) {
+                          e.stopPropagation();
+                          handleToggleSubStep(i);
+                        } else handleStepClick(e, stepNum);
+                      }}
                       title={`${t.step} ${stepNum} / ${effectiveStepList.length}`}
                       aria-label={`${t.step} ${stepNum} / ${effectiveStepList.length}`}
                       aria-pressed={isFilled}
@@ -913,6 +923,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
           onKeyDown={(e) => { if (e.key === 'Escape') setIsConfiguringTimer(false); }}
         >
           <form
+            id={`task-countdown-dialog-${task.id}`}
             role="dialog"
             aria-modal="true"
             aria-labelledby={`countdown-title-${task.id}`}
@@ -923,7 +934,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
               onConfigureCountdown(task.id, Number(countdownMinutes) * 60);
               setIsConfiguringTimer(false);
             }}
-            className="flex w-full max-w-sm flex-col gap-4 border border-neutral-800 bg-[#0c0c0e] p-5 font-mono shadow-2xl"
+            className="flex w-full max-w-sm max-h-[90dvh] overflow-y-auto flex-col gap-4 border border-neutral-800 bg-[#0c0c0e] p-5 font-mono shadow-2xl"
           >
             <div className="flex items-center justify-between gap-3">
               <h4 id={`countdown-title-${task.id}`} className="flex items-center gap-2 text-sm font-bold text-neutral-100">
@@ -976,22 +987,23 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
       )}
 
       {/* Time Adjustment Modal */}
-      {isEditingTime && (
+      {isEditingTime && createPortal(
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4"
           onClick={(e) => e.stopPropagation()}
         >
-          <div role="dialog" aria-modal="true" aria-labelledby="edit-time-title" className="flex w-full max-w-sm flex-col gap-4 border border-neutral-800 bg-[#0c0c0e] p-5 font-mono shadow-2xl">
+          <div id={`task-time-dialog-${task.id}`} role="dialog" aria-modal="true" aria-labelledby={`edit-time-title-${task.id}`} className="flex w-full max-w-sm max-h-[90dvh] overflow-y-auto flex-col gap-4 border border-neutral-800 bg-[#0c0c0e] p-5 font-mono shadow-2xl">
             <div className="flex items-center justify-between border-b border-neutral-800/80 pb-2.5">
               <h4 className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-2">
                 <Clock className="w-3.5 h-3.5 text-neutral-400" aria-hidden="true" />
-                <span id="edit-time-title">
+                <span id={`edit-time-title-${task.id}`}>
                 {t.timer.editTitle}
                 </span>
               </h4>
               <button
                 type="button"
                 onClick={() => setIsEditingTime(false)}
+                aria-label={t.timer.cancel}
                 className="inline-flex h-6 w-6 items-center justify-center text-neutral-500 transition-colors hover:bg-neutral-900 hover:text-white"
               >
                 <X className="w-4 h-4" />
@@ -1004,10 +1016,10 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                 <input
                   type="number"
                   min="0"
-                  max="99"
+                  aria-label={t.timer.hours}
                   value={editHours}
                   onChange={(e) => setEditHours(Math.max(0, parseInt(e.target.value) || 0))}
-                  className="bg-transparent px-1 py-1 text-center text-sm font-bold text-white outline-none focus:bg-neutral-900"
+                  className="w-full min-w-0 min-h-11 bg-transparent px-1 py-1 text-center text-sm font-bold text-white outline-none focus:bg-neutral-900"
                 />
               </div>
               <div className="flex flex-col gap-1 bg-[#0c0c0e] p-2">
@@ -1017,8 +1029,9 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   min="0"
                   max="59"
                   value={editMinutes}
+                  aria-label={t.timer.minutes}
                   onChange={(e) => setEditMinutes(Math.max(0, Math.min(59, parseInt(e.target.value) || 0)))}
-                  className="bg-transparent px-1 py-1 text-center text-sm font-bold text-white outline-none focus:bg-neutral-900"
+                  className="w-full min-w-0 min-h-11 bg-transparent px-1 py-1 text-center text-sm font-bold text-white outline-none focus:bg-neutral-900"
                 />
               </div>
               <div className="flex flex-col gap-1 bg-[#0c0c0e] p-2">
@@ -1028,8 +1041,9 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   min="0"
                   max="59"
                   value={editSeconds}
+                  aria-label={t.timer.seconds}
                   onChange={(e) => setEditSeconds(Math.max(0, Math.min(59, parseInt(e.target.value) || 0)))}
-                  className="bg-transparent px-1 py-1 text-center text-sm font-bold text-white outline-none focus:bg-neutral-900"
+                  className="w-full min-w-0 min-h-11 bg-transparent px-1 py-1 text-center text-sm font-bold text-white outline-none focus:bg-neutral-900"
                 />
               </div>
             </div>
@@ -1121,18 +1135,21 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                 type="button"
                 onClick={() => {
                   const newTotal = editHours * 3600 + editMinutes * 60 + editSeconds;
+                  if (!Number.isSafeInteger(newTotal) || newTotal < 0) return;
                   if (onUpdateTimeSpent) {
                     onUpdateTimeSpent(task.id, newTotal);
                   }
                   setIsEditingTime(false);
                 }}
-                className="border border-white bg-white px-4 py-1.5 text-xs font-bold uppercase tracking-wider text-black transition-colors hover:border-neutral-200 hover:bg-neutral-200"
+                disabled={!Number.isSafeInteger(editHours * 3600 + editMinutes * 60 + editSeconds)}
+                className="border border-white bg-white px-4 py-1.5 text-xs font-bold uppercase tracking-wider text-black transition-colors hover:border-neutral-200 hover:bg-neutral-200 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 {t.timer.save}
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

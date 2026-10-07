@@ -5,10 +5,10 @@ import {
   TaskTab,
   DeletedTask,
   WorkflowStats,
-  TaskStepItem,
   AdaptiveProfile,
   AITaskUpdate,
   AIResponse,
+  AITimerSettings,
 } from '../types';
 import { sound } from '../utils/audio';
 import { createVoiceDictation, type VoicePhase } from '../utils/voiceDictation';
@@ -41,6 +41,7 @@ import { loadAIChatHistory, saveAIChatHistory } from '../services/chatHistory';
 import type { PersistedAIChatMessage } from '../services/chatHistory';
 import { getPendingTaskIndexes } from './workflowViewModel';
 import { useDialogKeyboard } from './useDialogKeyboard';
+import { describeAIApplyResult, describeAITimer, getAITimerContext, prepareAITask, type AIApplyResult } from './aiTaskProposal';
 
 interface AIAssistantSheetProps {
   isOpen: boolean;
@@ -54,11 +55,11 @@ interface AIAssistantSheetProps {
   initialPrompt?: string;
   aiIconVariant?: AIIconId;
   onInjectTasks: (
-    newTasks: Omit<PSTask, 'id' | 'currentStep' | 'done' | 'pinned' | 'createdAt'>[],
+    newTasks: (Omit<PSTask, 'id' | 'currentStep' | 'done' | 'pinned' | 'createdAt'> & AITimerSettings)[],
     newTabs?: TaskTab[],
     taskUpdates?: AITaskUpdate[],
     deletedTaskIds?: string[],
-  ) => void;
+  ) => AIApplyResult;
   accountId?: string | null;
 }
 
@@ -94,6 +95,11 @@ const parseChatOptions = (content: string): { body: string; options: AIChatOptio
 const isChatModel = (model: string) => {
   const name = model.toLowerCase();
   return name.includes('gemini') && !/(embedding|image|tts|transcrib|robotics|computer-use)/.test(name);
+};
+
+const TimerProposal: React.FC<{ settings: AITimerSettings; lang: Language }> = ({ settings, lang }) => {
+  const description = describeAITimer(settings, lang);
+  return description ? <div className="mt-1 text-xs text-sky-300 whitespace-normal">{description}</div> : null;
 };
 
 export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
@@ -162,6 +168,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   const [mode, setMode] = useState<AIMode>('chat');
   const [loading, setLoading] = useState(false);
   const [response, setResponse] = useState<AIResponse | null>(null);
+  const [applyNotice, setApplyNotice] = useState<string | null>(null);
+  const [responsePartlyRejected, setResponsePartlyRejected] = useState(false);
   const [chatMessages, setChatMessages] = useState<AIChatMessage[]>(() => loadAIChatHistory(accountId));
   const hydratedAccountRef = useRef(accountId);
   const skipPersistRef = useRef(false);
@@ -282,6 +290,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     setPendingChatUpdates([]);
     setPendingChatDeletions([]);
     setResponse(null);
+    setApplyNotice(null);
+    setResponsePartlyRejected(false);
     injectedIdsRef.current = [];
     appliedUpdateIdsRef.current = [];
     appliedTabIdsRef.current.clear();
@@ -351,30 +361,10 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     if (pendingChangeCount === 0 || pendingChatConfirmed.current) return;
     pendingChatConfirmed.current = true;
 
-    const tasks = (pendingChatTasks || []).map((task) => {
-      const stepItems = task.stepList?.map((step, index) => ({
-        id: `s-chat-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`,
-        title: typeof step === 'string' ? step : step.title,
-        done: false,
-      }));
+    const tasks = (pendingChatTasks || []).map(task => prepareAITask(task,
+      index => `s-chat-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`));
 
-      return {
-        title: task.title,
-        phase: task.phase,
-        priority: task.priority,
-        steps: stepItems?.length || task.steps || 1,
-        stepList: stepItems,
-        note: task.note,
-      };
-    });
-
-    onInjectTasks(tasks, pendingChatTabs, pendingChatUpdates, pendingChatDeletions);
-    
-    const summaryParts: string[] = [];
-    if (tasks.length > 0) summaryParts.push(lang === 'uk' ? `завдань створено: ${tasks.length}` : `tasks created: ${tasks.length}`);
-    if (pendingChatTabs.length > 0) summaryParts.push(lang === 'uk' ? `вкладок додано: ${pendingChatTabs.length}` : `tabs added: ${pendingChatTabs.length}`);
-    if (pendingChatUpdates.length > 0) summaryParts.push(lang === 'uk' ? `завдань оновлено: ${pendingChatUpdates.length}` : `tasks updated: ${pendingChatUpdates.length}`);
-    if (pendingChatDeletions.length > 0) summaryParts.push(lang === 'uk' ? `завдань видалено: ${pendingChatDeletions.length}` : `tasks deleted: ${pendingChatDeletions.length}`);
+    const result = onInjectTasks(tasks, pendingChatTabs, pendingChatUpdates, pendingChatDeletions);
 
     setPendingChatTasks([]);
     setPendingChatTabs([]);
@@ -385,7 +375,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       ...previous,
       {
         role: 'assistant',
-        content: lang === 'uk' ? `Готово. Зміни успішно застосовано (${summaryParts.join(', ')}).` : `Done. Changes applied (${summaryParts.join(', ')}).`,
+        content: describeAIApplyResult(result, lang),
       },
     ]);
     sound.activate();
@@ -420,6 +410,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
 
     if (!requestText) return;
     if (requestInFlight.current) return;
+    setApplyNotice(null);
     const generation = requestGeneration.current;
 
     const savedApiKey = localStorage.getItem('karkas_custom_api_key') || '';
@@ -507,6 +498,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     requestInFlight.current = true;
     setLoading(true);
     setResponse(null);
+    setResponsePartlyRejected(false);
     injectedIdsRef.current = [];
     appliedUpdateIdsRef.current = [];
     appliedTabIdsRef.current.clear();
@@ -544,7 +536,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
           lang,
           tabs: tabs.map((tb) => tb.id),
           adaptiveProfile,
-          currentTasks,
+          currentTasks: currentTasks.map(task => ({ ...task, ...getAITimerContext(task) })),
           conversation: currentMode === 'chat' ? chatMessages.slice(-10) : undefined,
           pendingChanges: currentMode === 'chat' ? {
             tasks: pendingChatTasks, tabs: pendingChatTabs,
@@ -562,13 +554,12 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
               priority: t.priority,
               currentStep: t.currentStep,
               steps: t.steps,
-              timeSpentSeconds: t.timeSpentSeconds || 0,
               createdAt: t.createdAt,
-              timerRunning: Boolean(t.timerRunning),
+              ...getAITimerContext(t),
               stepList: t.stepList || [],
               note: t.note,
             })),
-            completedTasks: doneList,
+            completedTasks: doneList.map(task => ({ ...task, ...getAITimerContext(task) })),
             deletedTasks: deletedTasks.slice(0, 15).map((t) => ({
               id: t.id,
               title: t.title,
@@ -706,70 +697,42 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     if (!taskList.length && !tabList.length && !updateList.length && !deleteList.length) return;
     sound.activate();
 
-    const formattedTasks = taskList.map((task) => {
-      const stepItems: TaskStepItem[] | undefined = task.stepList && task.stepList.length > 0
-        ? task.stepList.map((st, idx) => ({
-            id: `s-${Date.now()}-${idx}-${Math.random().toString(36).substr(2, 4)}`,
-            title: typeof st === 'string' ? st : st.title,
-            done: false,
-          }))
-        : undefined;
-
-      return {
-        title: task.title,
-        phase: task.phase,
-        priority: task.priority,
-        steps: stepItems ? stepItems.length : (task.steps || 1),
-        stepList: stepItems,
-        note: task.note,
-      };
-    });
+    const formattedTasks = taskList.map(task => prepareAITask(task,
+      index => `s-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`));
 
     injectedIdsRef.current = (response.tasks || []).map((_, i) => i);
     appliedUpdateIdsRef.current = (response.taskUpdates || []).map((u) => u.id);
     tabList.forEach(tab => appliedTabIdsRef.current.add(tab.id));
     deleteList.forEach(id => appliedDeletionIdsRef.current.add(id));
-    onInjectTasks(formattedTasks, tabList, updateList, deleteList);
+    const result = onInjectTasks(formattedTasks, tabList, updateList, deleteList);
+    setApplyNotice(describeAIApplyResult(result, lang));
+    setResponsePartlyRejected(result.rejected > 0);
     setInjectedIds(injectedIdsRef.current);
     setAppliedUpdateIds(appliedUpdateIdsRef.current);
-    closeAfterInject.current = setTimeout(() => {
+    if (!result.rejected) closeAfterInject.current = setTimeout(() => {
       onClose();
     }, 500);
   };
 
   const handleInjectSingle = (task: NonNullable<AIResponse['tasks']>[0], index: number) => {
     if (injectedIdsRef.current.includes(index)) return;
-    injectedIdsRef.current = [...injectedIdsRef.current, index];
     sound.tick(600);
-    const stepItems: TaskStepItem[] | undefined = task.stepList && task.stepList.length > 0
-      ? task.stepList.map((st, idx) => ({
-          id: `s-${Date.now()}-${idx}-${Math.random().toString(36).substr(2, 4)}`,
-          title: typeof st === 'string' ? st : st.title,
-          done: false,
-        }))
-      : undefined;
-
     const tabList: TaskTab[] = (response?.tabs || []).filter(tab => !appliedTabIdsRef.current.has(tab.id)).map((t) => ({ id: t.id, name: t.name, color: t.color || '#6366f1' }));
-    tabList.forEach(tab => appliedTabIdsRef.current.add(tab.id));
-
-    onInjectTasks([
-      {
-        title: task.title,
-        phase: task.phase,
-        priority: task.priority,
-        steps: stepItems ? stepItems.length : (task.steps || 1),
-        stepList: stepItems,
-        note: task.note,
-      },
+    const result = onInjectTasks([
+      prepareAITask(task, stepIndex => `s-${Date.now()}-${stepIndex}-${Math.random().toString(36).slice(2, 6)}`),
     ], tabList);
+    setApplyNotice(describeAIApplyResult(result, lang));
+    if (result.created) injectedIdsRef.current = [...injectedIdsRef.current, index];
+    if (result.tabs) tabList.forEach(tab => appliedTabIdsRef.current.add(tab.id));
     setInjectedIds(injectedIdsRef.current);
   };
 
   const handleApplySingleUpdate = (update: AITaskUpdate) => {
     if (appliedUpdateIdsRef.current.includes(update.id)) return;
-    appliedUpdateIdsRef.current = [...appliedUpdateIdsRef.current, update.id];
     sound.tick(650);
-    onInjectTasks([], [], [update], []);
+    const result = onInjectTasks([], [], [update], []);
+    setApplyNotice(describeAIApplyResult(result, lang));
+    if (result.updated) appliedUpdateIdsRef.current = [...appliedUpdateIdsRef.current, update.id];
     setAppliedUpdateIds(appliedUpdateIdsRef.current);
   };
 
@@ -1032,11 +995,14 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                           </div>
                           <div className="space-y-1">
                             {pendingChatTasks.map((t, idx) => (
-                              <div key={idx} className="bg-black/60 border border-neutral-800 p-2 text-xs flex items-center justify-between gap-2">
-                                <div className="flex items-center gap-2 truncate">
-                                  <span className="text-[9px] text-emerald-400 font-bold">P{t.priority}</span>
-                                  <span className="text-neutral-200 truncate">{t.title}</span>
-                                  <span className="text-[10px] text-neutral-500">[{t.phase}]</span>
+                              <div key={idx} className="bg-black/60 border border-neutral-800 p-2 text-xs flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="text-[9px] text-emerald-400 font-bold">P{t.priority}</span>
+                                    <span className="text-neutral-200 break-words">{t.title}</span>
+                                    <span className="text-[10px] text-neutral-500">[{t.phase}]</span>
+                                  </div>
+                                  <TimerProposal settings={t} lang={lang} />
                                 </div>
                                 <span className="text-[10px] text-neutral-400 shrink-0">{t.steps} {lang === 'uk' ? 'кроків' : 'steps'}</span>
                               </div>
@@ -1064,9 +1030,10 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                               const existing = currentTasks.find((ct) => ct.id === u.id);
                               return (
                                 <div key={idx} className="bg-black/60 border border-neutral-800 p-2 text-xs flex items-center justify-between gap-2">
-                                  <div className="truncate">
+                                  <div className="min-w-0 break-words">
                                     <span className="text-neutral-400">{existing?.title || u.id} → </span>
-                                    <span className="text-amber-300 font-bold">{u.title || (u.priority ? `P${u.priority}` : u.note || 'Змінено')}</span>
+                                    <span className="text-amber-300 font-bold">{u.title || (u.priority ? `P${u.priority}` : u.note || (lang === 'uk' ? 'Зміна параметрів' : 'Settings update'))}</span>
+                                    <TimerProposal settings={u} lang={lang} />
                                   </div>
                                 </div>
                               );
@@ -1085,6 +1052,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   {keyStatus}
                 </div>
               )}
+
+              {applyNotice && <div role="status" aria-live="polite" className="border border-neutral-800 bg-[#111116] p-3 text-xs leading-relaxed text-neutral-200">{applyNotice}</div>}
 
               {loading && (
                 <div role="status" aria-live="polite" className="p-8 border border-neutral-800 bg-black/40 flex flex-col items-center justify-center gap-3 text-center">
@@ -1258,6 +1227,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                               <div className="space-y-0.5 text-xs">
                                 <div className="text-neutral-400 line-through text-[11px]">{existing?.title || up.id}</div>
                                 <div className="text-white font-bold">{up.title || existing?.title}</div>
+                                <TimerProposal settings={up} lang={lang} />
                                 {up.stepList !== undefined && <div className="text-neutral-300">
                                   {lang === 'uk' ? 'Підзавдання після зміни' : 'Subtasks after update'}: {up.stepList.length}
                                   {up.stepList.map((step, index) => <div key={step.id || index}>{step.done ? '?' : '?'} {step.title}</div>)}
@@ -1275,7 +1245,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                                     : 'border-amber-700 text-amber-300 hover:border-white hover:text-white bg-amber-950/30'
                                 }`}
                               >
-                                {isApplied ? t.aiSheet.added : (lang === 'uk' ? 'Застосувати' : 'Apply')}
+                                {isApplied ? (responsePartlyRejected ? (lang === 'uk' ? 'Опрацьовано' : 'Processed') : t.aiSheet.added) : (lang === 'uk' ? 'Застосувати' : 'Apply')}
                               </button>
                             </div>
                           );
@@ -1334,6 +1304,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                                     // {task.note}
                                   </span>
                                 )}
+                                <TimerProposal settings={task} lang={lang} />
                               </div>
 
                               <button
@@ -1346,7 +1317,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                                     : 'border-neutral-700 text-neutral-300 hover:border-white hover:text-white bg-neutral-900'
                                 }`}
                               >
-                                {isInjected ? t.aiSheet.added : t.aiSheet.injectSingle}
+                                {isInjected ? (responsePartlyRejected ? (lang === 'uk' ? 'Опрацьовано' : 'Processed') : t.aiSheet.added) : t.aiSheet.injectSingle}
                               </button>
                             </div>
 

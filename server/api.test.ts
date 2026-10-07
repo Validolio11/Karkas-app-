@@ -116,6 +116,19 @@ test("offline assistance retains user categories and consistent substep counts",
   }
 });
 
+test('offline timer requests never pretend to edit or generate replacement tasks', async () => {
+  for (const action of ['chat', 'generate', 'analyze']) {
+    const result = await post('assist', { prompt: 'Додай таймер на 25 хвилин для референсів', action, lang: 'uk' });
+    assert.equal(result.status, 200);
+    assert.equal(result.data.source, 'local-timer-fallback');
+    assert.deepEqual(result.data.tasks, []);
+    assert.deepEqual(result.data.taskUpdates, []);
+    assert.deepEqual(result.data.taskDeletions, []);
+    assert.match(result.data.reply, /недоступний/);
+    assert.match(result.data.reply, /не змінено/);
+  }
+});
+
 test("offline breakdown accepts the flat title request and repairs invalid priority", async () => {
   const result = await post("breakdown-task", { taskId: "task-1", title: "Finish draft", lang: "en", priority: 99 });
   assert.equal(result.status, 200);

@@ -14,12 +14,20 @@ export const getSavedAIIconId = (): AIIconId => 't1';
 
 /** One canonical AI mark across every Karkas surface. */
 export const AIIcon: React.FC<AIIconProps> = ({ className = 'w-4 h-4', style }) => (
-  <img
-    src="/icons-ai.png?v=karkas-ai-icon-1"
-    alt=""
+  <span
     aria-hidden="true"
-    draggable={false}
-    className={`inline-block shrink-0 object-contain ${className}`}
-    style={style}
+    className={`inline-block shrink-0 ${className}`}
+    style={{
+      backgroundColor: 'currentColor',
+      maskImage: 'url("/icons-ai.svg?v=karkas-ai-icon-2")',
+      WebkitMaskImage: 'url("/icons-ai.svg?v=karkas-ai-icon-2")',
+      maskSize: 'contain',
+      WebkitMaskSize: 'contain',
+      maskPosition: 'center',
+      WebkitMaskPosition: 'center',
+      maskRepeat: 'no-repeat',
+      WebkitMaskRepeat: 'no-repeat',
+      ...style,
+    }}
   />
 );

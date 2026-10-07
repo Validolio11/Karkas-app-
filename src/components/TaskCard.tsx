@@ -19,6 +19,7 @@ import {
   LoaderCircle,
   Play,
   Pause,
+  Square,
   RotateCcw,
   Timer,
   Clock,
@@ -46,6 +47,7 @@ interface TaskCardProps {
   onAIBreakdown?: (taskId: string) => void;
   isBreakingDown?: boolean;
   onToggleTimer?: (taskId: string) => void;
+  onStopTimer?: (taskId: string) => void;
   onResetTimer?: (taskId: string) => void;
   onUpdateTimeSpent?: (taskId: string, newTotalSeconds: number) => void;
   onConfigureCountdown?: (taskId: string, seconds: number) => void;
@@ -116,6 +118,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
   onAIBreakdown,
   isBreakingDown = false,
   onToggleTimer,
+  onStopTimer,
   onResetTimer,
   onUpdateTimeSpent,
   onConfigureCountdown,
@@ -566,7 +569,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
             )}
           </div>
 
-          {timerMode !== 'none' && (
+          {(timerMode !== 'none' || task.timerRunning) && (
             <section id={`task-timer-widget-${task.id}`}
               aria-label={lang === 'uk' ? 'Час завдання' : 'Task time'}
               className={`min-w-0 border p-3 sm:p-4 font-mono ${task.timerRunning
@@ -588,9 +591,9 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   </p>}
                 </div>
                 <p role="status" className={`text-xs leading-relaxed ${task.timerRunning ? 'text-emerald-300' : countdownFinished ? 'text-amber-300' : 'text-neutral-400'}`}>
-                  {task.done ? (lang === 'uk' ? 'Завершено' : 'Completed')
+                  {task.timerRunning ? (lang === 'uk' ? 'Таймер працює' : 'Timer running')
+                    : task.done ? (lang === 'uk' ? 'Завершено' : 'Completed')
                     : countdownFinished ? (lang === 'uk' ? 'Час вийшов · завершіть завдання, коли будете готові' : 'Time is up · complete the task when ready')
-                    : task.timerRunning ? (lang === 'uk' ? 'Таймер працює' : 'Timer running')
                     : hasStarted ? (lang === 'uk' ? 'На паузі' : 'Paused') : (lang === 'uk' ? 'Готовий до початку' : 'Ready to start')}
                 </p>
               </div>
@@ -602,7 +605,17 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                 <div style={{ width: `${countdownProgress}%` }} className={`h-full transition-[width] duration-500 ${countdownFinished ? 'bg-amber-400' : 'bg-emerald-400'}`} />
               </div>}
               <div className="mt-3 flex flex-wrap items-center gap-2">
-                {hasStarted && !task.done && onToggleTimer && <button
+                {task.timerRunning && onStopTimer && <button
+                  type="button" id={`task-timer-stop-${task.id}`}
+                  title={lang === 'uk'
+                    ? 'Зупинити зі збереженням витраченого часу й залишку. Можна продовжити пізніше.'
+                    : 'Stop and keep time spent and remaining time. You can resume later.'}
+                  onClick={(e) => { e.stopPropagation(); onStopTimer(task.id); }}
+                  className="inline-flex min-h-11 items-center justify-center gap-2 border border-neutral-600 px-3 py-2 text-sm font-bold text-neutral-100 transition-colors hover:border-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
+                  <Square className="h-4 w-4" aria-hidden="true" />
+                  {lang === 'uk' ? 'Зупинити' : 'Stop'}
+                </button>}
+                {(task.timerRunning || (hasStarted && !task.done)) && onToggleTimer && !(task.timerRunning && onStopTimer) && <button
                   type="button" id={`task-timer-toggle-${task.id}`}
                   onClick={(e) => { e.stopPropagation(); onToggleTimer(task.id); }}
                   className="inline-flex min-h-11 items-center justify-center gap-2 border border-neutral-600 px-3 py-2 text-sm font-bold text-neutral-100 transition-colors hover:border-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">

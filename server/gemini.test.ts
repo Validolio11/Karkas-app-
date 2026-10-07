@@ -24,6 +24,19 @@ before(async () => {
         const properties = config.responseSchema.properties;
         let result;
         if (properties.tasks) {
+          if (contents.includes('timer-case-')) {
+            if (!properties.tasks.items.properties.timerMode || !properties.taskUpdates.items.properties.timerAction) throw new Error('Missing timer schema');
+            if (config.systemInstruction.includes('control timers, or change app settings')) throw new Error('Timers still forbidden');
+            if (contents.includes('timer-case-create')) {
+              result = { reply: 'Timer proposed', summary: 'Timer proposed', tasks: [{ title: 'References', phase: 'focus', priority: 2, steps: 0, timerMode: 'countdown', countdownDurationSeconds: 1500 }] };
+            } else if (contents.includes('timer-case-invalid')) {
+              result = { reply: 'Timer proposed', summary: 'Timer proposed', tasks: [], taskUpdates: [{ id: 'parent', timerMode: 'countdown', countdownDurationSeconds: 0 }] };
+            } else {
+              if (!contents.includes('countdownRemainingSeconds') || !contents.includes('timerMode')) throw new Error('Missing timer context');
+              result = { reply: 'Stop proposed', summary: 'Stop proposed', tasks: [], taskUpdates: [{ id: 'parent', timerAction: 'stop' }] };
+            }
+            return { text: JSON.stringify(result) };
+          }
           const marker = 'WORKSPACE REAL-TIME CONTEXT:';
           const context = JSON.parse(contents.slice(contents.indexOf(marker) + marker.length));
           result = { summary: { invalid: true }, insights: {}, tasks: [null,
@@ -68,6 +81,36 @@ before(async () => {
       if (output.includes("server running")) { clearTimeout(timer); done(); }
     });
   });
+});
+
+test('chat and planning preserve configured countdown on newly generated tasks', async () => {
+  for (const action of ['chat', 'generate']) {
+    const data = await post('assist', { prompt: 'timer-case-create timer 25 minutes', action, tabs: ['focus'], lang: 'en' });
+    assert.equal(data.source, action === 'chat' ? 'gemini-chat' : 'gemini');
+    assert.equal(data.tasks[0].timerMode, 'countdown');
+    assert.equal(data.tasks[0].countdownDurationSeconds, 1500);
+    assert.equal(data.tasks[0].timerAction, undefined);
+    assert.equal(data.tasks[0].timerRunning, undefined);
+  }
+});
+
+test('AI receives current timer context and returns an explicit existing-task stop', async () => {
+  for (const action of ['chat', 'generate']) {
+    const data = await post('assist', { prompt: 'timer-case-stop timer', action, tabs: ['focus'], fullAppContext: { activeTasks: [{ id: 'parent', title: 'References', timerMode: 'countdown', countdownDurationSeconds: 1500, countdownRemainingSeconds: 900, timerRunning: true }] } });
+    assert.equal(data.source, action === 'chat' ? 'gemini-chat' : 'gemini');
+    assert.deepEqual(data.tasks, []);
+    assert.deepEqual(data.taskUpdates, [{ id: 'parent', timerAction: 'stop' }]);
+  }
+});
+
+test('invalid model timer configuration gives an honest empty proposal', async () => {
+  for (const action of ['chat', 'generate']) {
+    const data = await post('assist', { prompt: 'timer-case-invalid timer', action, tabs: ['focus'], currentTasks: [{ id: 'parent', title: 'References' }], lang: 'en' });
+    assert.equal(data.source, 'invalid-ai-proposal');
+    assert.deepEqual(data.tasks, []);
+    assert.deepEqual(data.taskUpdates, []);
+    assert.match(data.reply, /No changes were prepared or applied/);
+  }
 });
 
 after(async () => {

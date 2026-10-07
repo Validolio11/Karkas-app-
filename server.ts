@@ -1,5 +1,5 @@
 import express from "express";
-import { taskMutationProperties, taskActionInstructions, validateTaskMutations } from "./server/aiActions";
+import { taskMutationProperties, taskTimerProperties, taskActionInstructions, validateTaskMutations, validatedTimerFields } from "./server/aiActions";
 import path from "path";
 import dotenv from "dotenv";
 import { GoogleGenAI, Modality, Type } from "@google/genai";
@@ -292,6 +292,8 @@ export async function assistHandler(req: any, res: any) {
     const primaryTab = activeTabIds[0] || "focus";
 
     const isTabCreationRequested = allowNewTabs || /(?:вкладк|категорі|розділ|напрямок|проєкт|проект|секці|tab|category|section|project)/iu.test(prompt);
+    const isTimerRequest = /(?:таймер|секундомір|відлік|timer|stopwatch|countdown)/iu.test(prompt);
+    let rejectedProposal = false;
 
     if (ai && action === "chat") {
       try {
@@ -314,6 +316,11 @@ ${JSON.stringify({
             stepList: t.stepList || [],
             note: t.note || '',
             timerRunning: !!t.timerRunning,
+            timerMode: t.timerMode ?? (t.countdownDurationSeconds > 0 ? 'countdown' : 'stopwatch'),
+            countdownDurationSeconds: t.countdownDurationSeconds ?? null,
+            countdownRemainingSeconds: t.countdownRemainingSeconds ?? null,
+            timeSpentSeconds: t.timeSpentSeconds || 0,
+            done: !!t.done,
           })),
           completedTasksCount: effectiveCompletedTasks.length,
           completedTasks: effectiveCompletedTasks,
@@ -324,7 +331,7 @@ ${JSON.stringify({
 
 INSTRUCTIONS:
 1. Provide a natural, concise, empowering conversational "reply".
-2. If the user asks to create, plan, add, break down, edit, update, rename, or delete tasks or tabs, YOU MUST ALSO POPULATE the structured JSON fields ("tasks", "tabs", "taskUpdates", "taskDeletions").
+2. If the user asks to create, plan, add, break down, edit, update, rename, delete tasks or tabs, or configure/start/pause/stop timers, YOU MUST ALSO POPULATE the structured JSON fields ("tasks", "tabs", "taskUpdates", "taskDeletions").
 3. "tasks": New tasks to create. Each task must have:
    - "title": Actionable concise title
    - "phase": One of available tab IDs: ${JSON.stringify(activeTabIds)} or a newly defined tab ID
@@ -333,7 +340,7 @@ INSTRUCTIONS:
    - "stepList": Array of sequential sub-steps with "title"
    - "note": Short tactical note
 4. "tabs": Create only when explicitly requested. Each with "id" (lowercase ASCII slug) and "name".
-5. "taskUpdates": Edits to existing tasks matching their "id" (e.g. updating title, priority, phase, note, done, or stepList).
+5. "taskUpdates": Edits to existing tasks matching their "id" (e.g. updating title, priority, phase, note, done, stepList, timerMode, countdownDurationSeconds, or timerAction).
 6. "taskDeletions": Tasks to delete/archive by their "id".
 7. Return strictly valid JSON adhering to schema.`;
 
@@ -360,6 +367,7 @@ INSTRUCTIONS:
                       priority: { type: Type.INTEGER },
                       steps: { type: Type.INTEGER },
                       note: { type: Type.STRING },
+                      ...taskTimerProperties,
                       stepList: {
                         type: Type.ARRAY,
                         items: {
@@ -395,6 +403,7 @@ INSTRUCTIONS:
         });
 
         if (chatResponse?.text) {
+          rejectedProposal = true;
           const parsed = cleanAndParseJson(chatResponse.text || "{}");
           const existingTabIds = new Set(activeTabIds);
           const validatedTabs: { id: string; name: string }[] = [];
@@ -425,6 +434,7 @@ INSTRUCTIONS:
               steps: finalStepList.length,
               stepList: finalStepList,
               note: textOr(t.note),
+              ...validatedTimerFields(t),
             };
           });
 
@@ -495,6 +505,10 @@ Return valid JSON adhering to schema.`;
             note: t.note || "",
             timerRunning: !!t.timerRunning,
             timeSpentSeconds: t.timeSpentSeconds || 0,
+            timerMode: t.timerMode ?? (t.countdownDurationSeconds > 0 ? 'countdown' : 'stopwatch'),
+            countdownDurationSeconds: t.countdownDurationSeconds ?? null,
+            countdownRemainingSeconds: t.countdownRemainingSeconds ?? null,
+            done: !!t.done,
           })),
           completedTasks: effectiveCompletedTasks,
         };
@@ -525,6 +539,7 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
                       priority: { type: Type.INTEGER },
                       steps: { type: Type.INTEGER },
                       note: { type: Type.STRING },
+                      ...taskTimerProperties,
                       stepList: {
                         type: Type.ARRAY,
                         items: {
@@ -582,6 +597,7 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
         });
 
         if (response && response.text) {
+          rejectedProposal = true;
           const rawText = response.text || "{}";
           const parsed = cleanAndParseJson(rawText);
 
@@ -614,6 +630,7 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
               steps: finalStepList.length,
               stepList: finalStepList,
               note: textOr(t.note),
+              ...validatedTimerFields(t),
             };
           });
 
@@ -638,12 +655,19 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
       }
     }
 
+    if (rejectedProposal || isTimerRequest) {
+      const reply = rejectedProposal
+        ? (isUk ? 'AI повернув некоректну пропозицію. Зміни не підготовлено й не застосовано. Уточніть завдання, тривалість і потрібну дію та спробуйте ще раз.' : 'AI returned an invalid proposal. No changes were prepared or applied. Clarify the task, duration and action, then retry.')
+        : (isUk ? 'AI зараз недоступний. Таймери й завдання не змінено. Перевірте з’єднання та ключ API й повторіть запит або налаштуйте таймер на картці завдання.' : 'AI is unavailable. Tasks and timers were not changed. Check your connection and API key, then retry or configure the timer on the task card.');
+      return res.json({ reply, summary: reply, tasks: [], tabs: [], taskUpdates: [], taskDeletions: [], source: rejectedProposal ? 'invalid-ai-proposal' : 'local-timer-fallback' });
+    }
+
     if (action === "chat") {
       const activeCount = effectiveActiveTasks.length;
       const completedCount = effectiveCompletedTasks.length;
       return res.json({
         reply: isUk
-          ? `У черзі ${activeCount} активних задач і ${completedCount} завершених. Напишіть конкретну дію (напр. «додай задачу X», «створи вкладку Y», «проаналізуй мої задачі»).`
+          ? `AI зараз недоступний. Зміни не підготовлено й не застосовано. Перевірте з’єднання та ключ API й повторіть запит. У черзі ${activeCount} активних задач і ${completedCount} завершених.`
           : `AI is unavailable. No changes were prepared or applied. Check your connection and API key, then retry.`,
         source: "local-chat-fallback",
       });

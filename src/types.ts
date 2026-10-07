@@ -16,6 +16,12 @@ export interface TaskStepItem {
 
 export type TimerMode = 'none' | 'stopwatch' | 'countdown';
 
+export interface AITimerSettings {
+  timerMode?: TimerMode;
+  countdownDurationSeconds?: number;
+  timerAction?: 'start' | 'pause' | 'stop';
+}
+
 export interface PSTask {
   id: string;
   title: string;
@@ -89,7 +95,7 @@ export interface SuggestedTask {
   reason?: string;
 }
 
-export interface AITaskUpdate {
+export interface AITaskUpdate extends AITimerSettings {
   id: string;
   title?: string;
   phase?: string;
@@ -109,14 +115,14 @@ export interface AIResponse {
   summary: string;
   insights?: string[];
   reply?: string;
-  tasks?: {
+  tasks?: (AITimerSettings & {
     title: string;
     phase: string;
     priority: 1 | 2 | 3;
     steps: number;
     stepList?: { id?: string; title: string; done?: boolean }[];
     note?: string;
-  }[];
+  })[];
   tabs?: {
     id: string;
     name: string;

@@ -1,5 +1,6 @@
 import { completeTask, materializeStepList, reopenTask, setTaskSteps } from './taskOperations';
 import type { AITaskUpdate, PSTask, TaskStepItem } from '../types';
+import { applyAITimerSettings } from './aiTaskTimer';
 
 /** Apply only supported AI fields; stepList is the complete replacement checklist. */
 export function applyAITaskUpdate(
@@ -63,5 +64,6 @@ export function applyAITaskUpdate(
     }
   }
   const edited = replacement ? setTaskSteps(next, next.stepList!, now) : next;
-  return hasDone ? (update.done ? completeTask(edited, now) : reopenTask(edited, now)) : edited;
+  const completed = hasDone ? (update.done ? completeTask(edited, now) : reopenTask(edited, now)) : edited;
+  return applyAITimerSettings(completed, update, now);
 }

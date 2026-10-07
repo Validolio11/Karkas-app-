@@ -1,7 +1,8 @@
 import { pauseTaskTimer, startTaskTimer, configureTaskCountdown, clearTaskCountdown } from './utils/taskTimer';
 import { applyAITaskUpdate } from './utils/aiTaskUpdates';
+import { applyAITimerSettings, isAITimerSettingsValid } from './utils/aiTaskTimer';
 import React, { useState, useEffect, useMemo } from 'react';
-import { PSTask, DeletedTask, TaskTab, FilterMode, WorkflowStats, TaskStepItem, AdaptiveProfile, AITaskUpdate, NotepadNote, NewTaskInput } from './types';
+import { PSTask, DeletedTask, TaskTab, FilterMode, WorkflowStats, TaskStepItem, AdaptiveProfile, AITaskUpdate, AITimerSettings, NotepadNote, NewTaskInput } from './types';
 import { TaskCard } from './components/TaskCard';
 import { DashboardView } from './components/DashboardView';
 import { NotepadView } from './components/NotepadView';
@@ -1430,6 +1431,11 @@ export default function App() {
     setTasks(previous => previous.map(task => task.id === id && !task.done ? configureTaskCountdown(task, seconds, now) : task));
   };
 
+  const handleStopTimer = (id: string) => {
+    const now = Date.now();
+    setTasks(previous => previous.map(task => task.id === id ? pauseTaskTimer(task, now) : task));
+  };
+
   const handleClearCountdown = (id: string) => {
     const now = Date.now();
     setTasks(previous => previous.map(task => task.id === id ? clearTaskCountdown(task, now) : task));
@@ -1594,11 +1600,12 @@ export default function App() {
   };
 
   const handleInjectAITasks = (
-    newTasks: Omit<PSTask, 'id' | 'currentStep' | 'done' | 'pinned' | 'createdAt'>[] = [],
+    newTasks: (Omit<PSTask, 'id' | 'currentStep' | 'done' | 'pinned' | 'createdAt'> & AITimerSettings)[] = [],
     requestedTabs: TaskTab[] = [],
     taskUpdates: AITaskUpdate[] = [],
     deletedTaskIds: string[] = [],
   ) => {
+    const currentTaskIds = new Set(latestTasksRef.current.map(task => task.id));
     const knownIds = new Set(tabs.map((tab) => tab.id));
     const knownNames = new Set(tabs.map((tab) => tab.name.trim().toLocaleLowerCase()));
     const tabsToAdd: TaskTab[] = [];
@@ -1617,8 +1624,14 @@ export default function App() {
 
     // Process Task Updates and Task Deletions
     const updatesMap = new Map<string, AITaskUpdate>();
+    let rejectedUpdates = 0;
     for (const up of taskUpdates) {
-      if (up && up.id) updatesMap.set(up.id, up);
+      const current = latestTasksRef.current.find(task => task.id === up?.id);
+      if (!current || !isAITimerSettingsValid({ ...current, done: typeof up.done === 'boolean' ? up.done : current.done }, up)) {
+        rejectedUpdates++;
+        continue;
+      }
+      updatesMap.set(up.id, up);
     }
     const toDeleteSet = new Set(deletedTaskIds);
 
@@ -1652,21 +1665,23 @@ export default function App() {
         phase = tabs[0]?.id || 'focus';
       }
       const stepCount = t.stepList && t.stepList.length > 0 ? t.stepList.length : (Number.isInteger(t.steps) && t.steps >= 0 ? t.steps : 0);
-      return {
+      const now = Date.now();
+      const created = createTask({
         ...t,
         phase,
         steps: stepCount,
         stepList: t.stepList,
-        id: `task-${Date.now()}-${i}-${Math.random().toString(36).substr(2, 4)}`,
-        currentStep: 0,
-        done: false,
-        pinned: false,
-        createdAt: Date.now() + i,
-        timerMode: t.timerMode || 'none',
-      };
-    });
+        timerMode: t.timerMode || (t.countdownDurationSeconds !== undefined ? 'countdown' : 'none'),
+      }, `task-${now}-${i}-${Math.random().toString(36).substr(2, 4)}`, now + i);
+      return created && isAITimerSettingsValid(created, t) ? applyAITimerSettings(created, t, now) : null;
+    }).filter((task): task is PSTask => task !== null);
     if (items.length > 0) setTasks((prev) => [...items, ...prev]);
     if (tabsToAdd.length > 0 && items.length === 0) setSelectedPhase(tabsToAdd[0].id);
+    const updated = [...updatesMap.keys()].filter(id => currentTaskIds.has(id) && !toDeleteSet.has(id)).length;
+    const deleted = [...toDeleteSet].filter(id => currentTaskIds.has(id)).length;
+    return { created: items.length, updated, deleted, tabs: tabsToAdd.length,
+      rejected: rejectedUpdates + newTasks.length - items.length + [...updatesMap.keys()].filter(id => !currentTaskIds.has(id)).length
+        + [...toDeleteSet].filter(id => !currentTaskIds.has(id)).length };
   };
 
   const handleClearCompleted = () => {
@@ -1765,7 +1780,7 @@ export default function App() {
           className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-[#0d0d12]/95 border border-neutral-700 shadow-2xl px-4 py-2 flex items-center gap-3 backdrop-blur-md animate-in fade-in slide-in-from-bottom-3 duration-200"
         >
           <img
-            src="/icon.png?v=karkas-app-icon-2"
+            src="/icon.png?v=karkas-app-icon-3"
             alt="KARKAS Logo"
             className="w-4 h-4 rounded-[2px] object-cover shrink-0 shadow-sm"
             onError={(e) => {
@@ -1977,6 +1992,7 @@ export default function App() {
                       onConfigureCountdown={handleConfigureCountdown}
                       onClearCountdown={handleClearCountdown}
                       onToggleTimer={handleToggleTimer}
+                      onStopTimer={handleStopTimer}
                       onResetTimer={handleResetTimer}
                       onUpdateTimeSpent={handleUpdateTimeSpent}
                       onAskAIAboutTask={(taskTitle) => {

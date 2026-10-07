@@ -643,7 +643,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
   ];
 
   return (
-    <div className="space-y-8 font-mono leading-relaxed">
+    <div className="space-y-8 font-sans leading-relaxed">
       {/* ------------------------------------------------------------- */}
       {/* PERIOD SELECTOR & HEADER BAR */}
       {/* ------------------------------------------------------------- */}
@@ -652,7 +652,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
           <div className="flex items-center gap-2">
             <div className="h-1.5 w-1.5 bg-white" />
             <div>
-              <h2 className="text-sm font-bold uppercase tracking-wider text-white font-mono flex flex-wrap items-center gap-2">
+              <h2 className="text-sm font-bold uppercase tracking-wider text-white font-sans flex flex-wrap items-center gap-2">
                 <span>{tAnalytics.title}</span>
               </h2>
             </div>
@@ -666,7 +666,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
               fetchRecommendations(true, selectedPeriod);
             }}
             disabled={isLoadingRecs}
-            className="self-start sm:self-auto flex items-center gap-1.5 text-xs font-mono tracking-wider uppercase px-2 py-1 text-neutral-400 hover:text-white transition-colors disabled:opacity-50 cursor-pointer"
+            className="self-start sm:self-auto flex items-center gap-1.5 text-xs font-sans tracking-wider uppercase px-2 py-1 text-neutral-400 hover:text-white transition-colors disabled:opacity-50 cursor-pointer"
           >
             <RefreshCw className={`w-3 h-3 text-neutral-400 ${isLoadingRecs ? 'animate-spin' : ''}`} />
             <span>{isLoadingRecs ? tAnalytics.analyzing : tAnalytics.recalculate}</span>
@@ -675,7 +675,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
 
         {/* Period Selector Tabs */}
         <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
-          <span className="text-[11px] uppercase text-neutral-400 font-mono shrink-0 mr-1 flex items-center gap-1">
+          <span className="text-[11px] uppercase text-neutral-400 font-sans shrink-0 mr-1 flex items-center gap-1">
             <Calendar className="w-3 h-3 text-neutral-400" />
             <span>{tAnalytics.periodLabel}:</span>
           </span>
@@ -691,7 +691,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
                   sound.tick(550);
                   setSelectedPeriod(p.id);
                 }}
-                className={`shrink-0 px-3 py-2 text-xs font-mono font-bold tracking-wider uppercase whitespace-nowrap transition-colors cursor-pointer ${
+                className={`shrink-0 px-3 py-2 text-xs font-sans font-bold tracking-wider uppercase whitespace-nowrap transition-colors cursor-pointer ${
                   isSelected
                     ? 'bg-white text-black'
                     : 'text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200'
@@ -710,13 +710,13 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
       <div className="grid grid-cols-2 gap-px overflow-hidden border border-neutral-800/70 bg-neutral-800/70 xl:grid-cols-4">
         {/* Total Tracked Pool in Period */}
         <div className="bg-[#09090b] p-5 flex flex-col justify-between">
-          <div className="text-xs uppercase text-neutral-400 flex items-center justify-between gap-3 font-mono">
+          <div className="text-xs uppercase text-neutral-400 flex items-center justify-between gap-3 font-sans">
             <span>{tAnalytics.totalPool}</span>
             <Layers className="w-3.5 h-3.5 text-neutral-400" />
           </div>
           <div className="mt-3 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-2">
-            <span className="text-2xl font-bold text-white font-mono">{analyticsData.totalTracked}</span>
-            <span className="text-xs text-neutral-400 font-mono">
+            <span className="text-2xl font-bold text-white font-sans">{analyticsData.totalTracked}</span>
+            <span className="text-xs text-neutral-400 font-sans">
               {analyticsData.totalTracked} / {analyticsData.targetVolume} {lang === 'uk' ? 'норми' : 'norm'}
             </span>
           </div>
@@ -724,13 +724,13 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
 
         {/* Successfully Delivered / Completed */}
         <div className="bg-[#09090b] p-5 flex flex-col justify-between">
-          <div className="text-xs uppercase text-neutral-400 flex items-center justify-between gap-3 font-mono">
+          <div className="text-xs uppercase text-neutral-400 flex items-center justify-between gap-3 font-sans">
             <span>{tAnalytics.completed}</span>
             <CheckCircle2 className="w-3.5 h-3.5 text-neutral-400" />
           </div>
           <div className="mt-3 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-2">
-            <span className="text-2xl font-bold text-white font-mono">{analyticsData.totalDelivered}</span>
-            <span className="text-xs text-neutral-400 font-mono font-bold">
+            <span className="text-2xl font-bold text-white font-sans">{analyticsData.totalDelivered}</span>
+            <span className="text-xs text-neutral-400 font-sans font-bold">
               {analyticsData.deliveredNormPercent}% {lang === 'uk' ? 'норми' : 'norm'} ({analyticsData.successRate}%)
             </span>
           </div>
@@ -738,13 +738,13 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
 
         {/* Dropped / Deleted in Period */}
         <div className="bg-[#09090b] p-5 flex flex-col justify-between">
-          <div className="text-xs uppercase text-neutral-400 flex items-center justify-between gap-3 font-mono">
+          <div className="text-xs uppercase text-neutral-400 flex items-center justify-between gap-3 font-sans">
             <span>{tAnalytics.dropped}</span>
             <Trash2 className="w-3.5 h-3.5 text-neutral-400" />
           </div>
           <div className="mt-3 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-2">
-            <span className="text-2xl font-bold text-neutral-300 font-mono">{analyticsData.totalDropped}</span>
-            <span className="text-xs text-neutral-400 font-mono">
+            <span className="text-2xl font-bold text-neutral-300 font-sans">{analyticsData.totalDropped}</span>
+            <span className="text-xs text-neutral-400 font-sans">
               {analyticsData.substepsCount} {tAnalytics.substepsCompleted.toLowerCase()}
             </span>
           </div>
@@ -752,7 +752,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
 
         {/* Productivity Grade & Velocity Index */}
         <div className="bg-[#09090b] p-5 flex flex-col justify-between">
-          <div className="text-xs uppercase text-neutral-400 flex items-center justify-between gap-3 font-mono">
+          <div className="text-xs uppercase text-neutral-400 flex items-center justify-between gap-3 font-sans">
             <span>{tAnalytics.grade}</span>
             <Award className="w-3.5 h-3.5 text-neutral-400" />
           </div>
@@ -766,16 +766,16 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
               else if (currentGrade === 'C') gradeColor = 'text-rose-400';
 
               return (
-                <span className={`text-2xl font-bold font-mono tracking-wider ${gradeColor}`}>
+                <span className={`text-2xl font-bold font-sans tracking-wider ${gradeColor}`}>
                   {currentGrade}
                 </span>
               );
             })()}
             <div className="text-right">
-              <span className="text-xs text-neutral-200 font-mono font-bold block">
+              <span className="text-xs text-neutral-200 font-sans font-bold block">
                 {analyticsData.successRate}% {tAnalytics.completionRate.toLowerCase()}
               </span>
-              <span className="text-[11px] text-neutral-400 font-mono block">
+              <span className="text-[11px] text-neutral-400 font-sans block">
                 {analyticsData.isVolumeDeficit
                   ? (lang === 'uk' ? `дефіцит: ${analyticsData.totalDelivered}/${analyticsData.minDeliveredForGrade.B} мін.` : `deficit: ${analyticsData.totalDelivered}/${analyticsData.minDeliveredForGrade.B} min`)
                   : (lang === 'uk' ? 'норма обсягу ✓' : 'quota met ✓')}
@@ -792,10 +792,10 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 mb-2">
           <div className="flex items-center gap-2">
             <span className="w-1.5 h-1.5 bg-neutral-500" />
-            <span className="text-sm font-bold uppercase font-mono tracking-wider text-neutral-200">
+            <span className="text-sm font-bold uppercase font-sans tracking-wider text-neutral-200">
               {tAnalytics.volumeNorm}
             </span>
-            <span className="text-[11px] font-mono text-neutral-400">
+            <span className="text-[11px] font-sans text-neutral-400">
               {analyticsData.totalDelivered} / {analyticsData.targetVolume} {lang === 'uk' ? 'завдань' : 'tasks'} ({analyticsData.deliveredNormPercent}%)
             </span>
           </div>
@@ -847,7 +847,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
             <button
               id="dashboard-manage-tabs-period-btn"
               onClick={onOpenManageTabs}
-              className="text-xs text-neutral-400 hover:text-white flex items-center gap-1 transition-colors font-mono"
+              className="text-xs text-neutral-400 hover:text-white flex items-center gap-1 transition-colors font-sans"
             >
               <Sliders className="w-3 h-3" />
               <span>{t.manageTabs}</span>
@@ -864,7 +864,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
                 }}
                 className="group cursor-pointer px-2 py-4 transition-colors hover:bg-white/[0.025]"
               >
-                <div className="flex items-center justify-between gap-2 text-xs mb-1.5 font-mono">
+                <div className="flex items-center justify-between gap-2 text-xs mb-1.5 font-sans">
                   <div className="flex flex-wrap items-center gap-2 min-w-0">
                     {tp.color && (
                       <span
@@ -916,11 +916,11 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
             <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
               <div className="flex items-center gap-2">
                 <div className="w-1.5 h-1.5 bg-neutral-500" />
-                <h3 className="text-sm font-bold uppercase tracking-wider text-neutral-200 font-mono">
+                <h3 className="text-sm font-bold uppercase tracking-wider text-neutral-200 font-sans">
                   {lang === 'uk' ? 'Фокус: Термінові справи' : 'Urgent Action Queue'}
                 </h3>
               </div>
-              <span className="text-xs font-mono text-neutral-400">
+              <span className="text-xs font-sans text-neutral-400">
                 {p1ActiveTasks.length + p2ActiveTasks.length} {lang === 'uk' ? 'активних' : 'queued'}
               </span>
             </div>
@@ -930,7 +930,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
               {p1ActiveTasks.length === 0 && p2ActiveTasks.length === 0 ? (
                 <div className="py-6 text-center">
                   <CheckCircle2 className="w-5 h-5 mx-auto mb-2 text-neutral-400" />
-                  <p className="text-xs text-neutral-300 font-bold uppercase font-mono">
+                  <p className="text-xs text-neutral-300 font-bold uppercase font-sans">
                     {lang === 'uk' ? 'Всі термінові завдання закриті' : 'All urgent tasks cleared'}
                   </p>
                 </div>
@@ -938,7 +938,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
                 [...p1ActiveTasks, ...p2ActiveTasks].slice(0, 4).map((task) => (
                   <div
                     key={task.id}
-                    className={`flex items-start justify-between gap-3 border-l-2 px-3 py-3 text-xs transition-colors font-mono ${
+                    className={`flex items-start justify-between gap-3 border-l-2 px-3 py-3 text-xs transition-colors font-sans ${
                       task.priority === 1
                         ? 'border-rose-700/70 bg-white/[0.02] text-neutral-200'
                         : 'border-neutral-700 bg-white/[0.015] text-neutral-300'
@@ -958,14 +958,14 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
                       <div className="min-w-0 flex-1">
                         <p className="font-bold text-sm break-words text-white font-sans">{task.title}</p>
                         {task.note && (
-                          <p title={task.note} className="text-xs text-neutral-400 break-words line-clamp-2 mt-0.5 font-mono">{task.note}</p>
+                          <p title={task.note} className="text-xs text-neutral-400 break-words line-clamp-2 mt-0.5 font-sans">{task.note}</p>
                         )}
                       </div>
                     </div>
 
                     <div className="flex items-center gap-1.5 shrink-0">
                       <span
-                        className={`text-[11px] font-mono px-1.5 py-0.5 border ${
+                        className={`text-[11px] font-sans px-1.5 py-0.5 border ${
                           task.priority === 1
                             ? 'border-rose-800 text-rose-300 bg-rose-950/40'
                             : 'border-neutral-700 text-amber-300 bg-neutral-900'
@@ -1013,15 +1013,15 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
           <div className="flex items-center gap-2 flex-wrap">
             <AIIcon id={aiIconVariant} className="w-4 h-4 text-neutral-300" />
             <div className="flex items-center gap-2 flex-wrap">
-              <h2 className="text-sm font-bold uppercase tracking-wider text-white font-mono">
+              <h2 className="text-sm font-bold uppercase tracking-wider text-white font-sans">
                 {tAnalytics.aiAuditTitle}
               </h2>
-              <span className="flex items-center gap-1 text-xs font-mono text-neutral-400">
+              <span className="flex items-center gap-1 text-xs font-sans text-neutral-400">
                 <Clock className="w-3 h-3 text-neutral-400" />
                 <span>{periodsList.find((p) => p.id === selectedPeriod)?.label || selectedPeriod}</span>
               </span>
               {recommendation?.workloadStatus && (
-                <span className="text-xs font-mono text-neutral-400">
+                <span className="text-xs font-sans text-neutral-400">
                   {recommendation.workloadStatus}
                 </span>
               )}
@@ -1037,7 +1037,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
               }}
               disabled={isLoadingRecs}
               title={lang === 'uk' ? 'Оновити аналіз періоду' : 'Refresh period analysis'}
-              className="flex items-center gap-1.5 px-2 py-1 text-xs font-mono uppercase tracking-wider text-neutral-400 transition-colors hover:text-white disabled:opacity-50 cursor-pointer"
+              className="flex items-center gap-1.5 px-2 py-1 text-xs font-sans uppercase tracking-wider text-neutral-400 transition-colors hover:text-white disabled:opacity-50 cursor-pointer"
             >
               <RefreshCw className={`w-3 h-3 text-neutral-400 ${isLoadingRecs ? 'animate-spin' : ''}`} />
               <span>{isLoadingRecs ? tAnalytics.analyzing : tAnalytics.recalculate}</span>
@@ -1046,7 +1046,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
         </div>
 
         {/* Schedule & Last Analysis Status Bar */}
-        <div role="status" aria-live="polite" className="mb-3 flex flex-wrap items-center justify-between gap-1 border-b border-neutral-800/60 pb-3 text-xs font-mono text-neutral-400">
+        <div role="status" aria-live="polite" className="mb-3 flex flex-wrap items-center justify-between gap-1 border-b border-neutral-800/60 pb-3 text-xs font-sans text-neutral-400">
           <div className="flex items-start gap-1.5 min-w-0">
             <span className={`mt-1 w-1.5 h-1.5 shrink-0 rounded-full ${isLoadingRecs ? 'bg-neutral-400 animate-pulse' : recommendation?.source === 'engine' ? 'bg-amber-400' : 'bg-neutral-600'}`} />
             <span>
@@ -1073,7 +1073,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
           {/* Period Retrospective */}
           <div className="flex flex-col justify-between px-1 py-4 md:px-5">
             <div>
-              <div className="flex items-center gap-1.5 text-xs font-mono uppercase text-neutral-400 mb-1">
+              <div className="flex items-center gap-1.5 text-xs font-sans uppercase text-neutral-400 mb-1">
                 <Target className="w-3 h-3 text-neutral-400" />
                 <span>{tAnalytics.aiRetrospective}</span>
               </div>
@@ -1089,7 +1089,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
           {/* Dropoff & Bottlenecks Analysis */}
           <div className="flex flex-col justify-between px-1 py-4 md:px-5">
             <div>
-              <div className="flex items-center gap-1.5 text-xs font-mono uppercase text-neutral-400 mb-1">
+              <div className="flex items-center gap-1.5 text-xs font-sans uppercase text-neutral-400 mb-1">
                 <AlertTriangle className="w-3 h-3 text-neutral-400" />
                 <span>{tAnalytics.aiDropoffAnalysis}</span>
               </div>
@@ -1105,7 +1105,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
           {/* Future Strategic Guidance */}
           <div className="flex flex-col justify-between px-1 py-4 md:px-5">
             <div>
-              <div className="flex items-center gap-1.5 text-xs font-mono uppercase text-neutral-400 mb-1">
+              <div className="flex items-center gap-1.5 text-xs font-sans uppercase text-neutral-400 mb-1">
                 <Compass className="w-3 h-3 text-neutral-400" />
                 <span>{tAnalytics.aiFutureStrategy}</span>
               </div>
@@ -1124,7 +1124,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-1.5">
               <Zap className="w-3 h-3 text-neutral-400" />
-              <h3 className="text-sm font-bold font-mono uppercase tracking-wider text-neutral-300">
+              <h3 className="text-sm font-bold font-sans uppercase tracking-wider text-neutral-300">
                 {lang === 'uk' ? 'Рекомендовані наступні кроки' : 'Suggested Action Items'}
               </h3>
             </div>
@@ -1142,11 +1142,11 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
                 >
                   <div>
                     <div className="flex items-center justify-between gap-1 mb-1.5">
-                      <span className="max-w-[100px] truncate text-[11px] font-mono uppercase text-neutral-400">
+                      <span className="max-w-[100px] truncate text-[11px] font-sans uppercase text-neutral-400">
                         {tabName}
                       </span>
                       <span
-                        className={`text-[11px] font-mono ${
+                        className={`text-[11px] font-sans ${
                           st.priority === 1
                             ? 'text-rose-300'
                             : 'text-neutral-400'
@@ -1171,7 +1171,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
                     <button
                       onClick={() => handleAddSuggestedTask(st)}
                       disabled={isAdded}
-                      className={`flex flex-1 items-center justify-center gap-1 border px-2 py-1 text-xs font-mono font-bold uppercase tracking-wider transition-colors cursor-pointer ${
+                      className={`flex flex-1 items-center justify-center gap-1 border px-2 py-1 text-xs font-sans font-bold uppercase tracking-wider transition-colors cursor-pointer ${
                         isAdded
                           ? 'bg-neutral-900 border-neutral-800 text-neutral-400 cursor-default'
                           : 'border-neutral-700 text-neutral-300 hover:border-white hover:text-white'

@@ -211,7 +211,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
           // The visible close control is unavailable during installer handoff.
           if (isInstalling && event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); }
         }}
-        className="relative w-full max-w-lg max-h-[90dvh] overflow-y-auto bg-[#0c0c0e] border border-neutral-800 shadow-2xl p-5 sm:p-6 font-mono text-neutral-100 selection:bg-white selection:text-black"
+        className="relative w-full max-w-lg max-h-[90dvh] overflow-y-auto bg-[#0c0c0e] border border-neutral-800 shadow-2xl p-5 sm:p-6 font-sans text-neutral-100 selection:bg-white selection:text-black"
       >
         {/* Top Header */}
         <div className="flex items-center justify-between pb-3 border-b border-neutral-800 mb-4">

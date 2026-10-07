@@ -440,7 +440,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
               </button>
 
               {task.pinned && (
-                <span className="flex items-center text-xs font-mono text-neutral-400">
+                <span className="flex items-center text-xs font-sans text-neutral-400">
                   <Pin className="w-2.5 h-2.5 fill-neutral-400 mr-1" />
                   PIN
                 </span>
@@ -507,7 +507,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
               <section
                 id={`task-timer-widget-${task.id}`}
                 aria-label={lang === 'uk' ? 'Час завдання' : 'Task time'}
-                className="grid min-w-0 grid-cols-[minmax(0,1fr)_56px] items-center gap-2 border-b border-neutral-800/70 pb-3 font-mono sm:border-b-0 sm:border-r sm:pb-0 sm:pr-3"
+                className="grid min-w-0 grid-cols-[minmax(0,1fr)_56px] items-center gap-2 border-b border-neutral-800/70 pb-3 font-sans sm:border-b-0 sm:border-r sm:pb-0 sm:pr-3"
               >
                 <div className="min-w-0">
                   <p className="text-xs leading-relaxed text-neutral-400">
@@ -515,7 +515,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                       ? (lang === 'uk' ? 'ЗАЛИШИЛОСЬ' : 'REMAINING')
                       : (lang === 'uk' ? 'ВИТРАЧЕНО' : 'TIME SPENT')}
                   </p>
-                  <p role="status" className={`mt-1 text-xs leading-relaxed ${task.timerRunning ? 'text-emerald-300' : countdownFinished ? 'text-amber-300' : 'text-neutral-400'}`}>
+                  <p role="status" className={`mt-1 text-[13px] font-medium leading-relaxed ${task.timerRunning ? 'text-emerald-300' : countdownFinished ? 'text-amber-300' : 'text-neutral-400'}`}>
                     {task.timerRunning ? (lang === 'uk' ? 'Таймер працює' : 'Timer running')
                       : task.done ? (lang === 'uk' ? 'Завершено' : 'Completed')
                       : countdownFinished ? (lang === 'uk' ? 'Час вийшов · завершіть завдання, коли будете готові' : 'Time is up · complete the task when ready')
@@ -523,7 +523,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   </p>
                   <p
                     aria-label={`${hasCountdown ? (lang === 'uk' ? 'Залишилось' : 'Remaining') : (lang === 'uk' ? 'Витрачений час' : 'Time spent')}: ${formatDurationFull(hasCountdown ? remainingSeconds : currentElapsedSeconds, lang)}`}
-                    className={`mt-1 text-4xl font-bold leading-tight tabular-nums tracking-tight [overflow-wrap:anywhere] ${timerValue.length > 5 ? 'sm:text-[26px]' : ''} ${task.timerRunning
+                    className={`mt-1 text-4xl font-semibold leading-tight tabular-nums tracking-tight [overflow-wrap:anywhere] ${timerValue.length > 5 ? 'sm:text-[26px]' : ''} ${task.timerRunning
                     ? 'text-emerald-300' : countdownFinished ? 'text-amber-300' : 'text-neutral-100'}`}>
                     {timerValue}
                   </p>
@@ -583,7 +583,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   onClick={(e) => e.stopPropagation()}
                   className="flex flex-col gap-3 p-3 bg-[#08080a] border border-neutral-700 my-1 z-30"
                 >
-                  <div className="text-xs font-mono text-neutral-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <div className="text-xs font-sans text-neutral-400 uppercase tracking-wider flex items-center gap-1.5">
                     <Pencil className="w-3 h-3 text-emerald-400" />
                     <span>{lang === 'uk' ? 'Редагування завдання' : 'Edit Task'}</span>
                   </div>
@@ -595,7 +595,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                     onChange={(e) => setEditTitleText(e.target.value)}
                     placeholder={lang === 'uk' ? 'Назва завдання...' : 'Task title...'}
                     autoFocus
-                    className="w-full px-2.5 py-1.5 bg-[#0d0d12] border border-neutral-700 text-white text-sm leading-relaxed font-mono focus:outline-none focus:border-white transition-colors"
+                    className="w-full px-2.5 py-1.5 bg-[#0d0d12] border border-neutral-700 text-white text-sm leading-relaxed font-sans focus:outline-none focus:border-white transition-colors"
                   />
                   <input
                     type="text"
@@ -603,13 +603,13 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                     aria-label={lang === 'uk' ? 'Нотатка' : 'Note'}
                     onChange={(e) => setEditNoteText(e.target.value)}
                     placeholder={lang === 'uk' ? 'Нотатка (необов\'язково)...' : 'Note (optional)...'}
-                    className="w-full px-2.5 py-1.5 bg-[#0d0d12] border border-neutral-800 text-neutral-300 text-sm leading-relaxed font-mono focus:outline-none focus:border-neutral-600 transition-colors"
+                    className="w-full px-2.5 py-1.5 bg-[#0d0d12] border border-neutral-800 text-neutral-300 text-sm leading-relaxed font-sans focus:outline-none focus:border-neutral-600 transition-colors"
                   />
                   <div className="flex items-center justify-end gap-2 pt-1">
                     <button
                       type="button"
                       onClick={() => setIsEditingTask(false)}
-                      className="px-2.5 py-1 bg-neutral-800 border border-neutral-700 text-neutral-300 text-sm leading-relaxed font-mono font-bold hover:bg-neutral-700 transition-colors flex items-center gap-1 cursor-pointer"
+                      className="px-2.5 py-1 bg-neutral-800 border border-neutral-700 text-neutral-300 text-sm leading-relaxed font-sans font-bold hover:bg-neutral-700 transition-colors flex items-center gap-1 cursor-pointer"
                     >
                       <X className="w-3 h-3" />
                       <span>{lang === 'uk' ? 'Скасувати' : 'Cancel'}</span>
@@ -617,7 +617,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                     <button
                       type="submit"
                       disabled={!editTitleText.trim() || !onEditTask}
-                      className="px-2.5 py-1 bg-emerald-500 text-black text-xs font-mono font-extrabold hover:bg-emerald-400 transition-colors flex items-center gap-1 cursor-pointer"
+                      className="px-2.5 py-1 bg-emerald-500 text-black text-xs font-sans font-extrabold hover:bg-emerald-400 transition-colors flex items-center gap-1 cursor-pointer"
                     >
                       <Check className="w-3 h-3" />
                       <span>{lang === 'uk' ? 'Зберегти' : 'Save'}</span>
@@ -627,7 +627,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
               ) : (
                 <>
                   <h3
-                    className={`text-lg font-bold tracking-tight leading-[27px] break-words [overflow-wrap:anywhere] transition-all ${
+                    className={`text-lg font-semibold leading-[27px] break-words [overflow-wrap:anywhere] transition-all ${
                       task.done
                         ? 'line-through text-neutral-400 decoration-neutral-600 decoration-2'
                         : 'text-neutral-100 hover:text-white'
@@ -637,7 +637,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   </h3>
 
                   {task.note && (
-                    <div className="mt-2 text-sm leading-relaxed break-words [overflow-wrap:anywhere] font-mono text-neutral-300">
+                    <div className="mt-2 text-[15px] leading-[1.6] break-words [overflow-wrap:anywhere] font-sans text-neutral-300">
                       <span>{task.note}</span>
                     </div>
                   )}
@@ -647,7 +647,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
               {task.autoPausedOverdue && (
                 <button
                   type="button"
-                  className="flex w-full min-h-11 items-center gap-1.5 px-2 py-1 text-left bg-amber-950/40 border border-amber-500/40 text-amber-300 text-xs font-mono mt-1.5 cursor-pointer hover:bg-amber-950/60 transition-colors"
+                  className="flex w-full min-h-11 items-center gap-1.5 px-2 py-1 text-left bg-amber-950/40 border border-amber-500/40 text-amber-300 text-xs font-sans mt-1.5 cursor-pointer hover:bg-amber-950/60 transition-colors"
                   onClick={(e) => {
                     e.stopPropagation();
                     sound.tick(400);
@@ -665,7 +665,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                 </button>
               )}
               {showTimerWidget && (
-                <div className="mt-3 flex flex-col gap-3 font-mono">
+                <div className="mt-3 flex flex-col gap-3 font-sans">
                   {hasCountdown && <p className="text-xs leading-relaxed text-neutral-400">
                     {lang === 'uk' ? 'Тривалість' : 'Duration'}: {formatDurationFull(task.countdownDurationSeconds!, lang)}
                     {' · '}{lang === 'uk' ? 'Всього витрачено' : 'Total spent'}: {formatTime(currentElapsedSeconds)}
@@ -722,7 +722,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   if (!isExpanded && effectiveStepList.length === 0) setIsAddingStep(true);
                   setIsExpanded(!isExpanded);
                 }}
-                className={`flex min-h-11 items-center gap-2 text-xs font-mono uppercase font-bold tracking-wider px-3 py-2 border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white ${
+                className={`flex min-h-11 items-center gap-2 text-xs font-sans uppercase font-bold tracking-wider px-3 py-2 border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white ${
                   isExpanded
                     ? 'border-white bg-neutral-900 text-white'
                     : effectiveStepList.length > 0
@@ -773,17 +773,17 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
               {!showTimerWidget && !task.done && !hasStarted && <button
                 type="button" id={`task-start-action-${task.id}`} disabled={!onStartTask}
                 onClick={(e) => { e.stopPropagation(); sound.activate(); onStartTask?.(task.id); }}
-                className="inline-flex min-h-11 items-center justify-center gap-2 border border-white bg-white px-3 py-2 text-sm font-mono font-bold text-black hover:bg-neutral-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white disabled:opacity-40">
+                className="inline-flex min-h-11 items-center justify-center gap-2 border border-white bg-white px-3 py-2 text-sm font-sans font-bold text-black hover:bg-neutral-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white disabled:opacity-40">
                 <Play className="h-5 w-5" aria-hidden="true" />
                 {lang === 'uk' ? 'Почати' : 'Start'}
               </button>}
-              {!task.done && hasStarted && <span className="inline-flex min-h-11 items-center px-2 text-xs font-mono text-emerald-300">
+              {!task.done && hasStarted && <span className="inline-flex min-h-11 items-center px-2 text-xs font-sans text-emerald-300">
                 {lang === 'uk' ? 'У роботі' : 'In progress'}
               </span>}
-              {task.done && <span className="inline-flex min-h-11 items-center px-2 text-xs font-mono text-neutral-400">
+              {task.done && <span className="inline-flex min-h-11 items-center px-2 text-xs font-sans text-neutral-400">
                 {lang === 'uk' ? 'Завершено' : 'Completed'}
               </span>}
-              {showTimerWidget && !task.done && !hasStarted && <span className="inline-flex min-h-11 items-center px-2 text-xs font-mono text-neutral-400">
+              {showTimerWidget && !task.done && !hasStarted && <span className="inline-flex min-h-11 items-center px-2 text-xs font-sans text-neutral-400">
                 {lang === 'uk' ? 'Не розпочато' : 'Not started'}
               </span>}
 
@@ -796,7 +796,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   sound.slice();
                   onToggleDone(task.id);
                 }}
-                className={`inline-flex min-h-11 items-center justify-center gap-2 text-sm font-mono font-bold px-3 py-2 border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white ${
+                className={`inline-flex min-h-11 items-center justify-center gap-2 text-sm font-sans font-bold px-3 py-2 border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white ${
                   task.done
                     ? 'border-neutral-700 text-neutral-400 hover:border-neutral-500 hover:text-white'
                     : 'border-neutral-700 text-neutral-300 hover:border-white hover:text-white'
@@ -825,7 +825,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
               {/* Sub-Card Header */}
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div className="flex items-center gap-2">
-                  <span className="text-xs font-mono font-bold tracking-wider text-neutral-400 uppercase">
+                  <span className="text-xs font-sans font-bold tracking-wider text-neutral-400 uppercase">
                     {lang === 'uk' ? '\u041a\u0440\u043e\u043a\u0438' : 'Steps'}
                   </span>
                 </div>
@@ -843,7 +843,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                       title={lang === 'uk' ? 'Автоматично розбити це завдання на послідовні підкроки через ШІ' : 'Auto-break down this task into steps via AI'}
                       aria-label={isBreakingDown ? t.stepsSection.aiBreakingDown : t.stepsSection.aiBreakdownBtn}
                       aria-busy={isBreakingDown}
-                      className="inline-flex items-center justify-center gap-2 whitespace-nowrap border border-neutral-800 bg-transparent px-3 py-2 text-xs font-mono font-bold uppercase tracking-wider text-neutral-300 transition-colors hover:border-white hover:text-white focus-visible:outline-none focus-visible:border-white disabled:cursor-wait disabled:border-neutral-800 disabled:bg-neutral-950 disabled:text-neutral-600"
+                      className="inline-flex items-center justify-center gap-2 whitespace-nowrap border border-neutral-800 bg-transparent px-3 py-2 text-xs font-sans font-bold uppercase tracking-wider text-neutral-300 transition-colors hover:border-white hover:text-white focus-visible:outline-none focus-visible:border-white disabled:cursor-wait disabled:border-neutral-800 disabled:bg-neutral-950 disabled:text-neutral-600"
                     >
                       {isBreakingDown ? (
                         <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
@@ -861,7 +861,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                       sound.tick(600);
                       setIsAddingStep(!isAddingStep);
                     }}
-                    className="inline-flex items-center justify-center gap-2 whitespace-nowrap border border-neutral-800 bg-transparent px-3 py-2 text-xs font-mono font-bold uppercase tracking-wider text-neutral-300 transition-colors hover:border-white hover:text-white focus-visible:outline-none focus-visible:border-white"
+                    className="inline-flex items-center justify-center gap-2 whitespace-nowrap border border-neutral-800 bg-transparent px-3 py-2 text-xs font-sans font-bold uppercase tracking-wider text-neutral-300 transition-colors hover:border-white hover:text-white focus-visible:outline-none focus-visible:border-white"
                   >
                     <Plus className="h-3.5 w-3.5" aria-hidden="true" />
                     <span>{t.stepsSection.addStepBtn}</span>
@@ -886,12 +886,12 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                       onChange={(e) => setNewStepText(e.target.value)}
                       placeholder={t.stepsSection.stepPlaceholder}
                       autoFocus
-                      className="min-w-0 flex-1 bg-[#101014] border border-neutral-700 focus:border-white text-white placeholder:text-neutral-500 px-3 py-2 text-sm leading-relaxed font-mono transition-colors"
+                      className="min-w-0 flex-1 bg-[#101014] border border-neutral-700 focus:border-white text-white placeholder:text-neutral-500 px-3 py-2 text-sm leading-relaxed font-sans transition-colors"
                     />
                     <button
                       type="submit"
                       disabled={!newStepText.trim()}
-                      className="px-3 py-2.5 bg-white text-black font-extrabold text-xs font-mono uppercase tracking-wider hover:bg-neutral-200 transition-colors disabled:opacity-40"
+                      className="px-3 py-2.5 bg-white text-black font-extrabold text-xs font-sans uppercase tracking-wider hover:bg-neutral-200 transition-colors disabled:opacity-40"
                     >
                       OK
                     </button>
@@ -925,12 +925,12 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                           aria-label={step.title}
                           onClick={() => handleToggleSubStep(sIdx)}
                           className="flex min-w-0 flex-1 items-center gap-4 px-3 py-4 text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-white sm:px-4 sm:py-5">
-                          <span aria-hidden="true" className={`flex h-8 w-8 shrink-0 items-center justify-center border font-mono text-xs tabular-nums transition-colors ${isDone ? 'border-neutral-600 bg-neutral-800 text-neutral-300' : isCurrent ? 'border-white bg-white text-black' : 'border-neutral-700 text-neutral-400 group-hover/step:border-neutral-400'}`}>
+                          <span aria-hidden="true" className={`flex h-8 w-8 shrink-0 items-center justify-center border font-sans text-xs tabular-nums transition-colors ${isDone ? 'border-neutral-600 bg-neutral-800 text-neutral-300' : isCurrent ? 'border-white bg-white text-black' : 'border-neutral-700 text-neutral-400 group-hover/step:border-neutral-400'}`}>
                             {isDone ? <Check className="h-4 w-4" /> : String(sIdx + 1).padStart(2, '0')}
                           </span>
                           <span className="min-w-0 flex-1">
-                            {isCurrent && <span className="mb-1 block text-xs font-mono text-neutral-400">{t.stepsSection.stepPending}</span>}
-                            <span className={`block break-words text-sm font-mono leading-relaxed ${isDone ? 'text-neutral-400 line-through decoration-neutral-700' : 'text-neutral-100'}`}>{step.title}</span>
+                            {isCurrent && <span className="mb-1 block text-xs font-sans text-neutral-400">{t.stepsSection.stepPending}</span>}
+                            <span className={`block break-words text-sm font-sans leading-relaxed ${isDone ? 'text-neutral-400 line-through decoration-neutral-700' : 'text-neutral-100'}`}>{step.title}</span>
                           </span>
                         </button>
                         {onDeleteStepItem && hasStepList && (
@@ -946,7 +946,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   })}
                 </ol>
               ) : (
-                <div className="py-2 text-center text-xs font-mono text-neutral-400 flex flex-col items-center gap-1">
+                <div className="py-2 text-center text-xs font-sans text-neutral-400 flex flex-col items-center gap-1">
                   <button
                     type="button"
                     onClick={() => setIsAddingStep(true)}
@@ -979,7 +979,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
               onConfigureCountdown(task.id, Number(countdownMinutes) * 60);
               setIsConfiguringTimer(false);
             }}
-            className="flex w-full max-w-sm max-h-[90dvh] overflow-y-auto flex-col gap-4 border border-neutral-800 bg-[#0c0c0e] p-5 font-mono shadow-2xl"
+            className="flex w-full max-w-sm max-h-[90dvh] overflow-y-auto flex-col gap-4 border border-neutral-800 bg-[#0c0c0e] p-5 font-sans shadow-2xl"
           >
             <div className="flex items-center justify-between gap-3">
               <h4 id={`countdown-title-${task.id}`} className="flex items-center gap-2 text-sm font-bold text-neutral-100">
@@ -1037,7 +1037,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4"
           onClick={(e) => e.stopPropagation()}
         >
-          <div id={`task-time-dialog-${task.id}`} role="dialog" aria-modal="true" aria-labelledby={`edit-time-title-${task.id}`} className="flex w-full max-w-sm max-h-[90dvh] overflow-y-auto flex-col gap-4 border border-neutral-800 bg-[#0c0c0e] p-5 font-mono shadow-2xl">
+          <div id={`task-time-dialog-${task.id}`} role="dialog" aria-modal="true" aria-labelledby={`edit-time-title-${task.id}`} className="flex w-full max-w-sm max-h-[90dvh] overflow-y-auto flex-col gap-4 border border-neutral-800 bg-[#0c0c0e] p-5 font-sans shadow-2xl">
             <div className="flex items-center justify-between border-b border-neutral-800/80 pb-2.5">
               <h4 className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-2">
                 <Clock className="w-3.5 h-3.5 text-neutral-400" aria-hidden="true" />

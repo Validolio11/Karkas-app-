@@ -171,7 +171,7 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({ isOpen, lang, ta
     }
   };
 
-  return <AnimatePresence>{isOpen && <motion.div id="quick-add-drawer" initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.22, ease: 'easeOut' }} className="relative z-10 overflow-hidden bg-[#0c0c0e] border-b border-neutral-800 font-mono">
+  return <AnimatePresence>{isOpen && <motion.div id="quick-add-drawer" initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.22, ease: 'easeOut' }} className="relative z-10 overflow-hidden bg-[#0c0c0e] border-b border-neutral-800 font-sans">
     <form id="quick-add-task-form" noValidate onSubmit={handleSubmit} onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); closeDrawer(); } }} className="p-5 sm:p-6 max-w-4xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-5 md:gap-x-6 md:gap-y-4 [&_button]:min-h-11 [&_input]:min-h-11">
       <div className="flex items-end gap-2 md:col-span-2">
         <label className="min-w-0 flex-1 text-xs text-neutral-400" htmlFor="quick-add-title-input">{uk ? 'Назва завдання' : 'Task title'}

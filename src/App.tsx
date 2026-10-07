@@ -1773,7 +1773,7 @@ export default function App() {
               (e.currentTarget as HTMLElement).style.display = 'none';
             }}
           />
-          <span className="text-xs font-mono text-neutral-300">
+          <span className="text-xs font-sans text-neutral-300">
             {t.winTitlebar?.minimizedNotice || 'KARKAS window is minimized. Click to restore.'}
           </span>
           <button
@@ -1782,7 +1782,7 @@ export default function App() {
               sound.tick(600);
               setIsWindowMinimized(false);
             }}
-            className="px-2.5 py-1 bg-white text-black font-mono font-extrabold text-xs tracking-wider hover:bg-neutral-200 transition-colors uppercase cursor-pointer"
+            className="px-2.5 py-1 bg-white text-black font-sans font-extrabold text-xs tracking-wider hover:bg-neutral-200 transition-colors uppercase cursor-pointer"
           >
             {t.winTitlebar?.restoreBtn || 'RESTORE WINDOW'}
           </button>
@@ -1861,7 +1861,7 @@ export default function App() {
                       ? 'Пошук завдань…'
                       : 'Search tasks…'
                   }
-                  className="w-full pl-9 pr-8 py-3 bg-[#09090d] border border-neutral-800 text-neutral-200 placeholder-neutral-400 text-sm font-mono focus:outline-none focus:border-neutral-500 transition-colors shadow-inner"
+                  className="w-full pl-9 pr-8 py-3 bg-[#09090d] border border-neutral-800 text-neutral-200 placeholder-neutral-400 text-sm font-sans focus:outline-none focus:border-neutral-500 transition-colors shadow-inner"
                 />
                 {searchQuery && (
                   <button
@@ -1890,7 +1890,7 @@ export default function App() {
                     ? t.emptyActiveTitle
                     : t.emptyQueueTitle}
                 </h2>
-                <p className="text-xs text-neutral-400 font-mono max-w-sm mx-auto mb-4">
+                <p className="text-xs text-neutral-400 font-sans max-w-sm mx-auto mb-4">
                   {searchQuery
                     ? (lang === 'uk' ? `За запитом "${searchQuery}" нічого не знайдено` : `No tasks matching "${searchQuery}"`)
                     : activeFilter === 'DONE'
@@ -1904,7 +1904,7 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => setSearchQuery('')}
-                      className="px-3.5 py-1.5 bg-neutral-800 border border-neutral-600 text-white font-bold text-xs font-mono tracking-wider hover:bg-neutral-700 transition-colors"
+                      className="px-3.5 py-1.5 bg-neutral-800 border border-neutral-600 text-white font-bold text-xs font-sans tracking-wider hover:bg-neutral-700 transition-colors"
                     >
                       {lang === 'uk' ? 'Очистити пошук' : 'Clear search'}
                     </button>
@@ -1916,7 +1916,7 @@ export default function App() {
                         sound.tick(600);
                         setActiveFilter('ALL');
                       }}
-                      className="px-3.5 py-1.5 bg-neutral-800 border border-neutral-600 text-white font-bold text-xs font-mono tracking-wider hover:bg-neutral-700 transition-colors"
+                      className="px-3.5 py-1.5 bg-neutral-800 border border-neutral-600 text-white font-bold text-xs font-sans tracking-wider hover:bg-neutral-700 transition-colors"
                     >
                       {t.showAllTasks}
                     </button>
@@ -1928,7 +1928,7 @@ export default function App() {
                         sound.tick(600);
                         setSelectedPhase('ALL');
                       }}
-                      className="px-3.5 py-1.5 bg-neutral-900 border border-neutral-700 text-neutral-300 font-bold text-xs font-mono tracking-wider hover:text-white hover:border-neutral-500 transition-colors"
+                      className="px-3.5 py-1.5 bg-neutral-900 border border-neutral-700 text-neutral-300 font-bold text-xs font-sans tracking-wider hover:text-white hover:border-neutral-500 transition-colors"
                     >
                       {t.phases.ALL} ({stats.total})
                     </button>
@@ -1936,7 +1936,7 @@ export default function App() {
                   <button
                     id="empty-add-btn"
                     onClick={() => setIsAddOpen(true)}
-                    className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 bg-white text-black font-extrabold text-xs font-mono tracking-wider hover:bg-neutral-200 transition-colors"
+                    className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 bg-white text-black font-extrabold text-xs font-sans tracking-wider hover:bg-neutral-200 transition-colors"
                   >
                     <Plus className="h-3.5 w-3.5" aria-hidden="true" />
                     <span>{t.injectNewOp}</span>
@@ -2004,7 +2004,7 @@ export default function App() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 20, transition: { duration: 0.15 } }}
-              className="fixed bottom-20 left-1/2 -translate-x-1/2 z-40 bg-neutral-900 border border-neutral-700 px-4 py-2.5 flex items-center gap-3 shadow-2xl text-xs font-mono"
+              className="fixed bottom-20 left-1/2 -translate-x-1/2 z-40 bg-neutral-900 border border-neutral-700 px-4 py-2.5 flex items-center gap-3 shadow-2xl text-xs font-sans"
             >
               <span className="text-neutral-300">
                 {t.opRemoved} "{recentlyDeleted.title.slice(0, 26)}{recentlyDeleted.title.length > 26 ? '...' : ''}"
@@ -2046,7 +2046,7 @@ export default function App() {
               : (lang === 'uk' ? 'Увімкнути анімацію вогню' : 'Turn on fire animation')
           }
           aria-pressed={fireEnabled}
-          className={`min-h-11 px-2 py-1 border transition-all cursor-pointer flex items-center gap-1.5 text-xs font-mono tracking-wider uppercase backdrop-blur-md shadow-md app-no-drag pointer-events-auto ${
+          className={`min-h-11 px-2 py-1 border transition-all cursor-pointer flex items-center gap-1.5 text-xs font-sans tracking-wider uppercase backdrop-blur-md shadow-md app-no-drag pointer-events-auto ${
             fireEnabled
               ? 'border-neutral-700 bg-neutral-900/95 text-neutral-200 hover:border-white hover:text-white'
               : 'border-neutral-800 bg-[#08080a]/95 text-neutral-500 hover:text-neutral-300 hover:border-neutral-700'
@@ -2076,7 +2076,7 @@ export default function App() {
             setIsUpdateOpen(true);
           }}
           title={lang === 'uk' ? `Центр оновлень (v${appCurrentVersion})` : `System update center (v${appCurrentVersion})`}
-          className="min-h-11 px-2 py-1 border border-neutral-800 bg-[#08080a]/95 text-neutral-400 hover:text-white hover:border-neutral-600 transition-all cursor-pointer flex items-center gap-1.5 text-xs font-mono tracking-wider uppercase backdrop-blur-md shadow-md app-no-drag pointer-events-auto"
+          className="min-h-11 px-2 py-1 border border-neutral-800 bg-[#08080a]/95 text-neutral-400 hover:text-white hover:border-neutral-600 transition-all cursor-pointer flex items-center gap-1.5 text-xs font-sans tracking-wider uppercase backdrop-blur-md shadow-md app-no-drag pointer-events-auto"
         >
           <RefreshCw className="w-3.5 h-3.5 text-emerald-400" />
           <span className="hidden sm:inline font-bold text-neutral-300">
@@ -2086,7 +2086,7 @@ export default function App() {
       </div>
 
           {/* Left: Quick Filter Status */}
-          <div className="order-5 basis-full lg:order-1 lg:basis-auto flex flex-wrap items-center justify-center gap-2 text-xs font-mono text-neutral-400 app-no-drag">
+          <div className="order-5 basis-full lg:order-1 lg:basis-auto flex flex-wrap items-center justify-center gap-2 text-xs font-sans text-neutral-400 app-no-drag">
             <span className="text-neutral-200 font-bold">
               {selectedPhase === 'NOTES'
                 ? `${notes.length} ${lang === 'uk' ? (notes.length === 1 ? 'нотатка' : notes.length < 5 ? 'нотатки' : 'нотаток') : (notes.length === 1 ? 'note' : 'notes')}`
@@ -2114,7 +2114,7 @@ export default function App() {
               setIsAIOpen(true);
             }}
             aria-label={lang === 'uk' ? 'Відкрити ШІ-планувальник' : 'Open AI planner'}
-            className="order-2 min-h-11 shrink-0 mx-auto flex items-center justify-center gap-2 px-3 sm:px-4 py-1.5 bg-neutral-900 border border-neutral-700 hover:border-white text-white font-mono text-xs font-bold tracking-wider transition-all active:scale-95 app-no-drag"
+            className="order-2 min-h-11 shrink-0 mx-auto flex items-center justify-center gap-2 px-3 sm:px-4 py-1.5 bg-neutral-900 border border-neutral-700 hover:border-white text-white font-sans text-xs font-bold tracking-wider transition-all active:scale-95 app-no-drag"
           >
             <AIIcon id={aiIconVariant} className="w-3.5 h-3.5 shrink-0 text-neutral-300" />
             <span className="whitespace-nowrap">KARKAS AI</span>
@@ -2131,7 +2131,7 @@ export default function App() {
                 setIsAddOpen(true);
               }
             }}
-            className="order-3 min-h-11 shrink-0 flex items-center gap-1 px-3 py-1.5 bg-white text-black font-extrabold font-mono text-xs tracking-wider hover:bg-neutral-200 transition-all active:scale-95 app-no-drag"
+            className="order-3 min-h-11 shrink-0 flex items-center gap-1 px-3 py-1.5 bg-white text-black font-extrabold font-sans text-xs tracking-wider hover:bg-neutral-200 transition-all active:scale-95 app-no-drag"
           >
             <Plus className="w-3.5 h-3.5" />
             <span>{isAddOpen ? (lang === 'uk' ? 'Зберегти' : 'Save task') : t.addOp}</span>
@@ -2230,7 +2230,7 @@ export default function App() {
             initial={{ opacity: 0, y: -25 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -25 }}
-            className="fixed top-3.5 left-1/2 -translate-x-1/2 z-50 bg-[#09090c]/95 border border-emerald-500/70 shadow-2xl px-4 py-2.5 flex items-center gap-3 font-mono text-xs backdrop-blur-md app-no-drag"
+            className="fixed top-3.5 left-1/2 -translate-x-1/2 z-50 bg-[#09090c]/95 border border-emerald-500/70 shadow-2xl px-4 py-2.5 flex items-center gap-3 font-sans text-xs backdrop-blur-md app-no-drag"
           >
             <Sparkles className="w-4 h-4 text-emerald-400 shrink-0 animate-pulse" />
             <span className="text-neutral-200">
@@ -2272,7 +2272,7 @@ export default function App() {
               initial={{ opacity: 0, scale: 0.96 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.96 }}
-              className="w-full max-w-md bg-[#0c0c0e] border border-neutral-800 shadow-2xl p-5 sm:p-6 flex flex-col gap-4 text-neutral-100 font-mono"
+              className="w-full max-w-md bg-[#0c0c0e] border border-neutral-800 shadow-2xl p-5 sm:p-6 flex flex-col gap-4 text-neutral-100 font-sans"
             >
               <div className="flex items-center justify-between border-b border-neutral-800/80 pb-3">
                 <div className="flex items-center gap-2">

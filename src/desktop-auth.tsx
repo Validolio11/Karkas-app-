@@ -53,7 +53,7 @@ function DesktopLogin() {
   };
 
   return (
-    <main className="min-h-screen bg-[#030303] text-white flex items-center justify-center p-6 font-mono">
+    <main className="min-h-screen bg-[#030303] text-white flex items-center justify-center p-6 font-sans">
       <section className="w-full max-w-md border border-neutral-700 bg-neutral-950 p-8 space-y-6">
         <p className="text-xs text-neutral-400 tracking-widest">KARKAS / GOOGLE</p>
         <h1 className="text-xl font-bold">{done ? 'Поверніться до Karkas' : 'Вхід у застосунок'}</h1>

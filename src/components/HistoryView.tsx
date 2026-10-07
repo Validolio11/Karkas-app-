@@ -134,7 +134,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
               sound.tick(600);
               onBackToTasks();
             }}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-neutral-900 hover:bg-white text-neutral-300 hover:text-black border border-neutral-700 hover:border-white text-xs font-mono font-bold tracking-wider uppercase transition-all cursor-pointer"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-neutral-900 hover:bg-white text-neutral-300 hover:text-black border border-neutral-700 hover:border-white text-xs font-sans font-bold tracking-wider uppercase transition-all cursor-pointer"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
             <span>{hv.backToTasks}</span>
@@ -143,7 +143,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <History className="w-4 h-4 text-white" />
-              <h1 className="text-sm font-mono font-bold tracking-wider uppercase text-white">
+              <h1 className="text-sm font-sans font-bold tracking-wider uppercase text-white">
                 {hv.title}
               </h1>
             </div>
@@ -154,7 +154,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
         </div>
 
         {/* Counter Summary Pills */}
-        <div className="flex items-center gap-2 text-xs font-mono flex-wrap">
+        <div className="flex items-center gap-2 text-xs font-sans flex-wrap">
           <div className="px-2 py-1 bg-black border border-neutral-800 text-neutral-300 flex items-center gap-1.5">
             <span className="text-neutral-500">{hv.totalCount}:</span>
             <span className="font-bold text-white">{allHistoryItems.length}</span>
@@ -183,7 +183,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
               sound.tick(500);
               setActiveSubFilter('ALL');
             }}
-            className={`px-2.5 py-1 text-xs font-mono tracking-wider border uppercase transition-all cursor-pointer ${
+            className={`px-2.5 py-1 text-xs font-sans tracking-wider border uppercase transition-all cursor-pointer ${
               activeSubFilter === 'ALL'
                 ? 'border-white bg-white text-black font-extrabold'
                 : 'border-neutral-800 bg-black text-neutral-400 hover:text-white hover:border-neutral-700'
@@ -199,7 +199,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
               sound.tick(500);
               setActiveSubFilter('COMPLETED');
             }}
-            className={`flex items-center gap-1 px-2.5 py-1 text-xs font-mono tracking-wider border uppercase transition-all cursor-pointer ${
+            className={`flex items-center gap-1 px-2.5 py-1 text-xs font-sans tracking-wider border uppercase transition-all cursor-pointer ${
               activeSubFilter === 'COMPLETED'
                 ? 'border-white bg-white text-black font-extrabold'
                 : 'border-neutral-800 bg-black text-neutral-400 hover:text-white hover:border-neutral-700'
@@ -216,7 +216,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
               sound.tick(500);
               setActiveSubFilter('DELETED');
             }}
-            className={`flex items-center gap-1 px-2.5 py-1 text-xs font-mono tracking-wider border uppercase transition-all cursor-pointer ${
+            className={`flex items-center gap-1 px-2.5 py-1 text-xs font-sans tracking-wider border uppercase transition-all cursor-pointer ${
               activeSubFilter === 'DELETED'
                 ? 'border-white bg-white text-black font-extrabold'
                 : 'border-neutral-800 bg-black text-neutral-400 hover:text-white hover:border-neutral-700'
@@ -238,7 +238,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder={hv.searchPlaceholder}
-              className="w-full bg-black border border-neutral-800 text-xs font-mono text-white placeholder:text-neutral-400 pl-7 pr-8 py-2.5 outline-none focus:border-neutral-500 transition-colors"
+              className="w-full bg-black border border-neutral-800 text-xs font-sans text-white placeholder:text-neutral-400 pl-7 pr-8 py-2.5 outline-none focus:border-neutral-500 transition-colors"
             />
             {searchQuery && (
               <button
@@ -261,7 +261,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
                 setShowClearConfirm(true);
               }}
               title={hv.clearDeleted}
-              className="px-2 py-1 bg-black border border-neutral-800 hover:border-red-600 hover:text-red-400 text-neutral-400 text-xs font-mono tracking-wider uppercase transition-colors whitespace-nowrap cursor-pointer flex items-center gap-1"
+              className="px-2 py-1 bg-black border border-neutral-800 hover:border-red-600 hover:text-red-400 text-neutral-400 text-xs font-sans tracking-wider uppercase transition-colors whitespace-nowrap cursor-pointer flex items-center gap-1"
             >
               <Trash2 className="w-3 h-3" />
               <span>{hv.clearDeleted}</span>
@@ -272,7 +272,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
 
       {/* Confirmation Banner for Clearing Deleted Archive */}
       {showClearConfirm && (
-        <div role="alert" className="p-3 bg-red-950/40 border border-red-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-mono animate-in fade-in">
+        <div role="alert" className="p-3 bg-red-950/40 border border-red-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-sans animate-in fade-in">
           <div className="flex items-center gap-2 text-red-300 min-w-0">
             <AlertTriangle className="w-4 h-4 shrink-0 text-red-400" />
             <span>{hv.clearConfirm}</span>
@@ -303,7 +303,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
           /* Empty State */
           <div role="status" className="p-8 sm:p-12 text-center border border-dashed border-neutral-800 bg-[#0a0a0c]">
             <History className="w-8 h-8 text-neutral-600 mx-auto mb-3" />
-            <h3 className="text-xs sm:text-sm font-mono font-bold tracking-wider text-neutral-300 uppercase">
+            <h3 className="text-xs sm:text-sm font-sans font-bold tracking-wider text-neutral-300 uppercase">
               {searchQuery.trim()
                 ? (lang === 'uk' ? 'НІЧОГО НЕ ЗНАЙДЕНО' : 'NO MATCHING TASKS')
                 : activeSubFilter === 'COMPLETED'
@@ -324,7 +324,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery('')}
-                className="mt-3 text-xs font-mono text-white underline hover:text-neutral-300"
+                className="mt-3 text-xs font-sans text-white underline hover:text-neutral-300"
               >
                 {lang === 'uk' ? 'Скинути пошук' : 'Clear search query'}
               </button>
@@ -350,7 +350,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
                 }`}
               >
                 {/* Header line: Badges & Timestamp */}
-                <div className="flex items-center justify-between gap-2 flex-wrap text-xs font-mono mb-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap text-xs font-sans mb-2">
                   <div className="flex items-center gap-2 flex-wrap min-w-0 max-w-full">
                     {/* Status Badge */}
                     {isCompleted ? (
@@ -398,7 +398,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
 
                     {/* Progress tag if multi-step */}
                     {totalSteps > 1 && (
-                      <span className="text-neutral-500 font-mono">
+                      <span className="text-neutral-500 font-sans">
                         [{completedSteps}/{totalSteps} {hv.stepsCompleted}]
                       </span>
                     )}
@@ -406,7 +406,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
                     {/* Time spent duration pill */}
                     {task.timeSpentSeconds && task.timeSpentSeconds > 0 ? (
                       <span
-                        className="inline-flex items-center gap-1 px-1.5 py-0.5 border border-neutral-800 bg-black text-xs font-mono text-neutral-300"
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 border border-neutral-800 bg-black text-xs font-sans text-neutral-300"
                         title={lang === 'uk' ? 'Витрачено часу на завдання' : 'Time spent on task'}
                       >
                         <Timer className="w-2.5 h-2.5 text-neutral-400" />
@@ -457,7 +457,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
                     {task.stepList.map((st, idx) => (
                       <div
                         key={st.id || idx}
-                        className="flex items-center gap-2 text-xs font-mono text-neutral-400"
+                        className="flex items-center gap-2 text-xs font-sans text-neutral-400"
                       >
                         <span
                           className={`w-1.5 h-1.5 shrink-0 ${
@@ -473,7 +473,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
                 )}
 
                 {/* Bottom Action Buttons */}
-                <div className="pt-2 border-t border-neutral-900/80 flex items-center justify-between flex-wrap gap-2 text-xs font-mono">
+                <div className="pt-2 border-t border-neutral-900/80 flex items-center justify-between flex-wrap gap-2 text-xs font-sans">
                   <div className="text-xs text-neutral-400">
                     <span>{hv.createdAtPrefix}: {formatTimestamp(task.createdAt)}</span>
                   </div>
@@ -487,7 +487,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
                           sound.activate();
                           onToggleDone(task.id);
                         }}
-                        className="flex items-center gap-1.5 px-3 py-1 bg-white hover:bg-neutral-200 text-black border border-white text-xs font-mono font-bold uppercase transition-colors cursor-pointer"
+                        className="flex items-center gap-1.5 px-3 py-1 bg-white hover:bg-neutral-200 text-black border border-white text-xs font-sans font-bold uppercase transition-colors cursor-pointer"
                       >
                         <RotateCcw className="w-3 h-3" />
                         <span>{hv.restoreToActive}</span>
@@ -501,7 +501,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
                             sound.activate();
                             onRestoreDeleted(task as DeletedTask);
                           }}
-                          className="flex items-center gap-1.5 px-3 py-1 bg-white hover:bg-neutral-200 text-black border border-white text-xs font-mono font-bold uppercase transition-colors cursor-pointer"
+                          className="flex items-center gap-1.5 px-3 py-1 bg-white hover:bg-neutral-200 text-black border border-white text-xs font-sans font-bold uppercase transition-colors cursor-pointer"
                         >
                           <RotateCcw className="w-3 h-3" />
                           <span>{hv.restoreDeleted}</span>

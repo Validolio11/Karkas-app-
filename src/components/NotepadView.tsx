@@ -668,7 +668,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder={nv.searchPlaceholder}
-            className="w-full pl-9 pr-8 py-2.5 bg-[#09090d] border border-neutral-800 text-neutral-200 placeholder-neutral-500 text-xs font-mono focus:outline-none focus:border-neutral-500 transition-colors shadow-inner"
+            className="w-full pl-9 pr-8 py-2.5 bg-[#09090d] border border-neutral-800 text-neutral-200 placeholder-neutral-500 text-base leading-[1.6] font-sans focus:outline-none focus:border-neutral-500 transition-colors shadow-inner"
           />
           {searchQuery && (
             <button
@@ -691,7 +691,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
               if (!isComposerOpen) titleInputRef.current?.focus();
             }, 100);
           }}
-          className="px-3.5 py-2.5 bg-white hover:bg-neutral-200 text-black font-extrabold text-xs font-mono tracking-wider uppercase transition-all flex items-center gap-1.5 shrink-0 active:scale-95 cursor-pointer shadow-sm"
+          className="px-3.5 py-2.5 bg-white hover:bg-neutral-200 text-black font-extrabold text-xs font-sans tracking-wider uppercase transition-all flex items-center gap-1.5 shrink-0 active:scale-95 cursor-pointer shadow-sm"
         >
           {isComposerOpen ? <X className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
           <span>{isComposerOpen ? nv.cancel : nv.newNote}</span>
@@ -708,7 +708,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
               sound.tick(500);
               setSelectedColorFilter('ALL');
             }}
-            className={`px-2 py-1 text-[11px] font-mono tracking-wider uppercase border transition-all cursor-pointer ${
+            className={`px-2 py-1 text-[11px] font-sans tracking-wider uppercase border transition-all cursor-pointer ${
               selectedColorFilter === 'ALL'
                 ? 'border-neutral-600 bg-neutral-800 text-white font-bold'
                 : 'border-neutral-800 bg-[#0a0a0d] text-neutral-400 hover:text-neutral-200 hover:border-neutral-700'
@@ -739,7 +739,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
           </div>
 
           {pinnedCount > 0 && (
-            <span className="text-[10px] font-mono px-2 py-0.5 bg-neutral-900 border border-neutral-800 text-amber-300 flex items-center gap-1">
+            <span className="text-[10px] font-sans px-2 py-0.5 bg-neutral-900 border border-neutral-800 text-amber-300 flex items-center gap-1">
               <Pin className="w-2.5 h-2.5" />
               <span>{pinnedCount}</span>
             </span>
@@ -749,7 +749,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
         {/* Right: Compact Sorting Controls + Grid/List Toggle */}
         <div className="flex items-center gap-2 self-end sm:self-auto">
           <div className="flex items-center gap-1 bg-[#0a0a0d] border border-neutral-800 p-0.5">
-            <span className="text-[10px] font-mono text-neutral-500 px-1.5 uppercase tracking-wider flex items-center gap-1">
+            <span className="text-[10px] font-sans text-neutral-500 px-1.5 uppercase tracking-wider flex items-center gap-1">
               <ArrowUpDown className="w-2.5 h-2.5" />
               <span className="hidden md:inline">{nv.sortLabel}</span>
             </span>
@@ -761,7 +761,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
                   sound.tick(500);
                   setSortOption(opt);
                 }}
-                className={`px-2 py-0.5 text-[10px] font-mono uppercase tracking-wider transition-all cursor-pointer ${
+                className={`px-2 py-0.5 text-[10px] font-sans uppercase tracking-wider transition-all cursor-pointer ${
                   sortOption === opt
                     ? 'bg-neutral-200 text-black font-extrabold'
                     : 'text-neutral-400 hover:text-white'
@@ -812,7 +812,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
             transition={{ duration: 0.18, ease: 'easeOut' }}
             className="overflow-hidden"
           >
-            <div className="border border-neutral-800 bg-[#0a0a0d] p-4 font-mono space-y-3 shadow-lg">
+            <div className="border border-neutral-800 bg-[#0a0a0d] p-4 font-sans space-y-3 shadow-lg">
               {/* Top status of composer */}
               <div className="flex items-center justify-between pb-2 border-b border-neutral-800/80 text-xs">
                 <div className="flex items-center gap-2">
@@ -844,7 +844,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
                     }}
                     placeholder={nv.titlePlaceholder}
                     style={{ color: selectedColor }}
-                    className="w-full bg-[#060608] border border-neutral-800 text-sm font-mono font-bold pl-3 pr-9 py-2 focus:outline-none focus:border-neutral-500 transition-colors"
+                    className="w-full bg-[#060608] border border-neutral-800 text-base leading-[1.6] font-sans font-bold pl-3 pr-9 py-2 focus:outline-none focus:border-neutral-500 transition-colors"
                   />
                   <button
                     type="button"
@@ -894,13 +894,13 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
                   }}
                   placeholder={nv.contentPlaceholder}
                   rows={3}
-                  className="w-full bg-[#060608] border border-neutral-800 text-neutral-200 placeholder:text-neutral-500 text-xs font-mono p-3 focus:outline-none focus:border-neutral-500 transition-colors leading-relaxed"
+                  className="w-full bg-[#060608] border border-neutral-800 text-neutral-200 placeholder:text-neutral-500 text-base leading-[1.6] font-sans p-3 focus:outline-none focus:border-neutral-500 transition-colors"
                 />
               </div>
 
               {/* Voice Recording Live Feedback */}
               {(isVoiceStarting || isListening || isTranscribing || voiceNotice) && (
-                <div className="flex items-center justify-between px-3 py-1.5 bg-[#060608] border border-neutral-800 text-xs font-mono">
+                <div className="flex items-center justify-between px-3 py-1.5 bg-[#060608] border border-neutral-800 text-xs font-sans">
                   {voiceNotice ? (
                     <div className="flex items-center gap-2 text-amber-400">
                       <AlertTriangle className="w-3 h-3 shrink-0" />
@@ -918,7 +918,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
                         <span className="text-[11px] text-red-400 font-bold uppercase tracking-wider">
                           {nv.voiceListening} ({voiceTarget === 'title' ? (lang === 'uk' ? 'в заголовок' : 'to title') : (lang === 'uk' ? 'в текст' : 'to body')})
                         </span>
-                        <span className="text-[10px] text-neutral-400 font-mono">
+                        <span className="text-[10px] text-neutral-400 font-sans">
                           {Math.floor(recordingDuration / 60).toString().padStart(2, '0')}:
                           {(recordingDuration % 60).toString().padStart(2, '0')}
                         </span>
@@ -940,7 +940,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
                 <button
                   type="button"
                   onClick={() => handleToggleVoiceInput('content')}
-                  className={`px-2.5 py-1.5 border font-mono text-xs uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer ${
+                  className={`px-2.5 py-1.5 border font-sans text-xs uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer ${
                     isListening && voiceTarget === 'content'
                       ? 'border-red-500 bg-red-950/40 text-red-400'
                       : 'border-neutral-800 bg-[#060608] text-neutral-400 hover:text-white hover:border-neutral-600'
@@ -967,7 +967,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
                       setIsComposerOpen(false);
                       cancelVoiceInput();
                     }}
-                    className="px-3 py-1.5 border border-neutral-800 text-neutral-400 hover:text-white text-xs font-mono uppercase tracking-wider transition-colors cursor-pointer"
+                    className="px-3 py-1.5 border border-neutral-800 text-neutral-400 hover:text-white text-xs font-sans uppercase tracking-wider transition-colors cursor-pointer"
                   >
                     {nv.cancel}
                   </button>
@@ -975,7 +975,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
                     type="button"
                     onClick={() => handleSaveNewNote()}
                     disabled={isVoiceStarting || isListening || isTranscribing || (!title.trim() && !content.trim())}
-                    className="px-3.5 py-1.5 bg-white text-black font-extrabold text-xs font-mono uppercase tracking-wider hover:bg-neutral-200 disabled:opacity-40 transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
+                    className="px-3.5 py-1.5 bg-white text-black font-extrabold text-xs font-sans uppercase tracking-wider hover:bg-neutral-200 disabled:opacity-40 transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
                   >
                     <Check className="w-3 h-3" />
                     <span>{nv.saveNote}</span>
@@ -993,17 +993,17 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
           <div className="w-8 h-8 mx-auto mb-2 border border-neutral-800 bg-neutral-900/60 flex items-center justify-center text-neutral-500">
             <NotebookPen className="w-4 h-4" />
           </div>
-          <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-neutral-200">
+          <h3 className="text-xs font-sans font-bold uppercase tracking-wider text-neutral-200">
             {hasFilters ? nv.emptySearch : nv.emptyTitle}
           </h3>
-          <p className="text-xs font-mono text-neutral-500 max-w-sm mx-auto">
+          <p className="text-xs font-sans text-neutral-500 max-w-sm mx-auto">
             {hasFilters ? nv.emptySearchDesc : nv.emptyDesc}
           </p>
           {hasFilters ? (
             <button
               type="button"
               onClick={() => { setSearchQuery(''); setSelectedColorFilter('ALL'); }}
-              className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 bg-neutral-800 border border-neutral-700 text-white font-bold text-xs font-mono tracking-wider hover:bg-neutral-700 transition-colors cursor-pointer"
+              className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 bg-neutral-800 border border-neutral-700 text-white font-bold text-xs font-sans tracking-wider hover:bg-neutral-700 transition-colors cursor-pointer"
             >
               {lang === 'uk' ? 'Скинути фільтри' : 'Reset filters'}
             </button>
@@ -1015,7 +1015,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
                 setIsComposerOpen(true);
                 setTimeout(() => titleInputRef.current?.focus(), 100);
               }}
-              className="mt-3 inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-white text-black font-extrabold text-xs font-mono uppercase tracking-wider hover:bg-neutral-200 transition-all cursor-pointer"
+              className="mt-3 inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-white text-black font-extrabold text-xs font-sans uppercase tracking-wider hover:bg-neutral-200 transition-all cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" />
               <span>{nv.newNote}</span>
@@ -1038,10 +1038,10 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
               return (
                 <div
                   key={note.id}
-                  className="border border-neutral-600 bg-[#0a0a0d] p-3.5 space-y-3 col-span-full shadow-lg font-mono"
+                  className="border border-neutral-600 bg-[#0a0a0d] p-3.5 space-y-3 col-span-full shadow-lg font-sans"
                 >
                   <div className="flex items-center justify-between pb-2 border-b border-neutral-800">
-                    <span className="text-xs font-mono font-bold uppercase text-white">
+                    <span className="text-xs font-sans font-bold uppercase text-white">
                       {nv.editNote}
                     </span>
                     <div className="flex items-center gap-1">
@@ -1068,7 +1068,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
                       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') handleSaveEdit();
                     }}
                     style={{ color: editColor }}
-                    className="w-full bg-[#060608] border border-neutral-800 text-sm font-mono font-bold px-3 py-2 focus:outline-none focus:border-neutral-500"
+                    className="w-full bg-[#060608] border border-neutral-800 text-base leading-[1.6] font-sans font-bold px-3 py-2 focus:outline-none focus:border-neutral-500"
                   />
 
                   <textarea
@@ -1078,14 +1078,14 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
                       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') handleSaveEdit();
                     }}
                     rows={4}
-                    className="w-full bg-[#060608] border border-neutral-800 text-neutral-200 text-xs font-mono p-2.5 focus:outline-none focus:border-neutral-500 leading-relaxed"
+                    className="w-full bg-[#060608] border border-neutral-800 text-neutral-200 text-base leading-[1.6] font-sans p-2.5 focus:outline-none focus:border-neutral-500"
                   />
 
                   <div className="flex items-center justify-between pt-1">
                     <button
                       type="button"
                       onClick={() => handleToggleVoiceInput('content', note.id)}
-                      className={`px-2.5 py-1 border text-xs font-mono uppercase flex items-center gap-1.5 cursor-pointer ${
+                      className={`px-2.5 py-1 border text-xs font-sans uppercase flex items-center gap-1.5 cursor-pointer ${
                         isListening
                           ? 'border-red-500 bg-red-950/40 text-red-400'
                           : 'border-neutral-800 bg-[#060608] text-neutral-400 hover:text-white'
@@ -1099,7 +1099,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
                       <button
                         type="button"
                         onClick={handleCancelEdit}
-                        className="px-2.5 py-1 border border-neutral-800 text-neutral-400 hover:text-white text-xs font-mono uppercase cursor-pointer"
+                        className="px-2.5 py-1 border border-neutral-800 text-neutral-400 hover:text-white text-xs font-sans uppercase cursor-pointer"
                       >
                         {nv.cancel}
                       </button>
@@ -1107,7 +1107,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
                         type="button"
                         onClick={handleSaveEdit}
                         disabled={isVoiceStarting || isListening || isTranscribing || (!editTitle.trim() && !editContent.trim())}
-                        className="px-3 py-1 bg-white text-black font-extrabold text-xs font-mono uppercase hover:bg-neutral-200 disabled:opacity-40 cursor-pointer"
+                        className="px-3 py-1 bg-white text-black font-extrabold text-xs font-sans uppercase hover:bg-neutral-200 disabled:opacity-40 cursor-pointer"
                       >
                         {nv.updateNote}
                       </button>
@@ -1137,7 +1137,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
                         style={{ backgroundColor: noteColor }}
                       />
                       <h3
-                        className="text-xs sm:text-sm font-mono font-bold tracking-tight break-words line-clamp-2"
+                        className="text-base font-sans font-bold tracking-tight break-words line-clamp-2"
                         style={{ color: noteColor }}
                       >
                         {note.title}
@@ -1193,7 +1193,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
                   </div>
 
                   {/* Note Body Text */}
-                  <div className="text-neutral-300 text-xs font-mono whitespace-pre-wrap break-words leading-relaxed py-0.5">
+                  <div className="text-neutral-300 text-[15px] font-sans whitespace-pre-wrap break-words leading-[1.6] py-0.5">
                     {note.content || (
                       <span className="italic text-neutral-600">
                         {lang === 'uk' ? '(Порожній вміст)' : '(No content)'}
@@ -1204,7 +1204,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
 
                 {/* Footer: Crisp Timestamp and Edit Tag */}
                 <div
-                  className={`border-t border-neutral-800/60 flex items-center justify-between text-[10px] font-mono text-neutral-500 ${
+                  className={`border-t border-neutral-800/60 flex items-center justify-between text-[10px] font-sans text-neutral-500 ${
                     viewMode === 'list'
                       ? 'sm:border-t-0 sm:border-l sm:pl-4 sm:ml-2 sm:flex-col sm:items-end sm:justify-center sm:gap-1 mt-2 sm:mt-0 pt-2 sm:pt-0 shrink-0'
                       : 'mt-3 pt-2.5'
@@ -1237,7 +1237,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
         onClick={(event) => { if (event.target === event.currentTarget) setPendingDelete(null); }}
         className="fixed m-auto w-[calc(100%-2rem)] max-w-md border border-neutral-700 bg-[#101014] p-0 text-neutral-100 shadow-2xl backdrop:bg-black/70"
       >
-        <div className="space-y-4 p-5 font-mono">
+        <div className="space-y-4 p-5 font-sans">
           <h2 id="delete-note-title" className="flex items-center gap-2 text-sm font-bold">
             <AlertTriangle className="h-5 w-5 shrink-0 text-rose-400" />
             {lang === 'uk' ? 'Видалити нотатку?' : 'Delete note?'}
@@ -1265,7 +1265,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 20, transition: { duration: 0.15 } }}
-            className="fixed bottom-16 left-1/2 -translate-x-1/2 z-40 bg-neutral-900 border border-neutral-700 px-4 py-2.5 flex items-center gap-3 shadow-2xl text-xs font-mono"
+            className="fixed bottom-16 left-1/2 -translate-x-1/2 z-40 bg-neutral-900 border border-neutral-700 px-4 py-2.5 flex items-center gap-3 shadow-2xl text-xs font-sans"
           >
             <span className="text-neutral-300">
               {lang === 'uk' ? 'Нотатку видалено:' : 'Note deleted:'} "{recentlyDeletedNote.title.slice(0, 24)}{recentlyDeletedNote.title.length > 24 ? '...' : ''}"

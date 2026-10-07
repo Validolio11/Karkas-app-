@@ -92,7 +92,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           aria-labelledby="settings-modal-title"
           aria-describedby="settings-modal-description"
           onKeyDown={handleDialogKeyDown}
-          className="relative z-10 flex max-h-[calc(100dvh-2rem)] w-full max-w-lg flex-col overflow-hidden border border-neutral-800 bg-[#0c0c0e] font-mono text-neutral-100 shadow-2xl [&_button]:cursor-pointer [&_button]:focus-visible:outline-2 [&_button]:focus-visible:outline-offset-2 [&_button]:focus-visible:outline-white"
+          className="relative z-10 flex max-h-[calc(100dvh-2rem)] w-full max-w-lg flex-col overflow-hidden border border-neutral-800 bg-[#0c0c0e] font-sans text-neutral-100 shadow-2xl [&_button]:cursor-pointer [&_button]:focus-visible:outline-2 [&_button]:focus-visible:outline-offset-2 [&_button]:focus-visible:outline-white"
         >
           <div className="flex items-center justify-between gap-3 border-b border-neutral-800 px-5 py-5">
             <div className="flex items-center gap-3">

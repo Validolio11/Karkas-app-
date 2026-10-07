@@ -33,7 +33,7 @@ const CopyableDomain: React.FC<{ domain: string; lang: string }> = ({ domain, la
     }
   };
   return (
-    <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 bg-black border border-neutral-800 text-xs font-mono hover:border-neutral-700 transition-colors">
+    <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 bg-black border border-neutral-800 text-xs font-sans hover:border-neutral-700 transition-colors">
       <span className="text-neutral-300 truncate select-all">{domain}</span>
       <button
         type="button"
@@ -143,7 +143,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
                   href={consoleUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-950/80 border border-rose-800 hover:border-white text-white font-bold text-xs font-mono uppercase transition-all tracking-wider cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-950/80 border border-rose-800 hover:border-white text-white font-bold text-xs font-sans uppercase transition-all tracking-wider cursor-pointer"
                   onClick={() => sound.activate()}
                 >
                   <span>{lang === 'uk' ? 'Налаштування Firebase Console ↗' : 'Firebase Console Settings ↗'}</span>
@@ -286,14 +286,14 @@ export const AccountModal: React.FC<AccountModalProps> = ({
         aria-modal="true"
         aria-labelledby="account-modal-title"
         aria-describedby="account-modal-description"
-        className="relative z-10 flex max-h-[calc(100dvh-2rem)] w-full max-w-xl flex-col overflow-hidden border border-neutral-800 bg-[#0c0c0e] font-mono text-neutral-100 shadow-2xl [&_button]:cursor-pointer [&_button]:focus-visible:outline-2 [&_button]:focus-visible:outline-offset-2 [&_button]:focus-visible:outline-white"
+        className="relative z-10 flex max-h-[calc(100dvh-2rem)] w-full max-w-xl flex-col overflow-hidden border border-neutral-800 bg-[#0c0c0e] font-sans text-neutral-100 shadow-2xl [&_button]:cursor-pointer [&_button]:focus-visible:outline-2 [&_button]:focus-visible:outline-offset-2 [&_button]:focus-visible:outline-white"
       >
         {/* Top Header */}
         <div className="flex shrink-0 items-center justify-between gap-3 px-5 py-5 border-b border-neutral-800 bg-[#0c0c0e]">
           <div className="flex items-center gap-2">
             <Cloud className="w-4 h-4 text-white" />
             <div>
-              <h2 id="account-modal-title" className="text-xs font-mono font-black tracking-widest uppercase text-white">
+              <h2 id="account-modal-title" className="text-xs font-sans font-black tracking-widest uppercase text-white">
                 {acc.title}
               </h2>
               <p id="account-modal-description" className="mt-1 text-xs leading-relaxed text-neutral-400">
@@ -324,7 +324,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
                 initial={{ opacity: 0, height: 0 }}
                 animate={{ opacity: 1, height: 'auto' }}
                 exit={{ opacity: 0, height: 0 }}
-                className={`p-3 text-xs font-mono flex items-start gap-2 border ${
+                className={`p-3 text-xs font-sans flex items-start gap-2 border ${
                   feedbackMsg.type === 'success'
                     ? 'bg-emerald-950/40 border-emerald-800/80 text-emerald-300'
                     : 'bg-rose-950/40 border-rose-800/80 text-rose-300'
@@ -432,7 +432,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
           ) : (
             /* Logged-out view */
             <div className="space-y-4">
-              <div className="p-3.5 bg-neutral-900/60 border border-neutral-800 text-xs font-mono text-neutral-300 leading-relaxed flex items-start gap-2.5">
+              <div className="p-3.5 bg-neutral-900/60 border border-neutral-800 text-xs font-sans text-neutral-300 leading-relaxed flex items-start gap-2.5">
                 <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
                 <div>
                   <p className="font-bold text-white mb-1">
@@ -450,7 +450,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
                 type="button"
                 onClick={handleGoogleLogin}
                 disabled={authLoading}
-                className="w-full py-3 px-4 bg-white hover:bg-neutral-100 text-black font-mono font-extrabold text-xs tracking-wider transition-all flex items-center justify-center gap-3 shadow-lg active:scale-98 cursor-pointer disabled:opacity-50"
+                className="w-full py-3 px-4 bg-white hover:bg-neutral-100 text-black font-sans font-extrabold text-xs tracking-wider transition-all flex items-center justify-center gap-3 shadow-lg active:scale-98 cursor-pointer disabled:opacity-50"
               >
                 {/* Google Multi-Color G Icon */}
                 <svg className="w-4 h-4" viewBox="0 0 24 24">
@@ -478,7 +478,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
                   : acc.signInWithGoogle}</span>
               </button>
 
-              <p className="text-[11px] font-mono text-neutral-400 text-center leading-relaxed">
+              <p className="text-[11px] font-sans text-neutral-400 text-center leading-relaxed">
                 {lang === 'uk'
                   ? 'Після входу додаток перевіряє хмарну копію, зберігає локальні дані й узгоджує зміни. Результат показано в статусі синхронізації.'
                   : 'After sign-in, the app checks your cloud backup, preserves local data and reconciles changes. Check the sync status for the result.'}
@@ -489,7 +489,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="shrink-0 px-5 py-3 border-t border-neutral-800/80 bg-[#0a0a0c] flex items-center justify-between text-xs font-mono text-neutral-400">
+        <div className="shrink-0 px-5 py-3 border-t border-neutral-800/80 bg-[#0a0a0c] flex items-center justify-between text-xs font-sans text-neutral-400">
           <span>KARKAS // SECURE CLOUD</span>
           <button
             onClick={onClose}

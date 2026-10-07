@@ -130,7 +130,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
             }}
           />
 
-          <span className="text-xs font-mono font-extrabold tracking-wider text-neutral-200 uppercase">{t.appTitle}</span>
+          <span className="text-xs font-sans font-extrabold tracking-wider text-neutral-200 uppercase">{t.appTitle}</span>
         </div>
 
         {/* Center & Right: App Action Buttons integrated right inside the Windows Title Bar Header */}
@@ -154,7 +154,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
                   }`
                 : t.account.title
             }
-            className={`flex items-center gap-1.5 text-xs font-mono font-bold tracking-wider px-2 py-0.5 border transition-all cursor-pointer shrink-0 app-no-drag ${
+            className={`flex items-center gap-1.5 text-xs font-sans font-bold tracking-wider px-2 py-0.5 border transition-all cursor-pointer shrink-0 app-no-drag ${
               user
                 ? isSyncing
                   ? 'border-amber-700/80 bg-amber-950/30 text-amber-300'
@@ -202,7 +202,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
               onToggleLang();
             }}
             title={lang === 'uk' ? 'Перемкнути на English' : 'Switch to Ukrainian'}
-            className="flex items-center gap-1 text-xs font-mono font-bold tracking-wider px-2 py-0.5 border border-neutral-800 text-neutral-300 hover:text-white hover:border-neutral-600 bg-neutral-900 transition-colors shrink-0 app-no-drag"
+            className="flex items-center gap-1 text-xs font-sans font-bold tracking-wider px-2 py-0.5 border border-neutral-800 text-neutral-300 hover:text-white hover:border-neutral-600 bg-neutral-900 transition-colors shrink-0 app-no-drag"
           >
             <Globe className="w-2.5 h-2.5 text-neutral-400" />
             <span>{lang === 'uk' ? 'УКР' : 'ENG'}</span>
@@ -244,7 +244,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
               onOpenAI();
             }}
             title={lang === 'uk' ? 'Розумний Karkas Ai планувальник' : 'Smart Karkas Ai Planner'}
-            className="flex items-center gap-1.5 text-xs font-mono font-bold tracking-wider px-2 py-0.5 bg-neutral-900 border border-neutral-700 hover:border-white text-neutral-200 hover:text-white transition-all cursor-pointer shrink-0 app-no-drag"
+            className="flex items-center gap-1.5 text-xs font-sans font-bold tracking-wider px-2 py-0.5 bg-neutral-900 border border-neutral-700 hover:border-white text-neutral-200 hover:text-white transition-all cursor-pointer shrink-0 app-no-drag"
           >
             <AIIcon id={aiIconVariant} className="w-3 h-3 text-neutral-300" />
             <span className="hidden sm:inline">KARKAS AI</span>
@@ -258,7 +258,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
               sound.tick(600);
               onToggleAdd();
             }}
-            className={`flex items-center gap-1 text-xs font-mono font-bold tracking-wider px-2 py-0.5 border transition-all shrink-0 app-no-drag ${
+            className={`flex items-center gap-1 text-xs font-sans font-bold tracking-wider px-2 py-0.5 border transition-all shrink-0 app-no-drag ${
               isAddOpen
                 ? 'bg-white text-black border-white'
                 : 'bg-neutral-900 text-neutral-200 border-neutral-700 hover:border-white'
@@ -320,7 +320,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
       <div className="pt-4 pb-3 px-5 sm:px-8 app-no-drag">
         {/* Visual Timeline & Progress Matrix Bar */}
         <div className="mb-2">
-          <div className="flex items-center justify-between flex-wrap gap-3 text-xs font-mono text-neutral-400 mb-3">
+          <div className="flex items-center justify-between flex-wrap gap-3 text-xs font-sans text-neutral-400 mb-3">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-white font-bold">{stats.completed}/{stats.total} {t.delivered}</span>
               <span className="text-neutral-600">//</span>
@@ -338,7 +338,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
                       sound.tick(500);
                       onSetFilter(f);
                     }}
-                    className={`px-1.5 py-0.5 border font-mono transition-colors ${
+                    className={`px-1.5 py-0.5 border font-sans transition-colors ${
                       activeFilter === f
                         ? 'border-white text-white bg-neutral-800'
                         : 'border-transparent text-neutral-500 hover:text-neutral-300'
@@ -371,7 +371,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
                 sound.tick(600);
                 onSelectPhase('DASHBOARD');
               }}
-              className={`flex items-center gap-1.5 text-xs font-mono tracking-wider px-3 py-2 border whitespace-nowrap transition-all shrink-0 cursor-pointer ${
+              className={`flex items-center gap-1.5 text-xs font-sans tracking-wider px-3 py-2 border whitespace-nowrap transition-all shrink-0 cursor-pointer ${
                 selectedPhase === 'DASHBOARD'
                   ? 'border-white bg-white text-black font-extrabold'
                   : 'border-neutral-800 bg-[#09090b] text-neutral-300 hover:text-white hover:border-neutral-600'
@@ -388,7 +388,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
                 sound.tick(600);
                 onSelectPhase('NOTES');
               }}
-              className={`flex items-center gap-1.5 text-xs font-mono tracking-wider px-3 py-2 border whitespace-nowrap transition-all shrink-0 cursor-pointer ${
+              className={`flex items-center gap-1.5 text-xs font-sans tracking-wider px-3 py-2 border whitespace-nowrap transition-all shrink-0 cursor-pointer ${
                 selectedPhase === 'NOTES'
                   ? 'border-white bg-white text-black font-extrabold'
                   : 'border-neutral-800 bg-[#09090b] text-neutral-300 hover:text-white hover:border-neutral-600'
@@ -397,7 +397,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
               <NotebookPen className={`w-3 h-3 ${selectedPhase === 'NOTES' ? 'text-black' : 'text-neutral-400'}`} />
               <span className="font-bold">{t.notepad || (lang === 'uk' ? 'БЛОКНОТ' : 'NOTEPAD')}</span>
               {notesCount > 0 && (
-                <span className={`text-xs font-mono ${selectedPhase === 'NOTES' ? 'text-black font-bold' : 'text-neutral-500'}`}>
+                <span className={`text-xs font-sans ${selectedPhase === 'NOTES' ? 'text-black font-bold' : 'text-neutral-500'}`}>
                   {notesCount}
                 </span>
               )}
@@ -410,7 +410,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
                 sound.tick(600);
                 onSelectPhase('ALL');
               }}
-              className={`flex items-center gap-1.5 text-xs font-mono tracking-wider px-3 py-2 border whitespace-nowrap transition-all shrink-0 cursor-pointer ${
+              className={`flex items-center gap-1.5 text-xs font-sans tracking-wider px-3 py-2 border whitespace-nowrap transition-all shrink-0 cursor-pointer ${
                 selectedPhase === 'ALL'
                   ? 'border-white bg-neutral-100 text-black font-extrabold'
                   : 'border-neutral-800 bg-[#09090b] text-neutral-400 hover:text-white hover:border-neutral-600'
@@ -441,7 +441,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
                       ? { borderBottomColor: tab.color, borderBottomWidth: '2px' }
                       : undefined
                   }
-                  className={`flex items-center gap-1.5 text-xs font-mono tracking-wider px-3 py-2 border whitespace-nowrap transition-all shrink-0 cursor-pointer ${
+                  className={`flex items-center gap-1.5 text-xs font-sans tracking-wider px-3 py-2 border whitespace-nowrap transition-all shrink-0 cursor-pointer ${
                     isSelected
                       ? 'border-white bg-white text-black font-extrabold shadow-sm'
                       : 'border-neutral-800 bg-[#09090b] text-neutral-300 hover:text-white hover:border-neutral-600'
@@ -454,7 +454,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
                     />
                   )}
                   <span>{tabDisplayName}</span>
-                  <span className={`text-xs font-mono ${isSelected ? 'text-black font-bold' : 'text-neutral-500'}`}>
+                  <span className={`text-xs font-sans ${isSelected ? 'text-black font-bold' : 'text-neutral-500'}`}>
                     {count}
                   </span>
                 </button>
@@ -471,7 +471,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
                   onChange={(e) => setInlineTabName(e.target.value)}
                   placeholder={t.tabNamePlaceholder}
                   maxLength={20}
-                  className="bg-transparent text-xs font-mono text-white placeholder:text-neutral-300 outline-none w-24 px-1"
+                  className="bg-transparent text-xs font-sans text-white placeholder:text-neutral-300 outline-none w-24 px-1"
                 />
                 <button
                   type="submit"
@@ -498,7 +498,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
                   setIsInlineAdding(true);
                 }}
                 title={lang === 'uk' ? 'Додати нову вкладку' : 'Add new tab'}
-                className="flex h-[34px] shrink-0 items-center gap-1.5 px-3 text-xs font-mono tracking-wider border border-dashed border-neutral-700 text-neutral-400 hover:text-white hover:border-white bg-[#09090b]/60 whitespace-nowrap transition-colors cursor-pointer"
+                className="flex h-[34px] shrink-0 items-center gap-1.5 px-3 text-xs font-sans tracking-wider border border-dashed border-neutral-700 text-neutral-400 hover:text-white hover:border-white bg-[#09090b]/60 whitespace-nowrap transition-colors cursor-pointer"
               >
                 <Plus className="w-3 h-3" />
                 <span>{t.addTab}</span>
@@ -530,7 +530,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
                 onSelectPhase('HISTORY');
               }}
               title={lang === 'uk' ? 'Історія виконаних та видалених завдань' : 'History of completed and deleted tasks'}
-              className={`flex items-center gap-1.5 text-xs font-mono tracking-wider px-3 py-2 border whitespace-nowrap transition-all shrink-0 cursor-pointer ${
+              className={`flex items-center gap-1.5 text-xs font-sans tracking-wider px-3 py-2 border whitespace-nowrap transition-all shrink-0 cursor-pointer ${
                 selectedPhase === 'HISTORY'
                   ? 'border-white bg-white text-black font-extrabold'
                   : 'border-neutral-800 bg-[#09090b] text-neutral-300 hover:text-white hover:border-neutral-600'
@@ -540,7 +540,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
               <span className="font-bold">{t.history || (lang === 'uk' ? 'ІСТОРІЯ' : 'HISTORY')}</span>
               {historyCount !== undefined && historyCount > 0 && (
                 <span
-                  className={`text-xs font-mono px-1 py-0.2 ${
+                  className={`text-xs font-sans px-1 py-0.2 ${
                     selectedPhase === 'HISTORY'
                       ? 'bg-black text-white font-bold'
                       : 'bg-neutral-800 text-neutral-400'
@@ -560,7 +560,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
             sound.tick(500);
             onToggleAdd();
           }}
-          className="w-full flex items-center justify-center pt-1.5 cursor-pointer text-xs font-mono tracking-widest text-neutral-400 hover:text-neutral-200 transition-colors"
+          className="w-full flex items-center justify-center pt-1.5 cursor-pointer text-xs font-sans tracking-widest text-neutral-400 hover:text-neutral-200 transition-colors"
         >
           <span className="flex items-center gap-1">
             <ChevronDown className={`w-3 h-3 transition-transform ${isAddOpen ? 'rotate-180' : ''}`} />

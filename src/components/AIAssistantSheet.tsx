@@ -843,7 +843,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                 onClose();
               }
             }}
-            className="relative z-10 w-full max-w-2xl bg-[#0c0c0e] border-t border-x border-neutral-800 max-h-[88dvh] flex flex-col shadow-2xl font-mono"
+            className="relative z-10 w-full max-w-2xl bg-[#0c0c0e] border-t border-x border-neutral-800 max-h-[88dvh] flex flex-col shadow-2xl font-sans"
           >
             {/* Drag Handle */}
             <div
@@ -859,7 +859,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
             <div className="flex shrink-0 items-center justify-between gap-2 px-4 sm:px-5 py-3 border-b border-neutral-800">
               <div className="min-w-0 flex items-center gap-2">
                 <AIIcon id={aiIconVariant} className="w-4 h-4 shrink-0 text-white" />
-                <span className="min-w-0 break-words text-xs sm:text-sm font-bold uppercase tracking-wider font-mono text-white">
+                <span className="min-w-0 break-words text-xs sm:text-sm font-bold uppercase tracking-wider font-sans text-white">
                   {t.aiSheet.header}
                 </span>
               </div>
@@ -884,7 +884,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   sound.tick(450);
                   setMode('chat');
                 }}
-                className={`min-h-11 min-w-0 py-1.5 px-2 text-xs font-mono font-bold tracking-normal sm:tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                className={`min-h-11 min-w-0 py-1.5 px-2 text-xs font-sans font-bold tracking-normal sm:tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
                   mode === 'chat'
                     ? 'bg-white text-black border-white'
                     : 'bg-[#08080a] text-neutral-400 border-neutral-800 hover:text-white hover:border-neutral-700'
@@ -903,7 +903,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   sound.tick(500);
                   setMode('breakdown');
                 }}
-                className={`min-h-11 min-w-0 py-1.5 px-2 text-xs font-mono font-bold tracking-normal sm:tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                className={`min-h-11 min-w-0 py-1.5 px-2 text-xs font-sans font-bold tracking-normal sm:tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
                   mode === 'breakdown'
                     ? 'bg-white text-black border-white'
                     : 'bg-[#08080a] text-neutral-400 border-neutral-800 hover:text-white hover:border-neutral-700'
@@ -923,7 +923,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   setMode('analyze');
                   handleGenerate(prompt, 'analyze');
                 }}
-                className={`min-h-11 min-w-0 py-1.5 px-2 text-xs font-mono font-bold tracking-normal sm:tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                className={`min-h-11 min-w-0 py-1.5 px-2 text-xs font-sans font-bold tracking-normal sm:tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
                   mode === 'analyze'
                     ? 'bg-white text-black border-white'
                     : 'bg-[#08080a] text-neutral-400 border-neutral-800 hover:text-white hover:border-neutral-700'
@@ -942,7 +942,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   sound.tick(600);
                   setMode('generate');
                 }}
-                className={`min-h-11 min-w-0 py-1.5 px-2 text-xs font-mono font-bold tracking-normal sm:tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                className={`min-h-11 min-w-0 py-1.5 px-2 text-xs font-sans font-bold tracking-normal sm:tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
                   mode === 'generate'
                     ? 'bg-white text-black border-white'
                     : 'bg-[#08080a] text-neutral-400 border-neutral-800 hover:text-white hover:border-neutral-700'
@@ -957,7 +957,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
             <div ref={contentRef} className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 sm:p-5 flex flex-col gap-4">
               {/* Presets Chips */}
               <div>
-                <div className="text-[10px] font-mono uppercase tracking-widest text-neutral-400 mb-2">
+                <div className="text-[10px] font-sans uppercase tracking-widest text-neutral-400 mb-2">
                   {t.aiSheet.blueprints}
                 </div>
                 <div className="flex flex-wrap gap-1.5">
@@ -970,7 +970,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                         setPrompt(preset);
                         handleGenerate(preset);
                       }}
-                      className="text-[11px] font-mono text-left px-2 py-1 bg-[#08080a] border border-neutral-800 text-neutral-400 hover:border-neutral-600 hover:text-neutral-200 disabled:opacity-40 transition-colors cursor-pointer"
+                      className="text-[11px] font-sans text-left px-2 py-1 bg-[#08080a] border border-neutral-800 text-neutral-400 hover:border-neutral-600 hover:text-neutral-200 disabled:opacity-40 transition-colors cursor-pointer"
                     >
                       + {preset}
                     </button>
@@ -984,7 +984,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   {chatMessages.map((message, index) => (
                     <div
                       key={`${message.role}-${index}`}
-                      className={`max-w-[92%] border p-3 text-xs leading-relaxed whitespace-pre-wrap break-words ${
+                      className={`max-w-[92%] border p-3 text-[15px] leading-[1.6] whitespace-pre-wrap break-words ${
                         message.role === 'user'
                           ? 'self-end bg-white text-black border-white'
                           : 'self-start bg-[#111116] text-neutral-200 border-neutral-800'
@@ -1119,7 +1119,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
               )}
 
               {keyStatus && (
-                <div role="status" aria-live="polite" className="border border-neutral-800 bg-[#111116] p-3 text-xs leading-relaxed text-neutral-200 whitespace-pre-wrap">
+                <div role="status" aria-live="polite" className="border border-neutral-800 bg-[#111116] p-3 text-[15px] leading-[1.6] text-neutral-200 whitespace-pre-wrap">
                   <div className="mb-1 text-[9px] font-bold uppercase tracking-widest opacity-60">KARKAS AI</div>
                   {keyStatus}
                   {awaitingApiKey && <button id="ai-return-to-request-btn" type="button" onClick={returnToRequest} className="mt-3 min-h-11 block border border-neutral-700 px-3 py-2 hover:border-white">
@@ -1129,7 +1129,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
               )}
 
               {requestError && !awaitingApiKey && (
-                <div id="ai-request-error" role="alert" className="border border-neutral-700 bg-[#111116] p-3 text-xs leading-relaxed text-neutral-200">
+                <div id="ai-request-error" role="alert" className="border border-neutral-700 bg-[#111116] p-3 text-[15px] leading-[1.6] text-neutral-200">
                   <p>{requestError}</p>
                   {recoverableRequest && <button id="ai-retry-request-btn" type="button" disabled={loading} onClick={() => { setMode(recoverableRequest.mode); void handleGenerate(recoverableRequest.text, recoverableRequest.mode, false, !!prompt.trim() && prompt.trim() !== recoverableRequest.text.trim()); }} className="mt-3 min-h-11 border border-neutral-700 px-3 py-2 hover:border-white disabled:opacity-40">
                     {lang === 'uk' ? 'Повторити запит' : 'Retry request'}
@@ -1137,17 +1137,17 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                 </div>
               )}
 
-              {applyNotice && <div role="status" aria-live="polite" className="border border-neutral-800 bg-[#111116] p-3 text-xs leading-relaxed text-neutral-200">{applyNotice}</div>}
+              {applyNotice && <div role="status" aria-live="polite" className="border border-neutral-800 bg-[#111116] p-3 text-[15px] leading-[1.6] text-neutral-200">{applyNotice}</div>}
 
               {loading && (
                 <div role="status" aria-live="polite" className="p-8 border border-neutral-800 bg-black/40 flex flex-col items-center justify-center gap-3 text-center">
                   <div className="w-6 h-6 border-2 border-white border-t-transparent animate-spin rounded-full" />
-                  <span className="text-xs font-mono tracking-widest text-neutral-300 uppercase animate-pulse">
+                  <span className="text-xs font-sans tracking-widest text-neutral-300 uppercase animate-pulse">
                     {mode === 'chat'
                       ? (lang === 'uk' ? 'KARKAS AI ФОРМУЄ ВІДПОВІДЬ...' : 'KARKAS AI IS RESPONDING...')
                       : t.aiSheet.thinking}
                   </span>
-                  <span className="text-[10px] font-mono text-neutral-500">
+                  <span className="text-[10px] font-sans text-neutral-500">
                     {t.aiSheet.fullContextDesc}
                   </span>
                   <button id="ai-request-cancel-btn" type="button" onClick={cancelAIRequest} className="min-h-11 border border-neutral-700 px-3 py-2 text-xs text-neutral-300 hover:border-white hover:text-white">
@@ -1162,11 +1162,11 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   {/* Strategy Summary & Inject All */}
                   <div className="flex flex-wrap items-start justify-between gap-3 border-b border-neutral-800 pb-3">
                     <div className="space-y-1">
-                      <div className="text-[10px] font-mono uppercase text-neutral-400 tracking-widest flex items-center gap-1.5">
+                      <div className="text-[10px] font-sans uppercase text-neutral-400 tracking-widest flex items-center gap-1.5">
                         <AIIcon className="w-3 h-3" />
                         <span>{mode === 'analyze' ? (lang === 'uk' ? 'ДІАГНОСТИКА ПРОЦЕСУ' : 'WORKFLOW AUDIT') : t.aiSheet.strategyHeader}</span>
                       </div>
-                      <p className="text-xs sm:text-sm font-bold text-neutral-100 leading-relaxed">
+                      <p className="text-[15px] font-bold text-neutral-100 leading-[1.6]">
                         {response.summary}
                       </p>
                       {response.source === 'local-fallback' && (
@@ -1181,7 +1181,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                         id="ai-inject-all-btn"
                         disabled={remainingResponseActions === 0}
                         onClick={handleInjectAll}
-                        className="whitespace-nowrap px-3 py-1.5 bg-white text-black font-extrabold text-xs font-mono tracking-wider hover:bg-neutral-200 transition-colors flex items-center gap-1.5 shrink-0 disabled:opacity-50 disabled:cursor-default"
+                        className="whitespace-nowrap px-3 py-1.5 bg-white text-black font-extrabold text-xs font-sans tracking-wider hover:bg-neutral-200 transition-colors flex items-center gap-1.5 shrink-0 disabled:opacity-50 disabled:cursor-default"
                       >
                         <Plus className="w-3.5 h-3.5" />
                         <span>{remainingResponseActions === 0 ? t.aiSheet.added : `${t.aiSheet.injectAll} (${remainingResponseActions})`}</span>
@@ -1193,7 +1193,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   {response.workloadDiagnosis && (
                     <div className="bg-[#101015] border border-neutral-800 p-3.5 space-y-2.5">
                       <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-mono text-neutral-400 uppercase tracking-wider flex items-center gap-1.5">
+                        <span className="text-[10px] font-sans text-neutral-400 uppercase tracking-wider flex items-center gap-1.5">
                           <Activity className="w-3.5 h-3.5 text-indigo-400" />
                           <span>{lang === 'uk' ? 'Стан робочого навантаження' : 'Workload Status'}</span>
                         </span>
@@ -1226,7 +1226,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   {/* Category Health Matrix */}
                   {response.categoryHealth && response.categoryHealth.length > 0 && (
                     <div className="space-y-2">
-                      <div className="text-[10px] font-mono uppercase tracking-wider text-neutral-400 flex items-center gap-1.5">
+                      <div className="text-[10px] font-sans uppercase tracking-wider text-neutral-400 flex items-center gap-1.5">
                         <ClipboardList aria-hidden="true" className="w-4 h-4 text-neutral-300" strokeWidth={1.75} />
                         <span>{lang === 'uk' ? 'Аналітика балансу категорій' : 'Category Balance Matrix'}</span>
                       </div>
@@ -1246,7 +1246,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                               </span>
                             </div>
                             {ch.recommendation && (
-                              <p className="text-[11px] text-neutral-400 leading-tight">
+                              <p className="text-[15px] text-neutral-400 leading-[1.6]">
                                 {ch.recommendation}
                               </p>
                             )}
@@ -1259,13 +1259,13 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   {/* Tactical Insights */}
                   {response.insights && response.insights.length > 0 && (
                     <div className="bg-[#121216] border border-neutral-800 p-3 space-y-2">
-                      <div className="text-[10px] font-mono text-neutral-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
+                      <div className="text-[10px] font-sans text-neutral-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
                         <Lightbulb className="w-3.5 h-3.5 text-amber-400" />
                         <span>{t.aiSheet.insightsHeader}</span>
                       </div>
                       <ul className="space-y-1.5">
                         {response.insights.map((insight, idx) => (
-                          <li key={idx} className="text-xs font-mono text-neutral-300 flex items-start gap-2">
+                          <li key={idx} className="text-[15px] leading-[1.6] font-sans text-neutral-300 flex items-start gap-2">
                             <span className="text-white font-bold shrink-0">›</span>
                             <span>{insight}</span>
                           </li>
@@ -1276,7 +1276,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
 
                   {/* Proposed Tabs */}
                   {response.tabs && response.tabs.length > 0 && (
-                    <div className="border border-sky-900/70 bg-sky-950/20 p-3 text-xs font-mono text-sky-200 space-y-2">
+                    <div className="border border-sky-900/70 bg-sky-950/20 p-3 text-xs font-sans text-sky-200 space-y-2">
                       <span className="text-[10px] uppercase tracking-wider text-sky-400 flex items-center gap-1.5">
                         <FolderPlus className="w-3.5 h-3.5" />
                         <span>{lang === 'uk' ? 'Запропоновані нові вкладки' : 'Suggested new tabs'}</span>
@@ -1301,7 +1301,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   {/* Proposed Task Edits / Updates */}
                   {response.taskUpdates && response.taskUpdates.length > 0 && (
                     <div className="space-y-2">
-                      <div className="text-[10px] font-mono uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
+                      <div className="text-[10px] font-sans uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
                         <Edit3 className="w-3.5 h-3.5" />
                         <span>{lang === 'uk' ? 'Редагування завдань' : 'Task Modifications'}</span>
                       </div>
@@ -1344,7 +1344,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   {/* Generated Tasks List with Sub-Steps */}
                   {response.tasks && response.tasks.length > 0 && (
                     <div className="flex flex-col gap-2.5">
-                      <div className="text-[10px] font-mono uppercase tracking-wider text-neutral-400">
+                      <div className="text-[10px] font-sans uppercase tracking-wider text-neutral-400">
                         {lang === 'uk' ? 'Заплановані завдання' : 'Actionable Tasks'} ({response.tasks.length})
                       </div>
                       {response.tasks.map((task, i) => {
@@ -1362,7 +1362,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                             <div className="flex items-start justify-between gap-2">
                               <div className="flex flex-col gap-1">
                                 <div className="flex items-center gap-2 flex-wrap">
-                                  <span className="text-[10px] font-mono text-neutral-400 font-bold flex items-center gap-1">
+                                  <span className="text-[10px] font-sans text-neutral-400 font-bold flex items-center gap-1">
                                     {matchedTab?.color && (
                                       <span
                                         className="w-1.5 h-1.5 rounded-full shrink-0 shadow-sm"
@@ -1372,7 +1372,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                                     [{phaseLabel}]
                                   </span>
                                   <span
-                                    className={`text-[9px] font-mono font-bold px-1 py-0.2 border ${
+                                    className={`text-[9px] font-sans font-bold px-1 py-0.2 border ${
                                       task.priority === 1
                                         ? 'border-red-900/70 text-red-400 bg-red-950/30'
                                         : task.priority === 2
@@ -1387,7 +1387,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                                   </span>
                                 </div>
                                 {task.note && (
-                                  <span className="text-[10px] font-mono text-neutral-400">
+                                  <span className="text-[10px] font-sans text-neutral-400">
                                     // {task.note}
                                   </span>
                                 )}
@@ -1398,7 +1398,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                                 id={`ai-inject-single-btn-${i}`}
                                 onClick={() => handleInjectSingle(task, i)}
                                 disabled={isInjected}
-                                className={`px-2.5 py-1 text-[10px] font-mono uppercase font-bold border transition-all shrink-0 ${
+                                className={`px-2.5 py-1 text-[10px] font-sans uppercase font-bold border transition-all shrink-0 ${
                                   isInjected
                                     ? 'border-emerald-700 text-emerald-400 bg-emerald-950/40'
                                     : 'border-neutral-700 text-neutral-300 hover:border-white hover:text-white bg-neutral-900'
@@ -1411,7 +1411,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                             {/* Sub-steps preview */}
                             {subSteps.length > 0 && (
                               <div className="pt-2 border-t border-neutral-900/80 space-y-1">
-                                <div className="text-[9px] font-mono text-neutral-500 uppercase font-bold">
+                                <div className="text-[9px] font-sans text-neutral-500 uppercase font-bold">
                                   {t.aiSheet.subStepsTitle} ({subSteps.length})
                                 </div>
                                 <div className="grid grid-cols-1 gap-1">
@@ -1420,7 +1420,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                                     return (
                                       <div
                                         key={sIdx}
-                                        className="text-[10px] font-mono text-neutral-300 bg-[#0c0c0f] border border-neutral-900 px-2 py-1 flex items-center gap-1.5"
+                                        className="text-[10px] font-sans text-neutral-300 bg-[#0c0c0f] border border-neutral-900 px-2 py-1 flex items-center gap-1.5"
                                       >
                                         <span className="text-neutral-500 font-bold">{sIdx + 1}.</span>
                                         <span>{titleText}</span>
@@ -1443,7 +1443,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
             <div className="shrink-0 px-4 sm:px-5 py-3 bg-[#08080a] border-t border-neutral-800 space-y-2">
               {/* Voice recording / transcription status indicator */}
               {(isListening || isTranscribing || voiceNotice) && (
-                <div className="flex items-center justify-between px-3 py-1.5 bg-[#050507] border border-neutral-800 text-xs font-mono">
+                <div className="flex items-center justify-between px-3 py-1.5 bg-[#050507] border border-neutral-800 text-xs font-sans">
                   {voiceNotice ? (
                     <div className="flex items-center gap-2 text-amber-400 w-full justify-between">
                       <div className="flex items-center gap-1.5">
@@ -1484,7 +1484,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                                 ? (lang === 'uk' ? 'Записую · текст після зупинки' : 'Recording · text after stop')
                                 : t.aiSheet.voiceListening}
                         </span>
-                        <span className="text-[10px] text-neutral-400 font-mono">
+                        <span className="text-[10px] text-neutral-400 font-sans">
                           {Math.floor(recordingDuration / 60).toString().padStart(2, '0')}:
                           {(recordingDuration % 60).toString().padStart(2, '0')}
                         </span>
@@ -1516,7 +1516,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                     }
                     sound.tick(400);
                   }}
-                  className="w-full sm:w-auto sm:max-w-[150px] bg-[#050507] border border-neutral-800 text-neutral-300 text-xs font-mono px-2 py-2.5 focus:outline-none focus:border-white disabled:opacity-50"
+                  className="w-full sm:w-auto sm:max-w-[150px] bg-[#050507] border border-neutral-800 text-neutral-300 text-xs font-sans px-2 py-2.5 focus:outline-none focus:border-white disabled:opacity-50"
                 >
                   {availableModels.length === 0 ? (
                     <option value="">{lang === 'uk' ? 'Модель не налаштована' : 'Model not configured'}</option>
@@ -1551,7 +1551,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                         ? (lang === 'uk' ? 'Уточніть фокус аналізу (напр. перевірити пріоритети, дедлайни)...' : 'Refine audit focus (e.g. check priorities, deadlines)...')
                         : t.aiSheet.inputPlaceholder
                     }
-                    className="w-full min-h-11 bg-[#050507] border border-neutral-800 text-white placeholder:text-neutral-500 text-xs font-mono pl-3.5 pr-10 py-2.5 focus:outline-none focus:border-white transition-colors"
+                    className="w-full min-h-11 bg-[#050507] border border-neutral-800 text-white placeholder:text-neutral-500 text-base leading-[1.6] font-sans pl-3.5 pr-10 py-2.5 focus:outline-none focus:border-white transition-colors"
                   />
                   {/* Voice dictation button embedded in input field */}
                   <button
@@ -1598,7 +1598,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
             </div>
 
             {/* Bottom Footer Hint */}
-            <div className="shrink-0 px-4 sm:px-5 py-2.5 bg-black border-t border-neutral-800 flex flex-wrap items-center justify-between gap-2 text-[10px] font-mono text-neutral-400">
+            <div className="shrink-0 px-4 sm:px-5 py-2.5 bg-black border-t border-neutral-800 flex flex-wrap items-center justify-between gap-2 text-[10px] font-sans text-neutral-400">
               <span>{t.aiSheet.dismissHint}</span>
               <span>{t.aiSheet.footerTag}</span>
             </div>

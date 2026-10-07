@@ -74,7 +74,7 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
           initial={{ opacity: 0, scale: 0.96 }}
           animate={{ opacity: 1, scale: 1 }}
           exit={{ opacity: 0, scale: 0.96 }}
-          className="w-full max-w-lg max-h-[90dvh] overflow-y-auto bg-[#0c0c0e] border border-neutral-800 shadow-2xl p-5 sm:p-6 flex flex-col gap-4 text-neutral-100 font-mono"
+          className="w-full max-w-lg max-h-[90dvh] overflow-y-auto bg-[#0c0c0e] border border-neutral-800 shadow-2xl p-5 sm:p-6 flex flex-col gap-4 text-neutral-100 font-sans"
         >
           {/* Header */}
           <div className="flex items-center justify-between border-b border-neutral-800/80 pb-3">
@@ -96,7 +96,7 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
             </button>
           </div>
 
-          <p className="text-xs text-neutral-400 leading-relaxed font-mono">
+          <p className="text-xs text-neutral-400 leading-relaxed font-sans">
             {t.tabsModal.desc}
           </p>
 
@@ -130,14 +130,14 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
                   placeholder={t.tabsModal.inputPlaceholder}
                   aria-label={t.tabsModal.inputPlaceholder}
                   maxLength={24}
-                  className="w-full bg-[#08080a] border border-neutral-700 px-3 py-2 text-xs font-mono text-white placeholder:text-neutral-500 placeholder:font-normal focus:outline-none focus:border-white transition-all"
+                  className="w-full bg-[#08080a] border border-neutral-700 px-3 py-2 text-xs font-sans text-white placeholder:text-neutral-500 placeholder:font-normal focus:outline-none focus:border-white transition-all"
                 />
               </div>
 
               <button
                 type="submit"
                 disabled={!newTabName.trim()}
-                className="px-4 py-2 bg-white text-black font-mono font-bold text-xs hover:bg-neutral-200 disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center gap-1.5 shrink-0 cursor-pointer"
+                className="px-4 py-2 bg-white text-black font-sans font-bold text-xs hover:bg-neutral-200 disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center gap-1.5 shrink-0 cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>{t.tabsModal.addBtn}</span>
@@ -147,7 +147,7 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
 
           {/* Active Tabs List */}
           <div className="flex flex-col gap-1.5 max-h-56 overflow-y-auto pr-1">
-            <span className="text-[11px] font-mono tracking-widest text-neutral-400 uppercase">
+            <span className="text-[11px] font-sans tracking-widest text-neutral-400 uppercase">
               {t.tabsModal.currentTabs} ({tabs.length})
             </span>
             <div className="grid grid-cols-1 gap-1.5">
@@ -165,10 +165,10 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
                         className="w-2.5 h-2.5 shrink-0 border border-white/20 shadow-sm"
                         style={{ backgroundColor: tab.color || '#38bdf8' }}
                       />
-                      <span title={tab.name} className="min-w-0 truncate text-xs font-mono font-bold uppercase tracking-wider text-neutral-200">
+                      <span title={tab.name} className="min-w-0 truncate text-xs font-sans font-bold uppercase tracking-wider text-neutral-200">
                         {tab.name}
                       </span>
-                      <span className="shrink-0 whitespace-nowrap text-[11px] font-mono text-neutral-400">
+                      <span className="shrink-0 whitespace-nowrap text-[11px] font-sans text-neutral-400">
                         [{count} {lang === 'uk' ? 'справ' : 'tasks'}]
                       </span>
                     </div>
@@ -182,7 +182,7 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
                       }}
                       title={canDelete ? t.deleteTab : t.tabsModal.cantDeleteLast}
                       aria-label={`${t.deleteTab}: ${tab.name}`}
-                      className={`shrink-0 p-1.5 text-xs font-mono transition-colors flex items-center gap-1 cursor-pointer ${
+                      className={`shrink-0 p-1.5 text-xs font-sans transition-colors flex items-center gap-1 cursor-pointer ${
                         canDelete
                           ? 'text-neutral-400 hover:text-red-400 hover:bg-red-950/20'
                           : 'text-neutral-700 cursor-not-allowed'
@@ -207,7 +207,7 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
               }}
               className="flex-1 py-2 px-3 bg-[#08080a] border border-neutral-800 hover:border-neutral-600 text-left transition-colors cursor-pointer"
             >
-              <div className="flex items-center gap-1.5 text-[11px] font-mono font-bold text-neutral-200">
+              <div className="flex items-center gap-1.5 text-[11px] font-sans font-bold text-neutral-200">
                 <SquareCode className="w-3.5 h-3.5 text-emerald-400 fill-emerald-400/20" />
                 <span>{t.tabsModal.resetLife}</span>
               </div>
@@ -221,7 +221,7 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
               }}
               className="flex-1 py-2 px-3 bg-[#08080a] border border-neutral-800 hover:border-neutral-600 text-left transition-colors cursor-pointer"
             >
-              <div className="flex items-center gap-1.5 text-[11px] font-mono font-bold text-neutral-400 hover:text-neutral-200">
+              <div className="flex items-center gap-1.5 text-[11px] font-sans font-bold text-neutral-400 hover:text-neutral-200">
                 <span>{t.tabsModal.resetCreative}</span>
               </div>
             </button>
@@ -234,7 +234,7 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
               sound.tick(400);
               onClose();
             }}
-            className="w-full py-2 bg-white text-black font-mono font-bold text-xs tracking-wider uppercase hover:bg-neutral-200 transition-colors cursor-pointer"
+            className="w-full py-2 bg-white text-black font-sans font-bold text-xs tracking-wider uppercase hover:bg-neutral-200 transition-colors cursor-pointer"
           >
             {t.tabsModal.close}
           </button>

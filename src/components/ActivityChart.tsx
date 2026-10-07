@@ -43,11 +43,11 @@ export const ActivityChart: React.FC<ActivityChartProps> = ({ data, title, perio
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-center gap-2">
           <TrendingUp className="h-3.5 w-3.5 shrink-0 text-neutral-300" />
-          <h3 id={`${id}-title`} className="font-mono text-sm font-bold uppercase tracking-wider text-neutral-200">{title}</h3>
+          <h3 id={`${id}-title`} className="font-sans text-sm font-bold uppercase tracking-wider text-neutral-200">{title}</h3>
         </div>
         <span className="border border-neutral-800 bg-neutral-950 px-2.5 py-1.5 text-xs text-neutral-400">{period}</span>
       </div>
-      <div className="mt-5 flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
+      <div className="mt-5 flex flex-wrap items-center justify-between gap-3 text-xs font-sans">
         <span className="text-neutral-400">{unitLabel}</span>
         <div className="flex flex-wrap gap-4">
           {SERIES.map(series => (
@@ -60,7 +60,7 @@ export const ActivityChart: React.FC<ActivityChartProps> = ({ data, title, perio
       </div>
       {maximum === 0 && <p className="mt-4 text-xs text-neutral-400" role="status">{emptyLabel}</p>}
       <div className="mt-2 overflow-x-auto">
-        <svg viewBox="0 0 1000 280" className="block w-full min-w-[700px] overflow-visible font-mono" role="group" aria-label={title}
+        <svg viewBox="0 0 1000 280" className="block w-full min-w-[700px] overflow-visible font-sans" role="group" aria-label={title}
           onPointerLeave={() => setActiveIndex(null)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setActiveIndex(null); }}>
           <defs>
             <linearGradient id={`${id}-fill`} x1="0" y1="0" x2="0" y2="1">

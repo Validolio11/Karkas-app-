@@ -61,6 +61,24 @@ select:focus-visible,
   outline-offset: 3px;
 }
 
+/* Animate only the timer glow; keep task content fully opaque and still. */
+.task-timer-glow::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  pointer-events: none;
+  animation: task-timer-glow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes task-timer-glow {
+  0%, 100% {
+    box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.3), 0 0 10px rgba(52, 211, 153, 0.12);
+  }
+  50% {
+    box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.5), 0 0 20px rgba(52, 211, 153, 0.3);
+  }
+}
+
 @media (max-width: 639px) {
   #windows-app-header button {
     min-height: 32px;
@@ -70,6 +88,10 @@ select:focus-visible,
 
 @media (prefers-reduced-motion: reduce) {
   .ambient-particles { display: none; }
+  .task-timer-glow::before {
+    animation: none;
+    box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.5), 0 0 20px rgba(52, 211, 153, 0.3);
+  }
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;

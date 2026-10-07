@@ -93,7 +93,7 @@ const errorMessages: Record<AIRequestErrorCode, { uk: string; en: string }> = {
   NETWORK_ERROR: { uk: 'Не вдалося з’єднатися з AI. Перевірте інтернет і повторіть запит.', en: 'Could not connect to AI. Check your connection and retry.' },
   TIMEOUT: { uk: 'AI не відповів вчасно. Спробуйте ще раз або виберіть іншу модель.', en: 'AI did not respond in time. Retry or select another model.' },
   PROVIDER_ERROR: { uk: 'Сервіс AI зараз недоступний. Спробуйте повторити запит пізніше.', en: 'The AI service is unavailable. Retry later.' },
-  INVALID_RESPONSE: { uk: 'AI повернув некоректну відповідь. Уточніть запит або спробуйте ще раз.', en: 'AI returned an invalid response. Revise your request or try again.' },
+  INVALID_RESPONSE: { uk: 'AI не зміг підготувати коректну відповідь. Повторіть запит або виберіть іншу модель.', en: 'AI could not prepare a valid response. Retry the request or select another model.' },
   CANCELLED: { uk: 'Запит перервано. Його збережено, щоб ви могли продовжити.', en: 'The request was interrupted and saved so you can continue.' },
 };
 export function aiRequestErrorMessage(error: unknown, lang: 'uk' | 'en'): string {

@@ -121,6 +121,124 @@ test('invalid Gemini output does not silently generate heuristic changes', async
   assert.equal(result.body.code, 'INVALID_AI_RESPONSE');
   assert.deepEqual(result.body.tasks, []);
   assert.deepEqual(result.body.taskUpdates, []);
+  assert.deepEqual(calls.map(call => call.model), ['gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-flash-latest']);
+});
+
+const lottieTask = { title: 'Пошук референсів для анімації Lottie', phase: 'focus', priority: 2, steps: 0, stepList: [], timerMode: 'countdown', countdownDurationSeconds: 2400 };
+const lottiePrompt = 'Привіт, додай завдання пошук референсів для анімації лотті з таймером на 40 хвилин';
+
+test('Lottie forty-minute task tolerates unused optional nulls and preserves zero subtasks', async () => {
+  for (const action of ['chat', 'generate']) {
+    mockProvider((_model, body) => {
+      assert.match(body.systemInstruction.parts[0].text, /40 minutes means countdownDurationSeconds:2400/);
+      return success({ reply: 'Пропоную завдання з таймером на 40 хвилин.', summary: 'Пропозицію підготовлено.',
+        tasks: [{ ...lottieTask, note: null, timerAction: null }], tabs: null, taskUpdates: null, taskDeletions: null });
+    });
+    const result = await chat({ prompt: lottiePrompt, action, tabs: ['focus'] });
+    assert.equal(result.status, 200);
+    assert.equal(result.body.tasks.length, 1);
+    assert.equal(result.body.tasks[0].countdownDurationSeconds, 2400);
+    assert.equal(result.body.tasks[0].timerAction, undefined);
+    assert.equal(result.body.tasks[0].steps, 0);
+    assert.deepEqual(result.body.tasks[0].stepList, []);
+    assert.deepEqual(result.body.taskUpdates, []);
+    assert.deepEqual(result.body.taskDeletions, []);
+    assert.equal(calls.length, 1);
+  }
+});
+
+test('existing-task forty-minute timer with null optional text remains a valid complete mutation', async () => {
+  mockProvider(() => success({ reply: 'Пропоную таймер на 40 хвилин.', tasks: [], taskUpdates: [{
+    id: 't1', title: null, note: null, phase: null, priority: null, done: null, steps: null, stepList: null,
+    timerMode: null, countdownDurationSeconds: 2400, timerAction: null,
+  }], taskDeletions: null }));
+  const result = await chat({ prompt: 'Додай таймер на 40 хвилин до пошуку референсів', currentTasks: [{ id: 't1', title: lottieTask.title, note: 'Моя примітка' }] });
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.body.taskUpdates, [{ id: 't1', countdownDurationSeconds: 2400, timerMode: 'countdown' }]);
+  assert.equal(calls.length, 1);
+});
+
+test('invalid duration is not reinterpreted as minutes and a valid distinct fallback repairs the entire proposal', async () => {
+  mockProvider(model => success({ reply: 'Пропоную завдання.', tasks: [{ ...lottieTask,
+    countdownDurationSeconds: model === 'gemini-3.1-flash-lite' ? 40 : 2400 }] }));
+  const result = await chat({ prompt: lottiePrompt, tabs: ['focus'] });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.tasks[0].countdownDurationSeconds, 2400);
+  assert.equal(result.body.usedModel, 'gemini-2.5-flash');
+  assert.equal(result.body.fallbackUsed, true);
+  assert.deepEqual(calls.map(call => call.model), ['gemini-3.1-flash-lite', 'gemini-2.5-flash']);
+});
+
+test('all invalid timer, target and required-title variants fail without a partial proposal', async () => {
+  for (const malformed of [
+    { tasks: [{ ...lottieTask, countdownDurationSeconds: 40 }] },
+    { tasks: [{ ...lottieTask, countdownDurationSeconds: '2400' }] },
+    { tasks: [lottieTask, { ...lottieTask, countdownDurationSeconds: 0 }] },
+    { tasks: [{ ...lottieTask, title: null }] },
+    { tasks: [null] },
+    { tasks: [], taskUpdates: [{ id: 'unknown', timerAction: 'start' }] },
+    { tasks: [{ ...lottieTask, timerRunning: null }] },
+  ]) {
+    mockProvider(() => success({ reply: 'Пропоную завдання.', ...malformed }));
+    const result = await chat({ prompt: lottiePrompt, tabs: ['focus'] });
+    assert.equal(result.status, 502, JSON.stringify(malformed));
+    assert.equal(result.body.code, 'INVALID_AI_RESPONSE');
+    assert.deepEqual(result.body.tasks, []);
+    assert.deepEqual(result.body.taskUpdates, []);
+    assert.equal(calls.length, 3);
+  }
+});
+
+test('malformed optional mutation values trigger model fallback before a successful server response', async () => {
+  for (const malformed of [{ title: {} }, { note: [] }, { phase: {} }, { steps: {} }, { steps: 2.5 }, { done: 'false' }]) {
+    mockProvider(model => success({ reply: 'Пропоную таймер.', tasks: [], taskUpdates: [{ id: 't1',
+      countdownDurationSeconds: 2400, ...(model === 'gemini-3.1-flash-lite' ? malformed : {}) }] }));
+    const result = await chat({ currentTasks: [{ id: 't1', title: lottieTask.title }] });
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.body.taskUpdates, [{ id: 't1', countdownDurationSeconds: 2400, timerMode: 'countdown' }]);
+    assert.equal(result.body.usedModel, 'gemini-2.5-flash');
+    assert.equal(calls.length, 2);
+  }
+});
+
+test('real SDK ignores thought text and joins fenced JSON text parts for the Lottie proposal', async () => {
+  mockProvider(() => {
+    const proposal = JSON.stringify({ reply: 'Пропоную завдання.', tasks: [lottieTask] });
+    const split = Math.floor(proposal.length / 2);
+    return json({ candidates: [{ content: { role: 'model', parts: [
+      { thought: true, text: 'Internal reasoning must not be parsed.' },
+      { text: '\uFEFF```json\n' + proposal.slice(0, split) }, { text: proposal.slice(split) + '\n```' },
+    ] }, finishReason: 'STOP' }] });
+  });
+  const result = await chat({ prompt: lottiePrompt, tabs: ['focus'] });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.tasks[0].countdownDurationSeconds, 2400);
+  assert.equal(calls.length, 1);
+});
+
+test('malformed JSON uses a distinct model, while repeated truncation stays an explicit failure', async () => {
+  for (const repair of [true, false]) {
+    mockProvider(model => model !== 'gemini-3.1-flash-lite' && repair
+      ? success({ reply: 'Пропоную завдання.', tasks: [lottieTask] })
+      : json({ candidates: [{ content: { parts: [{ text: '{"reply":"Пропоную", "tasks": [' }] } }] }));
+    const result = await chat({ prompt: lottiePrompt, tabs: ['focus'] });
+    assert.equal(result.status, repair ? 200 : 502);
+    assert.equal(calls.length, repair ? 2 : 3);
+    if (!repair) assert.deepEqual(result.body.tasks, []);
+  }
+});
+
+test('validation fallback shares the original deadline and does not grant another full timeout', async () => {
+  mockProvider((model, _body, options) => model === 'gemini-3.1-flash-lite' ? success({ invalid: true })
+    : new Promise((_resolve, reject) => options.signal!.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true })));
+  const started = performance.now();
+  await assert.rejects(generateGeminiWithFallback({
+    ai: new GoogleGenAI({ apiKey: 'test-only-fake-key' }), contents: 'Test', config: {},
+    validateResponse: () => { throw new Error('Invalid proposal'); }, timeoutMs: 30, totalTimeoutMs: 15,
+  }), (error: unknown) => error instanceof AIRequestError && error.code === 'TIMEOUT');
+  assert.ok(performance.now() - started < 150);
+  assert.ok(calls.length <= 2);
+  assert.ok(calls.at(-1)?.signal?.aborted);
 });
 
 test('provider failures in planning, breakdown and recommendations are explicit too', async () => {

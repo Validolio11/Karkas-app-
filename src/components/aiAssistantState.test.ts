@@ -104,3 +104,35 @@ test('malformed proposal fields fail safely before rendering or offering task ch
     { workloadDiagnosis: { bottlenecks: [null] } },
   ]) assert.throws(() => readAIResponse({ reply: 'Malformed proposal', ...fields }, 'chat'), AIRequestError);
 });
+
+test('the normalized backend chat shape accepts a Lottie reference task with a forty-minute countdown', () => {
+  // This is the actual shape emitted by assistHandler after its task normalization.
+  const response = {
+    reply: 'Пропоную пошук референсів для анімації Lottie з таймером 40 хвилин.',
+    summary: 'Пропоную пошук референсів для анімації Lottie з таймером 40 хвилин.',
+    insights: [], tasks: [{
+      title: 'Пошук референсів для анімації Lottie', phase: 'focus', priority: 2, steps: 0,
+      stepList: [], note: '',
+      timerMode: 'countdown', countdownDurationSeconds: 2400,
+    }], tabs: [], taskUpdates: [], taskDeletions: [], source: 'gemini-chat',
+    usedModel: 'gemini-3.1-flash-lite', fallbackUsed: false,
+  };
+  const accepted = readAIResponse(response, 'chat');
+  assert.equal(accepted, response);
+  assert.equal(accepted.tasks?.length, 1);
+  assert.equal(accepted.tasks?.[0].countdownDurationSeconds, 2400);
+  assert.equal(accepted.tasks?.[0].timerAction, undefined);
+  assert.equal(accepted.tasks?.[0].steps, 0);
+  assert.deepEqual(accepted.tasks?.[0].stepList, []);
+  assert.deepEqual(accepted.taskUpdates, []);
+});
+
+test('an invalid model response never blames a valid user request or asks for different wording', () => {
+  const error = responseRequestError({ code: 'INVALID_AI_RESPONSE' }, 502);
+  const uk = aiRequestErrorMessage(error, 'uk');
+  const en = aiRequestErrorMessage(error, 'en');
+  assert.match(uk, /Повторіть запит або виберіть іншу модель/);
+  assert.doesNotMatch(uk, /Уточніть|змініть|перефразуйте/i);
+  assert.doesNotMatch(en, /revise|clarify|rephrase/i);
+  assert.match(uk, /не застосовано/);
+});

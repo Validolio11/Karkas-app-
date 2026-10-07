@@ -1,7 +1,7 @@
 {
   "name": "karkas-app",
   "private": true,
-  "version": "1.2.26",
+  "version": "1.2.27",
   "description": "Karkas Application",
   "author": "Melychyn",
   "type": "module",

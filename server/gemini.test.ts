@@ -39,7 +39,7 @@ before(async () => {
           }
           const marker = 'WORKSPACE REAL-TIME CONTEXT:';
           const context = JSON.parse(contents.slice(contents.indexOf(marker) + marker.length));
-          result = { summary: { invalid: true }, insights: {}, tasks: [null,
+          result = { summary: 'Plan prepared', insights: {}, tasks: [
             { title: 'Valid task', phase: 'missing', priority: 99, steps: 1000000000,
               stepList: [null, {}, ''], note: context.activeTasks[0].subSteps.map(step => typeof step === 'string' ? step : step.title).join('|') }] };
         } else if (properties.stepList) {

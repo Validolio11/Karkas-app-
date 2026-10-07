@@ -1,5 +1,5 @@
 import express from "express";
-import { taskMutationProperties, taskTimerProperties, taskActionInstructions, validateTaskMutations, validatedTimerFields } from "./server/aiActions";
+import { taskMutationProperties, taskTimerProperties, taskActionInstructions, validateTaskMutations, validatedTimerFields, normalizeAIOptionalFields } from "./server/aiActions";
 import path from "path";
 import dotenv from "dotenv";
 import { GoogleGenAI, Modality, Type } from "@google/genai";
@@ -68,6 +68,30 @@ function cleanAndParseJson(rawText: string): Record<string, any> {
   return parsed;
 }
 
+/** Validate every proposed action before accepting a provider response. */
+function validateAssistProposal(rawText: string, action: string, tasks: any[]) {
+  const parsed = normalizeAIOptionalFields(cleanAndParseJson(rawText));
+  if (!nonEmptyText(action === 'chat' ? parsed.reply : parsed.summary)) throw new Error('Missing AI response text');
+  for (const key of ['tasks', 'tabs', 'taskUpdates', 'taskDeletions', 'categoryHealth']) {
+    if (parsed[key] !== undefined && !Array.isArray(parsed[key])) throw new Error(`Invalid ${key}`);
+  }
+  for (const task of parsed.tasks || []) {
+    if (!isRecord(task) || !nonEmptyText(task.title)) throw new Error('Invalid new task title');
+    validatedTimerFields(task);
+  }
+  Object.assign(parsed, validateTaskMutations(parsed, tasks));
+  for (const category of parsed.categoryHealth || []) {
+    if (!isRecord(category) || ['phase', 'phaseName', 'status', 'recommendation'].some(key => category[key] !== undefined && typeof category[key] !== 'string') ||
+      category.taskCount !== undefined && typeof category.taskCount !== 'number') throw new Error('Invalid category analysis');
+  }
+  if (parsed.workloadDiagnosis !== undefined) {
+    const diagnosis = parsed.workloadDiagnosis;
+    if (!isRecord(diagnosis) || diagnosis.status !== undefined && typeof diagnosis.status !== 'string' ||
+      ['bottlenecks', 'strengths'].some(key => diagnosis[key] !== undefined && (!Array.isArray(diagnosis[key]) || diagnosis[key].some((item: unknown) => typeof item !== 'string')))) throw new Error('Invalid workload diagnosis');
+  }
+  return parsed;
+}
+
 function normalizedSteps(value: unknown, count: unknown, isUk: boolean, prefix: string, min = 1, max = 50) {
   const entries = Array.isArray(value) ? value.filter((step) => nonEmptyText(step) ||
     (isRecord(step) && nonEmptyText(step.title))).slice(0, max) : [];
@@ -103,6 +127,7 @@ async function generateGeminiContentWithFallback(params: {
   config: any;
   customAi?: GoogleGenAI | null;
   selectedModel?: string;
+  validateResponse?: (text: string) => unknown;
 }): Promise<any> {
   const ai = params.customAi || getGeminiClient();
   if (!ai) throw new AIRequestError('MISSING_API_KEY');
@@ -302,7 +327,7 @@ INSTRUCTIONS:
    - "title": Actionable concise title
    - "phase": One of available tab IDs: ${JSON.stringify(activeTabIds)} or a newly defined tab ID
    - "priority": 1, 2, or 3
-   - "steps": 1 to 5
+   - "steps": 0 to 5 (use 0 when no subtasks were requested or needed)
    - "stepList": Array of sequential sub-steps with "title"
    - "note": Short tactical note
 4. "tabs": Create only when explicitly requested. Each with "id" (lowercase ASCII slug) and "name".
@@ -366,10 +391,11 @@ INSTRUCTIONS:
           },
           customAi: ai,
           selectedModel,
+          validateResponse: text => validateAssistProposal(text, action, [...effectiveActiveTasks, ...effectiveCompletedTasks]),
         });
 
         if (chatResponse?.text) {
-          const parsed = cleanAndParseJson(chatResponse.text || "{}");
+          const parsed = chatResponse.validatedResponse;
           const existingTabIds = new Set(activeTabIds);
           const validatedTabs: { id: string; name: string }[] = [];
           if (isTabCreationRequested && Array.isArray(parsed.tabs)) {
@@ -390,7 +416,7 @@ INSTRUCTIONS:
           const allowedTaskPhases = new Set([...activeTabIds, ...validatedTabs.map((tb) => tb.id)]);
           const validatedTasks = (Array.isArray(parsed.tasks) ? parsed.tasks : [])
             .filter((t: unknown) => isRecord(t) && nonEmptyText(t.title)).slice(0, 50).map((t: any, idx: number) => {
-            const finalStepList = normalizedSteps(t.stepList, t.steps, isUk, `s-chat-gen-${idx}`);
+            const finalStepList = normalizedSteps(t.stepList, t.steps, isUk, `s-chat-gen-${idx}`, 0);
 
             return {
               title: t.title.trim(),
@@ -561,11 +587,11 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
           },
           customAi: ai,
           selectedModel: selectedModel,
+          validateResponse: text => validateAssistProposal(text, action, [...effectiveActiveTasks, ...effectiveCompletedTasks]),
         });
 
         if (response && response.text) {
-          const rawText = response.text || "{}";
-          const parsed = cleanAndParseJson(rawText);
+          const parsed = response.validatedResponse;
 
           const existingTabIds = new Set(activeTabIds);
           const validatedTabs: { id: string; name: string }[] = [];
@@ -587,7 +613,7 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
 
           const validatedTasks = (Array.isArray(parsed.tasks) ? parsed.tasks : [])
             .filter((t: unknown) => isRecord(t) && nonEmptyText(t.title)).slice(0, 50).map((t: any, idx: number) => {
-            const finalStepList = normalizedSteps(t.stepList, t.steps, isUk, `s-gen-${idx}`);
+            const finalStepList = normalizedSteps(t.stepList, t.steps, isUk, `s-gen-${idx}`, 0);
 
             return {
               title: t.title.trim(),

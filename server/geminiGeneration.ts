@@ -63,9 +63,10 @@ export function aiRequestFailure(error: AIRequestError, isUk: boolean) {
 
 /** Bound the whole operation and cancel transport before trying a distinct fallback. */
 export async function generateGeminiWithFallback({
-  ai, contents, config, selectedModel, timeoutMs = 15_000, totalTimeoutMs = 30_000,
+  ai, contents, config, selectedModel, validateResponse, timeoutMs = 15_000, totalTimeoutMs = 30_000,
 }: {
   ai: GoogleGenAI; contents: string; config: any; selectedModel?: string;
+  validateResponse?: (text: string) => unknown;
   timeoutMs?: number; totalTimeoutMs?: number;
 }) {
   const selected = typeof selectedModel === 'string' ? selectedModel.trim().replace(/^models\//, '') : '';
@@ -96,12 +97,17 @@ export async function generateGeminiWithFallback({
         timedOut,
       ]);
       if (!response?.text?.trim()) throw new AIRequestError('INVALID_AI_RESPONSE');
-      return { ...response, text: response.text, usedModel: model, fallbackUsed: model !== models[0] };
+      let validatedResponse: unknown;
+      if (validateResponse) {
+        try { validatedResponse = validateResponse(response.text); }
+        catch { throw new AIRequestError('INVALID_AI_RESPONSE'); }
+      }
+      return { ...response, text: response.text, usedModel: model, fallbackUsed: model !== models[0], validatedResponse };
     } catch (error) {
       const failure = classifyAIRequestError(error);
       if (failure.code !== 'MODEL_UNAVAILABLE' || lastError.code === 'MODEL_UNAVAILABLE') lastError = failure;
-      // Bad credentials, malformed output and invalid requests cannot be repaired by changing models.
-      if (['INVALID_API_KEY', 'ACCESS_DENIED', 'INVALID_AI_RESPONSE', 'INVALID_AI_REQUEST'].includes(failure.code) ||
+      // Invalid structured output may recover on another model; credentials and request errors cannot.
+      if (['INVALID_API_KEY', 'ACCESS_DENIED', 'INVALID_AI_REQUEST'].includes(failure.code) ||
           failure.code === 'PROVIDER_ERROR' && Number((error as any)?.status) < 500) throw failure;
     } finally {
       clearTimeout(timer!);

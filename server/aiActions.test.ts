@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { taskMutationProperties, taskTimerProperties, taskActionInstructions, validateTaskMutations, validatedTimerFields } from './aiActions';
+import { taskMutationProperties, taskTimerProperties, taskActionInstructions, validateTaskMutations, validatedTimerFields, normalizeAIOptionalFields } from './aiActions';
 import { applyAITaskUpdate } from '../src/utils/aiTaskUpdates';
 import type { PSTask } from '../src/types';
 
@@ -30,6 +30,29 @@ test('new countdown configuration is retained paused and duration-only means cou
   assert.deepEqual(validatedTimerFields({ timerMode: 'countdown', countdownDurationSeconds: 1500 }), { timerMode: 'countdown', countdownDurationSeconds: 1500 });
   assert.deepEqual(validatedTimerFields({ countdownDurationSeconds: 60 }), { timerMode: 'countdown', countdownDurationSeconds: 60 });
   assert.deepEqual(validatedTimerFields({ timerMode: 'stopwatch', timerAction: 'start' }), { timerMode: 'stopwatch', timerAction: 'start' });
+});
+
+test('unused null timer fields are absent without clearing a configured timer or starting it', () => {
+  assert.deepEqual(validatedTimerFields({ timerMode: 'countdown', countdownDurationSeconds: 2400, timerAction: null }), { timerMode: 'countdown', countdownDurationSeconds: 2400 });
+  assert.deepEqual(validatedTimerFields({ timerMode: null, countdownDurationSeconds: 2400, timerAction: null }), { timerMode: 'countdown', countdownDurationSeconds: 2400 });
+  assert.deepEqual(validatedTimerFields({ timerMode: 'stopwatch', countdownDurationSeconds: null, timerAction: null }), { timerMode: 'stopwatch' });
+  assert.throws(() => validatedTimerFields({ timerMode: 'countdown', countdownDurationSeconds: null }));
+});
+
+test('optional mutation nulls are omitted but explicit false zero empty text and empty steps survive', () => {
+  const response = { taskUpdates: [{ id: 'parent', title: null, phase: null, priority: null, note: null, done: null, steps: null, stepList: null, countdownDurationSeconds: 2400, timerAction: null }], taskDeletions: null };
+  assert.deepEqual(validateTaskMutations(response, [parent]), { taskUpdates: [{ id: 'parent', countdownDurationSeconds: 2400, timerMode: 'countdown' }], taskDeletions: [] });
+  assert.deepEqual(validateTaskMutations({ taskUpdates: [{ id: 'parent', done: false, steps: 0, note: '', stepList: [] }] }, [parent]).taskUpdates[0], { id: 'parent', done: false, steps: 0, note: '', stepList: [] });
+  assert.equal(response.taskUpdates[0].title, null, 'normalization must not mutate caller data');
+});
+
+test('optional null normalization never creates a missing target or removes forbidden accounting fields', () => {
+  assert.deepEqual(normalizeAIOptionalFields({ tasks: null, tabs: null, taskUpdates: null, taskDeletions: null }), {});
+  assert.throws(() => validateTaskMutations({ taskUpdates: [{ id: null, note: 'Keep' }] }, [parent]));
+  assert.throws(() => validateTaskMutations({ taskUpdates: [{ id: 'parent', note: null, timerAction: null }] }, [parent]));
+  assert.throws(() => validateTaskMutations({ taskUpdates: [{ id: 'parent', note: 'Keep', timerRunning: null }] }, [parent]));
+  assert.throws(() => validateTaskMutations({ taskUpdates: [{ id: 'parent', title: 123 }] }, [parent]));
+  assert.throws(() => validateTaskMutations({ taskUpdates: [{ id: 'parent', stepList: [{ title: 'Draft', done: 'false' }] }] }, [parent]));
 });
 
 test('existing countdown accepts start pause stop and completed task must reopen before start', () => {

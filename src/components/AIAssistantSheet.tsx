@@ -185,6 +185,12 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   const [pendingChatTabs, setPendingChatTabs] = useState<TaskTab[]>([]);
   const [pendingChatUpdates, setPendingChatUpdates] = useState<AITaskUpdate[]>([]);
   const [pendingChatDeletions, setPendingChatDeletions] = useState<string[]>([]);
+  const [chatProposalReady, setChatProposalReady] = useState(false);
+  const chatProposalReadyRef = useRef(false);
+  const setChatProposalReadiness = (ready: boolean) => {
+    chatProposalReadyRef.current = ready;
+    setChatProposalReady(ready);
+  };
   const pendingChatConfirmed = useRef(false);
 
   const [awaitingApiKey, setAwaitingApiKey] = useState(false);
@@ -303,6 +309,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     setChatMessages(loadAIChatHistory(accountId));
     pendingRequest.current = null;
     pendingChatConfirmed.current = false;
+    setChatProposalReadiness(false);
     setPendingChatTasks([]);
     setPendingChatTabs([]);
     setPendingChatUpdates([]);
@@ -415,8 +422,9 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     (pendingChatDeletions?.length || 0);
 
   const confirmChatChanges = () => {
-    if (pendingChangeCount === 0 || pendingChatConfirmed.current) return;
+    if (!chatProposalReadyRef.current || requestInFlight.current || requestError || pendingChangeCount === 0 || pendingChatConfirmed.current) return;
     pendingChatConfirmed.current = true;
+    setChatProposalReadiness(false);
 
     const tasks = (pendingChatTasks || []).map(task => prepareAITask(task,
       index => `s-chat-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`));
@@ -470,11 +478,18 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     if (!requestText) return;
     if (requestInFlight.current) return;
     if (currentMode === 'chat' && pendingChangeCount > 0 && /^(так|підтверджую|підтверджено|yes|confirm|ок|застосувати|зберегти)$/i.test(textToQuery.trim())) {
+      if (!chatProposalReadyRef.current || requestError) {
+        setRequestError(lang === 'uk'
+          ? 'Спочатку повторіть останній запит, щоб підготувати актуальну пропозицію. Зміни до завдань не застосовано.'
+          : 'Retry the last request first to prepare an up-to-date proposal. No task changes were applied.');
+        return;
+      }
       setPrompt('');
       setChatMessages(previous => appendChatRequest(previous, textToQuery.trim()));
       confirmChatChanges();
       return;
     }
+    setChatProposalReadiness(false);
     setApplyNotice(null);
     const generation = requestGeneration.current;
     const isKeyEntry = !resuming && shouldVerifyAsApiKey(requestText, awaitingKeyRef.current, queryText === undefined);
@@ -668,6 +683,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       if (currentMode === 'chat') {
         {
           pendingChatConfirmed.current = false;
+          setChatProposalReadiness(hasPendingChatActions);
           setPendingChatTasks(data.tasks || []);
           setPendingChatTabs((data.tabs || []).map((tb) => ({ id: tb.id, name: tb.name, color: tb.color || '#6366f1' })));
           setPendingChatUpdates(data.taskUpdates || []);
@@ -709,6 +725,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   };
 
   const cancelAIRequest = () => {
+    setChatProposalReadiness(false);
     requestGeneration.current += 1;
     assistController.current?.abort();
     assistController.current = null;
@@ -1006,7 +1023,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   ))}
 
                   {/* Proposed Workspace Actions in Chat */}
-                  {pendingChangeCount > 0 && !loading && (
+                  {chatProposalReady && pendingChangeCount > 0 && !loading && !requestError && (
                     <div className="border border-emerald-800/80 bg-[#0a120c] p-3 space-y-3">
                       <div className="flex items-center justify-between">
                         <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">

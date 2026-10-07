@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import type { PSTask } from '../types';
 import {
   clearTaskCountdown, configureTaskCountdown, getTaskRemainingSeconds,
-  getTaskSessionSeconds, getTaskTotalSeconds, pauseTaskTimer, startTaskTimer,
+  getTaskSessionSeconds, getTaskTimerMode, getTaskTotalSeconds, pauseTaskTimer, startTaskTimer,
 } from './taskTimer';
 
 const task = (overrides: Partial<PSTask> = {}): PSTask => ({
@@ -15,6 +15,8 @@ test('one-hour countdown starts immediately and preserves accumulated time', () 
   const original = task({ timeSpentSeconds: 300 });
   const running = configureTaskCountdown(original, 3600, 1000);
   assert.equal(running.timerRunning, true);
+  assert.equal(running.timerMode, 'countdown');
+  assert.equal(running.startedAt, 1000);
   assert.equal(getTaskRemainingSeconds(running, 61_000), 3540);
   assert.equal(getTaskTotalSeconds(running, 61_000), 360);
   assert.equal(original.countdownDurationSeconds, undefined);
@@ -63,6 +65,7 @@ test('changing and clearing countdown preserve work from the current session', (
   const cleared = clearTaskCountdown(changed, 61_000);
   assert.equal(cleared.timeSpentSeconds, 70);
   assert.equal(cleared.timerRunning, false);
+  assert.equal(cleared.timerMode, 'stopwatch');
   assert.equal('countdownDurationSeconds' in cleared, false);
   assert.equal('countdownRemainingSeconds' in cleared, false);
   assert.equal(getTaskRemainingSeconds(cleared), undefined);
@@ -83,4 +86,18 @@ test('invalid countdown durations are rejected without mutating the task', () =>
     assert.throws(() => configureTaskCountdown(original, duration), RangeError);
   }
   assert.equal(original.timerRunning, undefined);
+});
+
+test('disabled timers and completed tasks cannot be started while legacy timer behavior remains compatible', () => {
+  const disabled = task({ timerMode: 'none', timeSpentSeconds: 10 });
+  assert.equal(startTaskTimer(disabled, 1000), disabled);
+  assert.equal(getTaskSessionSeconds({ ...disabled, timerRunning: true, timerStartedAt: 0 }, 10_000), 0);
+  const completed = task({ done: true });
+  assert.equal(startTaskTimer(completed, 1000), completed);
+  assert.equal(configureTaskCountdown(completed, 60, 1000), completed);
+  assert.equal(getTaskTimerMode(task()), 'stopwatch');
+  assert.equal(getTaskTimerMode(task({ countdownDurationSeconds: 60 })), 'countdown');
+  assert.equal(getTaskTimerMode(task({ timerMode: 'stopwatch', countdownDurationSeconds: 60 })), 'stopwatch');
+  assert.equal(getTaskRemainingSeconds(task({ timerMode: 'stopwatch', countdownDurationSeconds: 60 })), undefined);
+  assert.equal(startTaskTimer(task(), 1000).startedAt, 1000);
 });

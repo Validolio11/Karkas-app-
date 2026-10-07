@@ -32,43 +32,43 @@ test('adding a subtask preserves existing identities and completed progress', ()
   assert.equal(new Set(result.stepList?.map((s) => s.id)).size, 3);
 });
 
-test('deleting the remaining incomplete subtask completes and stops the timer', () => {
+test('deleting the remaining incomplete subtask does not implicitly complete or stop the parent', () => {
   const result = applyAITaskUpdate(task({ timerRunning: true, timerStartedAt: 1000, timeSpentSeconds: 5 }), {
     id: 'task-1', stepList: [{ id: 'a', title: 'Research' }],
   } as AITaskUpdate, tabs, 11000);
-  assert.equal(result.done, true);
+  assert.equal(result.done, false);
   assert.equal(result.currentStep, 1);
-  assert.equal(result.completedAt, 11000);
-  assert.equal(result.timerRunning, false);
-  assert.equal(result.timerStartedAt, undefined);
-  assert.equal(result.timeSpentSeconds, 15);
+  assert.equal(result.completedAt, undefined);
+  assert.equal(result.timerRunning, true);
+  assert.equal(result.timerStartedAt, 1000);
+  assert.equal(result.timeSpentSeconds, 5);
 });
 
-test('deleting all subtasks retains a valid unfinished parent', () => {
+test('deleting all subtasks preserves explicit parent completion with a valid zero-step task', () => {
   const result = applyAITaskUpdate(task({ done: true, completedAt: 50 }), { id: 'task-1', stepList: [] }, tabs);
   assert.deepEqual(result.stepList, []);
-  assert.equal(result.steps, 1);
+  assert.equal(result.steps, 0);
   assert.equal(result.currentStep, 0);
-  assert.equal(result.done, false);
-  assert.equal(result.completedAt, undefined);
+  assert.equal(result.done, true);
+  assert.equal(result.completedAt, 50);
 });
 
-test('explicit parent completion and reopening synchronize the checklist', () => {
+test('explicit parent completion and reopening preserve actual checklist progress', () => {
   const completed = applyAITaskUpdate(task(), { id: 'task-1', done: true }, tabs, 100);
-  assert.equal(completed.currentStep, 2);
-  assert.ok(completed.stepList?.every((step) => step.done));
+  assert.equal(completed.currentStep, 1);
+  assert.deepEqual(completed.stepList?.map((step) => step.done), [true, false]);
   const reopened = applyAITaskUpdate(completed, { id: 'task-1', done: false }, tabs, 200);
-  assert.equal(reopened.currentStep, 0);
-  assert.ok(reopened.stepList?.every((step) => !step.done));
+  assert.equal(reopened.currentStep, 1);
+  assert.deepEqual(reopened.stepList, completed.stepList);
   assert.equal(reopened.completedAt, undefined);
 });
 
-test('an additional subtask reopens a completed task without restarting its timer', () => {
+test('an additional subtask preserves completion until an explicit reopen without restarting the timer', () => {
   const completed = applyAITaskUpdate(task(), { id: 'task-1', done: true }, tabs, 100);
   const result = applyAITaskUpdate(completed, { id: 'task-1', stepList: [...completed.stepList!, { title: 'Ship' }] } as AITaskUpdate, tabs, 200);
-  assert.equal(result.done, false);
-  assert.equal(result.currentStep, 2);
-  assert.equal(result.completedAt, undefined);
+  assert.equal(result.done, true);
+  assert.equal(result.currentStep, 1);
+  assert.equal(result.completedAt, 100);
   assert.equal(result.timerRunning, false);
 });
 
@@ -94,5 +94,42 @@ test('numeric steps update tasks without a checklist and clamp completed progres
   const result = applyAITaskUpdate(task({ stepList: undefined, steps: 4, currentStep: 3 }), { id: 'task-1', steps: 2 }, tabs, 100);
   assert.equal(result.steps, 2);
   assert.equal(result.currentStep, 2);
-  assert.equal(result.done, true);
+  assert.equal(result.done, false);
+});
+
+test('naming legacy numeric steps preserves ordered progress and generated identities', () => {
+  const original = task({ stepList: undefined, steps: 3, currentStep: 2, timeSpentSeconds: 120 });
+  const result = applyAITaskUpdate(original, { id: original.id, stepList: [
+    { title: 'Collect inputs' }, { title: 'Prepare draft' }, { title: 'Review draft' }, { title: 'Publish' },
+  ] }, tabs, 1000);
+  assert.equal(result.currentStep, 2);
+  assert.deepEqual(result.stepList?.map(step => step.done), [true, true, false, false]);
+  assert.deepEqual(result.stepList?.slice(0, 3).map(step => step.id), ['s-task-1-0', 's-task-1-1', 's-task-1-2']);
+  assert.equal(result.steps, 4);
+  assert.equal(result.done, false);
+  assert.equal(result.timeSpentSeconds, 120);
+  assert.equal(original.stepList, undefined);
+  const renamed = applyAITaskUpdate(result, { id: result.id, stepList: result.stepList!.map(step => ({
+    id: step.id, title: `${step.title} updated`,
+  })) }, tabs, 2000);
+  assert.deepEqual(renamed.stepList?.map(step => step.id), result.stepList?.map(step => step.id));
+  assert.deepEqual(renamed.stepList?.map(step => step.done), [true, true, false, false]);
+});
+
+test('legacy migration respects explicit checks and never reuses one row identity twice', () => {
+  const original = task({ stepList: undefined, steps: 3, currentStep: 2 });
+  const result = applyAITaskUpdate(original, { id: original.id, stepList: [
+    { id: 's-task-1-1', title: 'Second stage first' },
+    { title: 'Replacement', done: false }, { title: 'Final stage', done: true },
+  ] }, tabs, 1000);
+  assert.equal(new Set(result.stepList?.map(step => step.id)).size, 3);
+  assert.equal(result.stepList![0].id, 's-task-1-1');
+  assert.deepEqual(result.stepList?.map(step => step.done), [true, false, true]);
+  assert.equal(result.done, false);
+  const reordered = applyAITaskUpdate(original, { id: original.id, stepList: [
+    { id: 's-task-1-1', title: 'Second stage first' }, { title: 'First stage' }, { title: 'Final stage' },
+  ] }, tabs, 2000);
+  assert.deepEqual(reordered.stepList?.map(step => step.id), ['s-task-1-1', 's-task-1-0', 's-task-1-2']);
+  assert.deepEqual(reordered.stepList?.map(step => step.done), [true, true, false]);
+  assert.equal(reordered.currentStep, 2);
 });

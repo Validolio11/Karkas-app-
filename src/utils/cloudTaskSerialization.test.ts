@@ -37,3 +37,13 @@ test('non-finite timer values are omitted from the cloud payload', () => {
     assert.equal(key in value, false);
   }
 });
+
+test('timer choice, first work timestamp and zero-subtask tasks survive cloud serialization', () => {
+  for (const timerMode of ['none', 'stopwatch', 'countdown'] as const) {
+    const value = serializeTaskForCloud({ ...task, steps: 0, currentStep: 0, timerMode, startedAt: 0 });
+    assert.equal(value.timerMode, timerMode);
+    assert.equal(value.startedAt, 0);
+    assert.equal(value.steps, 0);
+  }
+  assert.equal('timerMode' in serializeTaskForCloud(task), false);
+});

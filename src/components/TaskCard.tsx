@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { motion, AnimatePresence, useMotionValue, useTransform } from 'motion/react';
 import { PSTask, TaskTab } from '../types';
 import { sound } from '../utils/audio';
-import { getTaskTotalSeconds, getTaskRemainingSeconds } from '../utils/taskTimer';
+import { getTaskTotalSeconds, getTaskRemainingSeconds, getTaskTimerMode } from '../utils/taskTimer';
 import { Language, TRANSLATIONS } from '../utils/i18n';
 import { AIIcon } from './AIIconTemplates';
 import { useDialogKeyboard } from './useDialogKeyboard';
@@ -32,6 +32,7 @@ interface TaskCardProps {
   lang: Language;
   tabs?: TaskTab[];
   onToggleDone: (id: string) => void;
+  onStartTask?: (id: string) => void;
   onUpdateStep: (id: string, step: number) => void;
   onCyclePriority: (id: string) => void;
   onCyclePhase: (id: string) => void;
@@ -101,6 +102,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
   lang,
   tabs = [],
   onToggleDone,
+  onStartTask,
   onUpdateStep,
   onCyclePriority,
   onCyclePhase,
@@ -151,13 +153,18 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
 
   // Compute live seconds spent on task
   const currentElapsedSeconds = getTaskTotalSeconds(task, now);
-  const hasCountdown = (task.countdownDurationSeconds || 0) > 0;
+  const timerMode = getTaskTimerMode(task);
+  const hasCountdown = timerMode === 'countdown' && (task.countdownDurationSeconds || 0) > 0;
   const remainingSeconds = getTaskRemainingSeconds(task, now) ?? 0;
   const countdownFinished = hasCountdown && remainingSeconds === 0;
+  const hasStarted = Number.isFinite(task.startedAt) || !!task.timerRunning || currentElapsedSeconds > 0;
+  const countdownProgress = hasCountdown
+    ? Math.min(100, Math.max(0, (1 - remainingSeconds / task.countdownDurationSeconds!) * 100)) : 0;
   const timerToggleLabel = task.timerRunning
     ? t.timer.pause
     : task.done ? (lang === 'uk' ? 'Спершу поверніть завдання в роботу' : 'Reopen the task before starting its timer')
-    : countdownFinished ? (lang === 'uk' ? 'Повторити таймер' : 'Restart countdown') : t.timer.start;
+    : countdownFinished ? (lang === 'uk' ? 'Повторити таймер' : 'Restart countdown')
+    : (lang === 'uk' ? 'Продовжити' : 'Resume');
   const validCountdownMinutes = Number.isInteger(Number(countdownMinutes))
     && Number(countdownMinutes) >= 1 && Number(countdownMinutes) <= 1440;
 
@@ -172,7 +179,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
   const hasStepList = !!task.stepList && task.stepList.length > 0;
   const effectiveStepList = hasStepList
     ? task.stepList!
-    : Array.from({ length: Math.max(1, task.steps || 1) }, (_, idx) => ({
+    : Array.from({ length: Math.max(0, task.steps || 0) }, (_, idx) => ({
         id: `s-${task.id}-${idx}`,
         title: `${lang === 'uk' ? 'Крок' : 'Step'} ${idx + 1}`,
         done: idx < task.currentStep,
@@ -414,129 +421,8 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
               )}
             </div>
 
-            {/* Right side: Stopwatch / Timer & Quick Micro-Actions */}
+            {/* Quick task actions */}
             <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-              {/* Task Stopwatch / Timer Widget */}
-              <div
-                id={`task-timer-widget-${task.id}`}
-                className={`flex items-center gap-1 sm:gap-1.5 px-1.5 sm:px-2 py-1 border font-mono transition-all ${
-                  task.timerRunning
-                    ? 'border-emerald-500/80 bg-emerald-950/30 text-emerald-300 shadow-[0_0_10px_rgba(52,211,153,0.15)]'
-                    : currentElapsedSeconds > 0
-                    ? 'border-neutral-700 bg-neutral-900/90 text-neutral-200'
-                    : 'border-neutral-800 bg-[#0a0a0c] text-neutral-400 hover:border-neutral-700'
-                }`}
-                title={`${t.timer.timeSpent}: ${formatDurationFull(currentElapsedSeconds, lang)} (${task.timerRunning ? t.timer.running : t.timer.paused})`}
-              >
-                {/* Play / Pause Toggle Button */}
-                <button
-                  type="button"
-                  id={`task-timer-toggle-${task.id}`}
-                  disabled={task.done && !task.timerRunning}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (onToggleTimer) onToggleTimer(task.id);
-                  }}
-                  title={timerToggleLabel}
-                  aria-label={timerToggleLabel}
-                  className={`min-w-8 min-h-8 transition-transform active:scale-90 flex items-center justify-center disabled:opacity-40 ${
-                    task.timerRunning
-                      ? 'text-emerald-400 hover:text-emerald-300'
-                      : 'text-neutral-400 hover:text-white'
-                  }`}
-                >
-                  {task.timerRunning ? (
-                    <Pause className="w-2.5 h-2.5 fill-current" />
-                  ) : (
-                    <Play className="w-2.5 h-2.5 fill-current" />
-                  )}
-                </button>
-
-                {/* Pulsing indicator when timer is active */}
-                {task.timerRunning && (
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
-                )}
-
-                {/* Live Formatted Stopwatch Time */}
-                <span
-                  className={`text-xs font-bold tracking-wider ${
-                    task.timerRunning
-                      ? 'text-emerald-300'
-                      : currentElapsedSeconds > 0
-                      ? 'text-neutral-200'
-                      : 'text-neutral-500'
-                  }`}
-                >
-                  {formatTime(hasCountdown ? remainingSeconds : currentElapsedSeconds)}
-                </span>
-
-                {hasCountdown && (
-                  <span className="flex flex-col gap-0.5 border-l border-neutral-700 pl-1.5 text-[10px] leading-tight text-neutral-400">
-                    <span className={countdownFinished ? 'text-amber-300' : ''} role="status">
-                      {countdownFinished
-                        ? (lang === 'uk' ? 'Час вийшов' : 'Time is up')
-                        : (lang === 'uk' ? 'Залишилось' : 'Remaining')}
-                    </span>
-                    <span>{lang === 'uk' ? 'Всього' : 'Total'}: {formatTime(currentElapsedSeconds)}</span>
-                  </span>
-                )}
-
-                {onConfigureCountdown && (
-                  <button
-                    type="button"
-                    id={`task-timer-configure-${task.id}`}
-                    disabled={task.done}
-                    ref={countdownTriggerRef}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setCountdownMinutes(String(Math.max(1, Math.round((task.countdownDurationSeconds || 3600) / 60))));
-                      setIsConfiguringTimer(true);
-                    }}
-                    title={task.done ? (lang === 'uk' ? 'Спершу поверніть завдання в роботу' : 'Reopen the task before starting its timer') : (lang === 'uk' ? 'Налаштувати зворотний відлік' : 'Set countdown')}
-                    aria-label={lang === 'uk' ? 'Налаштувати зворотний відлік' : 'Set countdown'}
-                    className="p-1 text-neutral-400 transition-colors hover:text-white"
-                  >
-                    <Timer className="h-3.5 w-3.5" />
-                  </button>
-                )}
-
-                {/* Reset Button (shows when paused and has recorded time) */}
-                {!hasCountdown && currentElapsedSeconds > 0 && !task.timerRunning && onResetTimer && (
-                  <button
-                    type="button"
-                    id={`task-timer-reset-${task.id}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onResetTimer(task.id);
-                    }}
-                    title={t.timer.reset}
-                    className="p-0.5 text-neutral-500 hover:text-rose-400 transition-colors"
-                  >
-                    <RotateCcw className="w-2.5 h-2.5" />
-                  </button>
-                )}
-
-                {/* Edit Time Button */}
-                {onUpdateTimeSpent && (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      sound.tick(400);
-                      const total = currentElapsedSeconds;
-                      setEditHours(Math.floor(total / 3600));
-                      setEditMinutes(Math.floor((total % 3600) / 60));
-                      setEditSeconds(total % 60);
-                      setIsEditingTime(true);
-                    }}
-                    title={t.timer.editTime}
-                    className="p-0.5 text-neutral-500 hover:text-neutral-200 transition-colors ml-0.5"
-                  >
-                    <Clock className="w-2.5 h-2.5" />
-                  </button>
-                )}
-              </div>
-
               {/* Edit Task Text */}
               <button
                 id={`task-edit-btn-${task.id}`}
@@ -590,9 +476,8 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
-                  if (editTitleText.trim() && onEditTask) {
-                    onEditTask(task.id, editTitleText, editNoteText);
-                  }
+                  if (!editTitleText.trim() || !onEditTask) return;
+                  onEditTask(task.id, editTitleText.trim(), editNoteText.trim());
                   setIsEditingTask(false);
                 }}
                 onClick={(e) => e.stopPropagation()}
@@ -604,6 +489,8 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                 </div>
                 <input
                   type="text"
+                  required
+                  aria-label={lang === 'uk' ? 'Назва завдання' : 'Task title'}
                   value={editTitleText}
                   onChange={(e) => setEditTitleText(e.target.value)}
                   placeholder={lang === 'uk' ? 'Назва завдання...' : 'Task title...'}
@@ -613,6 +500,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                 <input
                   type="text"
                   value={editNoteText}
+                  aria-label={lang === 'uk' ? 'Нотатка' : 'Note'}
                   onChange={(e) => setEditNoteText(e.target.value)}
                   placeholder={lang === 'uk' ? 'Нотатка (необов\'язково)...' : 'Note (optional)...'}
                   className="w-full px-2.5 py-1.5 bg-[#0d0d12] border border-neutral-800 text-neutral-300 text-sm leading-relaxed font-mono focus:outline-none focus:border-neutral-600 transition-colors"
@@ -628,6 +516,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   </button>
                   <button
                     type="submit"
+                    disabled={!editTitleText.trim() || !onEditTask}
                     className="px-2.5 py-1 bg-emerald-500 text-black text-xs font-mono font-extrabold hover:bg-emerald-400 transition-colors flex items-center gap-1 cursor-pointer"
                   >
                     <Check className="w-3 h-3" />
@@ -638,14 +527,13 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
             ) : (
               <>
                 <h3
-                  className={`text-sm sm:text-base font-bold tracking-tight cursor-pointer leading-relaxed break-words transition-all ${
+                  className={`text-sm sm:text-base font-bold tracking-tight leading-relaxed break-words [overflow-wrap:anywhere] transition-all ${
                     task.done
                       ? 'line-through text-neutral-400 decoration-neutral-600 decoration-2'
                       : 'text-neutral-100 hover:text-white'
                   }`}
                 >
-                  <button type="button" className="w-full text-left [overflow-wrap:anywhere]" aria-pressed={task.done}
-                    onClick={() => { sound.slice(); onToggleDone(task.id); }}>{task.title}</button>
+                  {task.title}
                 </h3>
 
                 {task.note && (
@@ -657,8 +545,9 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
             )}
 
             {task.autoPausedOverdue && (
-              <div
-                className="flex items-center gap-1.5 px-2 py-1 bg-amber-950/40 border border-amber-500/40 text-amber-300 text-xs font-mono mt-1.5 cursor-pointer hover:bg-amber-950/60 transition-colors"
+              <button
+                type="button"
+                className="flex w-full min-h-11 items-center gap-1.5 px-2 py-1 text-left bg-amber-950/40 border border-amber-500/40 text-amber-300 text-xs font-mono mt-1.5 cursor-pointer hover:bg-amber-950/60 transition-colors"
                 onClick={(e) => {
                   e.stopPropagation();
                   sound.tick(400);
@@ -673,20 +562,99 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                 <AlertTriangle className="w-3 h-3 shrink-0 text-amber-400" />
                 <span className="flex-1">{t.timer.autoPausedNotice}</span>
                 <span className="text-xs underline underline-offset-2 text-amber-200">{t.timer.editTime}</span>
-              </div>
+              </button>
             )}
           </div>
 
-          {/* Interactive Step Scrubber Rail with Right-Side Step Description and Toggle Button */}
+          {timerMode !== 'none' && (
+            <section id={`task-timer-widget-${task.id}`}
+              aria-label={lang === 'uk' ? 'Час завдання' : 'Task time'}
+              className={`min-w-0 border p-3 sm:p-4 font-mono ${task.timerRunning
+                ? 'border-emerald-500/60 bg-emerald-950/20'
+                : countdownFinished ? 'border-amber-700/60 bg-amber-950/10' : 'border-neutral-800 bg-neutral-950/70'}`}>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-xs text-neutral-400">
+                    {timerMode === 'countdown' ? (lang === 'uk' ? 'Зворотний відлік · залишилось' : 'Countdown · remaining')
+                      : (lang === 'uk' ? 'Секундомір · витрачений час' : 'Stopwatch · time spent')}
+                  </p>
+                  <p className={`mt-1 text-3xl sm:text-4xl font-bold tabular-nums tracking-wide [overflow-wrap:anywhere] ${task.timerRunning
+                    ? 'text-emerald-300' : countdownFinished ? 'text-amber-300' : 'text-neutral-100'}`}>
+                    {formatTime(hasCountdown ? remainingSeconds : currentElapsedSeconds)}
+                  </p>
+                  {hasCountdown && <p className="mt-1 text-xs text-neutral-400">
+                    {lang === 'uk' ? 'Тривалість' : 'Duration'}: {formatDurationFull(task.countdownDurationSeconds!, lang)}
+                    {' · '}{lang === 'uk' ? 'Всього витрачено' : 'Total spent'}: {formatTime(currentElapsedSeconds)}
+                  </p>}
+                </div>
+                <p role="status" className={`text-xs leading-relaxed ${task.timerRunning ? 'text-emerald-300' : countdownFinished ? 'text-amber-300' : 'text-neutral-400'}`}>
+                  {task.done ? (lang === 'uk' ? 'Завершено' : 'Completed')
+                    : countdownFinished ? (lang === 'uk' ? 'Час вийшов · завершіть завдання, коли будете готові' : 'Time is up · complete the task when ready')
+                    : task.timerRunning ? (lang === 'uk' ? 'Таймер працює' : 'Timer running')
+                    : hasStarted ? (lang === 'uk' ? 'На паузі' : 'Paused') : (lang === 'uk' ? 'Готовий до початку' : 'Ready to start')}
+                </p>
+              </div>
+              {hasCountdown && <div role="progressbar"
+                aria-label={lang === 'uk' ? 'Прогрес зворотного відліку' : 'Countdown progress'}
+                aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(countdownProgress)}
+                aria-valuetext={lang === 'uk' ? `Залишилось ${formatDurationFull(remainingSeconds, lang)}` : `${formatDurationFull(remainingSeconds, lang)} remaining`}
+                className="mt-3 h-2 overflow-hidden bg-neutral-800">
+                <div style={{ width: `${countdownProgress}%` }} className={`h-full transition-[width] duration-500 ${countdownFinished ? 'bg-amber-400' : 'bg-emerald-400'}`} />
+              </div>}
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                {hasStarted && !task.done && onToggleTimer && <button
+                  type="button" id={`task-timer-toggle-${task.id}`}
+                  onClick={(e) => { e.stopPropagation(); onToggleTimer(task.id); }}
+                  className="inline-flex min-h-11 items-center justify-center gap-2 border border-neutral-600 px-3 py-2 text-sm font-bold text-neutral-100 transition-colors hover:border-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
+                  {task.timerRunning ? <Pause className="h-4 w-4" aria-hidden="true" /> : <Play className="h-4 w-4" aria-hidden="true" />}
+                  {timerToggleLabel}
+                </button>}
+                {onConfigureCountdown && <button
+                  type="button" id={`task-timer-configure-${task.id}`} ref={countdownTriggerRef}
+                  disabled={task.done}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setCountdownMinutes(String(Math.max(1, Math.round((task.countdownDurationSeconds || 3600) / 60))));
+                    setIsConfiguringTimer(true);
+                  }}
+                  className="inline-flex min-h-11 items-center justify-center gap-2 border border-neutral-800 px-3 py-2 text-xs text-neutral-300 hover:border-neutral-500 hover:text-white disabled:opacity-40">
+                  <Timer className="h-4 w-4" aria-hidden="true" />
+                  {lang === 'uk' ? 'Налаштувати' : 'Configure'}
+                </button>}
+                {!hasCountdown && currentElapsedSeconds > 0 && !task.timerRunning && !task.done && onResetTimer && <button
+                  type="button" id={`task-timer-reset-${task.id}`}
+                  onClick={(e) => { e.stopPropagation(); onResetTimer(task.id); }}
+                  className="inline-flex min-h-11 items-center justify-center gap-2 px-3 py-2 text-xs text-neutral-400 hover:text-rose-300">
+                  <RotateCcw className="h-4 w-4" aria-hidden="true" />{t.timer.reset}
+                </button>}
+                {onUpdateTimeSpent && <button
+                  type="button" id={`task-edit-time-${task.id}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const total = currentElapsedSeconds;
+                    setEditHours(Math.floor(total / 3600));
+                    setEditMinutes(Math.floor((total % 3600) / 60));
+                    setEditSeconds(total % 60);
+                    setIsEditingTime(true);
+                  }}
+                  className="inline-flex min-h-11 items-center justify-center gap-2 px-3 py-2 text-xs text-neutral-400 hover:text-white">
+                  <Clock className="h-4 w-4" aria-hidden="true" />{t.timer.editTime}
+                </button>}
+              </div>
+            </section>
+          )}
+
+          {/* Task progress and explicit work actions */}
           <div className="pt-4 flex flex-wrap items-center justify-between gap-4 border-t border-neutral-800/70">
             {/* Scrubber & Active Step Description */}
-            <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+            <div className="flex min-w-0 basis-full flex-wrap items-center gap-x-3 gap-y-1 md:basis-auto md:flex-1">
               <span className="text-xs font-mono text-neutral-400 uppercase tracking-widest font-bold whitespace-nowrap">
-                {t.step} {completedStepCount}/{effectiveStepList.length}
+                {effectiveStepList.length ? `${t.step} ${completedStepCount}/${effectiveStepList.length}`
+                  : (lang === 'uk' ? 'Без підзавдань' : 'No subtasks')}
               </span>
               
               {/* Bars */}
-              <div className="flex items-center gap-1 w-24 sm:w-28 h-3.5">
+              {effectiveStepList.length > 0 && <div className="flex max-w-full flex-wrap items-center gap-1">
                 {effectiveStepList.map((step, i) => {
                   const stepNum = i + 1;
                   const isFilled = step.done;
@@ -703,20 +671,19 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                       title={`${t.step} ${stepNum} / ${effectiveStepList.length}`}
                       aria-label={`${t.step} ${stepNum} / ${effectiveStepList.length}`}
                       aria-pressed={isFilled}
-                      className={`h-3 flex-1 transition-all rounded-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white ${
-                        isFilled
-                          ? 'bg-neutral-100 shadow-[0_0_6px_rgba(255,255,255,0.2)]'
-                          : 'bg-neutral-800 hover:bg-neutral-700'
-                      }`}
-                    />
+                      className="flex h-11 w-11 min-h-11 min-w-11 shrink-0 items-center focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white md:[@media(pointer:fine)]:h-7 md:[@media(pointer:fine)]:w-3 md:[@media(pointer:fine)]:min-h-7 md:[@media(pointer:fine)]:min-w-3"
+                    >
+                      <span aria-hidden="true" className={`h-3 w-full transition-all ${isFilled
+                        ? 'bg-neutral-100 shadow-[0_0_6px_rgba(255,255,255,0.2)]' : 'bg-neutral-800 hover:bg-neutral-700'}`} />
+                    </button>
                   );
                 })}
-              </div>
+              </div>}
 
             </div>
 
             {/* Steps Drawer Toggle & Complete Button */}
-            <div className="flex items-center gap-1.5 shrink-0">
+            <div className="flex flex-wrap items-center gap-2">
               {/* Collapsible Steps Button */}
               <button
                 id={`task-toggle-steps-${task.id}`}
@@ -727,7 +694,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   sound.tick(500);
                   setIsExpanded(!isExpanded);
                 }}
-                className={`flex items-center gap-2 text-xs font-mono uppercase font-bold tracking-wider px-3 py-2 border transition-all ${
+                className={`flex min-h-11 items-center gap-2 text-xs font-mono uppercase font-bold tracking-wider px-3 py-2 border transition-all ${
                   isExpanded
                     ? 'border-white bg-neutral-900 text-white'
                     : hasStepList
@@ -744,21 +711,33 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                 )}
               </button>
 
-              {/* Quick Slash Action / Done Toggle */}
+              {!task.done && !hasStarted && <button
+                type="button" id={`task-start-action-${task.id}`} disabled={!onStartTask}
+                onClick={(e) => { e.stopPropagation(); sound.activate(); onStartTask?.(task.id); }}
+                className="inline-flex min-h-11 items-center justify-center gap-2 border border-emerald-500 bg-emerald-500 px-3 py-2 text-sm font-mono font-bold text-black hover:bg-emerald-400 disabled:opacity-40">
+                <Play className="h-4 w-4" aria-hidden="true" />
+                {lang === 'uk' ? 'Почати' : 'Start'}
+              </button>}
+              {!task.done && hasStarted && <span className="inline-flex min-h-11 items-center px-2 text-xs font-mono text-emerald-300">
+                {lang === 'uk' ? 'У роботі' : 'In progress'}
+              </span>}
+
+              {/* Explicit completion preserves subtask progress and recorded time */}
               <button
+                type="button"
                 id={`task-toggle-action-${task.id}`}
                 onClick={(e) => {
                   e.stopPropagation();
                   sound.slice();
                   onToggleDone(task.id);
                 }}
-                className={`text-xs font-mono uppercase font-bold tracking-wider px-3 py-2 border transition-all ${
+                className={`min-h-11 text-sm font-mono font-bold px-3 py-2 border transition-all ${
                   task.done
                     ? 'border-neutral-700 text-neutral-400 hover:border-neutral-500 hover:text-white'
                     : 'border-neutral-700 text-neutral-300 hover:border-white hover:text-white'
                 }`}
               >
-                {task.done ? t.reopenBtn : t.completedBtn}
+                {task.done ? (lang === 'uk' ? 'Відновити' : 'Reopen') : (lang === 'uk' ? 'Завершити' : 'Complete')}
               </button>
             </div>
           </div>
@@ -942,7 +921,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                 {lang === 'uk' ? 'Таймер завдання' : 'Task countdown'}
               </h4>
               <button type="button" onClick={() => setIsConfiguringTimer(false)}
-                aria-label={t.timer.cancel} className="p-1 text-neutral-400 hover:text-white">
+                aria-label={t.timer.cancel} className="flex min-h-11 min-w-11 items-center justify-center p-1 text-neutral-400 hover:text-white">
                 <X className="h-4 w-4" />
               </button>
             </div>
@@ -957,12 +936,12 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
             <input id={`countdown-minutes-${task.id}`} type="number" min="1" max="1440" step="1"
               required autoFocus value={countdownMinutes}
               onChange={(e) => setCountdownMinutes(e.target.value)}
-              className="w-full border border-neutral-700 bg-neutral-950 px-3 py-2 text-white focus:border-white focus:outline-none" />
+              className="w-full min-h-11 border border-neutral-700 bg-neutral-950 px-3 py-2 text-white focus:border-white focus:outline-none" />
             <div className="grid grid-cols-3 gap-2">
               {[15, 25, 60].map((minutes) => (
                 <button key={minutes} type="button" onClick={() => setCountdownMinutes(String(minutes))}
                   aria-pressed={Number(countdownMinutes) === minutes}
-                  className={`border px-2 py-2 text-xs transition-colors ${Number(countdownMinutes) === minutes ? 'border-white text-white' : 'border-neutral-700 text-neutral-400 hover:border-neutral-400 hover:text-white'}`}>
+                  className={`min-h-11 border px-2 py-2 text-xs transition-colors ${Number(countdownMinutes) === minutes ? 'border-white text-white' : 'border-neutral-700 text-neutral-400 hover:border-neutral-400 hover:text-white'}`}>
                   {minutes} {lang === 'uk' ? 'хв' : 'min'}
                 </button>
               ))}
@@ -970,14 +949,14 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
             <div className="flex flex-wrap items-center justify-end gap-2 border-t border-neutral-800 pt-3">
               {hasCountdown && onClearCountdown && (
                 <button type="button" onClick={() => { onClearCountdown(task.id); setIsConfiguringTimer(false); }}
-                  className="mr-auto py-1.5 text-xs text-neutral-400 hover:text-white">
+                  className="mr-auto min-h-11 py-1.5 text-xs text-neutral-400 hover:text-white">
                   {lang === 'uk' ? 'Секундомір' : 'Stopwatch'}
                 </button>
               )}
               <button type="button" onClick={() => setIsConfiguringTimer(false)}
-                className="px-2 py-1.5 text-xs text-neutral-400 hover:text-white">{t.timer.cancel}</button>
+                className="min-h-11 px-2 py-1.5 text-xs text-neutral-400 hover:text-white">{t.timer.cancel}</button>
               <button type="submit" disabled={!validCountdownMinutes}
-                className="border border-white bg-white px-3 py-1.5 text-xs font-bold text-black hover:bg-neutral-200 disabled:opacity-40">
+                className="min-h-11 border border-white bg-white px-3 py-1.5 text-xs font-bold text-black hover:bg-neutral-200 disabled:opacity-40">
                 {lang === 'uk' ? 'Почати' : 'Start'}
               </button>
             </div>
@@ -1004,7 +983,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                 type="button"
                 onClick={() => setIsEditingTime(false)}
                 aria-label={t.timer.cancel}
-                className="inline-flex h-6 w-6 items-center justify-center text-neutral-500 transition-colors hover:bg-neutral-900 hover:text-white"
+                className="inline-flex h-11 w-11 items-center justify-center text-neutral-400 transition-colors hover:bg-neutral-900 hover:text-white"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -1127,7 +1106,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
               <button
                 type="button"
                 onClick={() => setIsEditingTime(false)}
-                className="px-3 py-1.5 text-xs font-bold uppercase tracking-wider text-neutral-500 transition-colors hover:text-white"
+                className="min-h-11 px-3 py-1.5 text-xs font-bold uppercase tracking-wider text-neutral-400 transition-colors hover:text-white"
               >
                 {t.timer.cancel}
               </button>
@@ -1142,7 +1121,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   setIsEditingTime(false);
                 }}
                 disabled={!Number.isSafeInteger(editHours * 3600 + editMinutes * 60 + editSeconds)}
-                className="border border-white bg-white px-4 py-1.5 text-xs font-bold uppercase tracking-wider text-black transition-colors hover:border-neutral-200 hover:bg-neutral-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="min-h-11 border border-white bg-white px-4 py-1.5 text-xs font-bold uppercase tracking-wider text-black transition-colors hover:border-neutral-200 hover:bg-neutral-200 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 {t.timer.save}
               </button>

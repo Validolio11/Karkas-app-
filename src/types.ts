@@ -14,19 +14,23 @@ export interface TaskStepItem {
   done: boolean;
 }
 
+export type TimerMode = 'none' | 'stopwatch' | 'countdown';
+
 export interface PSTask {
   id: string;
   title: string;
   phase: string; // Dynamic tab/category ID
   priority: 1 | 2 | 3; // 1: Urgent (Red), 2: Standard (Yellow), 3: Low (Green)
-  steps: number; // 1 to 4+ stages
+  steps: number; // Zero means the task has no subtasks
   currentStep: number; // 0 to steps
   stepList?: TaskStepItem[]; // Optional list of custom steps with descriptions
   done: boolean;
   pinned: boolean;
   note?: string;
   createdAt: number;
+  startedAt?: number; // First explicit start of work; preserved through pauses and reopening
   completedAt?: number;
+  timerMode?: TimerMode; // Missing on legacy tasks: countdown if configured, otherwise stopwatch
   timeSpentSeconds?: number; // Total accumulated seconds spent on this task
   timerRunning?: boolean; // Is stopwatch currently active
   timerStartedAt?: number; // Timestamp (ms) when current stopwatch session started
@@ -34,6 +38,9 @@ export interface PSTask {
   countdownRemainingSeconds?: number; // Remaining at the last start/pause; live elapsed is derived
   autoPausedOverdue?: boolean; // Timer was auto-paused due to session cap or inactivity safeguard
 }
+
+export type NewTaskInput = Pick<PSTask, 'title' | 'phase' | 'priority' | 'steps'> &
+  Partial<Pick<PSTask, 'stepList' | 'note' | 'timerMode' | 'countdownDurationSeconds'>>;
 
 export interface DeletedTask extends PSTask {
   deletedAt: number;

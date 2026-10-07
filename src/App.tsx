@@ -1,7 +1,7 @@
 import { pauseTaskTimer, startTaskTimer, configureTaskCountdown, clearTaskCountdown } from './utils/taskTimer';
 import { applyAITaskUpdate } from './utils/aiTaskUpdates';
 import React, { useState, useEffect, useMemo } from 'react';
-import { PSTask, DeletedTask, TaskTab, FilterMode, WorkflowStats, TaskStepItem, AdaptiveProfile, AITaskUpdate, NotepadNote } from './types';
+import { PSTask, DeletedTask, TaskTab, FilterMode, WorkflowStats, TaskStepItem, AdaptiveProfile, AITaskUpdate, NotepadNote, NewTaskInput } from './types';
 import { TaskCard } from './components/TaskCard';
 import { DashboardView } from './components/DashboardView';
 import { NotepadView } from './components/NotepadView';
@@ -44,8 +44,9 @@ import { SettingsModal } from './components/SettingsModal';
 import { mergeWorkspace, normalizeWorkspaceForStorage, sameWorkspace, type WorkspaceState } from './utils/syncState';
 import { diffWorkspaceOperations } from './utils/syncOperations';
 import { karkasApiFetch } from './utils/desktopApi';
-import { sanitizeTasksTimerSafeguard, toggleTaskDone, setTaskProgress, toggleTaskStep, addTaskStep, deleteTaskStep, setTaskTimeSpent, setTaskSteps, materializeStepList } from './utils/taskOperations';
+import { sanitizeTasksTimerSafeguard, completeTask, reopenTask, startTaskWork, createTask, setTaskProgress, toggleTaskStep, addTaskStep, deleteTaskStep, setTaskTimeSpent, setTaskSteps, materializeStepList } from './utils/taskOperations';
 import packageMetadata from '../package.json';
+import { taskBreakdownContext } from './utils/taskBreakdownContext';
 
 const STORAGE_KEY = 'life_todo_tasks_v2';
 const DELETED_STORAGE_KEY = 'karkas_deleted_tasks_v2';
@@ -148,6 +149,7 @@ export default function App() {
 
   const t = TRANSLATIONS[lang];
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [completedNoticeId, setCompletedNoticeId] = useState<string | null>(null);
   const breakdownRequestRef = React.useRef<AbortController | null>(null);
   useEffect(() => { document.documentElement.lang = lang; }, [lang]);
   useEffect(() => () => breakdownRequestRef.current?.abort(), []);
@@ -211,6 +213,8 @@ export default function App() {
     }
     return sanitizeTasksTimerSafeguard(loaded);
   });
+  const latestTasksRef = React.useRef(tasks);
+  latestTasksRef.current = tasks;
 
   // Reconcile deadlines globally, including tasks hidden by filters or tabs.
   useEffect(() => {
@@ -465,6 +469,7 @@ export default function App() {
     const requestController = new AbortController();
     breakdownRequestRef.current = requestController;
     const requestGeneration = authGenerationRef.current;
+    const targetSnapshot = taskBreakdownContext(targetTask);
     const requestTimeout = window.setTimeout(() => requestController.abort(), 12_000);
 
     try {
@@ -512,8 +517,13 @@ export default function App() {
         }));
 
       if (requestController.signal.aborted || requestGeneration !== authGenerationRef.current) return;
+      const latestTarget = latestTasksRef.current.find(task => task.id === taskId);
+      if (!latestTarget || taskBreakdownContext(latestTarget) !== targetSnapshot) {
+        setActionNotice(lang === 'uk' ? 'Завдання змінилося під час генерації. Ваші правки збережено; повторіть створення кроків.' : 'The task changed during generation. Your edits are preserved; generate steps again.');
+        return;
+      }
       setTasks(prev => prev.map(task => {
-        if (task.id !== taskId) return task;
+        if (task.id !== taskId || taskBreakdownContext(task) !== targetSnapshot) return task;
         const existing = materializeStepList(task, lang === 'uk' ? 'Крок' : 'Step');
         const titles = new Set(existing.map(step => step.title.trim().toLowerCase()));
         const additions = newStepItems.filter(step => {
@@ -1279,7 +1289,7 @@ export default function App() {
   const filteredTasks = useMemo(() => {
     return tasks
       .filter((t) => {
-        if (activeFilter === 'ACTIVE' && t.done) return false;
+        if (activeFilter !== 'DONE' && t.done) return false;
         if (activeFilter === 'DONE' && !t.done) return false;
         if (selectedPhase !== 'ALL' && selectedPhase !== 'DASHBOARD' && t.phase !== selectedPhase) return false;
         if (searchQuery.trim()) {
@@ -1306,6 +1316,13 @@ export default function App() {
         return b.createdAt - a.createdAt;
       });
   }, [tasks, activeFilter, selectedPhase, searchQuery]);
+
+  const listCounts = useMemo(() => {
+    const visible = tasks.filter(task => activeFilter === 'DONE' ? task.done : !task.done);
+    const phaseCounts: Record<string, number> = {};
+    visible.forEach(task => { phaseCounts[task.phase] = (phaseCounts[task.phase] || 0) + 1; });
+    return { total: visible.length, phaseCounts };
+  }, [tasks, activeFilter]);
 
   // Edit Task Title and Note
   const handleEditTask = (id: string, updatedTitle: string, updatedNote?: string) => {
@@ -1379,14 +1396,31 @@ export default function App() {
   // Task Actions
   const handleToggleDone = (id: string) => {
     const now = Date.now();
-    setTasks(prev => prev.map(task => task.id === id ? toggleTaskDone(task, now, lang === 'uk' ? 'Крок' : 'Step') : task));
+    const current = tasks.find(task => task.id === id);
+    if (!current) return;
+    const shouldComplete = !current.done;
+    setTasks(prev => prev.map(task => task.id === id
+      ? shouldComplete ? completeTask(task, now) : reopenTask(task, now)
+      : task));
+    setCompletedNoticeId(shouldComplete ? id : null);
+    if (!shouldComplete) {
+      setSelectedPhase('ALL');
+      setActiveFilter('ALL');
+      setSearchQuery('');
+    }
+  };
+
+  const handleStartTask = (id: string) => {
+    const now = Date.now();
+    setTasks(prev => prev.map(task => task.id === id ? startTaskWork(task, now) : task));
   };
 
   const handleToggleTimer = (id: string) => {
     sound.tick(500);
     const now = Date.now();
+    const shouldPause = tasks.find(task => task.id === id)?.timerRunning;
     setTasks(previous => previous.map(task => task.id === id
-      ? task.timerRunning ? pauseTaskTimer(task, now) : task.done ? task : startTaskTimer(task, now)
+      ? shouldPause ? pauseTaskTimer(task, now) : task.done ? task : startTaskTimer(task, now)
       : task));
   };
 
@@ -1515,12 +1549,15 @@ export default function App() {
     sound.activate();
     const { deletedAt, ...restTask } = task;
     const fallbackTab = tabs[0]?.id || 'focus';
-    const safeTask: PSTask = {
+    const safeTask = reopenTask({
       ...restTask,
       phase: tabs.some((tb) => tb.id === restTask.phase) ? restTask.phase : fallbackTab,
-    };
-    setTasks((prev) => [safeTask, ...prev]);
+    }, Date.now());
+    setTasks((prev) => [safeTask, ...prev.filter(existing => existing.id !== task.id)]);
     setDeletedTasks((prev) => prev.filter((d) => d.id !== task.id));
+    setSelectedPhase('ALL');
+    setActiveFilter('ALL');
+    setSearchQuery('');
   };
 
   const handlePermanentDeleteTask = (id: string) => {
@@ -1535,14 +1572,7 @@ export default function App() {
     setDeletedTasks([]);
   };
 
-  const handleAddTask = (newTask: {
-    title: string;
-    phase: string;
-    priority: 1 | 2 | 3;
-    steps: number;
-    stepList?: { id: string; title: string; done: boolean }[];
-    note?: string;
-  }) => {
+  const handleAddTask = (newTask: NewTaskInput) => {
     let effectivePhase = newTask.phase;
     if (
       effectivePhase === 'DASHBOARD' ||
@@ -1552,16 +1582,15 @@ export default function App() {
       effectivePhase = tabs[0]?.id || 'focus';
     }
 
-    const task: PSTask = {
-      id: `task-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-      ...newTask,
-      phase: effectivePhase,
-      currentStep: 0,
-      done: false,
-      pinned: false,
-      createdAt: Date.now(),
-    };
+    const now = Date.now();
+    const task = createTask({ ...newTask, phase: effectivePhase }, `task-${now}-${Math.random().toString(36).slice(2, 8)}`, now);
+    if (!task) return false;
     setTasks((prev) => [task, ...prev]);
+    setSelectedPhase('ALL');
+    setActiveFilter('ALL');
+    setSearchQuery('');
+    setCompletedNoticeId(null);
+    return true;
   };
 
   const handleInjectAITasks = (
@@ -1622,7 +1651,7 @@ export default function App() {
       if (phase === 'DASHBOARD' || phase === 'ALL' || !availableTabIds.has(phase)) {
         phase = tabs[0]?.id || 'focus';
       }
-      const stepCount = t.stepList && t.stepList.length > 0 ? t.stepList.length : (t.steps || 1);
+      const stepCount = t.stepList && t.stepList.length > 0 ? t.stepList.length : (Number.isInteger(t.steps) && t.steps >= 0 ? t.steps : 0);
       return {
         ...t,
         phase,
@@ -1633,6 +1662,7 @@ export default function App() {
         done: false,
         pinned: false,
         createdAt: Date.now() + i,
+        timerMode: t.timerMode || 'none',
       };
     });
     if (items.length > 0) setTasks((prev) => [...items, ...prev]);
@@ -1674,6 +1704,7 @@ export default function App() {
       {/* Top Header & Interactive Dynamic Tab Matrix with Windows Titlebar */}
       <TopWorkflowMatrix
         stats={stats}
+        listCounts={listCounts}
         tabs={tabs}
         activeFilter={activeFilter}
         selectedPhase={selectedPhase}
@@ -1712,6 +1743,21 @@ export default function App() {
       {actionNotice && <div role="status" className="relative z-20 max-w-6xl w-full mx-auto px-4 py-3 text-sm bg-amber-950/40 border border-amber-800 text-amber-100">
         {actionNotice}<button className="underline ml-3" onClick={() => setActionNotice(null)}>{lang === 'uk' ? 'Закрити' : 'Dismiss'}</button>
       </div>}
+      {completedNoticeId && tasks.some(task => task.id === completedNoticeId && task.done) && (
+        <div role="status" className="relative z-20 w-full px-5 py-3 bg-emerald-950/30 border-b border-emerald-900 text-emerald-100 flex flex-wrap items-center justify-center gap-3 text-sm">
+          <span>{lang === 'uk' ? 'Завдання завершено й збережено в історії.' : 'Task completed and saved in history.'}</span>
+          <button type="button" onClick={() => setSelectedPhase('HISTORY')} className="min-h-11 underline">{lang === 'uk' ? 'Відкрити історію' : 'Open history'}</button>
+          <button type="button" onClick={() => {
+            const now = Date.now();
+            setTasks(prev => prev.map(task => task.id === completedNoticeId ? reopenTask(task, now) : task));
+            setCompletedNoticeId(null);
+            setSelectedPhase('ALL');
+            setActiveFilter('ALL');
+            setSearchQuery('');
+          }} className="min-h-11 underline">{lang === 'uk' ? 'Повернути в роботу' : 'Reopen task'}</button>
+          <button type="button" onClick={() => setCompletedNoticeId(null)} className="min-h-11" aria-label={lang === 'uk' ? 'Закрити повідомлення' : 'Dismiss notice'}><X className="w-4 h-4" /></button>
+        </div>
+      )}
       {/* Minimized Window Taskbar Floating Notification */}
       {isWindowMinimized && (
         <div
@@ -1916,6 +1962,7 @@ export default function App() {
                       lang={lang}
                       tabs={tabs}
                       onToggleDone={handleToggleDone}
+                      onStartTask={handleStartTask}
                       onUpdateStep={handleUpdateStep}
                       onCyclePriority={handleCyclePriority}
                       onCyclePhase={handleCyclePhase}
@@ -2074,14 +2121,18 @@ export default function App() {
           {/* Right: Quick Add Button */}
           <button
             id="bottom-quick-add-btn"
+            type={isAddOpen ? 'submit' : 'button'}
+            form={isAddOpen ? 'quick-add-task-form' : undefined}
             onClick={() => {
-              sound.tick(600);
-              setIsAddOpen((prev) => !prev);
+              if (!isAddOpen) {
+                sound.tick(600);
+                setIsAddOpen(true);
+              }
             }}
             className="order-3 min-h-11 shrink-0 flex items-center gap-1 px-3 py-1.5 bg-white text-black font-extrabold font-mono text-xs tracking-wider hover:bg-neutral-200 transition-all active:scale-95 app-no-drag"
           >
             <Plus className="w-3.5 h-3.5" />
-            <span>{t.addOp}</span>
+            <span>{isAddOpen ? (lang === 'uk' ? 'Зберегти' : 'Save task') : t.addOp}</span>
           </button>
         </div>
       </footer>

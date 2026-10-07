@@ -10,6 +10,8 @@ export function serializeTaskForCloud<T extends PSTask | DeletedTask>(task: T, n
   if ('deletedAt' in task) result.deletedAt = task.deletedAt || now;
   if (task.note != null) result.note = task.note;
   if (task.completedAt != null) result.completedAt = task.completedAt;
+  if (Number.isFinite(task.startedAt)) result.startedAt = task.startedAt;
+  if (task.timerMode === 'none' || task.timerMode === 'stopwatch' || task.timerMode === 'countdown') result.timerMode = task.timerMode;
   if (Number.isFinite(task.timeSpentSeconds)) result.timeSpentSeconds = task.timeSpentSeconds;
   if (task.timerRunning !== undefined) result.timerRunning = Boolean(task.timerRunning);
   if (Number.isFinite(task.timerStartedAt)) result.timerStartedAt = task.timerStartedAt;

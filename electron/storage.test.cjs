@@ -41,6 +41,16 @@ test('workspace and preferences round-trip through versioned files', async (t) =
   assert.deepEqual(raw.data.accounts.$guest.workspace, workspace());
 });
 
+test('zero-subtask tasks retain timer choice and first work date in native storage', async (t) => {
+  const { storage } = await temporaryStorage(t);
+  const state = workspace();
+  state.tasks[0] = { ...state.tasks[0], steps: 0, timerMode: 'none', startedAt: 0, timerRunning: false };
+  state.deletedTasks = [{ ...state.tasks[0], id: 'archived', timerMode: 'countdown',
+    countdownDurationSeconds: 3600, countdownRemainingSeconds: 900, deletedAt: 2000 }];
+  await storage.saveWorkspace(state);
+  assert.deepEqual(await storage.loadWorkspace(), state);
+});
+
 test('concurrent saves are serialized and do not leave temporary files', async (t) => {
   const { directory, storage } = await temporaryStorage(t);
   await Promise.all(Array.from({ length: 20 }, (_, index) => storage.saveWorkspace(workspace(`Task ${index}`))));

@@ -8,6 +8,7 @@ import { User } from 'firebase/auth';
 
 interface TopWorkflowMatrixProps {
   stats: WorkflowStats;
+  listCounts?: Pick<WorkflowStats, 'total' | 'phaseCounts'>;
   tabs: TaskTab[];
   activeFilter: FilterMode;
   selectedPhase: string;
@@ -40,6 +41,7 @@ interface TopWorkflowMatrixProps {
 
 const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
   stats,
+  listCounts = stats,
   tabs,
   activeFilter,
   selectedPhase,
@@ -424,13 +426,13 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
             >
               <span>{t.phases.ALL}</span>
               <span className={`text-xs ${selectedPhase === 'ALL' ? 'text-black font-bold' : 'text-neutral-500'}`}>
-                {stats.total}
+                {listCounts.total}
               </span>
             </button>
 
             {/* Dynamic User Tabs */}
             {tabs.map((tab) => {
-              const count = stats.phaseCounts[tab.id] || 0;
+              const count = listCounts.phaseCounts[tab.id] || 0;
               const isSelected = selectedPhase === tab.id;
               const tabDisplayName = (t.phases as any)[tab.id] || tab.name;
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { motion, AnimatePresence, useMotionValue, useTransform } from 'motion/react';
+import { motion, AnimatePresence, useMotionValue, useTransform, useDragControls } from 'motion/react';
 import { PSTask, TaskTab } from '../types';
 import { sound } from '../utils/audio';
 import { getTaskTotalSeconds, getTaskRemainingSeconds, getTaskTimerMode } from '../utils/taskTimer';
@@ -143,6 +143,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
   useDialogKeyboard(isEditingTime, () => setIsEditingTime(false), `task-time-dialog-${task.id}`);
   useDialogKeyboard(isConfiguringTimer, () => setIsConfiguringTimer(false), `task-countdown-dialog-${task.id}`, countdownTriggerRef);
   const x = useMotionValue(0);
+  const dragControls = useDragControls();
 
   // Live stopwatch interval (only ticks when timer is running)
   useEffect(() => {
@@ -275,6 +276,16 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
       <motion.div
         id={`task-card-${task.id}`}
         drag="x"
+        dragControls={dragControls}
+        dragListener={false}
+        onPointerDown={(event) => {
+          // Native drag listeners run before React bubbling. Start explicitly so
+          // text selection and button gestures can never become a task swipe.
+          if (isEditingTask || isAddingStep || isEditingTime || isConfiguringTimer || event.button !== 0) return;
+          const target = event.target;
+          if (target instanceof Element && target.closest('button, input, textarea, select, a, [role="button"], [contenteditable="true"]')) return;
+          dragControls.start(event);
+        }}
         dragConstraints={{ left: -100, right: 100 }}
         dragElastic={0.2}
         onDragEnd={handleDragEnd}

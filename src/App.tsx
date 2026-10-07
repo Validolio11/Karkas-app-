@@ -457,7 +457,7 @@ export default function App() {
     breakdownRequestRef.current = requestController;
     const requestGeneration = authGenerationRef.current;
     const targetSnapshot = taskBreakdownContext(targetTask);
-    const requestTimeout = window.setTimeout(() => requestController.abort(), 12_000);
+    const requestTimeout = window.setTimeout(() => requestController.abort(), 35_000);
 
     try {
       const activeTasks = tasks.filter((t) => !t.done);
@@ -522,7 +522,7 @@ export default function App() {
           note: task.note || data.note,
           priority: [1, 2, 3].includes(data.suggestedPriority) ? data.suggestedPriority : task.priority };
       }));
-      if (data.source === 'engine') setActionNotice(lang === 'uk' ? 'Зовнішній ШІ недоступний. Кроки запропоновано за локальними правилами; перевірте їх.' : 'External AI is unavailable. Steps use local rules; review them.');
+      if (data.source === 'engine' || data.source === 'heuristic-engine') setActionNotice(lang === 'uk' ? 'Кроки запропоновано за локальними правилами; перевірте їх.' : 'Steps use local rules; review them.');
       sound.activate();
     } catch (err) {
       if (requestGeneration !== authGenerationRef.current) return;

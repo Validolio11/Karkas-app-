@@ -43,6 +43,7 @@ import type { PersistedAIChatMessage } from '../services/chatHistory';
 import { getPendingTaskIndexes } from './workflowViewModel';
 import { useDialogKeyboard } from './useDialogKeyboard';
 import { describeAIApplyResult, describeAITimer, getAITimerContext, prepareAITask, type AIApplyResult } from './aiTaskProposal';
+import { AIRequestError, aiRequestErrorMessage, appendChatRequest, readAIAssistantDraft, readAIResponse, responseRequestError, restoredAIRequestNotice, saveAIAssistantDraft, selectAIModel, type AIMode, type AIRequest } from './aiAssistantState';
 
 interface AIAssistantSheetProps {
   isOpen: boolean;
@@ -63,8 +64,6 @@ interface AIAssistantSheetProps {
   ) => AIApplyResult;
   accountId?: string | null;
 }
-
-type AIMode = 'chat' | 'breakdown' | 'analyze' | 'generate';
 
 interface AIChatMessage {
   role: 'user' | 'assistant';
@@ -165,8 +164,15 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     return scenarioList.slice(0, 5);
   }, [adaptiveProfile, lang, presets, tabs]);
 
-  const [prompt, setPrompt] = useState(initialPrompt);
-  const [mode, setMode] = useState<AIMode>('chat');
+  const [initialDraft] = useState(() => readAIAssistantDraft(localStorage, accountId));
+  const [prompt, setPrompt] = useState(initialPrompt || initialDraft?.prompt || initialDraft?.recoverableRequest?.text || '');
+  const [mode, setMode] = useState<AIMode>(initialDraft?.mode || 'chat');
+  const [recoverableRequest, setRecoverableRequest] = useState<AIRequest | null>(initialDraft?.recoverableRequest || null);
+  const [requestError, setRequestError] = useState<string | null>(restoredAIRequestNotice(initialDraft?.recoverableRequest, lang));
+  const activeRequest = useRef<AIRequest | null>(null);
+  const draftAccountRef = useRef(accountId);
+  const skipDraftPersistRef = useRef(false);
+  const contentRef = useRef<HTMLDivElement | null>(null);
   const [loading, setLoading] = useState(false);
   const [response, setResponse] = useState<AIResponse | null>(null);
   const [applyNotice, setApplyNotice] = useState<string | null>(null);
@@ -199,6 +205,17 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   const closeAfterInject = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    if (!isOpen && verificationController.current) {
+      setPrompt('');
+      setKeyStatus(lang === 'uk' ? 'Перевірку ключа перервано. Вставте його ще раз, щоб продовжити.' : 'Key verification was interrupted. Paste the key again to continue.');
+    }
+    if (!isOpen && activeRequest.current && draftAccountRef.current === accountId) {
+      const interrupted = activeRequest.current;
+      setPrompt(previous => previous || interrupted.text);
+      setRecoverableRequest(interrupted);
+      setRequestError(aiRequestErrorMessage(new AIRequestError('CANCELLED'), lang));
+    }
+    activeRequest.current = null;
     requestGeneration.current += 1;
     assistController.current?.abort();
     assistController.current = null;
@@ -226,10 +243,10 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   });
   const [customModel, setCustomModel] = useState(() => {
     const storedModel = localStorage.getItem('karkas_custom_model') || '';
-    return availableModels.includes('gemini-3.1-flash-lite')
-      ? 'gemini-3.1-flash-lite'
-      : storedModel;
+    return selectAIModel(availableModels, storedModel);
   });
+  const customModelRef = useRef(customModel);
+  const chooseCustomModel = (model: string) => { customModelRef.current = model; setCustomModel(model); };
 
   // Each dictation owns its microphone, socket, buffered audio and cancellation.
   const [voicePhase, setVoicePhase] = useState<VoicePhase>('idle');
@@ -310,18 +327,57 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   }, [accountId, chatMessages]);
 
   useEffect(() => {
+    if (draftAccountRef.current === accountId) return;
+    draftAccountRef.current = accountId;
+    skipDraftPersistRef.current = true;
+    const draft = readAIAssistantDraft(localStorage, accountId);
+    setPrompt(draft?.prompt || draft?.recoverableRequest?.text || '');
+    setMode(draft?.mode || 'chat');
+    setRecoverableRequest(draft?.recoverableRequest || null);
+    setRequestError(restoredAIRequestNotice(draft?.recoverableRequest, lang));
+    setAwaitingApiKey(false);
+    awaitingKeyRef.current = false;
+    setKeyStatus(null);
+  }, [accountId]);
+
+  useEffect(() => {
+    if (skipDraftPersistRef.current) { skipDraftPersistRef.current = false; return; }
+    // A key is entered in the same field, but must never enter draft storage.
+    saveAIAssistantDraft(localStorage, { prompt: awaitingApiKey ? '' : prompt, mode, recoverableRequest }, accountId);
+  }, [accountId, prompt, mode, awaitingApiKey, recoverableRequest]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const frame = requestAnimationFrame(() => {
+      if (contentRef.current) contentRef.current.scrollTop = contentRef.current.scrollHeight;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [isOpen, chatMessages, loading, keyStatus, requestError, response]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const frame = requestAnimationFrame(() => document.getElementById('ai-prompt-input')?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [isOpen, awaitingApiKey]);
+
+  useEffect(() => {
     if (window.karkasDesktop) {
       let active = true;
-      Promise.all([desktopHasAiKey(), window.karkasDesktop.preferences.get()]).then(([hasKey, preferences]) => {
-        if (!active || !hasKey) return;
-        const storedModels = preferences.ok ? preferences.value.karkas_available_models : null;
-        const parsedModels = typeof storedModels === 'string' ? JSON.parse(storedModels) : storedModels;
-        const models = Array.isArray(parsedModels) ? parsedModels.filter((m): m is string => typeof m === 'string' && isChatModel(m)) : [];
-        const preferred = preferences.ok && typeof preferences.value.karkas_custom_model === 'string'
-          ? preferences.value.karkas_custom_model : '';
+      Promise.allSettled([desktopHasAiKey(), window.karkasDesktop.preferences.get()]).then(([keyResult, preferenceResult]) => {
+        if (!active || keyResult.status !== 'fulfilled' || !keyResult.value) return;
+        const preferences = preferenceResult.status === 'fulfilled' && preferenceResult.value.ok ? preferenceResult.value.value : {};
+        const storedModels = preferences.karkas_available_models;
+        let parsedModels: unknown = storedModels;
+        if (typeof storedModels === 'string') { try { parsedModels = JSON.parse(storedModels); } catch { parsedModels = null; } }
+        const models = Array.isArray(parsedModels) ? parsedModels.filter((m): m is string => typeof m === 'string' && isChatModel(m)) : availableModels;
+        const preferred = typeof preferences.karkas_custom_model === 'string'
+          ? preferences.karkas_custom_model : customModel;
         if (models.length) {
           setAvailableModels(models);
-          setCustomModel(models.includes(preferred) ? preferred : models[0]);
+          const nextModel = selectAIModel(models, preferred);
+          chooseCustomModel(nextModel);
+          localStorage.setItem('karkas_available_models', JSON.stringify(models));
+          localStorage.setItem('karkas_custom_model', nextModel);
         }
         localStorage.setItem('karkas_custom_ai_enabled', 'true');
         setAwaitingApiKey(false);
@@ -338,8 +394,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       .then((models) => {
         if (controller.signal.aborted) return;
         setAvailableModels(models);
-        const nextModel = models.includes(customModel) ? customModel : models[0];
-        setCustomModel(nextModel);
+        const nextModel = selectAIModel(models, localStorage.getItem('karkas_custom_model') || customModel);
+        chooseCustomModel(nextModel);
         localStorage.setItem('karkas_custom_model', nextModel);
         localStorage.setItem('karkas_available_models', JSON.stringify(models));
         localStorage.setItem('karkas_custom_ai_enabled', 'true');
@@ -366,6 +422,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       index => `s-chat-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`));
 
     const result = onInjectTasks(tasks, pendingChatTabs, pendingChatUpdates, pendingChatDeletions);
+    setRecoverableRequest(null);
+    setRequestError(null);
 
     setPendingChatTasks([]);
     setPendingChatTabs([]);
@@ -397,7 +455,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     }
   }, [initialPrompt]);
 
-  const handleGenerate = async (queryText?: string, selectedMode?: AIMode, resuming = false) => {
+  const handleGenerate = async (queryText?: string, selectedMode?: AIMode, resuming = false, preserveInput = false) => {
     voiceRef.current?.cancel();
     voiceRef.current = null;
     setVoicePhase('idle');
@@ -411,19 +469,45 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
 
     if (!requestText) return;
     if (requestInFlight.current) return;
+    if (currentMode === 'chat' && pendingChangeCount > 0 && /^(так|підтверджую|підтверджено|yes|confirm|ок|застосувати|зберегти)$/i.test(textToQuery.trim())) {
+      setPrompt('');
+      setChatMessages(previous => appendChatRequest(previous, textToQuery.trim()));
+      confirmChatChanges();
+      return;
+    }
     setApplyNotice(null);
     const generation = requestGeneration.current;
+    const isKeyEntry = !resuming && shouldVerifyAsApiKey(requestText, awaitingKeyRef.current, queryText === undefined);
+    if (!isKeyEntry) {
+      activeRequest.current = { text: requestText, mode: currentMode };
+      setRecoverableRequest(activeRequest.current);
+    }
+    requestInFlight.current = true;
+    setLoading(true);
 
     const savedApiKey = localStorage.getItem('karkas_custom_api_key') || '';
-    const desktopKeyAvailable = window.karkasDesktop ? await desktopHasAiKey() : false;
-    if (generation !== requestGeneration.current || requestInFlight.current) return;
+    let desktopKeyAvailable = false;
+    try { desktopKeyAvailable = window.karkasDesktop ? await desktopHasAiKey() : false; }
+    catch {
+      if (generation !== requestGeneration.current) return;
+      requestInFlight.current = false;
+      setLoading(false);
+      setRequestError(aiRequestErrorMessage(new AIRequestError('PROVIDER_ERROR'), lang));
+      activeRequest.current = null;
+      if (!isKeyEntry) { setRecoverableRequest({ text: requestText, mode: currentMode }); setPrompt(previous => previous || requestText); }
+      else { setAwaitingApiKey(true); awaitingKeyRef.current = true; setKeyStatus(aiRequestErrorMessage(new AIRequestError('PROVIDER_ERROR'), lang)); }
+      return;
+    }
+    if (generation !== requestGeneration.current) return;
     const customAiEnabled = desktopKeyAvailable || localStorage.getItem('karkas_custom_ai_enabled') === 'true';
 
-    if (!resuming && shouldVerifyAsApiKey(requestText, awaitingKeyRef.current, queryText === undefined)) {
+    if (isKeyEntry) {
       requestInFlight.current = true;
       backgroundVerification.current?.abort();
       const controller = new AbortController();
       verificationController.current = controller;
+      setAwaitingApiKey(true);
+      awaitingKeyRef.current = true;
       setPrompt('');
       setLoading(true);
       setKeyStatus(lang === 'uk' ? 'Перевіряю API-ключ…' : 'Verifying API key…');
@@ -431,9 +515,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       try {
         const models = await verifyApiKey(requestText, { signal: controller.signal });
         if (controller.signal.aborted) return;
-        const nextModel = models.includes('gemini-3.1-flash-lite')
-          ? 'gemini-3.1-flash-lite'
-          : models[0];
+        const nextModel = selectAIModel(models, customModelRef.current);
         if (!window.karkasDesktop) localStorage.setItem('karkas_custom_api_key', requestText.trim());
         localStorage.setItem('karkas_custom_ai_enabled', 'true');
         localStorage.setItem('karkas_custom_model', nextModel);
@@ -446,10 +528,11 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
           });
         }
         setAvailableModels(models);
-        setCustomModel(nextModel);
+        chooseCustomModel(nextModel);
         setAwaitingApiKey(false);
         awaitingKeyRef.current = false;
         setKeyStatus(null);
+        setRequestError(null);
         sound.activate();
         requestToResume = pendingRequest.current;
         pendingRequest.current = null;
@@ -459,6 +542,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
         awaitingKeyRef.current = true;
         setKeyStatus(keyVerificationMessage(error, lang));
       } finally {
+        if (verificationController.current === controller) verificationController.current = null;
         if (generation === requestGeneration.current) {
           requestInFlight.current = false;
           setLoading(false);
@@ -470,32 +554,32 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       return;
     }
 
-    if (awaitingKeyRef.current && !resuming && ((!savedApiKey && !desktopKeyAvailable) || !customAiEnabled)) {
+    if (!resuming && (window.karkasDesktop ? !desktopKeyAvailable : !savedApiKey || !customAiEnabled)) {
       setPrompt('');
       setAwaitingApiKey(true);
       awaitingKeyRef.current = true;
       pendingRequest.current = { text: requestText, mode: currentMode };
+      activeRequest.current = null;
+      setRecoverableRequest(pendingRequest.current);
+      setRequestError(null);
+      requestInFlight.current = false;
+      setLoading(false);
       setKeyStatus(lang === 'uk'
         ? 'Щоб підключити AI, вставте свій Gemini API-ключ у рядок нижче. Я перевірю його, збережу на цьому пристрої та автоматично продовжу ваш запит.'
         : 'To connect AI, paste your Gemini API key into the input below. I will verify it, save it on this device, and automatically continue your request.');
-      if (currentMode === 'chat') {
-        setChatMessages((previous) => [
-          ...previous,
-          { role: 'user', content: requestText },
-        ]);
-      }
-      return;
-    }
-
-    if (currentMode === 'chat' && pendingChangeCount > 0 && /^(так|підтверджую|підтверджено|yes|confirm|ок|застосувати|зберегти)$/i.test(textToQuery.trim())) {
-      setPrompt('');
-      setChatMessages((previous) => [...previous, { role: 'user', content: textToQuery.trim() }]);
-      confirmChatChanges();
       return;
     }
 
     sound.activate();
-    setPrompt('');
+    if (!preserveInput) setPrompt('');
+    setAwaitingApiKey(false);
+    awaitingKeyRef.current = false;
+    setKeyStatus(null);
+    setRequestError(null);
+    const currentRequest = { text: requestText, mode: currentMode };
+    activeRequest.current = currentRequest;
+    setRecoverableRequest(currentRequest);
+    pendingRequest.current = null;
     requestInFlight.current = true;
     setLoading(true);
     setResponse(null);
@@ -506,27 +590,22 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     appliedDeletionIdsRef.current.clear();
     setInjectedIds([]);
     setAppliedUpdateIds([]);
-    if (currentMode === 'chat' && !resuming) {
-      setChatMessages((previous) => [
-        ...previous,
-        { role: 'user', content: requestText },
-      ]);
-    }
+    if (currentMode === 'chat') setChatMessages(previous => appendChatRequest(previous, requestText));
 
     const isTabMutation = /(?:вкладк|категорі|напрямок|розділ|секці|tab|category|section)/iu.test(requestText);
     const activeList = currentTasks.filter((t) => !t.done);
     const doneList = currentTasks.filter((t) => t.done);
 
     let requestTimeout: number | undefined;
+    let timedOut = false;
     const controller = new AbortController();
     assistController.current?.abort();
     assistController.current = controller;
     try {
       const customKey = localStorage.getItem('karkas_custom_api_key') || '';
-      const storedModel = localStorage.getItem('karkas_custom_model') || '';
       const customEnabled = localStorage.getItem('karkas_custom_ai_enabled') === 'true';
 
-      requestTimeout = window.setTimeout(() => controller.abort(), 35000);
+      requestTimeout = window.setTimeout(() => { timedOut = true; controller.abort(); }, 35000);
       const res = await karkasApiFetch('/api/ai/assist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -546,7 +625,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
           } : undefined,
           allowNewTabs: isTabMutation,
           customApiKey: customEnabled ? customKey : undefined,
-          selectedModel: customEnabled ? (storedModel || customModel) : undefined,
+          selectedModel: customModelRef.current || undefined,
           fullAppContext: {
             activeTasks: activeList.map((t) => ({
               id: t.id,
@@ -576,12 +655,16 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
           },
         }),
       });
-      window.clearTimeout(requestTimeout);
-
-      if (!res.ok) throw new Error('API request failed');
-      const data: AIResponse = await res.json();
+      const rawData: unknown = await res.json().catch(() => { throw new AIRequestError('INVALID_RESPONSE'); });
       if (assistController.current !== controller) return;
-      if (controller.signal.aborted) throw new Error('AI request timed out');
+      if (controller.signal.aborted) throw new AIRequestError(timedOut ? 'TIMEOUT' : 'CANCELLED');
+      if (!res.ok) throw responseRequestError(rawData, res.status);
+      const data = readAIResponse(rawData, currentMode);
+      activeRequest.current = null;
+      const hasPendingChatActions = currentMode === 'chat' && [data.tasks, data.tabs, data.taskUpdates, data.taskDeletions].some(actions => (actions?.length || 0) > 0);
+      setRecoverableRequest(hasPendingChatActions ? { ...currentRequest, purpose: 'proposal' } : null);
+      setRequestError(null);
+      if (data.fallbackUsed && data.usedModel) setKeyStatus(lang === 'uk' ? `Відповідь підготувала доступна модель ${data.usedModel}.` : `The response was generated by the available model ${data.usedModel}.`);
       if (currentMode === 'chat') {
         {
           pendingChatConfirmed.current = false;
@@ -604,81 +687,18 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       sound.activate();
     } catch (err) {
       if (assistController.current !== controller) return;
-      console.error('AI query error:', err);
-      const isUk = lang === 'uk';
-      const mainPhase = tabs[0]?.id || 'focus';
-      const secondaryPhase = tabs[1]?.id || mainPhase;
-
-      const fallbackPrompt = requestText || (isUk ? 'Оптимізація завдань' : 'Task Optimization');
-
-      if (currentMode === 'chat') {
-        setChatMessages((previous) => [
-          ...previous,
-          {
-            role: 'assistant',
-            content: isUk
-              ? `Зараз працюю в локальному режимі. У вас ${activeCount} активних задач і ${completedCount} завершених. Напишіть конкретну дію, наприклад «додай задачу X» або «проаналізуй мої задачі».`
-              : 'Could not reach AI. No changes were applied. Check your connection and retry.',
-          },
-        ]);
-        return;
+      const error = controller.signal.aborted ? new AIRequestError(timedOut ? 'TIMEOUT' : 'CANCELLED') : err;
+      setRequestError(aiRequestErrorMessage(error, lang));
+      setRecoverableRequest(currentRequest);
+      setPrompt(previous => previous || requestText);
+      activeRequest.current = null;
+      if (error instanceof AIRequestError && (error.code === 'INVALID_API_KEY' || error.code === 'MISSING_API_KEY')) {
+        pendingRequest.current = currentRequest;
+        setAwaitingApiKey(true);
+        awaitingKeyRef.current = true;
+        setPrompt('');
+        setKeyStatus(aiRequestErrorMessage(error, lang));
       }
-
-      setResponse({
-        summary: isUk
-          ? `Аналіз сформовано на основі ${activeCount} активних завдань для «${fallbackPrompt}».`
-          : `Analysis formulated based on ${activeCount} active tasks for "${fallbackPrompt}".`,
-        insights: isUk
-          ? [
-              `Зосередьтеся на P1 завданнях перед відкриттям нових етапів.`,
-              `Розбивайте великі завдання на 2-4 конкретних підкроки для прискорення прогресу.`,
-            ]
-          : [
-              `Focus on urgent P1 items before starting secondary tabs.`,
-              `Decompose multi-stage operations into smaller micro-steps.`,
-            ],
-        tasks: isUk
-          ? [
-              {
-                title: `${fallbackPrompt} — Головний пріоритет`,
-                phase: mainPhase,
-                priority: 1,
-                steps: 3,
-                stepList: [
-                  { title: 'Аналіз вимог та підготовка', done: false },
-                  { title: 'Виконання основної частини', done: false },
-                  { title: 'Фінальна перевірка та закриття', done: false },
-                ],
-                note: 'Ключовий фокус',
-              },
-              {
-                title: `${fallbackPrompt} — Супутній етап`,
-                phase: secondaryPhase,
-                priority: 2,
-                steps: 2,
-                stepList: [
-                  { title: 'Узгодження деталей', done: false },
-                  { title: 'Збереження результатів', done: false },
-                ],
-                note: 'Стандартний пріоритет',
-              },
-            ]
-          : [
-              {
-                title: `${fallbackPrompt} - Core Milestone`,
-                phase: mainPhase,
-                priority: 1,
-                steps: 3,
-                stepList: [
-                  { title: 'Requirements review', done: false },
-                  { title: 'Primary execution sprint', done: false },
-                  { title: 'Quality check & finalize', done: false },
-                ],
-                note: 'Primary focus',
-              },
-            ],
-        source: 'local-fallback',
-      });
     } finally {
       window.clearTimeout(requestTimeout);
       if (assistController.current === controller) {
@@ -686,6 +706,35 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
         setLoading(false);
       }
     }
+  };
+
+  const cancelAIRequest = () => {
+    requestGeneration.current += 1;
+    assistController.current?.abort();
+    assistController.current = null;
+    verificationController.current?.abort();
+    verificationController.current = null;
+    requestInFlight.current = false;
+    setLoading(false);
+    if (activeRequest.current) {
+      const interrupted = activeRequest.current;
+      setPrompt(previous => previous || interrupted.text);
+      setRecoverableRequest(interrupted);
+      setRequestError(aiRequestErrorMessage(new AIRequestError('CANCELLED'), lang));
+      activeRequest.current = null;
+    } else if (awaitingKeyRef.current) {
+      setPrompt('');
+      setKeyStatus(lang === 'uk' ? 'Перевірку ключа перервано. Вставте його ще раз, щоб продовжити.' : 'Key verification was interrupted. Paste the key again to continue.');
+    }
+  };
+
+  const returnToRequest = () => {
+    cancelAIRequest();
+    const request = pendingRequest.current || recoverableRequest;
+    setAwaitingApiKey(false);
+    awaitingKeyRef.current = false;
+    setKeyStatus(null);
+    if (request) { setPrompt(request.text); setMode(request.mode); }
   };
 
   const handleInjectAll = () => {
@@ -801,7 +850,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                 id="close-ai-sheet-btn"
                 aria-label={lang === 'uk' ? 'Закрити ШІ-помічника' : 'Close AI assistant'}
                 onClick={onClose}
-                className="shrink-0 p-1.5 text-neutral-400 hover:text-white border border-neutral-800 hover:border-neutral-600 transition-colors cursor-pointer"
+                className="shrink-0 min-w-11 min-h-11 flex items-center justify-center p-1.5 text-neutral-400 hover:text-white border border-neutral-800 hover:border-neutral-600 transition-colors cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -813,6 +862,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                 id="ai-mode-chat-btn"
                 aria-pressed={mode === 'chat'}
                 type="button"
+                disabled={loading}
                 onClick={() => {
                   sound.tick(450);
                   setMode('chat');
@@ -831,6 +881,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                 id="ai-mode-breakdown-btn"
                 aria-pressed={mode === 'breakdown'}
                 type="button"
+                disabled={loading}
                 onClick={() => {
                   sound.tick(500);
                   setMode('breakdown');
@@ -849,6 +900,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                 id="ai-mode-analyze-btn"
                 aria-pressed={mode === 'analyze'}
                 type="button"
+                disabled={loading}
                 onClick={() => {
                   sound.tick(550);
                   setMode('analyze');
@@ -868,6 +920,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                 id="ai-mode-generate-btn"
                 aria-pressed={mode === 'generate'}
                 type="button"
+                disabled={loading}
                 onClick={() => {
                   sound.tick(600);
                   setMode('generate');
@@ -884,7 +937,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
             </div>
 
             {/* Content Container (Scrollable) */}
-            <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 sm:p-5 flex flex-col gap-4">
+            <div ref={contentRef} className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 sm:p-5 flex flex-col gap-4">
               {/* Presets Chips */}
               <div>
                 <div className="text-[10px] font-mono uppercase tracking-widest text-neutral-400 mb-2">
@@ -895,11 +948,12 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                     <button
                       key={i}
                       id={`ai-preset-chip-${i}`}
+                      disabled={loading || awaitingApiKey}
                       onClick={() => {
                         setPrompt(preset);
                         handleGenerate(preset);
                       }}
-                      className="text-[11px] font-mono text-left px-2 py-1 bg-[#08080a] border border-neutral-800 text-neutral-400 hover:border-neutral-600 hover:text-neutral-200 transition-colors cursor-pointer"
+                      className="text-[11px] font-mono text-left px-2 py-1 bg-[#08080a] border border-neutral-800 text-neutral-400 hover:border-neutral-600 hover:text-neutral-200 disabled:opacity-40 transition-colors cursor-pointer"
                     >
                       + {preset}
                     </button>
@@ -909,7 +963,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
 
               {/* Chat View */}
               {mode === 'chat' && chatMessages.length > 0 && (
-                <div className="flex flex-col gap-3">
+                <div role="log" aria-label={lang === 'uk' ? 'Розмова з AI' : 'AI conversation'} aria-live="polite" aria-relevant="additions text" className="flex flex-col gap-3">
                   {chatMessages.map((message, index) => (
                     <div
                       key={`${message.role}-${index}`}
@@ -1051,6 +1105,18 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                 <div role="status" aria-live="polite" className="border border-neutral-800 bg-[#111116] p-3 text-xs leading-relaxed text-neutral-200 whitespace-pre-wrap">
                   <div className="mb-1 text-[9px] font-bold uppercase tracking-widest opacity-60">KARKAS AI</div>
                   {keyStatus}
+                  {awaitingApiKey && <button id="ai-return-to-request-btn" type="button" onClick={returnToRequest} className="mt-3 min-h-11 block border border-neutral-700 px-3 py-2 hover:border-white">
+                    {lang === 'uk' ? 'Повернутися до запиту' : 'Return to request'}
+                  </button>}
+                </div>
+              )}
+
+              {requestError && !awaitingApiKey && (
+                <div id="ai-request-error" role="alert" className="border border-neutral-700 bg-[#111116] p-3 text-xs leading-relaxed text-neutral-200">
+                  <p>{requestError}</p>
+                  {recoverableRequest && <button id="ai-retry-request-btn" type="button" disabled={loading} onClick={() => { setMode(recoverableRequest.mode); void handleGenerate(recoverableRequest.text, recoverableRequest.mode, false, !!prompt.trim() && prompt.trim() !== recoverableRequest.text.trim()); }} className="mt-3 min-h-11 border border-neutral-700 px-3 py-2 hover:border-white disabled:opacity-40">
+                    {lang === 'uk' ? 'Повторити запит' : 'Retry request'}
+                  </button>}
                 </div>
               )}
 
@@ -1067,6 +1133,9 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   <span className="text-[10px] font-mono text-neutral-500">
                     {t.aiSheet.fullContextDesc}
                   </span>
+                  <button id="ai-request-cancel-btn" type="button" onClick={cancelAIRequest} className="min-h-11 border border-neutral-700 px-3 py-2 text-xs text-neutral-300 hover:border-white hover:text-white">
+                    {lang === 'uk' ? 'Скасувати запит' : 'Cancel request'}
+                  </button>
                 </div>
               )}
 
@@ -1418,11 +1487,16 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                 <select
                   aria-label={lang === 'uk' ? 'Модель AI' : 'AI model'}
                   value={customModel}
-                  disabled={availableModels.length === 0}
+                  disabled={loading || availableModels.length === 0}
                   onChange={(e) => {
                     const model = e.target.value;
-                    setCustomModel(model);
+                    chooseCustomModel(model);
                     localStorage.setItem('karkas_custom_model', model);
+                    if (window.karkasDesktop) {
+                      void window.karkasDesktop.preferences.update({ karkas_custom_model: model }).then(result => {
+                        if ('error' in result) setKeyStatus(lang === 'uk' ? 'Не вдалося зберегти вибір моделі. Вона діє для поточного запиту; виберіть її знову після перезапуску.' : 'Could not save the model selection. It applies to this session; select it again after restarting.');
+                      }).catch(() => setKeyStatus(lang === 'uk' ? 'Не вдалося зберегти вибір моделі. Спробуйте вибрати її ще раз.' : 'Could not save the model selection. Try selecting it again.'));
+                    }
                     sound.tick(400);
                   }}
                   className="w-full sm:w-auto sm:max-w-[150px] bg-[#050507] border border-neutral-800 text-neutral-300 text-xs font-mono px-2 py-2.5 focus:outline-none focus:border-white disabled:opacity-50"
@@ -1449,7 +1523,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                       setPrompt(e.target.value);
                     }}
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter') handleGenerate();
+                      if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void handleGenerate(); }
                     }}
                     placeholder={
                       awaitingApiKey
@@ -1460,7 +1534,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                         ? (lang === 'uk' ? 'Уточніть фокус аналізу (напр. перевірити пріоритети, дедлайни)...' : 'Refine audit focus (e.g. check priorities, deadlines)...')
                         : t.aiSheet.inputPlaceholder
                     }
-                    className="w-full bg-[#050507] border border-neutral-800 text-white placeholder:text-neutral-500 text-xs font-mono pl-3.5 pr-10 py-2.5 focus:outline-none focus:border-white transition-colors"
+                    className="w-full min-h-11 bg-[#050507] border border-neutral-800 text-white placeholder:text-neutral-500 text-xs font-mono pl-3.5 pr-10 py-2.5 focus:outline-none focus:border-white transition-colors"
                   />
                   {/* Voice dictation button embedded in input field */}
                   <button
@@ -1495,7 +1569,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   disabled={loading || !prompt.trim()}
                   title={t.aiSheet.execute}
                   aria-label={t.aiSheet.execute}
-                  className="w-[38px] h-[38px] bg-white text-black hover:bg-neutral-200 disabled:opacity-30 disabled:hover:bg-white transition-all flex items-center justify-center cursor-pointer shrink-0"
+                  className="w-11 h-11 bg-white text-black hover:bg-neutral-200 disabled:opacity-30 disabled:hover:bg-white transition-all flex items-center justify-center cursor-pointer shrink-0"
                 >
                   {loading ? (
                     <Loader2 className="w-4 h-4 animate-spin text-black" />

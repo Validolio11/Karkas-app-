@@ -323,7 +323,7 @@ function registerIpc() {
     const response = await invokeService('verifyKey', { apiKey });
     if (response.status < 200 || response.status >= 300 || !response.body?.success) {
       const error = new Error(response.body?.error || 'Не вдалося перевірити API key');
-      error.code = 'AI_KEY_REJECTED';
+      error.code = response.body?.code || 'AI_KEY_REJECTED';
       throw error;
     }
     await secrets.setGeminiApiKey(apiKey);

@@ -105,11 +105,17 @@ test('AI receives current timer context and returns an explicit existing-task st
 
 test('invalid model timer configuration gives an honest empty proposal', async () => {
   for (const action of ['chat', 'generate']) {
-    const data = await post('assist', { prompt: 'timer-case-invalid timer', action, tabs: ['focus'], currentTasks: [{ id: 'parent', title: 'References' }], lang: 'en' });
-    assert.equal(data.source, 'invalid-ai-proposal');
+    const response = await fetch(`${baseUrl}/api/ai/assist`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: 'timer-case-invalid timer', action, tabs: ['focus'], currentTasks: [{ id: 'parent', title: 'References' }], lang: 'en' }),
+    });
+    assert.equal(response.status, 502);
+    const data = await response.json();
+    assert.equal(data.source, 'ai-error');
+    assert.equal(data.code, 'INVALID_AI_RESPONSE');
     assert.deepEqual(data.tasks, []);
     assert.deepEqual(data.taskUpdates, []);
-    assert.match(data.reply, /No changes were prepared or applied/);
+    assert.match(data.error, /No changes were prepared or applied/);
   }
 });
 

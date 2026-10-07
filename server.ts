@@ -4,6 +4,7 @@ import path from "path";
 import dotenv from "dotenv";
 import { GoogleGenAI, Modality, Type } from "@google/genai";
 import { verifyGeminiKey } from "./server/geminiKeyVerification";
+import { AIRequestError, aiRequestFailure, classifyAIRequestError, generateGeminiWithFallback } from "./server/geminiGeneration";
 
 dotenv.config();
 
@@ -96,7 +97,7 @@ function getGeminiClient(): GoogleGenAI | null {
   return geminiClient;
 }
 
-// Helper to call Gemini with retry and fallback across models
+// Shared bounded generation path for HTTP and the native desktop bridge.
 async function generateGeminiContentWithFallback(params: {
   contents: string;
   config: any;
@@ -104,47 +105,13 @@ async function generateGeminiContentWithFallback(params: {
   selectedModel?: string;
 }): Promise<any> {
   const ai = params.customAi || getGeminiClient();
-  if (!ai) return null;
+  if (!ai) throw new AIRequestError('MISSING_API_KEY');
+  return generateGeminiWithFallback({ ai, ...params });
+}
 
-  // Models to attempt: primary and fallback
-  const modelsToTry = params.selectedModel
-    ? [params.selectedModel, "gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-flash-latest"]
-    : ["gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-flash-latest"];
-
-  for (const model of modelsToTry) {
-    try {
-      const response = await Promise.race([
-        ai.models.generateContent({
-          model,
-          contents: params.contents,
-          config: params.config,
-        }),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`Gemini model ${model} timed out`)), 12000)
-        ),
-      ]);
-      if (response && response.text) {
-        return response;
-      }
-    } catch (err: any) {
-      const isTemporaryDemand =
-        err?.status === 503 ||
-        err?.status === 429 ||
-        err?.message?.includes("503") ||
-        err?.message?.includes("high demand") ||
-        err?.message?.includes("UNAVAILABLE");
-
-      if (isTemporaryDemand || err?.message?.includes("timed out")) {
-        // Move quickly to the next model when a provider is slow or busy.
-        await new Promise((r) => setTimeout(r, 150));
-        continue;
-      } else {
-        break;
-      }
-    }
-  }
-
-  return null;
+function sendAIRequestFailure(res: any, error: unknown, isUk: boolean) {
+  const failure = aiRequestFailure(error instanceof AIRequestError ? error : new AIRequestError('INVALID_AI_RESPONSE'), isUk);
+  return res.status(failure.status).json(failure.body);
 }
 
 // Endpoint to validate custom Gemini API key and automatically fetch available models
@@ -293,7 +260,6 @@ export async function assistHandler(req: any, res: any) {
 
     const isTabCreationRequested = allowNewTabs || /(?:вкладк|категорі|розділ|напрямок|проєкт|проект|секці|tab|category|section|project)/iu.test(prompt);
     const isTimerRequest = /(?:таймер|секундомір|відлік|timer|stopwatch|countdown)/iu.test(prompt);
-    let rejectedProposal = false;
 
     if (ai && action === "chat") {
       try {
@@ -403,7 +369,6 @@ INSTRUCTIONS:
         });
 
         if (chatResponse?.text) {
-          rejectedProposal = true;
           const parsed = cleanAndParseJson(chatResponse.text || "{}");
           const existingTabIds = new Set(activeTabIds);
           const validatedTabs: { id: string; name: string }[] = [];
@@ -446,10 +411,12 @@ INSTRUCTIONS:
             tabs: validatedTabs,
             ...validateTaskMutations(parsed, [...effectiveActiveTasks, ...effectiveCompletedTasks]),
             source: "gemini-chat",
+            usedModel: chatResponse.usedModel,
+            fallbackUsed: chatResponse.fallbackUsed,
           });
         }
       } catch (chatError) {
-        console.warn("Gemini chat request failed, smoothly falling back:", chatError);
+        return sendAIRequestFailure(res, chatError, isUk);
       }
     }
 
@@ -597,7 +564,6 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
         });
 
         if (response && response.text) {
-          rejectedProposal = true;
           const rawText = response.text || "{}";
           const parsed = cleanAndParseJson(rawText);
 
@@ -648,30 +614,16 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
               tabsCount: tabList.length,
             },
             source: "gemini",
+            usedModel: response.usedModel,
+            fallbackUsed: response.fallbackUsed,
           });
         }
       } catch (geminiError) {
-        console.warn("Gemini assist encountered load, smoothly using heuristic engine:", geminiError);
+        return sendAIRequestFailure(res, geminiError, isUk);
       }
     }
 
-    if (rejectedProposal || isTimerRequest) {
-      const reply = rejectedProposal
-        ? (isUk ? 'AI повернув некоректну пропозицію. Зміни не підготовлено й не застосовано. Уточніть завдання, тривалість і потрібну дію та спробуйте ще раз.' : 'AI returned an invalid proposal. No changes were prepared or applied. Clarify the task, duration and action, then retry.')
-        : (isUk ? 'AI зараз недоступний. Таймери й завдання не змінено. Перевірте з’єднання та ключ API й повторіть запит або налаштуйте таймер на картці завдання.' : 'AI is unavailable. Tasks and timers were not changed. Check your connection and API key, then retry or configure the timer on the task card.');
-      return res.json({ reply, summary: reply, tasks: [], tabs: [], taskUpdates: [], taskDeletions: [], source: rejectedProposal ? 'invalid-ai-proposal' : 'local-timer-fallback' });
-    }
-
-    if (action === "chat") {
-      const activeCount = effectiveActiveTasks.length;
-      const completedCount = effectiveCompletedTasks.length;
-      return res.json({
-        reply: isUk
-          ? `AI зараз недоступний. Зміни не підготовлено й не застосовано. Перевірте з’єднання та ключ API й повторіть запит. У черзі ${activeCount} активних задач і ${completedCount} завершених.`
-          : `AI is unavailable. No changes were prepared or applied. Check your connection and API key, then retry.`,
-        source: "local-chat-fallback",
-      });
-    }
+    if (isTimerRequest || action === 'chat') return sendAIRequestFailure(res, new AIRequestError('MISSING_API_KEY'), isUk);
 
     // High quality offline rule-based Assistant fallback
     const lower = prompt.toLowerCase();
@@ -837,8 +789,7 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
       source: "life-rule-engine",
     });
   } catch (err: any) {
-    console.error("AI assist error:", err);
-    return res.status(500).json({ error: "Failed to process AI assist request" });
+    return sendAIRequestFailure(res, classifyAIRequestError(err), req.body?.lang !== 'en');
   }
 }
 app.post("/api/ai/assist", assistHandler);
@@ -960,10 +911,12 @@ APP CONTEXT:
             suggestedPriority: priorityOr(parsed.suggestedPriority, priorityOr(task.priority)),
             explanation: textOr(parsed.explanation, isUk ? "Завдання розбито на послідовні кроки." : "Task broken into sequential steps."),
             source: "gemini",
+            usedModel: response.usedModel,
+            fallbackUsed: response.fallbackUsed,
           });
         }
       } catch (err) {
-        console.warn("Gemini breakdown error, falling back to heuristic decomposition engine:", err);
+        return sendAIRequestFailure(res, err, isUk);
       }
     }
 
@@ -991,8 +944,7 @@ APP CONTEXT:
       source: "heuristic-engine",
     });
   } catch (err: any) {
-    console.error("Task breakdown API error:", err);
-    return res.status(500).json({ error: "Failed to break down task" });
+    return sendAIRequestFailure(res, classifyAIRequestError(err), req.body?.lang !== 'en');
   }
 }
 app.post("/api/ai/breakdown-task", breakdownTaskHandler);
@@ -1195,10 +1147,12 @@ Language: ${isUk ? "Ukrainian" : "English"}.`,
             productivityGrade,
             suggestedTasks: validatedSuggestedTasks,
             source: "gemini",
+            usedModel: response.usedModel,
+            fallbackUsed: response.fallbackUsed,
           });
         }
       } catch (gemError) {
-        console.warn("Gemini recommendations encountered temporary load, seamlessly transitioning to local rule engine:", gemError);
+        return sendAIRequestFailure(res, gemError, isUk);
       }
     }
 
@@ -1307,8 +1261,7 @@ Language: ${isUk ? "Ukrainian" : "English"}.`,
       source: "rule-engine",
     });
   } catch (err: any) {
-    console.error("AI recommendations error:", err);
-    return res.status(500).json({ error: "Failed to generate AI recommendations" });
+    return sendAIRequestFailure(res, classifyAIRequestError(err), req.body?.lang !== 'en');
   }
 }
 app.post("/api/ai/recommendations", recommendationsHandler);

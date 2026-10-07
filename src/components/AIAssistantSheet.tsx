@@ -17,15 +17,16 @@ import {
   X,
   Plus,
   CheckCircle2,
-  ListTree,
-  Layers,
+  MessagesSquare,
+  Workflow,
+  ClipboardList,
   Lightbulb,
   Edit3,
   Trash2,
   CheckSquare,
   Activity,
   AlertTriangle,
-  TrendingUp,
+  ChartNoAxesCombined,
   FolderPlus,
   Mic,
   MicOff,
@@ -816,13 +817,13 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   sound.tick(450);
                   setMode('chat');
                 }}
-                className={`min-w-0 py-1.5 px-2 text-xs font-mono font-bold tracking-normal sm:tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                className={`min-h-11 min-w-0 py-1.5 px-2 text-xs font-mono font-bold tracking-normal sm:tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
                   mode === 'chat'
                     ? 'bg-white text-black border-white'
                     : 'bg-[#08080a] text-neutral-400 border-neutral-800 hover:text-white hover:border-neutral-700'
                 }`}
               >
-                <span className="text-sm leading-none">◌</span>
+                <MessagesSquare aria-hidden="true" className="w-4 h-4 shrink-0" strokeWidth={1.75} />
                 <span className="min-w-0 whitespace-normal break-words leading-snug">{lang === 'uk' ? 'ЧАТ' : 'CHAT'}</span>
               </button>
 
@@ -834,13 +835,13 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   sound.tick(500);
                   setMode('breakdown');
                 }}
-                className={`min-w-0 py-1.5 px-2 text-xs font-mono font-bold tracking-normal sm:tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                className={`min-h-11 min-w-0 py-1.5 px-2 text-xs font-mono font-bold tracking-normal sm:tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
                   mode === 'breakdown'
                     ? 'bg-white text-black border-white'
                     : 'bg-[#08080a] text-neutral-400 border-neutral-800 hover:text-white hover:border-neutral-700'
                 }`}
               >
-                <ListTree className="w-3.5 h-3.5 shrink-0" />
+                <Workflow aria-hidden="true" className="w-4 h-4 shrink-0" strokeWidth={1.75} />
                 <span className="min-w-0 whitespace-normal break-words leading-snug">{t.aiSheet.modes.breakdown}</span>
               </button>
 
@@ -853,13 +854,13 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   setMode('analyze');
                   handleGenerate(prompt, 'analyze');
                 }}
-                className={`min-w-0 py-1.5 px-2 text-xs font-mono font-bold tracking-normal sm:tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                className={`min-h-11 min-w-0 py-1.5 px-2 text-xs font-mono font-bold tracking-normal sm:tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
                   mode === 'analyze'
                     ? 'bg-white text-black border-white'
                     : 'bg-[#08080a] text-neutral-400 border-neutral-800 hover:text-white hover:border-neutral-700'
                 }`}
               >
-                <TrendingUp className="w-3.5 h-3.5 shrink-0" />
+                <ChartNoAxesCombined aria-hidden="true" className="w-4 h-4 shrink-0" strokeWidth={1.75} />
                 <span className="min-w-0 whitespace-normal break-words leading-snug">{t.aiSheet.modes.analyze}</span>
               </button>
 
@@ -871,13 +872,13 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   sound.tick(600);
                   setMode('generate');
                 }}
-                className={`min-w-0 py-1.5 px-2 text-xs font-mono font-bold tracking-normal sm:tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                className={`min-h-11 min-w-0 py-1.5 px-2 text-xs font-mono font-bold tracking-normal sm:tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
                   mode === 'generate'
                     ? 'bg-white text-black border-white'
                     : 'bg-[#08080a] text-neutral-400 border-neutral-800 hover:text-white hover:border-neutral-700'
                 }`}
               >
-                <Layers className="w-3.5 h-3.5 shrink-0" />
+                <ClipboardList aria-hidden="true" className="w-4 h-4 shrink-0" strokeWidth={1.75} />
                 <span className="min-w-0 whitespace-normal break-words leading-snug">{t.aiSheet.modes.generate}</span>
               </button>
             </div>
@@ -1140,7 +1141,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   {response.categoryHealth && response.categoryHealth.length > 0 && (
                     <div className="space-y-2">
                       <div className="text-[10px] font-mono uppercase tracking-wider text-neutral-400 flex items-center gap-1.5">
-                        <Layers className="w-3.5 h-3.5 text-neutral-300" />
+                        <ClipboardList aria-hidden="true" className="w-4 h-4 text-neutral-300" strokeWidth={1.75} />
                         <span>{lang === 'uk' ? 'Аналітика балансу категорій' : 'Category Balance Matrix'}</span>
                       </div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">

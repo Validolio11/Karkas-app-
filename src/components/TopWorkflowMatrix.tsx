@@ -130,15 +130,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
             }}
           />
 
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs font-mono font-extrabold tracking-wider text-neutral-200 uppercase sm:hidden">{t.appTitle}</span>
-            <span className="text-xs font-mono font-extrabold tracking-wider text-neutral-200 uppercase hidden sm:inline">
-              {t.winTitlebar?.appTitle || 'KARKAS // TASK ARCHITECT'}
-            </span>
-            <span className="text-xs font-mono font-bold tracking-widest text-neutral-400 px-1 py-0.2 bg-neutral-900 border border-neutral-800 rounded-[2px] hidden sm:inline-block">
-              {t.winTitlebar?.badge || 'WIN_x64'}
-            </span>
-          </div>
+          <span className="text-xs font-mono font-extrabold tracking-wider text-neutral-200 uppercase">{t.appTitle}</span>
         </div>
 
         {/* Center & Right: App Action Buttons integrated right inside the Windows Title Bar Header */}

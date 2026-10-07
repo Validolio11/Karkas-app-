@@ -1,6 +1,7 @@
 import { pauseTaskTimer, startTaskTimer, configureTaskCountdown, clearTaskCountdown } from './utils/taskTimer';
 import { applyAITaskUpdate } from './utils/aiTaskUpdates';
 import { applyAITimerSettings, isAITimerSettingsValid } from './utils/aiTaskTimer';
+import { isNewerAppVersion, isValidAppVersion } from './utils/appVersion';
 import React, { useState, useEffect, useMemo } from 'react';
 import { PSTask, DeletedTask, TaskTab, FilterMode, WorkflowStats, TaskStepItem, AdaptiveProfile, AITaskUpdate, AITimerSettings, NotepadNote, NewTaskInput } from './types';
 import { TaskCard } from './components/TaskCard';
@@ -102,29 +103,6 @@ const MIN_APP_ZOOM = 75;
 const MAX_APP_ZOOM = 150;
 const DEFAULT_APP_ZOOM = 100;
 const APP_BUILD_VERSION = packageMetadata.version;
-
-function normalizeVersion(version: string): number[] {
-  const cleaned = String(version || '').trim().replace(/^v/i, '').split('-')[0];
-  const parts = cleaned.split('.').map((part) => Number.parseInt(part, 10) || 0);
-
-  while (parts.length < 3) {
-    parts.push(0);
-  }
-
-  return parts.slice(0, 3);
-}
-
-function compareVersions(a: string, b: string): number {
-  const left = normalizeVersion(a);
-  const right = normalizeVersion(b);
-
-  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
-    const diff = (left[index] ?? 0) - (right[index] ?? 0);
-    if (diff !== 0) return diff;
-  }
-
-  return 0;
-}
 
 function normalizeAppZoom(value: unknown): number {
   if (value === null || value === undefined || value === '') return DEFAULT_APP_ZOOM;
@@ -290,19 +268,24 @@ export default function App() {
   });
   const [availableNewRelease, setAvailableNewRelease] = useState<{ tag_name: string; name?: string } | null>(null);
   const [appCurrentVersion, setAppCurrentVersion] = useState(APP_BUILD_VERSION);
+  const [isAppVersionKnown, setIsAppVersionKnown] = useState(() => !window.karkasDesktop);
 
   useEffect(() => {
     const desktop = window.karkasDesktop;
     if (!desktop) return;
     let active = true;
-    Promise.all([desktop.preferences.get(), desktop.system.getStartupEnabled(), desktop.system.getAppVersion()]).then(([preferences, startup, version]) => {
+    Promise.allSettled([desktop.preferences.get(), desktop.system.getStartupEnabled(), desktop.system.getAppVersion()]).then(([preferencesResult, startupResult, versionResult]) => {
       if (!active) return;
-      if (preferences.ok && preferences.value.zoomPercent != null) {
+      const preferences = preferencesResult.status === 'fulfilled' ? preferencesResult.value : null;
+      const startup = startupResult.status === 'fulfilled' ? startupResult.value : null;
+      const version = versionResult.status === 'fulfilled' ? versionResult.value : null;
+      if (preferences?.ok && preferences.value.zoomPercent != null) {
         setAppZoomPercent(normalizeAppZoom(preferences.value.zoomPercent));
       }
-      if (startup.ok) setLaunchAtStartup(startup.value);
-      if (version.ok && typeof version.value === 'string' && version.value.trim()) {
+      if (startup?.ok) setLaunchAtStartup(startup.value);
+      if (version?.ok && typeof version.value === 'string' && isValidAppVersion(version.value)) {
         setAppCurrentVersion(version.value.trim());
+        setIsAppVersionKnown(true);
       }
       setDesktopPreferencesReady(true);
     }).catch(() => setDesktopPreferencesReady(true));
@@ -334,13 +317,16 @@ export default function App() {
 
   // Background automated version analyzer: checks if a newer version exists
   useEffect(() => {
+    let cancelled = false;
+    setAvailableNewRelease(null);
+    if (!isAppVersionKnown) return;
     const timer = setTimeout(async () => {
       try {
         const res = await karkasApiFetch('/api/check-update');
         if (res.ok) {
           const data = await res.json();
-          if (data && data.tag_name) {
-            if (compareVersions(data.tag_name, appCurrentVersion) > 0) {
+          if (!cancelled && data && data.tag_name && !data.draft && !data.prerelease) {
+            if (isNewerAppVersion(data.tag_name, appCurrentVersion)) {
               const dismissed = sessionStorage.getItem('karkas_dismissed_update');
               if (dismissed !== data.tag_name) {
                 setAvailableNewRelease(data);
@@ -353,8 +339,8 @@ export default function App() {
       }
     }, 2500);
 
-    return () => clearTimeout(timer);
-  }, [appCurrentVersion]);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [appCurrentVersion, isAppVersionKnown]);
   const [aiIconVariant, setAiIconVariant] = useState<AIIconId>(() => {
     return getSavedAIIconId();
   });
@@ -2206,6 +2192,18 @@ export default function App() {
         onClose={() => setIsUpdateOpen(false)}
         lang={lang}
         currentVersion={appCurrentVersion}
+        isVersionKnown={isAppVersionKnown}
+        onCheckAgain={async () => {
+          const desktop = window.karkasDesktop;
+          if (!desktop) return;
+          try {
+            const version = await desktop.system.getAppVersion();
+            if (version.ok && isValidAppVersion(version.value)) {
+              setAppCurrentVersion(version.value.trim());
+              setIsAppVersionKnown(true);
+            } else setIsAppVersionKnown(false);
+          } catch { setIsAppVersionKnown(false); }
+        }}
       />
 
       {/* Device-local application settings */}

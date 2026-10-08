@@ -210,14 +210,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                 </div>
                 <button
+                  id="toggle-startup-btn"
                   type="button"
                   role="switch"
                   aria-checked={launchAtStartup}
                   aria-label={labels.startup}
                   onClick={() => onLaunchAtStartupChange(!launchAtStartup)}
-                  className={`relative h-6 w-11 shrink-0 rounded-full border transition-colors ${launchAtStartup ? 'border-white bg-white' : 'border-neutral-700 bg-black'}`}
+                  className="flex h-11 w-11 shrink-0 items-center justify-center"
                 >
-                  <span className={`absolute top-1 h-3.5 w-3.5 rounded-full transition-transform ${launchAtStartup ? 'translate-x-5 bg-black' : 'translate-x-1 bg-neutral-500'}`} />
+                  <span aria-hidden="true" className={`relative block h-6 w-11 shrink-0 rounded-full border transition-colors motion-reduce:transition-none ${launchAtStartup ? 'border-white bg-white' : 'border-neutral-700 bg-black'}`}>
+                    <span className={`absolute left-1 top-1 h-3.5 w-3.5 rounded-full transition-transform motion-reduce:transition-none ${launchAtStartup ? 'translate-x-5 bg-black' : 'translate-x-0 bg-neutral-500'}`} />
+                  </span>
                 </button>
               </div>
             )}

@@ -104,6 +104,17 @@ const MIN_APP_ZOOM = 75;
 const MAX_APP_ZOOM = 150;
 const DEFAULT_APP_ZOOM = 100;
 const APP_BUILD_VERSION = packageMetadata.version;
+const STARTUP_REQUEST_TIMEOUT_MS = 10000;
+
+function requestStartupWithDeadline<T>(request: () => Promise<T>): Promise<T> {
+  let timeout: number | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timeout = window.setTimeout(() => reject(new Error('Startup request timed out')), STARTUP_REQUEST_TIMEOUT_MS);
+  });
+  return Promise.race([Promise.resolve().then(request), deadline]).finally(() => {
+    window.clearTimeout(timeout);
+  });
+}
 
 function normalizeAppZoom(value: unknown): number {
   if (value === null || value === undefined || value === '') return DEFAULT_APP_ZOOM;
@@ -222,12 +233,14 @@ export default function App() {
     localStorage, NOTEPAD_STORAGE_KEY, lang === 'uk' ? INITIAL_NOTES_UK : INITIAL_NOTES_EN,
   ));
   const [notes, setNotes] = useState<NotepadNote[]>(initialNotes.notes);
+  const currentNotesRef = React.useRef(notes);
+  currentNotesRef.current = notes;
   const [notesStorageError, setNotesStorageError] = useState(!initialNotes.canPersist);
 
   useEffect(() => {
     if (!initialNotes.canPersist) return;
     try {
-      localStorage.setItem(NOTEPAD_STORAGE_KEY, JSON.stringify(notes));
+      localStorage.setItem(NOTEPAD_STORAGE_KEY, JSON.stringify(currentNotesRef.current));
       setNotesStorageError(false);
     } catch (e) {
       console.error('Failed to save notes to localStorage', e);
@@ -235,17 +248,37 @@ export default function App() {
     }
   }, [notes, initialNotes.canPersist]);
 
-  const handleAddNote = (newNote: Omit<NotepadNote, 'id' | 'createdAt'>) => {
+  const commitNoteEdit = (nextNotes: NotepadNote[]): boolean => {
+    if (!initialNotes.canPersist) {
+      setNotesStorageError(true);
+      return false;
+    }
+    try {
+      localStorage.setItem(NOTEPAD_STORAGE_KEY, JSON.stringify(nextNotes));
+    } catch (error) {
+      console.error('Failed to save note edit to localStorage', error);
+      setNotesStorageError(true);
+      return false;
+    }
+    currentNotesRef.current = nextNotes;
+    setNotes(nextNotes);
+    setNotesStorageError(false);
+    return true;
+  };
+
+  const handleAddNote = (newNote: Omit<NotepadNote, 'id' | 'createdAt'>): boolean => {
     const created: NotepadNote = {
       ...newNote,
       id: `note-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       createdAt: Date.now(),
     };
-    setNotes((prev) => [created, ...prev]);
+    return commitNoteEdit([created, ...currentNotesRef.current]);
   };
 
-  const handleUpdateNote = (id: string, updates: Partial<NotepadNote>) => {
-    setNotes((prev) => prev.map((n) => (n.id === id ? { ...n, ...updates } : n)));
+  const handleUpdateNote = (id: string, updates: Partial<NotepadNote>): boolean => {
+    const currentNotes = currentNotesRef.current;
+    if (!currentNotes.some((note) => note.id === id)) return false;
+    return commitNoteEdit(currentNotes.map((note) => note.id === id ? { ...note, ...updates } : note));
   };
 
   const handleDeleteNote = (id: string) => {
@@ -257,7 +290,10 @@ export default function App() {
   const [isAccountOpen, setIsAccountOpen] = useState(false);
   const [isUpdateOpen, setIsUpdateOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [launchAtStartup, setLaunchAtStartup] = useState(false);
+  const [launchAtStartup, setLaunchAtStartup] = useState<boolean | null>(null);
+  const [startupPending, setStartupPending] = useState(() => Boolean(window.karkasDesktop));
+  const [startupError, setStartupError] = useState<'read' | 'write' | 'unchanged' | null>(null);
+  const startupPendingRef = React.useRef(Boolean(window.karkasDesktop));
   const [desktopPreferencesReady, setDesktopPreferencesReady] = useState(() => !window.karkasDesktop);
   const [appZoomPercent, setAppZoomPercent] = useState(() => {
     if (typeof window === 'undefined') return DEFAULT_APP_ZOOM;
@@ -275,27 +311,91 @@ export default function App() {
     const desktop = window.karkasDesktop;
     if (!desktop) return;
     let active = true;
-    Promise.allSettled([desktop.preferences.get(), desktop.system.getStartupEnabled(), desktop.system.getAppVersion()]).then(([preferencesResult, startupResult, versionResult]) => {
+    startupPendingRef.current = true;
+    setStartupPending(true);
+    requestStartupWithDeadline(() => desktop.system.getStartupEnabled()).then((startup) => {
+      if (!active) return;
+      if (startup.ok && typeof startup.value === 'boolean') {
+        setLaunchAtStartup(startup.value);
+        setStartupError(null);
+      } else {
+        setStartupError('read');
+      }
+    }).catch(() => {
+      if (active) setStartupError('read');
+    }).finally(() => {
+      if (!active) return;
+      startupPendingRef.current = false;
+      setStartupPending(false);
+    });
+    Promise.allSettled([desktop.preferences.get(), desktop.system.getAppVersion()]).then(([preferencesResult, versionResult]) => {
       if (!active) return;
       const preferences = preferencesResult.status === 'fulfilled' ? preferencesResult.value : null;
-      const startup = startupResult.status === 'fulfilled' ? startupResult.value : null;
       const version = versionResult.status === 'fulfilled' ? versionResult.value : null;
       if (preferences?.ok && preferences.value.zoomPercent != null) {
         setAppZoomPercent(normalizeAppZoom(preferences.value.zoomPercent));
       }
-      if (startup?.ok) setLaunchAtStartup(startup.value);
       if (version?.ok && typeof version.value === 'string' && isValidAppVersion(version.value)) {
         setAppCurrentVersion(version.value.trim());
         setIsAppVersionKnown(true);
       }
       setDesktopPreferencesReady(true);
-    }).catch(() => setDesktopPreferencesReady(true));
+    }).catch(() => {
+      if (!active) return;
+      setDesktopPreferencesReady(true);
+    });
     const unsubscribe = desktop.window.onCommand((command) => {
       if (command === 'new-task') setIsAddOpen(true);
       if (command === 'open-settings') setIsSettingsOpen(true);
     });
     return () => { active = false; unsubscribe(); };
   }, []);
+
+  const handleRefreshStartup = async () => {
+    const desktop = window.karkasDesktop;
+    if (!desktop || startupPendingRef.current) return;
+    startupPendingRef.current = true;
+    setStartupPending(true);
+    setStartupError(null);
+    try {
+      const result = await requestStartupWithDeadline(() => desktop.system.getStartupEnabled());
+      if (result.ok && typeof result.value === 'boolean') setLaunchAtStartup(result.value);
+      else setStartupError('read');
+    } catch {
+      setStartupError('read');
+    } finally {
+      startupPendingRef.current = false;
+      setStartupPending(false);
+    }
+  };
+
+  const handleLaunchAtStartupChange = async (enabled: boolean) => {
+    const desktop = window.karkasDesktop;
+    if (!desktop || launchAtStartup === null || startupPendingRef.current) return;
+    startupPendingRef.current = true;
+    setStartupPending(true);
+    setStartupError(null);
+    try {
+      const result = await requestStartupWithDeadline(() => desktop.system.setStartupEnabled(enabled));
+      if (result.ok && typeof result.value === 'boolean') {
+        setLaunchAtStartup(result.value);
+        if (result.value !== enabled) setStartupError('unchanged');
+      } else {
+        throw new Error('Startup change was not confirmed');
+      }
+    } catch {
+      setStartupError('write');
+      try {
+        const confirmed = await requestStartupWithDeadline(() => desktop.system.getStartupEnabled());
+        if (confirmed.ok && typeof confirmed.value === 'boolean') setLaunchAtStartup(confirmed.value);
+      } catch {
+        // Retain the last confirmed state when Windows cannot be read back.
+      }
+    } finally {
+      startupPendingRef.current = false;
+      setStartupPending(false);
+    }
+  };
 
   useEffect(() => {
     if (window.karkasDesktop && !desktopPreferencesReady) return;
@@ -2292,10 +2392,10 @@ export default function App() {
         maxZoom={MAX_APP_ZOOM}
         defaultZoom={DEFAULT_APP_ZOOM}
         launchAtStartup={launchAtStartup}
-        onLaunchAtStartupChange={async (enabled) => {
-          const result = await window.karkasDesktop?.system.setStartupEnabled(enabled);
-          setLaunchAtStartup(result?.ok ? result.value : enabled);
-        }}
+        startupPending={startupPending}
+        startupError={startupError}
+        onLaunchAtStartupChange={handleLaunchAtStartupChange}
+        onRefreshStartup={handleRefreshStartup}
         onZoomChange={(value) => setAppZoomPercent(normalizeAppZoom(value))}
         onClose={() => setIsSettingsOpen(false)}
       />

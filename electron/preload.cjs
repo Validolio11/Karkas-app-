@@ -17,6 +17,16 @@ function subscribe(channel, callback) {
   return () => ipcRenderer.removeListener(channel, listener);
 }
 
+// Keep native unsaved-draft prompts in the renderer's current UI language.
+if (typeof window !== 'undefined') {
+  window.addEventListener('DOMContentLoaded', () => {
+    const reportLanguage = () => ipcRenderer.send('karkas:system:ui-language', { lang: document.documentElement.lang });
+    reportLanguage();
+    const observer = new MutationObserver(reportLanguage);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['lang'] });
+  }, { once: true });
+}
+
 contextBridge.exposeInMainWorld('karkasDesktop', {
   isDesktop: true,
   window: {
@@ -61,6 +71,8 @@ contextBridge.exposeInMainWorld('karkasDesktop', {
   updates: {
     checkLatest: () => invoke('karkas:updates:check'),
     downloadAndInstall: (input) => invoke('karkas:updates:install', input),
+    cancelDownload: (requestId) => invoke('karkas:updates:cancel-download', { requestId }),
+    onInstallStateChanged: (callback) => subscribe('karkas:updates:state', callback),
   },
   system: {
     getAppVersion: () => invoke('karkas:system:get-version'),

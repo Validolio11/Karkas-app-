@@ -4,11 +4,11 @@ const {
 } = require('electron');
 const { pathToFileURL } = require('node:url');
 const path = require('node:path');
-const http = require('node:http');
-const https = require('node:https');
+const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const { launchUpdateInstaller } = require('./update-installer.cjs');
+const { downloadUpdateFile, updateDownloadError } = require('./update-download.cjs');
 const { beginBrowserGoogleLogin } = require('./browser-auth.cjs');
 const { createDesktopStorage } = require('./storage.cjs');
 const { createSecretStore } = require('./secrets.cjs');
@@ -41,6 +41,9 @@ let loginController = null;
 let isQuitting = false;
 let persistWindowTimer = null;
 let updateInProgress = false;
+let activeUpdate = null;
+let approvedUpdateUnload = null;
+let uiLanguage = 'uk';
 
 const ok = (value) => ({ ok: true, value });
 const fail = (error) => ({
@@ -123,6 +126,29 @@ function quitApplication() {
   isQuitting = true;
   loginController?.abort();
   app.quit();
+}
+
+function confirmLeavingDrafts(window, forUpdate = false) {
+  const isUk = uiLanguage === 'uk';
+  try {
+    showAndFocusWindow();
+    const choice = dialog.showMessageBoxSync(window, {
+      type: 'warning', title: 'Karkas',
+      buttons: isUk ? ['Залишитися', 'Вийти без збереження'] : ['Stay', 'Leave without saving'],
+      defaultId: 0, cancelId: 0, noLink: true,
+      message: isUk ? 'Є незбережені чернетки або незавершене голосове введення.' : 'There are unsaved drafts or unfinished voice input.',
+      detail: forUpdate
+        ? (isUk ? 'Для оновлення Karkas закриється. Незбережені чернетки й незавершене голосове введення буде втрачено. «Залишитися» не перериває запис або розпізнавання. Завершіть голосове введення та збережіть або скопіюйте текст перед оновленням.' : 'Karkas must close for the update. Unsaved drafts and unfinished voice input will be lost. Stay keeps recording or transcription in progress. Finish voice input and save or copy the text before updating.')
+        : (isUk ? 'Якщо вийти зараз, незбережені чернетки й незавершене голосове введення буде втрачено. «Залишитися» не перериває запис або розпізнавання. Завершіть голосове введення та збережіть або скопіюйте текст перед виходом.' : 'Leaving now will lose unsaved drafts and unfinished voice input. Stay keeps recording or transcription in progress. Finish voice input and save or copy the text before leaving.'),
+    });
+    if (choice === 1) return true;
+  } catch (error) {
+    console.error('Unable to confirm unsaved drafts', error);
+  }
+  isQuitting = false;
+  approvedUpdateUnload = null;
+  showAndFocusWindow();
+  return false;
 }
 
 function getWindowState() {
@@ -243,24 +269,46 @@ async function collectLegacyLocalStorage() {
   }
 }
 
-function downloadFile(fileUrl, destination) {
+async function awaitUpdatePreparation(operation, signal, timeoutMs = 10000) {
+  signal.throwIfAborted();
   return new Promise((resolve, reject) => {
-    const parsed = new URL(fileUrl);
-    if (!['https:', 'http:'].includes(parsed.protocol)) return reject(new Error('Unsupported download protocol'));
-    const transport = parsed.protocol === 'https:' ? https : http;
-    const request = transport.get(parsed, { headers: { 'User-Agent': 'Karkas-App' } }, (response) => {
-      if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-        response.resume();
-        return downloadFile(new URL(response.headers.location, parsed).toString(), destination).then(resolve, reject);
-      }
-      if (response.statusCode !== 200) { response.resume(); return reject(new Error(`Installer download failed: HTTP ${response.statusCode}`)); }
-      const stream = fs.createWriteStream(destination, { flags: 'wx' });
-      response.pipe(stream);
-      stream.on('finish', () => stream.close(() => resolve(destination)));
-      stream.on('error', (error) => { fs.unlink(destination, () => {}); reject(error); });
-    });
-    request.on('error', reject);
+    let settled = false;
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      signal.removeEventListener('abort', cancel);
+      if (error) reject(error);
+      else resolve(value);
+    };
+    const cancel = () => finish(signal.reason);
+    const timeout = setTimeout(() => finish(updateDownloadError('UPDATE_PREPARATION_TIMEOUT', 'Update preparation timed out')), timeoutMs);
+    signal.addEventListener('abort', cancel, { once: true });
+    // A late result cannot resume an already cancelled handoff.
+    Promise.resolve().then(() => {
+      signal.throwIfAborted();
+      return operation();
+    }).then(value => finish(null, value), finish);
   });
+}
+
+async function confirmUpdateUnload(renderer, signal) {
+  if (renderer.isDestroyed()) throw updateDownloadError('UPDATE_PREPARATION_FAILED', 'Update window is unavailable');
+  const result = await awaitUpdatePreparation(() => renderer.executeJavaScript(`(() => {
+    const event = new Event('beforeunload', { cancelable: true });
+    const allowed = window.dispatchEvent(event);
+    return { blocked: !allowed || event.defaultPrevented, lang: document.documentElement.lang };
+  })()`), signal, 5000);
+  signal.throwIfAborted();
+  if (!result || typeof result.blocked !== 'boolean') throw updateDownloadError('UPDATE_PREPARATION_FAILED', 'Unable to verify unsaved drafts');
+  if (result.lang === 'uk' || result.lang === 'en') uiLanguage = result.lang;
+  if (result.blocked) {
+    const window = BrowserWindow.fromWebContents(renderer);
+    if (!window || !confirmLeavingDrafts(window, true)) throw updateDownloadError('UPDATE_UNSAVED_DRAFTS', 'Update postponed to preserve unsaved drafts');
+    signal.throwIfAborted();
+    // Only this approved handoff may skip the repeated native unload prompt.
+    approvedUpdateUnload = renderer;
+  }
 }
 
 async function invokeService(operation, body = {}, useStoredKey = false) {
@@ -282,6 +330,9 @@ function registerIpc() {
   on('karkas:window:hide', () => mainWindow?.hide());
   handle('karkas:window:quit', () => { quitApplication(); });
   handle('karkas:window:get-state', getWindowState);
+  on('karkas:system:ui-language', ({ lang }) => {
+    if (lang === 'uk' || lang === 'en') uiLanguage = lang;
+  });
 
   handle('karkas:workspace:load-account', ({ ownerId }) => storage.loadAccount(ownerId ?? null));
   handle('karkas:workspace:save-account', async ({ ownerId, record }) => { await storage.saveAccount(ownerId ?? null, record); });
@@ -336,25 +387,62 @@ function registerIpc() {
   handle('karkas:ai:voice-token', (input) => invokeService('voiceToken', input || {}, true));
   handle('karkas:ai:transcribe-audio', (input) => invokeService('transcribeAudio', input || {}, true));
   handle('karkas:updates:check', () => invokeService('checkUpdate'));
-  handle('karkas:updates:install', async ({ url, fileName }) => {
+  handle('karkas:updates:install', async ({ url, fileName, requestId }, event) => {
     if (updateInProgress) throw new Error('An update is already in progress');
     if (process.platform !== 'win32' || !app.isPackaged) throw new Error('Automatic installation requires the installed Windows app');
     if (typeof url !== 'string') throw new Error('Missing download URL');
+    if (typeof requestId !== 'string' || !requestId || requestId.length > 128) throw new Error('Missing update request identifier');
     const parsed = new URL(url);
     if (!['https:', 'http:'].includes(parsed.protocol)) throw new Error('Unsupported download URL');
     const safeName = path.basename(typeof fileName === 'string' && fileName ? fileName : `Karkas-Setup-${Date.now()}.exe`);
     if (!safeName.toLowerCase().endsWith('.exe') || !parsed.pathname.toLowerCase().endsWith('.exe')) throw new Error('Missing Windows installer asset');
-    const destination = path.join(app.getPath('temp') || os.tmpdir(), `${Date.now()}-${safeName}`);
+    const destination = path.join(app.getPath('temp') || os.tmpdir(), `${Date.now()}-${randomUUID()}-${safeName}`);
+    const controller = new AbortController();
+    let finish;
+    const operation = { requestId, controller, phase: 'downloading', sender: event.sender, completion: new Promise(resolve => { finish = resolve; }) };
+    const cancel = () => {
+      if (operation.phase === 'downloading') controller.abort(updateDownloadError('UPDATE_DOWNLOAD_CANCELLED', 'Update download cancelled'));
+    };
+    const publishPhase = () => {
+      if (!event.sender.isDestroyed()) event.sender.send('karkas:updates:state', { requestId, phase: operation.phase });
+    };
     updateInProgress = true;
+    activeUpdate = operation;
+    event.sender.once('destroyed', cancel);
+    let downloaded = false;
+    let handedOff = false;
     try {
-      await downloadFile(url, destination);
-      await persistWindowState();
+      publishPhase();
+      await downloadUpdateFile(url, destination, { signal: controller.signal });
+      downloaded = true;
+      controller.signal.throwIfAborted();
+      await awaitUpdatePreparation(persistWindowState, controller.signal);
+      await confirmUpdateUnload(event.sender, controller.signal);
+      controller.signal.throwIfAborted();
+      // Lock cancellation synchronously before starting the installer process.
+      operation.phase = 'installing';
+      publishPhase();
       await launchUpdateInstaller(destination, { quit: quitApplication });
+      handedOff = true;
     } catch (error) {
-      updateInProgress = false;
-      await fs.promises.unlink(destination).catch(() => {});
+      if (approvedUpdateUnload === event.sender) approvedUpdateUnload = null;
+      if (downloaded) await fs.promises.unlink(destination).catch(() => {});
       throw error;
+    } finally {
+      event.sender.removeListener('destroyed', cancel);
+      if (!handedOff) updateInProgress = false;
+      if (activeUpdate === operation) activeUpdate = null;
+      finish();
     }
+  });
+  handle('karkas:updates:cancel-download', async ({ requestId }, event) => {
+    const operation = activeUpdate;
+    if (!operation || operation.requestId !== requestId || operation.sender !== event.sender) return { cancelled: false, phase: 'idle' };
+    if (operation.phase !== 'downloading') return { cancelled: false, phase: 'installing' };
+    operation.controller.abort(updateDownloadError('UPDATE_DOWNLOAD_CANCELLED', 'Update download cancelled'));
+    // A retry becomes available only after streams and temporary files are closed.
+    await operation.completion;
+    return { cancelled: true, phase: 'idle' };
   });
 
   handle('karkas:system:open-external', async ({ url }) => {
@@ -392,6 +480,17 @@ async function createWindow() {
     const allowed = isDevelopment ? /^http:\/\/(localhost|127\.0\.0\.1):3000(?:\/|$)/.test(url) : url.startsWith(`${APP_SCHEME}://app/`);
     if (!allowed) event.preventDefault();
   });
+  const window = mainWindow;
+  const renderer = window.webContents;
+  renderer.on('will-prevent-unload', (event) => {
+    if (approvedUpdateUnload === renderer) {
+      approvedUpdateUnload = null;
+      // Electron preventDefault here ignores the renderer guard and permits exit.
+      event.preventDefault();
+    } else if (confirmLeavingDrafts(window)) {
+      event.preventDefault();
+    }
+  });
   const isMediaPermission = (permission) => {
     return permission === 'media' || permission === 'audio-capture' || permission === 'microphone';
   };
@@ -416,7 +515,10 @@ async function createWindow() {
   mainWindow.on('move', queueWindowStateSave);
   mainWindow.on('maximize', () => { queueWindowStateSave(); mainWindow.webContents.send('karkas:window:state', getWindowState()); });
   mainWindow.on('unmaximize', () => { queueWindowStateSave(); mainWindow.webContents.send('karkas:window:state', getWindowState()); });
-  mainWindow.on('closed', () => { mainWindow = null; });
+  mainWindow.on('closed', () => {
+    if (approvedUpdateUnload === renderer) approvedUpdateUnload = null;
+    mainWindow = null;
+  });
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (!input.control || input.alt || input.meta || input.shift || input.type !== 'keyDown') return;
     if (input.key.toLowerCase() === 'q') { event.preventDefault(); quitApplication(); }
@@ -431,7 +533,11 @@ async function createWindow() {
 }
 
 app.on('second-instance', showAndFocusWindow);
-app.on('before-quit', () => { isQuitting = true; loginController?.abort(); });
+app.on('before-quit', () => {
+  isQuitting = true;
+  loginController?.abort();
+  if (activeUpdate?.phase === 'downloading') activeUpdate.controller.abort(updateDownloadError('UPDATE_DOWNLOAD_CANCELLED', 'Update download cancelled'));
+});
 app.on('window-all-closed', () => {});
 
 app.whenReady().then(async () => {

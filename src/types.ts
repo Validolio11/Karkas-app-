@@ -257,7 +257,9 @@ declare global {
       };
       updates: {
         checkLatest: () => Promise<DesktopResult<{ status: number; body: any }>>;
-        downloadAndInstall: (input: { url: string; fileName?: string }) => Promise<DesktopResult<void>>;
+        downloadAndInstall: (input: { url: string; fileName?: string; requestId: string }) => Promise<DesktopResult<void>>;
+        cancelDownload: (requestId: string) => Promise<DesktopResult<{ cancelled: boolean; phase: 'idle' | 'installing' }>>;
+        onInstallStateChanged: (callback: (state: { requestId: string; phase: 'downloading' | 'installing' }) => void) => () => void;
       };
       system: {
         getAppVersion: () => Promise<DesktopResult<string>>;

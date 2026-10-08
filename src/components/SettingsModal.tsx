@@ -11,9 +11,12 @@ interface SettingsModalProps {
   minZoom: number;
   maxZoom: number;
   defaultZoom: number;
-  launchAtStartup: boolean;
+  launchAtStartup: boolean | null;
+  startupPending: boolean;
+  startupError: 'read' | 'write' | 'unchanged' | null;
   onZoomChange: (zoomPercent: number) => void;
   onLaunchAtStartupChange: (enabled: boolean) => void;
+  onRefreshStartup: () => void;
   onClose: () => void;
 }
 
@@ -28,11 +31,29 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   maxZoom,
   defaultZoom,
   launchAtStartup,
+  startupPending,
+  startupError,
   onZoomChange,
   onLaunchAtStartupChange,
+  onRefreshStartup,
   onClose,
 }) => {
   const labels = SETTINGS_TRANSLATIONS[lang];
+  const startupMessages = lang === 'uk' ? {
+    pending: 'Перевіряємо налаштування Windows…',
+    unknown: 'Стан автозапуску невідомий.',
+    read: 'Не вдалося перевірити автозапуск. Перевірте стан знову.',
+    write: 'Не вдалося завершити зміну автозапуску. Показано останній підтверджений стан. Перевірте стан знову й повторіть спробу.',
+    unchanged: 'Windows не підтвердив запитану зміну. Показано фактичний стан. Перевірте автозапуск Karkas у налаштуваннях Windows.',
+    retry: 'Перевірити знову',
+  } : {
+    pending: 'Checking Windows settings…',
+    unknown: 'Startup status is unknown.',
+    read: 'Could not check startup. Check the status again.',
+    write: 'Could not complete the startup change. The last confirmed state is shown. Check the status again, then retry the change.',
+    unchanged: 'Windows did not confirm the requested change. The actual state is shown. Check Karkas startup in Windows Settings.',
+    retry: 'Check again',
+  };
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
@@ -207,16 +228,33 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <div>
                     <div className="text-xs font-bold uppercase tracking-wider text-neutral-200">{labels.startup}</div>
                     <div className="mt-1 text-[10px] leading-relaxed text-neutral-500">{labels.startupDescription}</div>
+                    <div id="startup-setting-status" aria-live="polite" className="text-xs leading-relaxed text-neutral-400">
+                      {startupPending ? startupMessages.pending : launchAtStartup === null ? startupMessages.unknown : null}
+                    </div>
+                    {startupError && <div id="startup-setting-error" className="mt-1 text-xs leading-relaxed text-rose-300">
+                      <p role="alert">{startupMessages[startupError]}</p>
+                      <button type="button" onClick={() => {
+                        // The retry control disappears when its previous error clears.
+                        closeButtonRef.current?.focus();
+                        onRefreshStartup();
+                      }} disabled={startupPending}
+                        className="mt-2 inline-flex min-h-11 min-w-11 items-center justify-center border border-neutral-700 bg-[#08080a] px-3 text-xs font-bold text-neutral-300 transition-colors hover:border-white hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white disabled:cursor-not-allowed disabled:opacity-50">
+                        {startupMessages.retry}
+                      </button>
+                    </div>}
                   </div>
                 </div>
                 <button
                   id="toggle-startup-btn"
                   type="button"
-                  role="switch"
-                  aria-checked={launchAtStartup}
+                  role={launchAtStartup === null ? undefined : 'switch'}
+                  aria-checked={launchAtStartup === null ? undefined : launchAtStartup}
                   aria-label={labels.startup}
+                  aria-describedby={startupError ? 'startup-setting-status startup-setting-error' : 'startup-setting-status'}
+                  aria-busy={startupPending}
+                  disabled={startupPending || launchAtStartup === null}
                   onClick={() => onLaunchAtStartupChange(!launchAtStartup)}
-                  className="flex h-11 w-11 shrink-0 items-center justify-center"
+                  className="flex h-11 w-11 shrink-0 items-center justify-center disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <span aria-hidden="true" className={`relative block h-6 w-11 shrink-0 rounded-full border transition-colors motion-reduce:transition-none ${launchAtStartup ? 'border-white bg-white' : 'border-neutral-700 bg-black'}`}>
                     <span className={`absolute left-1 top-1 h-3.5 w-3.5 rounded-full transition-transform motion-reduce:transition-none ${launchAtStartup ? 'translate-x-5 bg-black' : 'translate-x-0 bg-neutral-500'}`} />

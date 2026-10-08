@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
 import { NotepadNote, NoteSortOption } from '../types';
 import { Language, TRANSLATIONS } from '../utils/i18n';
 import { sound } from '../utils/audio';
 import { karkasApiFetch } from '../utils/desktopApi';
+import { loadNotepadDrafts, markNotepadDraftCleanup, noteDraftBase, noteDraftMatches, saveNotepadDrafts, type NoteDraftBase } from '../utils/notepadDrafts';
 import {
   NotebookPen,
   Search,
@@ -31,8 +32,8 @@ import { motion, AnimatePresence } from 'motion/react';
 interface NotepadViewProps {
   lang: Language;
   notes: NotepadNote[];
-  onAddNote: (note: Omit<NotepadNote, 'id' | 'createdAt'>) => void;
-  onUpdateNote: (id: string, updates: Partial<NotepadNote>) => void;
+  onAddNote: (note: Omit<NotepadNote, 'id' | 'createdAt'>) => boolean;
+  onUpdateNote: (id: string, updates: Partial<NotepadNote>) => boolean;
   onDeleteNote: (id: string) => void;
   onRestoreNote: (note: NotepadNote) => void;
   storageError?: boolean;
@@ -67,6 +68,15 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
 }) => {
   const t = TRANSLATIONS[lang];
   const nv = t.notepadView;
+  const [initialDrafts] = useState(() => {
+    try { return loadNotepadDrafts(localStorage); }
+    catch { return loadNotepadDrafts(); }
+  });
+  const [draftStorageError, setDraftStorageError] = useState(!initialDrafts.canPersist);
+  const [draftCanPersist, setDraftCanPersist] = useState(initialDrafts.canPersist);
+  const [draftSaveAttempt, setDraftSaveAttempt] = useState(0);
+  const [draftCleanupError, setDraftCleanupError] = useState(Boolean(initialDrafts.cleanupPending));
+  const draftCleanupPending = useRef(Boolean(initialDrafts.cleanupPending));
 
   // Search & Filter state
   const [searchQuery, setSearchQuery] = useState('');
@@ -75,17 +85,22 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
 
   // New Note Composer state
-  const [title, setTitle] = useState('');
-  const [content, setContent] = useState('');
-  const [selectedColor, setSelectedColor] = useState<string>(NOTE_COLOR_PRESETS[0].hex);
-  const [isComposerOpen, setIsComposerOpen] = useState(false);
+  const [title, setTitle] = useState(initialDrafts.drafts.composer?.title || '');
+  const [content, setContent] = useState(initialDrafts.drafts.composer?.content || '');
+  const [selectedColor, setSelectedColor] = useState<string>(initialDrafts.drafts.composer?.color || NOTE_COLOR_PRESETS[0].hex);
+  const [isComposerOpen, setIsComposerOpen] = useState(Boolean(initialDrafts.drafts.composer));
   const [voiceTarget, setVoiceTarget] = useState<'content' | 'title'>('content');
 
   // Inline edit state
-  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
-  const [editTitle, setEditTitle] = useState('');
-  const [editContent, setEditContent] = useState('');
-  const [editColor, setEditColor] = useState<string>(NOTE_COLOR_PRESETS[0].hex);
+  const [hasEditDraft, setHasEditDraft] = useState(Boolean(initialDrafts.drafts.edit));
+  const [editBase, setEditBase] = useState<NoteDraftBase | null>(initialDrafts.drafts.edit?.base || null);
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(() => {
+    const base = initialDrafts.drafts.edit?.base;
+    return base && noteDraftMatches(base, notes.find(note => note.id === base.id)) ? base.id : null;
+  });
+  const [editTitle, setEditTitle] = useState(initialDrafts.drafts.edit?.title || '');
+  const [editContent, setEditContent] = useState(initialDrafts.drafts.edit?.content || '');
+  const [editColor, setEditColor] = useState<string>(initialDrafts.drafts.edit?.color || NOTE_COLOR_PRESETS[0].hex);
 
   // Copied feedback state
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -94,7 +109,47 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
   const [recentlyDeletedNote, setRecentlyDeletedNote] = useState<NotepadNote | null>(null);
   const [pendingDelete, setPendingDelete] = useState<NotepadNote | null>(null);
   const deleteDialogRef = useRef<HTMLDialogElement | null>(null);
-  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(() => initialDrafts.recovered
+    ? initialDrafts.canPersist
+      ? (lang === 'uk' ? 'Доступний текст чернеток відновлено. Початкову пошкоджену копію збережено окремо.' : 'Available draft text was recovered. The original damaged copy was kept separately.')
+      : (lang === 'uk' ? 'Доступний текст чернеток відновлено. Початкову пошкоджену копію не змінено.' : 'Available draft text was recovered. The original damaged copy was left unchanged.')
+    : initialDrafts.drafts.composer || initialDrafts.drafts.edit
+      ? (lang === 'uk' ? 'Незбережені зміни відновлено з чернеток.' : 'Unsaved changes were restored from drafts.') : null);
+  const [noteSaveError, setNoteSaveError] = useState(false);
+  const newNoteSaveLock = useRef(false);
+  const editSaveLock = useRef(false);
+  const voiceDraftWriteSequenceRef = useRef(0);
+  const pendingVoiceDraftWriteRef = useRef<number | null>(null);
+  const [committedVoiceDraftRevision, setCommittedVoiceDraftRevision] = useState(0);
+  const editRecoveryRef = useRef<HTMLDivElement | null>(null);
+  const composerToggleRef = useRef<HTMLButtonElement | null>(null);
+  const editedNote = editBase ? notes.find(note => note.id === editBase.id) : undefined;
+  const editDraftIsCurrent = hasEditDraft && noteDraftMatches(editBase, editedNote);
+
+  // Persist each committed text change before navigation can unmount this view.
+  // Composer and edit drafts are independent; saving one never clears the other.
+  useLayoutEffect(() => {
+    const drafts = {
+      composer: title || content ? { title, content, color: selectedColor } : null,
+      edit: hasEditDraft ? { title: editTitle, content: editContent, color: editColor, base: editBase } : null,
+    };
+    let saved = false;
+    try { saved = saveNotepadDrafts(localStorage, drafts, draftCanPersist); }
+    catch { saved = saveNotepadDrafts(undefined, drafts, false); }
+    setDraftStorageError(!saved);
+    setDraftCleanupError(draftCleanupPending.current && !saved);
+    if (saved) draftCleanupPending.current = false;
+    // saveNotepadDrafts installs the session unload guard on a failed write.
+    // An older render must not release protection for newer accepted speech.
+    if (pendingVoiceDraftWriteRef.current === committedVoiceDraftRevision) pendingVoiceDraftWriteRef.current = null;
+  }, [title, content, selectedColor, hasEditDraft, editTitle, editContent, editColor, editBase, draftCanPersist, draftSaveAttempt, committedVoiceDraftRevision]);
+
+  useLayoutEffect(() => {
+    if (title || content) newNoteSaveLock.current = false;
+  }, [title, content]);
+  useLayoutEffect(() => {
+    if (hasEditDraft) editSaveLock.current = false;
+  }, [hasEditDraft, editTitle, editContent, editColor]);
 
   useEffect(() => {
     if (pendingDelete) deleteDialogRef.current?.showModal();
@@ -113,6 +168,18 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const voiceSessionRef = useRef<NoteVoiceSession | null>(null);
   const voiceMountedRef = useRef(true);
+
+  useLayoutEffect(() => {
+    const protectUnfinishedVoiceWork = (event: BeforeUnloadEvent) => {
+      if (!voiceSessionRef.current && pendingVoiceDraftWriteRef.current === null) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    // Native update preparation dispatches this same cancelable event.
+    // Staying leaves the recording/transcription session running unchanged.
+    window.addEventListener('beforeunload', protectUnfinishedVoiceWork);
+    return () => window.removeEventListener('beforeunload', protectUnfinishedVoiceWork);
+  }, []);
 
   const titleInputRef = useRef<HTMLInputElement | null>(null);
   const contentTextareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -162,12 +229,11 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
           return;
         }
         if (editingNoteId) {
-          handleCancelEdit();
+          handlePauseEdit();
           return;
         }
         if (isComposerOpen) {
-          cancelVoiceInput();
-          setIsComposerOpen(false);
+          handleCloseComposer();
           return;
         }
         if (searchQuery) {
@@ -307,15 +373,19 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
   };
 
   const applyTranscribedText = (spoken: string, session: NoteVoiceSession) => {
-    if (!spoken || !isCurrentVoiceSession(session)) return;
+    const text = spoken.trim();
+    if (!text || !isCurrentVoiceSession(session)) return;
+    const revision = ++voiceDraftWriteSequenceRef.current;
+    pendingVoiceDraftWriteRef.current = revision;
+    setCommittedVoiceDraftRevision(revision);
     if (session.noteId) {
-      setEditContent((prev) => (prev ? `${prev} ${spoken}` : spoken));
+      setEditContent((prev) => (prev ? `${prev} ${text}` : text));
       return;
     }
     if (session.target === 'title') {
-      setTitle((prev) => (prev ? `${prev} ${spoken}` : spoken));
+      setTitle((prev) => (prev ? `${prev} ${text}` : text));
     } else {
-      setContent((prev) => (prev ? `${prev} ${spoken}` : spoken));
+      setContent((prev) => (prev ? `${prev} ${text}` : text));
     }
   };
 
@@ -487,35 +557,71 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
     startMediaRecorderFallback(session);
   };
 
+  const handleCloseComposer = () => {
+    cancelVoiceInput();
+    setIsComposerOpen(false);
+    setTimeout(() => composerToggleRef.current?.focus(), 0);
+  };
+
   const handleSaveNewNote = () => {
-    if (isVoiceBusy()) return;
+    if (isVoiceBusy() || newNoteSaveLock.current) return;
     if (!title.trim() && !content.trim()) return;
-
-    sound.tick(700);
+    newNoteSaveLock.current = true;
     const finalTitle = title.trim() || (lang === 'uk' ? 'Без назви' : 'Untitled note');
-
-    onAddNote({
-      title: finalTitle,
-      content: content.trim(),
-      color: selectedColor,
-      pinned: false,
-    });
-
+    let saved = false;
+    try {
+      saved = onAddNote({ title: finalTitle, content: content.trim(), color: selectedColor, pinned: false });
+    } catch { /* Keep the draft if the caller cannot commit the saved note. */ }
+    if (!saved) {
+      newNoteSaveLock.current = false;
+      setNoteSaveError(true);
+      return;
+    }
+    sound.tick(700);
+    setNoteSaveError(false);
+    markNotepadDraftCleanup();
+    draftCleanupPending.current = true;
     setTitle('');
     setContent('');
+    setSelectedColor(NOTE_COLOR_PRESETS[0].hex);
     setIsComposerOpen(false);
     cancelVoiceInput();
+    setTimeout(() => composerToggleRef.current?.focus(), 0);
+  };
+
+  const handleDiscardNewDraft = () => {
+    if ((title || content) && !window.confirm(lang === 'uk' ? 'Видалити чернетку нової нотатки? Незбережений текст буде втрачено.' : 'Discard the new note draft? Unsaved text will be lost.')) return;
+    cancelVoiceInput();
+    markNotepadDraftCleanup();
+    draftCleanupPending.current = true;
+    setTitle('');
+    setContent('');
+    setSelectedColor(NOTE_COLOR_PRESETS[0].hex);
+    setIsComposerOpen(false);
+    setNoteSaveError(false);
+    setTimeout(() => composerToggleRef.current?.focus(), 0);
   };
 
   const handleStartEdit = (note: NotepadNote) => {
-    if (editingNoteId && editingNoteId !== note.id) {
-      setActionNotice(lang === 'uk' ? 'Збережіть або скасуйте поточне редагування перед переходом до іншої нотатки.' : 'Save or cancel the current edit before editing another note.');
-      editTitleInputRef.current?.focus();
+    if (hasEditDraft) {
+      if (editBase?.id === note.id && noteDraftMatches(editBase, note)) {
+        setEditingNoteId(note.id);
+        setSearchQuery('');
+        setSelectedColorFilter('ALL');
+        setTimeout(() => editTitleInputRef.current?.focus(), 100);
+      } else {
+        setActionNotice(lang === 'uk' ? 'Спочатку збережіть або видаліть наявну чернетку редагування.' : 'Save or discard the existing edit draft first.');
+        if (editingNoteId && editDraftIsCurrent) editTitleInputRef.current?.focus();
+        else editRecoveryRef.current?.focus();
+      }
       return;
     }
     cancelVoiceInput();
     setActionNotice(null);
+    setNoteSaveError(false);
     sound.tick(500);
+    setHasEditDraft(true);
+    setEditBase(noteDraftBase(note));
     setEditingNoteId(note.id);
     setEditTitle(note.title);
     setEditContent(note.content);
@@ -525,29 +631,85 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
     }, 100);
   };
 
-  const handleCancelEdit = () => {
+  const handlePauseEdit = () => {
     sound.tick(400);
+    setEditingNoteId(null);
+    cancelVoiceInput();
+    setTimeout(() => editRecoveryRef.current?.focus(), 100);
+  };
+
+  const clearEditDraft = () => {
+    markNotepadDraftCleanup();
+    draftCleanupPending.current = true;
+    setHasEditDraft(false);
+    setEditBase(null);
     setEditingNoteId(null);
     setEditTitle('');
     setEditContent('');
+    setEditColor(NOTE_COLOR_PRESETS[0].hex);
     cancelVoiceInput();
+    setTimeout(() => composerToggleRef.current?.focus(), 0);
+  };
+
+  const handleRetryDraftSave = () => {
+    let canPersist = false;
+    try { canPersist = loadNotepadDrafts(localStorage).canPersist; }
+    catch { /* Never overwrite a draft store that cannot be read safely. */ }
+    setDraftCanPersist(canPersist);
+    setDraftSaveAttempt(attempt => attempt + 1);
+  };
+
+  const handleDiscardEdit = () => {
+    if (!window.confirm(lang === 'uk' ? 'Видалити чернетку редагування? Збережена нотатка залишиться без цих змін.' : 'Discard the edit draft? These changes will not be added to the saved note.')) return;
+    clearEditDraft();
+    setNoteSaveError(false);
   };
 
   const handleSaveEdit = () => {
-    if (isVoiceBusy()) return;
-    if (!editingNoteId) return;
+    if (isVoiceBusy() || editSaveLock.current || !hasEditDraft) return;
     if (!editTitle.trim() && !editContent.trim()) return;
-
+    if (!editBase || !noteDraftMatches(editBase, notes.find(note => note.id === editBase.id))) {
+      setEditingNoteId(null);
+      cancelVoiceInput();
+      setTimeout(() => editRecoveryRef.current?.focus(), 100);
+      return;
+    }
+    editSaveLock.current = true;
+    let saved = false;
+    try {
+      saved = onUpdateNote(editBase.id, {
+        title: editTitle.trim() || (lang === 'uk' ? 'Без назви' : 'Untitled note'),
+        content: editContent.trim(), color: editColor, updatedAt: Date.now(),
+      });
+    } catch { /* An unsuccessful save must leave the edit draft intact. */ }
+    if (!saved) {
+      editSaveLock.current = false;
+      setNoteSaveError(true);
+      return;
+    }
     sound.tick(700);
-    onUpdateNote(editingNoteId, {
-      title: editTitle.trim() || (lang === 'uk' ? 'Без назви' : 'Untitled note'),
-      content: editContent.trim(),
-      color: editColor,
-      updatedAt: Date.now(),
-    });
+    setNoteSaveError(false);
+    clearEditDraft();
+  };
 
-    setEditingNoteId(null);
-    cancelVoiceInput();
+  const handleSaveRecoveredEdit = () => {
+    if (isVoiceBusy() || editSaveLock.current || !hasEditDraft || (!editTitle.trim() && !editContent.trim())) return;
+    editSaveLock.current = true;
+    let saved = false;
+    try {
+      saved = onAddNote({
+        title: editTitle.trim() || (lang === 'uk' ? 'Без назви' : 'Untitled note'),
+        content: editContent.trim(), color: editColor, pinned: false,
+      });
+    } catch { /* Keep this recovery draft independent from the new-note draft. */ }
+    if (!saved) {
+      editSaveLock.current = false;
+      setNoteSaveError(true);
+      return;
+    }
+    sound.tick(700);
+    setNoteSaveError(false);
+    clearEditDraft();
   };
 
   const handleConfirmDelete = () => {
@@ -643,6 +805,21 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
           {lang === 'uk' ? 'Не вдалося зберегти нотатки на пристрої. Скопіюйте важливий текст перед закриттям додатка.' : 'Notes could not be saved on this device. Copy important text before closing the app.'}
         </p>
       )}
+      {draftStorageError && (
+        <div role="alert" className="border border-rose-800 bg-rose-950/20 p-3 space-y-2 text-xs text-rose-200">
+          <p>{draftCleanupError
+            ? (lang === 'uk' ? 'Стару чернетку не вдалося прибрати зі сховища. У цьому сеансі вона не відновиться; після перезапуску може з’явитися знову. Повторіть збереження чернеток перед виходом.' : 'The old draft could not be removed from storage. It will not return in this session, but may return after restarting. Retry saving drafts before quitting.')
+            : (lang === 'uk' ? 'Чернетки доступні в цьому сеансі, але не збережені на пристрої. Скопіюйте важливий незбережений текст перед перезапуском або виходом.' : 'Drafts remain available in this session but are not saved on this device. Copy important unsaved text before restarting or quitting.')}</p>
+          <button type="button" onClick={handleRetryDraftSave} className="min-h-11 border border-rose-700 px-3 py-2 text-xs text-rose-100 hover:bg-rose-950/50">
+            {lang === 'uk' ? 'Повторити збереження чернеток' : 'Retry saving drafts'}
+          </button>
+        </div>
+      )}
+      {noteSaveError && (
+        <p role="alert" className="border border-rose-800 bg-rose-950/20 p-3 text-xs text-rose-200">
+          {lang === 'uk' ? 'Нотатку не збережено. Введений текст залишився у формі; спробуйте зберегти ще раз.' : 'The note was not saved. Your text remains in the form; try saving again.'}
+        </p>
+      )}
       {actionNotice && (
         <div role="status" className="flex items-center justify-between gap-3 border border-amber-800 bg-amber-950/20 p-3 text-xs text-amber-200">
           <span>{actionNotice}</span>
@@ -682,6 +859,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
         </div>
 
         <button
+          ref={composerToggleRef}
           type="button"
           onClick={() => {
             sound.tick(600);
@@ -694,7 +872,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
           className="px-3.5 py-2.5 bg-white hover:bg-neutral-200 text-black font-extrabold text-xs font-sans tracking-wider uppercase transition-all flex items-center gap-1.5 shrink-0 active:scale-95 cursor-pointer shadow-sm"
         >
           {isComposerOpen ? <X className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
-          <span>{isComposerOpen ? nv.cancel : nv.newNote}</span>
+          <span>{isComposerOpen ? (lang === 'uk' ? 'Закрити' : 'Close') : nv.newNote}</span>
         </button>
       </div>
 
@@ -833,9 +1011,12 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
                     ref={titleInputRef}
                     type="text"
                     value={title}
+                    aria-label={lang === 'uk' ? 'Назва нової нотатки' : 'New note title'}
                     onChange={(e) => setTitle(e.target.value)}
                     onKeyDown={(e) => {
+                      if (e.nativeEvent.isComposing) return;
                       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                        e.preventDefault();
                         handleSaveNewNote();
                       } else if (e.key === 'Enter') {
                         e.preventDefault();
@@ -888,9 +1069,10 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
                 <textarea
                   ref={contentTextareaRef}
                   value={content}
+                  aria-label={lang === 'uk' ? 'Текст нової нотатки' : 'New note text'}
                   onChange={(e) => setContent(e.target.value)}
                   onKeyDown={(e) => {
-                    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') handleSaveNewNote();
+                    if (!e.nativeEvent.isComposing && (e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); handleSaveNewNote(); }
                   }}
                   placeholder={nv.contentPlaceholder}
                   rows={3}
@@ -936,7 +1118,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
               )}
 
               {/* Bottom Actions */}
-              <div className="flex items-center justify-between pt-1">
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
                 <button
                   type="button"
                   onClick={() => handleToggleVoiceInput('content')}
@@ -959,33 +1141,74 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
                   )}
                 </button>
 
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button type="button" onClick={handleDiscardNewDraft} className="min-h-11 px-3 py-1.5 border border-neutral-800 text-neutral-400 hover:text-rose-300 text-xs font-sans transition-colors cursor-pointer">
+                    {lang === 'uk' ? 'Видалити чернетку' : 'Discard draft'}
+                  </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      sound.tick(400);
-                      setIsComposerOpen(false);
-                      cancelVoiceInput();
-                    }}
-                    className="px-3 py-1.5 border border-neutral-800 text-neutral-400 hover:text-white text-xs font-sans uppercase tracking-wider transition-colors cursor-pointer"
+                    onClick={handleCloseComposer}
+                    className="min-h-11 px-3 py-1.5 border border-neutral-800 text-neutral-400 hover:text-white text-xs font-sans uppercase tracking-wider transition-colors cursor-pointer"
                   >
-                    {nv.cancel}
+                    {lang === 'uk' ? 'Закрити' : 'Close'}
                   </button>
                   <button
                     type="button"
                     onClick={() => handleSaveNewNote()}
                     disabled={isVoiceStarting || isListening || isTranscribing || (!title.trim() && !content.trim())}
-                    className="px-3.5 py-1.5 bg-white text-black font-extrabold text-xs font-sans uppercase tracking-wider hover:bg-neutral-200 disabled:opacity-40 transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
+                    className="min-h-11 px-3.5 py-1.5 bg-white text-black font-extrabold text-xs font-sans uppercase tracking-wider hover:bg-neutral-200 disabled:opacity-40 transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
                   >
                     <Check className="w-3 h-3" />
                     <span>{nv.saveNote}</span>
                   </button>
                 </div>
               </div>
+              <p className="text-xs leading-relaxed text-neutral-500">
+                {draftStorageError
+                  ? (lang === 'uk' ? 'Чернетка залишиться доступною до завершення цього сеансу.' : 'The draft remains available until this session ends.')
+                  : (lang === 'uk' ? 'Закриття й перехід до іншого розділу зберігають чернетку.' : 'Closing this form or moving to another section keeps the draft.')}
+              </p>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
+
+      {hasEditDraft && (!editingNoteId || !editDraftIsCurrent || !filteredAndSortedNotes.some(note => note.id === editingNoteId)) && (
+        <div ref={editRecoveryRef} tabIndex={-1} role="region" aria-labelledby="notepad-edit-draft-title" className="border border-amber-800 bg-[#0a0a0d] p-4 space-y-3 font-sans">
+          <h2 id="notepad-edit-draft-title" className="text-sm font-bold text-neutral-100">
+            {lang === 'uk' ? 'Чернетка редагування' : 'Edit draft'}
+          </h2>
+          <p role="status" className="text-xs leading-relaxed text-neutral-300">
+            {editDraftIsCurrent
+              ? (lang === 'uk' ? 'Незбережені зміни залишилися в чернетці. Продовжіть редагування або видаліть чернетку.' : 'Your unsaved changes remain in this draft. Resume editing or discard the draft.')
+              : editedNote
+                ? (lang === 'uk' ? 'Збережена нотатка змінилася після початку редагування. Чернетка її не перезапише; збережіть цей текст як нову нотатку.' : 'The saved note changed after editing began. This draft will not overwrite it; save this text as a new note.')
+                : (lang === 'uk' ? 'Початкової нотатки немає або її не вдалося визначити. Відновлений текст можна зберегти як нову нотатку.' : 'The original note is missing or could not be identified. You can save the recovered text as a new note.')}
+          </p>
+          <label htmlFor="notepad-edit-draft-name" className="block text-xs text-neutral-400">
+            {lang === 'uk' ? 'Назва з чернетки' : 'Draft title'}
+            <input id="notepad-edit-draft-name" value={editTitle} onChange={event => setEditTitle(event.target.value)} className="mt-1 w-full bg-[#060608] border border-neutral-800 px-3 py-2 text-base text-neutral-100 focus:outline-none focus:border-neutral-500" />
+          </label>
+          <label htmlFor="notepad-edit-draft-content" className="block text-xs text-neutral-400">
+            {lang === 'uk' ? 'Текст з чернетки' : 'Draft text'}
+            <textarea id="notepad-edit-draft-content" value={editContent} onChange={event => setEditContent(event.target.value)} rows={4} className="mt-1 w-full bg-[#060608] border border-neutral-800 px-3 py-2 text-base leading-[1.6] text-neutral-200 focus:outline-none focus:border-neutral-500" />
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {editDraftIsCurrent && editedNote ? (
+              <button type="button" onClick={() => handleStartEdit(editedNote)} className="min-h-11 bg-white px-3 py-2 text-xs font-bold text-black hover:bg-neutral-200">
+                {lang === 'uk' ? 'Продовжити редагування' : 'Resume editing'}
+              </button>
+            ) : (
+              <button type="button" onClick={handleSaveRecoveredEdit} disabled={isVoiceStarting || isListening || isTranscribing || (!editTitle.trim() && !editContent.trim())} className="min-h-11 bg-white px-3 py-2 text-xs font-bold text-black hover:bg-neutral-200 disabled:opacity-40">
+                {lang === 'uk' ? 'Зберегти як нову нотатку' : 'Save as a new note'}
+              </button>
+            )}
+            <button type="button" onClick={handleDiscardEdit} className="min-h-11 border border-neutral-700 px-3 py-2 text-xs text-neutral-300 hover:text-rose-300">
+              {lang === 'uk' ? 'Видалити чернетку' : 'Discard draft'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* 3. Notes Stream / Cards Grid */}
       {filteredAndSortedNotes.length === 0 ? (
@@ -1031,7 +1254,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
           }`}
         >
           {filteredAndSortedNotes.map((note) => {
-            const isEditing = editingNoteId === note.id;
+            const isEditing = editingNoteId === note.id && editDraftIsCurrent;
             const noteColor = note.color || NOTE_COLOR_PRESETS[0].hex;
 
             if (isEditing) {
@@ -1063,9 +1286,10 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
                     ref={editTitleInputRef}
                     type="text"
                     value={editTitle}
+                    aria-label={lang === 'uk' ? 'Назва нотатки' : 'Note title'}
                     onChange={(e) => setEditTitle(e.target.value)}
                     onKeyDown={(e) => {
-                      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') handleSaveEdit();
+                      if (!e.nativeEvent.isComposing && (e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); handleSaveEdit(); }
                     }}
                     style={{ color: editColor }}
                     className="w-full bg-[#060608] border border-neutral-800 text-base leading-[1.6] font-sans font-bold px-3 py-2 focus:outline-none focus:border-neutral-500"
@@ -1073,15 +1297,16 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
 
                   <textarea
                     value={editContent}
+                    aria-label={lang === 'uk' ? 'Текст нотатки' : 'Note text'}
                     onChange={(e) => setEditContent(e.target.value)}
                     onKeyDown={(e) => {
-                      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') handleSaveEdit();
+                      if (!e.nativeEvent.isComposing && (e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); handleSaveEdit(); }
                     }}
                     rows={4}
                     className="w-full bg-[#060608] border border-neutral-800 text-neutral-200 text-base leading-[1.6] font-sans p-2.5 focus:outline-none focus:border-neutral-500"
                   />
 
-                  <div className="flex items-center justify-between pt-1">
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
                     <button
                       type="button"
                       onClick={() => handleToggleVoiceInput('content', note.id)}
@@ -1095,19 +1320,22 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
                       <span>{isListening ? nv.voiceStop : nv.voiceDictation}</span>
                     </button>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button type="button" onClick={handleDiscardEdit} className="min-h-11 px-2.5 py-1 border border-neutral-800 text-neutral-400 hover:text-rose-300 text-xs font-sans cursor-pointer">
+                        {lang === 'uk' ? 'Видалити чернетку' : 'Discard draft'}
+                      </button>
                       <button
                         type="button"
-                        onClick={handleCancelEdit}
-                        className="px-2.5 py-1 border border-neutral-800 text-neutral-400 hover:text-white text-xs font-sans uppercase cursor-pointer"
+                        onClick={handlePauseEdit}
+                        className="min-h-11 px-2.5 py-1 border border-neutral-800 text-neutral-400 hover:text-white text-xs font-sans uppercase cursor-pointer"
                       >
-                        {nv.cancel}
+                        {lang === 'uk' ? 'Закрити' : 'Close'}
                       </button>
                       <button
                         type="button"
                         onClick={handleSaveEdit}
                         disabled={isVoiceStarting || isListening || isTranscribing || (!editTitle.trim() && !editContent.trim())}
-                        className="px-3 py-1 bg-white text-black font-extrabold text-xs font-sans uppercase hover:bg-neutral-200 disabled:opacity-40 cursor-pointer"
+                        className="min-h-11 px-3 py-1 bg-white text-black font-extrabold text-xs font-sans uppercase hover:bg-neutral-200 disabled:opacity-40 cursor-pointer"
                       >
                         {nv.updateNote}
                       </button>

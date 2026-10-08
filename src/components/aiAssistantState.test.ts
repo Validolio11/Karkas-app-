@@ -28,6 +28,87 @@ test('API keys never enter request draft storage, while an original pending requ
   assert.equal(memory.values.size, 0);
 });
 
+test('an alternative plan retains its source mode, proposal metadata and newer draft across restart', () => {
+  const memory = storage();
+  const request = {
+    text: 'Internal comparison request for a different approach',
+    mode: 'breakdown' as const,
+    purpose: 'proposal' as const,
+    internalAlternative: true as const,
+    planningSource: { text: 'Break down my existing animation task with a 40-minute timer', mode: 'breakdown' as const },
+  };
+  const draft = { prompt: 'My next question is still being written', mode: 'chat' as const, recoverableRequest: request };
+  assert.equal(saveAIAssistantDraft(memory, draft, 'account'), true);
+  assert.deepEqual(readAIAssistantDraft(memory, 'account'), draft);
+  assert.match(restoredAIRequestNotice(readAIAssistantDraft(memory, 'account')?.recoverableRequest, 'en') || '', /unapplied proposal was not restored/);
+  assert.equal(readAIAssistantDraft(memory, 'account')?.recoverableRequest?.planningSource?.mode, 'breakdown');
+  assert.equal(readAIAssistantDraft(memory, 'another-account'), null);
+});
+
+test('an intentionally empty draft stays empty while an alternative request remains recoverable', () => {
+  const memory = storage();
+  const request = {
+    text: 'Internal alternative request', mode: 'generate' as const,
+    internalAlternative: true as const,
+    planningSource: { text: 'Plan my next work cycle', mode: 'generate' as const },
+  };
+  saveAIAssistantDraft(memory, { prompt: 'Draft I decided to clear', mode: 'generate', recoverableRequest: request });
+  saveAIAssistantDraft(memory, { prompt: '', mode: 'generate', recoverableRequest: request });
+  const restored = readAIAssistantDraft(memory);
+  assert.equal(restored?.prompt, '');
+  assert.deepEqual(restored?.recoverableRequest, request);
+  assert.equal(memory.values.size, 1);
+  saveAIAssistantDraft(memory, { prompt: '', mode: 'generate', recoverableRequest: null });
+  assert.equal(readAIAssistantDraft(memory), null);
+});
+
+test('malformed alternative source metadata cannot restore an internal request without its safe source', () => {
+  const memory = storage();
+  const secret = `AIza${'synthetic'.repeat(6)}`;
+  for (const planningSource of [
+    undefined, null, [], 'not a source', {},
+    { text: '', mode: 'generate' },
+    { text: '   ', mode: 'generate' },
+    { text: 'Original task', mode: 'unknown' },
+    { text: {}, mode: 'generate' },
+    { text: secret, mode: 'generate' },
+  ]) {
+    const draft = {
+      prompt: 'Keep my visible draft', mode: 'chat' as const,
+      recoverableRequest: { text: 'Internal alternative request', mode: 'generate' as const, internalAlternative: true as const, planningSource },
+    };
+    memory.values.set('karkas_ai_draft:guest', JSON.stringify(draft));
+    assert.deepEqual(readAIAssistantDraft(memory), { prompt: draft.prompt, mode: 'chat', recoverableRequest: null });
+    assert.equal(saveAIAssistantDraft(memory, draft as unknown as Parameters<typeof saveAIAssistantDraft>[1]), true);
+    assert.deepEqual(readAIAssistantDraft(memory), { prompt: draft.prompt, mode: 'chat', recoverableRequest: null });
+    assert.equal([...memory.values.values()].join('').includes(secret), false);
+  }
+});
+
+test('draft storage preserves only supported typed request metadata', () => {
+  const memory = storage();
+  const draft = {
+    prompt: 'Next question', mode: 'analyze' as const, unexpectedDraftField: 'discard me',
+    recoverableRequest: {
+      text: 'Compare approaches', mode: 'chat' as const, purpose: 'proposal' as const, internalAlternative: true as const,
+      planningSource: { text: 'Plan the existing task', mode: 'chat' as const, rawProviderDetails: 'discard me' },
+      tasks: [{ title: 'Must never restore an executable proposal' }], rawProviderDetails: 'discard me',
+    },
+  };
+  const expected = {
+    prompt: draft.prompt, mode: draft.mode,
+    recoverableRequest: {
+      text: draft.recoverableRequest.text, mode: 'chat', purpose: 'proposal', internalAlternative: true,
+      planningSource: { text: 'Plan the existing task', mode: 'chat' },
+    },
+  };
+  memory.values.set('karkas_ai_draft:guest', JSON.stringify(draft));
+  assert.deepEqual(readAIAssistantDraft(memory), expected);
+  assert.equal(saveAIAssistantDraft(memory, draft), true);
+  assert.deepEqual(JSON.parse(memory.values.get('karkas_ai_draft:guest') || 'null'), expected);
+  assert.equal([...memory.values.values()].join('').includes('rawProviderDetails'), false);
+});
+
 test('an unapplied chat proposal restores only its original request with an explicit notice and clears after confirmation', () => {
   const memory = storage();
   const request = { text: 'Додай Референси з таймером 25 хвилин', mode: 'chat' as const, purpose: 'proposal' as const };
@@ -103,6 +184,32 @@ test('malformed proposal fields fail safely before rendering or offering task ch
     { categoryHealth: [{ recommendation: {} }] },
     { workloadDiagnosis: { bottlenecks: [null] } },
   ]) assert.throws(() => readAIResponse({ reply: 'Malformed proposal', ...fields }, 'chat'), AIRequestError);
+});
+
+test('task deletion intent accepts only accidental, cancelled or legacy missing metadata', () => {
+  for (const mode of ['chat', 'breakdown', 'analyze', 'generate'] as const) {
+    const response = {
+      reply: 'Review these removals', summary: 'Review these removals',
+      taskDeletions: [
+        { id: 'accidental-task', deletionReason: 'accidental' as const, reason: 'Created by mistake' },
+        { id: 'cancelled-task', deletionReason: 'cancelled' as const, reason: 'The task is no longer needed' },
+        { id: 'legacy-task' },
+      ],
+    };
+    assert.equal(readAIResponse(response, mode), response);
+    for (const deletionReason of ['deleted', 'done', 'cancel', '', null, 0, false, {}, []]) {
+      assert.throws(() => readAIResponse({
+        reply: 'Malformed removal', summary: 'Malformed removal',
+        taskDeletions: [{ id: 'task', deletionReason }],
+      }, mode), error => error instanceof AIRequestError && error.code === 'INVALID_RESPONSE');
+    }
+    for (const reason of [null, 0, false, {}, []]) {
+      assert.throws(() => readAIResponse({
+        reply: 'Malformed removal', summary: 'Malformed removal',
+        taskDeletions: [{ id: 'task', deletionReason: 'cancelled', reason }],
+      }, mode), error => error instanceof AIRequestError && error.code === 'INVALID_RESPONSE');
+    }
+  }
 });
 
 test('the normalized backend chat shape accepts a Lottie reference task with a forty-minute countdown', () => {

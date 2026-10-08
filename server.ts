@@ -5,6 +5,8 @@ import dotenv from "dotenv";
 import { GoogleGenAI, Modality, Type } from "@google/genai";
 import { verifyGeminiKey } from "./server/geminiKeyVerification";
 import { AIRequestError, aiRequestFailure, classifyAIRequestError, generateGeminiWithFallback } from "./server/geminiGeneration";
+import { isCompletedArchivedTask, isCancelledArchivedTask, selectRelevantArchivedTasks } from "./src/utils/taskArchive";
+import { selectPeriodTasks } from "./src/components/workflowViewModel";
 
 dotenv.config();
 
@@ -104,6 +106,38 @@ function normalizedSteps(value: unknown, count: unknown, isUk: boolean, prefix: 
     done: false,
   }));
 }
+
+function workspaceProductivityContext(activeTasks: any[], completedTasks: any[], archivedTasks: any[], currentRecords = [...activeTasks, ...completedTasks]) {
+  const relevantArchive = selectRelevantArchivedTasks(currentRecords, archivedTasks);
+  const completedHistory = relevantArchive.filter(isCompletedArchivedTask);
+  const cancelledTasks = relevantArchive.filter(isCancelledArchivedTask);
+  const completed = [...completedTasks, ...completedHistory];
+  const tracked = [...activeTasks, ...completedTasks, ...relevantArchive];
+  const phaseCounts: Record<string, number> = {};
+  const completedByPhase = new Map<string, number>();
+  const activeByPhase = new Map<string, number>();
+  for (const task of tracked) phaseCounts[task.phase] = (phaseCounts[task.phase] || 0) + 1;
+  for (const task of completed) completedByPhase.set(task.phase, (completedByPhase.get(task.phase) || 0) + 1);
+  for (const task of activeTasks) activeByPhase.set(task.phase, (activeByPhase.get(task.phase) || 0) + 1);
+  const tasksWithSteps = tracked.filter(task => Number.isInteger(task.steps) && task.steps > 0);
+  const urgentLoad = activeTasks.filter(task => task.priority === 1).length;
+  const completionRate = tracked.length ? Math.round(completed.length / tracked.length * 100) : 0;
+  return {
+    completedHistory, cancelledTasks,
+    stats: { total: tracked.length, completed: completed.length, active: activeTasks.length, cancelled: cancelledTasks.length, percent: completionRate, phaseCounts },
+    adaptiveProfile: {
+      trackedTasks: tracked.length, completedTasks: completed.length, completionRate,
+      averageCompletionMinutes: completed.length ? Math.round(completed.reduce((sum, task) => sum + (Number.isFinite(task.timeSpentSeconds) ? task.timeSpentSeconds : 0), 0) / completed.length / 60) : 0,
+      averageStepCount: tasksWithSteps.length ? Math.round(tasksWithSteps.reduce((sum, task) => sum + task.steps, 0) / tasksWithSteps.length * 10) / 10 : 0,
+      preferredPhases: [...completedByPhase].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([phase]) => phase),
+      overloadedPhases: [...activeByPhase].filter(([, count]) => count >= 4).sort((a, b) => b[1] - a[1]).map(([phase]) => phase),
+      activeLoad: activeTasks.length, urgentLoad,
+      recommendedActiveLimit: urgentLoad >= 3 || activeTasks.length >= 8 ? 3 : 5,
+    },
+  };
+}
+
+const isLiveProductivityTask = (task: any) => task.deletedAt === undefined && task.deletionReason !== 'accidental';
 
 // Initialize Gemini Client
 let geminiClient: GoogleGenAI | null = null;
@@ -217,8 +251,6 @@ export async function assistHandler(req: any, res: any) {
       completedTasks = [],
       deletedTasks = [],
       tabs = [],
-      stats = {},
-      adaptiveProfile = {},
       action = "generate",
       lang = "uk",
       customApiKey,
@@ -265,18 +297,22 @@ export async function assistHandler(req: any, res: any) {
     const contextCompletedTasks = Array.isArray(suppliedContext.completedTasks) ? suppliedContext.completedTasks : [];
     const contextDeletedTasks = Array.isArray(suppliedContext.deletedTasks) ? suppliedContext.deletedTasks : [];
     const contextTabs = Array.isArray(suppliedContext.tabs) ? suppliedContext.tabs : [];
-    const effectiveActiveTasks = activeTasks.length > 0
+    const currentActiveRecords = activeTasks.length > 0
       ? activeTasks
       : contextActiveTasks.length > 0
         ? contextActiveTasks
         : currentTasks.filter((t: any) => !t.done);
-    const effectiveCompletedTasks = completedTasks.length > 0
+    const currentCompletedRecords = completedTasks.length > 0
       ? completedTasks
       : contextCompletedTasks.length > 0
         ? contextCompletedTasks
         : currentTasks.filter((t: any) => t.done);
+    const effectiveActiveTasks = currentActiveRecords.filter((task: any) => !task.done && isLiveProductivityTask(task));
+    const effectiveCompletedTasks = currentCompletedRecords.filter((task: any) => task.done && isLiveProductivityTask(task));
     const effectiveDeletedTasks = deletedTasks.length > 0 ? deletedTasks : contextDeletedTasks;
-    const effectiveStats = Object.keys(stats || {}).length > 0 ? stats : (suppliedContext.stats || {});
+    const productivity = workspaceProductivityContext(effectiveActiveTasks, effectiveCompletedTasks, effectiveDeletedTasks, [...currentActiveRecords, ...currentCompletedRecords]);
+    const effectiveStats = productivity.stats;
+    const effectiveAdaptiveProfile = productivity.adaptiveProfile;
 
     // Preserve tab names and colors for analysis
     const tabList = contextTabs.length > 0 ? contextTabs : (Array.isArray(tabs) ? tabs : []);
@@ -313,11 +349,13 @@ ${JSON.stringify({
             timeSpentSeconds: t.timeSpentSeconds || 0,
             done: !!t.done,
           })),
-          completedTasksCount: effectiveCompletedTasks.length,
+          completedTasksCount: effectiveStats.completed,
           completedTasks: effectiveCompletedTasks,
+          completedHistory: productivity.completedHistory,
+          cancelledTasks: productivity.cancelledTasks,
           availableTabs: tabList,
           stats: effectiveStats,
-          adaptiveProfile,
+          adaptiveProfile: effectiveAdaptiveProfile,
         }, null, 2)}
 
 INSTRUCTIONS:
@@ -454,6 +492,7 @@ INSTRUCTIONS:
 You have FULL real-time visibility into the user's workspace:
 - Active Tasks (with sub-steps, priority, and progress)
 - Completed Tasks history
+- Deliberately cancelled tasks, kept separate from unfinished active work and completed work
 - Category Tabs: ${JSON.stringify(tabList)}
 - Workflow statistics & metrics
 
@@ -486,7 +525,7 @@ Return valid JSON adhering to schema.`;
             activeCount: effectiveActiveTasks.length,
             urgentP1Count: effectiveActiveTasks.filter((t: any) => t.priority === 1).length,
           },
-          behavioralProfile: adaptiveProfile,
+          behavioralProfile: effectiveAdaptiveProfile,
           categoryTabs: tabList,
           activeTasks: effectiveActiveTasks.map((t: any) => ({
             id: t.id,
@@ -504,6 +543,8 @@ Return valid JSON adhering to schema.`;
             done: !!t.done,
           })),
           completedTasks: effectiveCompletedTasks,
+          completedHistory: productivity.completedHistory,
+          cancelledTasks: productivity.cancelledTasks,
         };
 
         const response = await generateGeminiContentWithFallback({
@@ -636,7 +677,7 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
             categoryHealth: parsed.categoryHealth,
             analyzedContext: {
               activeCount: effectiveActiveTasks.length,
-              completedCount: effectiveCompletedTasks.length,
+              completedCount: effectiveStats.completed,
               tabsCount: tabList.length,
             },
             source: "gemini",
@@ -664,8 +705,8 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
 
     if (isAnalyze) {
       fallbackSummary = isUk
-        ? `Аудит робочого процесу: ${effectiveActiveTasks.length} активних завдань, ${effectiveCompletedTasks.length} виконано, ${p1Count} у терміновому пріоритеті P1.`
-        : `Workflow audit: ${effectiveActiveTasks.length} active tasks, ${effectiveCompletedTasks.length} completed, ${p1Count} urgent P1 items.`;
+        ? `Аудит робочого процесу: ${effectiveActiveTasks.length} активних завдань, ${effectiveStats.completed} виконано, ${p1Count} у терміновому пріоритеті P1. Свідомо скасованих: ${productivity.cancelledTasks.length}; вони враховані окремо.`
+        : `Workflow audit: ${effectiveActiveTasks.length} active tasks, ${effectiveStats.completed} completed, ${p1Count} urgent P1 items. Deliberately cancelled: ${productivity.cancelledTasks.length}, counted separately.`;
 
       fallbackInsights = isUk
         ? [
@@ -809,7 +850,7 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
       tabs: fallbackTabs,
       analyzedContext: {
         activeCount: effectiveActiveTasks.length,
-        completedCount: effectiveCompletedTasks.length,
+        completedCount: effectiveStats.completed,
         tabsCount: tabList.length,
       },
       source: "life-rule-engine",
@@ -856,7 +897,7 @@ export async function breakdownTaskHandler(req: any, res: any) {
       });
     }
 
-    const effectiveAllTasks = fullAppContext?.activeTasks || allTasks || [];
+    const effectiveAllTasks = (fullAppContext?.activeTasks || allTasks || []).filter((item: any) => !item.done && isLiveProductivityTask(item));
     const effectiveTabs = fullAppContext?.tabs || tabs || [];
 
     const activeTabIds = Array.isArray(effectiveTabs) && effectiveTabs.length > 0
@@ -981,12 +1022,11 @@ export async function recommendationsHandler(req: any, res: any) {
     const validationError = requestValidationError(req.body);
     if (validationError) return res.status(400).json({ error: validationError });
     const {
-      tasks = [],
-      deletedTasks = [],
+      tasks: suppliedTasks = [],
+      deletedTasks: suppliedDeletedTasks = [],
       tabs = [],
       lang = "uk",
       period = "ALL_TIME",
-      periodMetrics,
       customApiKey,
       selectedModel,
     } = req.body;
@@ -1010,8 +1050,12 @@ export async function recommendationsHandler(req: any, res: any) {
       : ["focus", "work", "home", "health", "buy", "study"];
     const primaryTab = activeTabIds[0] || "focus";
 
-    const activeTasks = tasks.filter((t: any) => !t.done);
-    const completedTasks = tasks.filter((t: any) => t.done);
+    const tasks = suppliedTasks.filter(isLiveProductivityTask);
+    const relevantArchive = selectRelevantArchivedTasks(suppliedTasks, suppliedDeletedTasks);
+    const periodTasks = selectPeriodTasks(tasks, relevantArchive, period, new Date());
+    const activeTasks = periodTasks.activeInPeriod;
+    const completedTasks = [...periodTasks.completedInPeriod, ...periodTasks.deletedCompleted];
+    const cancelledTasks = periodTasks.droppedInPeriod;
     const p1Count = activeTasks.filter((t: any) => t.priority === 1).length;
     const p2Count = activeTasks.filter((t: any) => t.priority === 2).length;
 
@@ -1044,11 +1088,15 @@ export async function recommendationsHandler(req: any, res: any) {
       ? { S: 150, APlus: 100, A: 60, B: 30 }
       : { S: 30, APlus: 20, A: 12, B: 6 };
 
-    const totalAll = periodMetrics?.totalCreated ?? (tasks.length + deletedTasks.length);
-    const completedAll = periodMetrics?.totalCompleted ?? completedTasks.length;
-    const deletedAll = periodMetrics?.totalDeleted ?? deletedTasks.length;
-    const successRate = periodMetrics?.successRate ?? Math.round(
-      (completedAll / (completedAll + deletedAll || 1)) * 100);
+    const totalAll = periodTasks.createdInPeriod.length;
+    const completedAll = completedTasks.length;
+    const cancelledAll = cancelledTasks.length;
+    const successRate = Math.round(
+      (completedAll / (completedAll + cancelledAll || 1)) * 100);
+    const safePeriodMetrics = {
+      totalCreated: totalAll, totalCompleted: completedAll, totalActive: activeTasks.length,
+      totalCancelled: cancelledAll, totalDeleted: cancelledAll, successRate,
+    };
     const productivityGrade = successRate >= 90 && completedAll >= minDeliveredForGrade.S ? 'S'
       : successRate >= 80 && completedAll >= minDeliveredForGrade.APlus ? 'A+'
       : successRate >= 65 && completedAll >= minDeliveredForGrade.A ? 'A'
@@ -1058,7 +1106,9 @@ export async function recommendationsHandler(req: any, res: any) {
       try {
         const systemInstruction = `You are an elite strategic AI Productivity Analyst for the "KARKAS // TASK ARCHITECT" workspace.
 Your task is to critically analyze the user's complete productivity performance and TASK VOLUME DENSITY for the specified timeframe (${periodHumanName}).
-This includes active tasks, successfully completed tasks, and deleted/dropped tasks from the archive.
+This includes unfinished active work, successfully completed work (including completed archives), and explicitly deliberately cancelled unfinished tasks as three separate groups.
+Active unfinished tasks are not failures and are not cancelled. Cancelled tasks are not completed. Do not infer why the user cancelled a task or equate cancellation with procrastination or poor discipline.
+Accidental entries and unfinished archives with unknown reasons are excluded entirely from these metrics and context. Do not reconstruct them from earlier conversation or treat them as workload, output, or failures.
 
 TASK VOLUME BENCHMARKS & DENSITY RULES:
 - Standard monthly workload benchmark is 20 to 30 tasks per month (target norm: ~${targetNorm} tasks for ${periodHumanName}).
@@ -1081,7 +1131,7 @@ Provide:
 2. "optimizationTip": 1 actionable tip on cadence, batching, daily decomposition, or workload management.
 3. "workloadStatus": Short badge string (e.g. ${isUk ? '"🔥 ВИСОКИЙ ТЕМП", "⚡ ОПТИМАЛЬНИЙ БАЛАНС", "⚠️ НИЗЬКИЙ ОБСЯГ", "🌱 ЧЕРГА ВІЛЬНА"' : '"🔥 HIGH TEMPO", "⚡ OPTIMAL BALANCE", "⚠️ LOW VOLUME", "🌱 LOW LOAD"'}).
 4. "periodRetrospective": 2-3 deep analytical sentences evaluating output velocity, completion discipline, and task volume density against the target norm of ${targetNorm} tasks for "${periodHumanName}". Refer to concrete numbers (e.g. "закрито X із норми Y завдань").
-5. "dropoffAnalysis": 1-2 constructive sentences analyzing dropped/deleted tasks or stuck categories and why friction occurred.
+5. "dropoffAnalysis": 1-2 constructive sentences about explicitly cancelled unfinished tasks only. Use their supplied count; do not invent motives or mix them with active work, completed archives or accidental entries. When there are none, say there were no classified cancellations in this period.
 6. "futureStrategy": 1-2 strategic recommendations for the upcoming work cycles (focusing on consistent daily task cadence).
 7. "productivityGrade": One grade code: "S", "A+", "A", "B", or "C" strictly matching the volume+completion rules above.
 8. "suggestedTasks": 2 to 3 high-impact next step tasks that naturally complement their workflow. Each with:
@@ -1097,10 +1147,10 @@ Return valid JSON adhering to the schema.`;
         const response = await generateGeminiContentWithFallback({
           contents: `USER PRODUCTIVITY DATA FOR PERIOD [${periodHumanName}]:
 - Target Period Norm: ${targetNorm} tasks
-- Metrics Overview: ${JSON.stringify(periodMetrics || {})}
+- Metrics Overview: ${JSON.stringify(safePeriodMetrics)}
 - Active Tasks (${activeTasks.length}): ${JSON.stringify(activeTasks.slice(0, 15).map((t: any) => ({ title: t.title, phase: t.phase, priority: t.priority, steps: t.steps })))}
 - Completed Tasks (${completedTasks.length}): ${JSON.stringify(completedTasks.slice(0, 15).map((t: any) => ({ title: t.title, phase: t.phase })))}
-- Archived / Deleted Tasks (${deletedTasks.length}): ${JSON.stringify(deletedTasks.slice(0, 15).map((t: any) => ({ title: t.title, phase: t.phase, doneBeforeDelete: t.done })))}
+- Deliberately Cancelled Unfinished Tasks (${cancelledTasks.length}): ${JSON.stringify(cancelledTasks.slice(0, 15).map((t: any) => ({ title: t.title, phase: t.phase, deletionReason: 'cancelled', done: false })))}
 - Category List: ${JSON.stringify(tabs)}
 - Urgent P1 count: ${p1Count}, Standard P2 count: ${p2Count}
 Language: ${isUk ? "Ukrainian" : "English"}.`,
@@ -1212,8 +1262,8 @@ Language: ${isUk ? "Ukrainian" : "English"}.`,
     } else if (activeTasks.length === 0) {
       workloadStatus = isUk ? "🌱 ЧЕРГА ВІЛЬНА" : "🌱 QUEUE CLEARED";
       focusAdvice = isUk
-        ? "Всі поточні завдання виконано. Ідеальний момент для планування нових завдань."
-        : "All active items are cleared. Perfect window for strategic planning.";
+        ? "У вибраному періоді немає активних завдань. Можна переглянути результати або спланувати наступні справи."
+        : "There are no active tasks in the selected period. Review results or plan the next tasks.";
       optimizationTip = isUk
         ? "Сформуйте 3 ключові орієнтири на наступний робочий спринт."
         : "Draft 3 core anchors for your next operational sprint.";
@@ -1232,12 +1282,12 @@ Language: ${isUk ? "Ukrainian" : "English"}.`,
       : `For "${periodHumanName}", tracked ${totalAll} tasks (target norm: ${targetNorm}). Delivered ${completedAll} (${successRate}% success rate). ${completedAll < minDeliveredForGrade.B ? "Volume is below baseline quota — increase daily task decomposition." : "Solid task output and execution cadence."}`;
 
     dropoffAnalysis = isUk
-      ? deletedAll > 0
-        ? `Утилізовано або скасовано ${deletedAll} завдань. Регулярне очищення черги звільняє ментальний ресурс для дійсно пріоритетних цілей.`
-        : "Нульовий рівень відмови: всі зафіксовані завдання або виконані, або знаходяться в активній черзі."
-      : deletedAll > 0
-      ? `${deletedAll} items were archived or dropped, keeping your queue lean and focused on true priorities.`
-      : "Zero dropoff rate: all tasks are either active or successfully delivered.";
+      ? cancelledAll > 0
+        ? `Свідомо скасовано ${cancelledAll} незавершених завдань. Вони враховані окремо від виконаних і активних; причина скасування не визначена.`
+        : "Свідомо скасованих завдань за цей період немає. Активні незавершені завдання не є скасованими."
+      : cancelledAll > 0
+      ? `${cancelledAll} unfinished tasks were deliberately cancelled. They are counted separately from completed and active work; no cancellation motive is inferred.`
+      : "There are no classified cancellations in this period. Active unfinished tasks are not cancellations.";
 
     futureStrategy = isUk
       ? "Підтримуйте декомпозицію складних цілей на 2-3 підкроки та підбивайте підсумки наприкінці кожного тижня для максимального фокусу."

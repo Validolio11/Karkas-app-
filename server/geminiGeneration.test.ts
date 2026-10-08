@@ -201,6 +201,137 @@ test('malformed optional mutation values trigger model fallback before a success
   }
 });
 
+test('all assistant modes send classified records and recomputed statistics to the provider', async () => {
+  const timestamp = Date.now();
+  const task = (id: string, done: boolean, extra: any = {}) => ({ id, title: id, phase: 'focus', priority: 2, done, createdAt: timestamp, ...extra });
+  const fullAppContext = {
+    activeTasks: [task('live', false), task('EXCLUDED-accidental-live', false, { deletionReason: 'accidental' }), task('EXCLUDED-archived-live', false, { deletedAt: timestamp })],
+    completedTasks: [task('completed', true)],
+    deletedTasks: [
+      task('archived-completed', true, { deletedAt: timestamp }),
+      task('cancelled', false, { deletedAt: timestamp, deletionReason: 'cancelled' }),
+      task('live', true, { title: 'EXCLUDED-restored-task-archive', deletedAt: timestamp }),
+      task('completed', false, { title: 'EXCLUDED-completed-task-cancellation', deletedAt: timestamp, deletionReason: 'cancelled' }),
+      task('archived-completed', true, { title: 'EXCLUDED-duplicate-completion', deletedAt: timestamp }),
+      task('cancelled', false, { title: 'EXCLUDED-duplicate-cancellation', deletedAt: timestamp, deletionReason: 'cancelled' }),
+      task('EXCLUDED-accidental-archive', true, { deletedAt: timestamp, deletionReason: 'accidental' }),
+      task('EXCLUDED-accidental-archive', true, { title: 'EXCLUDED-older-completion-for-accident', deletedAt: timestamp }),
+      task('EXCLUDED-unknown-archive', false, { deletedAt: timestamp }),
+      task('EXCLUDED-unknown-archive', false, { title: 'EXCLUDED-older-cancellation-for-unknown', deletedAt: timestamp, deletionReason: 'cancelled' }),
+      task('EXCLUDED-accidental-live', true, { title: 'EXCLUDED-older-completion-for-current-accident', deletedAt: timestamp }),
+    ],
+    stats: { total: 999, completed: 999, percent: 100, phaseCounts: { 'EXCLUDED-client-aggregate': 999 } },
+    adaptiveProfile: { trackedTasks: 999, completedTasks: 999, activeLoad: 999, preferredPhases: ['EXCLUDED-client-profile'] },
+  };
+  for (const action of ['chat', 'generate', 'analyze']) {
+    mockProvider((_model, body) => {
+      const contents = body.contents.flatMap((content: any) => content.parts.map((part: any) => part.text ?? '')).join('\n');
+      assert.doesNotMatch(contents, /EXCLUDED-|999/);
+      const serialized = action === 'chat'
+        ? /WORKSPACE CONTEXT:\n([\s\S]+?)\n\nINSTRUCTIONS:/.exec(contents)?.[1]
+        : /WORKSPACE REAL-TIME CONTEXT:\n([\s\S]+)$/.exec(contents)?.[1];
+      assert.ok(serialized);
+      const context = JSON.parse(serialized);
+      assert.deepEqual(context.activeTasks.map((item: any) => item.id), ['live']);
+      assert.deepEqual(context.completedTasks.map((item: any) => item.id), ['completed']);
+      assert.deepEqual(context.completedHistory.map((item: any) => item.id), ['archived-completed']);
+      assert.deepEqual(context.cancelledTasks.map((item: any) => item.id), ['cancelled']);
+      const profile = context.adaptiveProfile ?? context.behavioralProfile;
+      assert.equal(profile.trackedTasks, 4);
+      assert.equal(profile.completedTasks, 2);
+      assert.equal(profile.activeLoad, 1);
+      assert.equal(profile.completionRate, 50);
+      if (action === 'chat') assert.deepEqual(context.stats, { total: 4, completed: 2, active: 1, cancelled: 1, percent: 50, phaseCounts: { focus: 4 } });
+      else assert.deepEqual(context.overview, { totalTasks: 4, completedCount: 2, completionPercent: 50, activeCount: 1, urgentP1Count: 0 });
+      assert.deepEqual(body.generationConfig.responseSchema.properties.taskDeletions.items.properties.deletionReason.enum, ['accidental', 'cancelled']);
+      return success({ reply: 'Review prepared.', summary: 'Review prepared.', tasks: [], taskUpdates: [], taskDeletions: [] });
+    });
+    const result = await chat({ prompt: 'Audit the workspace', lang: 'en', action, fullAppContext });
+    assert.equal(result.status, 200);
+    assert.equal(calls.length, 1);
+  }
+});
+
+test('recommendations send server-derived period metrics and distinct completion and cancellation groups', async () => {
+  const timestamp = Date.now();
+  const previousMonth = new Date(timestamp);
+  previousMonth.setDate(0);
+  const older = previousMonth.getTime();
+  const task = (id: string, done: boolean, extra: any = {}) => ({ id, title: id, phase: 'focus', priority: 2, done, createdAt: timestamp, ...extra });
+  mockProvider((_model, body) => {
+    const contents = body.contents.flatMap((content: any) => content.parts.map((part: any) => part.text ?? '')).join('\n');
+    assert.doesNotMatch(contents, /EXCLUDED-|999/);
+    const metrics = JSON.parse(/Metrics Overview: (.+)/.exec(contents)![1]);
+    assert.deepEqual(metrics, { totalCreated: 4, totalCompleted: 2, totalActive: 1, totalCancelled: 1, totalDeleted: 1, successRate: 67 });
+    assert.match(contents, /Active Tasks \(1\): \[{"title":"live"/);
+    assert.match(contents, /Completed Tasks \(2\):.*"title":"completed".*"title":"archived-completed"/);
+    assert.match(contents, /Deliberately Cancelled Unfinished Tasks \(1\): \[{"title":"cancelled"/);
+    assert.match(body.systemInstruction.parts[0].text, /Active unfinished tasks are not failures/);
+    return success({ focusAdvice: 'Review results.', optimizationTip: 'Plan next steps.', workloadStatus: 'LOW VOLUME',
+      periodRetrospective: 'Two completed tasks.', dropoffAnalysis: 'One cancellation.', futureStrategy: 'Plan next steps.', productivityGrade: 'S', suggestedTasks: [] });
+  });
+  const result = await invokeDesktopApi('recommendations', {
+    customApiKey: 'test-only-fake-key', lang: 'en', period: 'THIS_MONTH',
+    tasks: [task('live', false), task('completed', true, { completedAt: timestamp }), task('EXCLUDED-live-accident', false, { deletionReason: 'accidental' })],
+    deletedTasks: [
+      task('archived-completed', true, { deletedAt: timestamp }),
+      task('cancelled', false, { deletedAt: timestamp, deletionReason: 'cancelled' }),
+      task('live', true, { title: 'EXCLUDED-restored-task-archive', deletedAt: timestamp }),
+      task('completed', false, { title: 'EXCLUDED-completed-task-cancellation', deletedAt: timestamp, deletionReason: 'cancelled' }),
+      task('archived-completed', true, { title: 'EXCLUDED-duplicate-completion', deletedAt: timestamp }),
+      task('cancelled', false, { title: 'EXCLUDED-duplicate-cancellation', deletedAt: timestamp, deletionReason: 'cancelled' }),
+      task('EXCLUDED-accidental', true, { deletedAt: timestamp, deletionReason: 'accidental' }),
+      task('EXCLUDED-accidental', true, { title: 'EXCLUDED-older-completion-for-accident', deletedAt: timestamp }),
+      task('EXCLUDED-unclassified', false, { deletedAt: timestamp }),
+      task('EXCLUDED-unclassified', false, { title: 'EXCLUDED-older-cancellation-for-unknown', deletedAt: timestamp, deletionReason: 'cancelled' }),
+      task('EXCLUDED-live-accident', true, { title: 'EXCLUDED-older-completion-for-current-accident', deletedAt: timestamp }),
+      task('EXCLUDED-earlier-cancellation', false, { createdAt: older, deletedAt: older, deletionReason: 'cancelled' }),
+      task('EXCLUDED-earlier-completion', true, { createdAt: older, completedAt: older, deletedAt: timestamp }),
+    ],
+    periodMetrics: { totalCreated: 999, totalCompleted: 999, totalActive: 999, totalDeleted: 999, successRate: 100 },
+  });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.productivityGrade, 'C', 'the provider cannot override the server grade');
+  assert.equal(calls.length, 1);
+});
+
+test('breakdown excludes completed, accidental and archived tasks from other active work', async () => {
+  mockProvider((_model, body) => {
+    const contents = body.contents.flatMap((content: any) => content.parts.map((part: any) => part.text ?? '')).join('\n');
+    assert.match(contents, /Other active tasks: \["live"\]/);
+    assert.doesNotMatch(contents, /EXCLUDED-/);
+    return success({ stepList: [{ title: 'First step' }], suggestedPriority: 2, note: 'Plan ready.' });
+  });
+  const result = await invokeDesktopApi('breakdown', {
+    customApiKey: 'test-only-fake-key', task: { id: 'target', title: 'Prepare draft' }, lang: 'en',
+    fullAppContext: { activeTasks: [
+      { id: 'live', title: 'live', done: false },
+      { id: 'done', title: 'EXCLUDED-completed', done: true },
+      { id: 'accidental', title: 'EXCLUDED-accidental', done: false, deletionReason: 'accidental' },
+      { id: 'archived', title: 'EXCLUDED-archived', done: false, deletedAt: Date.now() },
+    ] },
+  });
+  assert.equal(result.status, 200);
+  assert.equal(calls.length, 1);
+});
+
+test('classified deletion proposals round-trip through the SDK and unknown enum values fail without mutations', async () => {
+  for (const deletionReason of ['accidental', 'cancelled', undefined, 'unknown']) {
+    mockProvider(() => success({ reply: 'Deletion proposal prepared.', tasks: [], taskDeletions: [{ id: 't1', deletionReason }] }));
+    const result = await chat({ currentTasks: [{ id: 't1', title: 'Current task' }] });
+    if (deletionReason === 'unknown') {
+      assert.equal(result.status, 502);
+      assert.equal(result.body.code, 'INVALID_AI_RESPONSE');
+      assert.deepEqual(result.body.taskDeletions, []);
+      assert.equal(calls.length, 3);
+    } else {
+      assert.equal(result.status, 200);
+      assert.deepEqual(result.body.taskDeletions, [{ id: 't1', ...(deletionReason ? { deletionReason } : {}) }]);
+      assert.equal(calls.length, 1);
+    }
+  }
+});
+
 test('real SDK ignores thought text and joins fenced JSON text parts for the Lottie proposal', async () => {
   mockProvider(() => {
     const proposal = JSON.stringify({ reply: 'Пропоную завдання.', tasks: [lottieTask] });

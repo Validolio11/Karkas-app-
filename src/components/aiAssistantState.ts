@@ -2,31 +2,54 @@ import type { AIResponse } from '../types';
 import { looksLikeGeminiApiKey } from '../utils/apiKey';
 
 export type AIMode = 'chat' | 'breakdown' | 'analyze' | 'generate';
-export interface AIRequest { text: string; mode: AIMode; purpose?: 'proposal' }
+export interface AIRequest {
+  text: string;
+  mode: AIMode;
+  purpose?: 'proposal';
+  planningSource?: { text: string; mode: AIMode };
+  internalAlternative?: true;
+}
 export interface AIAssistantDraft { prompt: string; mode: AIMode; recoverableRequest: AIRequest | null }
 type DraftStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 const modes: AIMode[] = ['chat', 'breakdown', 'analyze', 'generate'];
 const draftKey = (accountId?: string | null) => `karkas_ai_draft:${accountId || 'guest'}`;
 const safeText = (value: unknown): value is string => typeof value === 'string' && !looksLikeGeminiApiKey(value);
+const safeRequest = (value: unknown): AIRequest | null => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const request = value as Record<string, unknown>;
+  if (!safeText(request.text) || !request.text.trim() || !modes.includes(request.mode as AIMode)) return null;
+  const source = request.planningSource && typeof request.planningSource === 'object' && !Array.isArray(request.planningSource)
+    ? request.planningSource as Record<string, unknown> : null;
+  const planningSource = source && safeText(source.text) && source.text.trim() && modes.includes(source.mode as AIMode)
+    ? { text: source.text, mode: source.mode as AIMode } : null;
+  if (request.internalAlternative === true && !planningSource) return null;
+  return {
+    text: request.text,
+    mode: request.mode as AIMode,
+    ...(request.purpose === 'proposal' ? { purpose: 'proposal' as const } : {}),
+    ...(planningSource ? { planningSource, ...(request.internalAlternative === true ? { internalAlternative: true as const } : {}) } : {}),
+  };
+};
 
 export function readAIAssistantDraft(storage: DraftStorage, accountId?: string | null): AIAssistantDraft | null {
   try {
     const value = JSON.parse(storage.getItem(draftKey(accountId)) || 'null');
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-    const request = value.recoverableRequest;
     return {
       prompt: safeText(value.prompt) ? value.prompt : '',
       mode: modes.includes(value.mode) ? value.mode : 'chat',
-      recoverableRequest: request && safeText(request.text) && request.text.trim() && modes.includes(request.mode)
-        ? { text: request.text, mode: request.mode, ...(request.purpose === 'proposal' ? { purpose: 'proposal' as const } : {}) } : null,
+      recoverableRequest: safeRequest(value.recoverableRequest),
     };
   } catch { return null; }
 }
 
 export function saveAIAssistantDraft(storage: DraftStorage, draft: AIAssistantDraft, accountId?: string | null): boolean {
   try {
-    const safeDraft = { ...draft, prompt: safeText(draft.prompt) ? draft.prompt : '',
-      recoverableRequest: draft.recoverableRequest && safeText(draft.recoverableRequest.text) ? draft.recoverableRequest : null };
+    const safeDraft: AIAssistantDraft = {
+      prompt: safeText(draft.prompt) ? draft.prompt : '',
+      mode: modes.includes(draft.mode) ? draft.mode : 'chat',
+      recoverableRequest: safeRequest(draft.recoverableRequest),
+    };
     if (safeDraft.prompt || safeDraft.recoverableRequest) storage.setItem(draftKey(accountId), JSON.stringify(safeDraft));
     else storage.removeItem(draftKey(accountId));
     return true;
@@ -71,7 +94,9 @@ export function readAIResponse(value: unknown, mode: AIMode): AIResponse & { use
     || hasInvalidText(item, ['title', 'note', 'phase']) || hasInvalidSteps(item) || (item.steps !== undefined && typeof item.steps !== 'number'))) throw new AIRequestError('INVALID_RESPONSE');
   if (record.tabs?.some((item: Record<string, unknown>) => typeof item.id !== 'string' || typeof item.name !== 'string' || hasInvalidText(item, ['color']))) throw new AIRequestError('INVALID_RESPONSE');
   if (record.taskUpdates?.some((item: Record<string, unknown>) => typeof item.id !== 'string' || hasInvalidText(item, ['title', 'note', 'phase']) || hasInvalidSteps(item))) throw new AIRequestError('INVALID_RESPONSE');
-  if (record.taskDeletions?.some((item: Record<string, unknown>) => typeof item.id !== 'string')) throw new AIRequestError('INVALID_RESPONSE');
+  if (record.taskDeletions?.some((item: Record<string, unknown>) => typeof item.id !== 'string'
+    || hasInvalidText(item, ['reason'])
+    || (item.deletionReason !== undefined && item.deletionReason !== 'accidental' && item.deletionReason !== 'cancelled'))) throw new AIRequestError('INVALID_RESPONSE');
   if (record.categoryHealth?.some((item: Record<string, unknown>) => hasInvalidText(item, ['phase', 'phaseName', 'status', 'recommendation']) || (item.taskCount !== undefined && typeof item.taskCount !== 'number'))) throw new AIRequestError('INVALID_RESPONSE');
   if (record.workloadDiagnosis && (typeof record.workloadDiagnosis !== 'object' || Array.isArray(record.workloadDiagnosis)
     || hasInvalidText(record.workloadDiagnosis, ['status']) || ['bottlenecks', 'strengths'].some(field => record.workloadDiagnosis[field] !== undefined

@@ -23,6 +23,37 @@ test('deleted task retains countdown state and deletion timestamp', () => {
   assert.equal(value.countdownRemainingSeconds, 900);
 });
 
+test('archive intent survives cloud serialization without omitting recoverable accidental tasks', () => {
+  for (const deletionReason of ['accidental', 'cancelled'] as const) {
+    for (const done of [false, true]) {
+      const archived: DeletedTask = { ...task, done, deletedAt: 50, deletionReason };
+      const saved = structuredClone(archived);
+      const value = serializeTaskForCloud(archived);
+      assert.equal(value.deletionReason, deletionReason);
+      assert.equal(value.done, done);
+      assert.equal(value.deletedAt, 50);
+      assert.equal(value.timeSpentSeconds, task.timeSpentSeconds);
+      assert.deepEqual(archived, saved);
+    }
+  }
+});
+
+test('legacy unknown archive intent remains absent and invalid reasons are not sent', () => {
+  const unknown: DeletedTask = { ...task, deletedAt: 50 };
+  assert.equal('deletionReason' in serializeTaskForCloud(unknown), false);
+  for (const deletionReason of [undefined, null, 'completed', 'dropped', '']) {
+    const invalid = { ...unknown, deletionReason } as unknown as DeletedTask;
+    assert.equal('deletionReason' in serializeTaskForCloud(invalid), false);
+  }
+});
+
+test('current tasks do not retain stray archive classification in their cloud payload', () => {
+  const restored = { ...task, deletionReason: 'accidental' };
+  const value = serializeTaskForCloud(restored);
+  assert.equal('deletedAt' in value, false);
+  assert.equal('deletionReason' in value, false);
+});
+
 test('active timers including timestamp zero survive cloud serialization', () => {
   const value = serializeTaskForCloud({ ...task, timerRunning: true, timerStartedAt: 0 });
   assert.equal(value.timerRunning, true);

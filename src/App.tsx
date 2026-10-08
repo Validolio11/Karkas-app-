@@ -3,7 +3,8 @@ import { applyAITaskUpdate } from './utils/aiTaskUpdates';
 import { applyAITimerSettings, isAITimerSettingsValid } from './utils/aiTaskTimer';
 import { isNewerAppVersion, isValidAppVersion } from './utils/appVersion';
 import React, { useState, useEffect, useMemo } from 'react';
-import { PSTask, DeletedTask, TaskTab, FilterMode, WorkflowStats, TaskStepItem, AdaptiveProfile, AITaskUpdate, AITimerSettings, NotepadNote, NewTaskInput } from './types';
+import { PSTask, DeletedTask, TaskTab, FilterMode, WorkflowStats, TaskStepItem, AdaptiveProfile, AITaskUpdate, AITimerSettings, AIDeletedTaskRef, NotepadNote, NewTaskInput } from './types';
+import { isCompletedArchivedTask, selectRelevantArchivedTasks } from './utils/taskArchive';
 import { TaskCard } from './components/TaskCard';
 import { DashboardView } from './components/DashboardView';
 import { NotepadView } from './components/NotepadView';
@@ -482,7 +483,7 @@ export default function App() {
           fullAppContext: {
             activeTasks: activeTasks.map((t) => ({ title: t.title, phase: t.phase, priority: t.priority })),
             completedTasks: completedTasks.map((t) => ({ title: t.title, phase: t.phase })),
-            deletedTasks: deletedTasks.slice(0, 10).map((t) => ({ title: t.title })),
+            deletedTasks: selectRelevantArchivedTasks(tasks, deletedTasks).slice(0, 10).map((t) => ({ title: t.title, done: t.done, deletionReason: t.deletionReason })),
             tabs: tabs.map((tb) => ({ id: tb.id, name: tb.name })),
             stats,
           },
@@ -1231,22 +1232,22 @@ export default function App() {
   }, [tasks, tabs]);
 
   const adaptiveProfile: AdaptiveProfile = useMemo(() => {
-    const completedTasks = tasks.filter((task) => task.done && task.completedAt);
-    const trackedTasks = tasks.length + deletedTasks.length;
+    const archivedRelevant = selectRelevantArchivedTasks(tasks, deletedTasks);
+    const tracked = [...tasks, ...archivedRelevant];
+    const completedTasks = tracked.filter((task) => task.done);
+    const trackedTasks = tracked.length;
     const completionRate = trackedTasks > 0 ? Math.round((completedTasks.length / trackedTasks) * 100) : 0;
     const averageCompletionMinutes = completedTasks.length > 0
       ? Math.round(completedTasks.reduce((total, task) => total + (task.timeSpentSeconds || 0), 0) / completedTasks.length / 60)
       : 0;
-    const tasksWithSteps = tasks.filter((task) => task.steps > 0);
+    const tasksWithSteps = tracked.filter((task) => task.steps > 0);
     const averageStepCount = tasksWithSteps.length > 0
       ? Math.round((tasksWithSteps.reduce((total, task) => total + task.steps, 0) / tasksWithSteps.length) * 10) / 10
       : 0;
     const completedByPhase = new Map<string, number>();
     const activeByPhase = new Map<string, number>();
-    tasks.forEach((task) => {
-      const bucket = task.done ? completedByPhase : activeByPhase;
-      bucket.set(task.phase, (bucket.get(task.phase) || 0) + 1);
-    });
+    completedTasks.forEach(task => completedByPhase.set(task.phase, (completedByPhase.get(task.phase) || 0) + 1));
+    tasks.filter(task => !task.done).forEach(task => activeByPhase.set(task.phase, (activeByPhase.get(task.phase) || 0) + 1));
     const preferredPhases = [...completedByPhase.entries()]
       .sort((a, b) => b[1] - a[1])
       .slice(0, 3)
@@ -1270,6 +1271,13 @@ export default function App() {
       urgentLoad,
       recommendedActiveLimit: urgentLoad >= 3 || activeLoad >= 8 ? 3 : 5,
     };
+  }, [tasks, deletedTasks]);
+
+  const completedHistoryCount = useMemo(() => {
+    return new Set([
+      ...tasks.filter(task => task.done).map(task => task.id),
+      ...selectRelevantArchivedTasks(tasks, deletedTasks).filter(isCompletedArchivedTask).map(task => task.id),
+    ]).size;
   }, [tasks, deletedTasks]);
 
   // Filtered & Sorted Tasks (Running timers & Pinned on top, then by search, priority, creation)
@@ -1530,16 +1538,36 @@ export default function App() {
 
   const handleUndoDelete = () => {
     if (recentlyDeleted) {
+      const currentArchived = currentDeletedTasksRef.current.find(task => task.id === recentlyDeleted.id);
+      if (!currentArchived || latestTasksRef.current.some(task => task.id === recentlyDeleted.id)) {
+        setRecentlyDeleted(null);
+        return;
+      }
+      const { deletedAt, deletionReason, ...restored } = currentArchived;
       sound.activate();
-      setTasks((prev) => [recentlyDeleted, ...prev]);
+      const safeTask = { ...restored, phase: tabs.some(tab => tab.id === restored.phase) ? restored.phase : tabs[0]?.id || 'focus' };
+      setTasks((prev) => [safeTask, ...prev.filter(task => task.id !== restored.id)]);
       setDeletedTasks((prev) => prev.filter((d) => d.id !== recentlyDeleted.id));
       setRecentlyDeleted(null);
     }
   };
 
+  const handleClassifyDeletedTask = (id: string, deletionReason?: DeletedTask['deletionReason']) => {
+    setDeletedTasks(prev => prev.map(task => {
+      if (task.id !== id) return task;
+      const { deletionReason: previousReason, ...rest } = task;
+      return deletionReason ? { ...rest, deletionReason } : rest;
+    }));
+  };
+
   const handleRestoreDeletedTask = (task: DeletedTask) => {
+    const currentArchived = currentDeletedTasksRef.current.find(item => item.id === task.id);
+    if (!currentArchived || latestTasksRef.current.some(item => item.id === task.id)) {
+      setRecentlyDeleted(prev => prev?.id === task.id ? null : prev);
+      return;
+    }
     sound.activate();
-    const { deletedAt, ...restTask } = task;
+    const { deletedAt, deletionReason, ...restTask } = currentArchived;
     const fallbackTab = tabs[0]?.id || 'focus';
     const safeTask = reopenTask({
       ...restTask,
@@ -1547,21 +1575,29 @@ export default function App() {
     }, Date.now());
     setTasks((prev) => [safeTask, ...prev.filter(existing => existing.id !== task.id)]);
     setDeletedTasks((prev) => prev.filter((d) => d.id !== task.id));
+    setRecentlyDeleted(prev => prev?.id === task.id ? null : prev);
     setSelectedPhase('ALL');
     setActiveFilter('ALL');
     setSearchQuery('');
   };
 
   const handlePermanentDeleteTask = (id: string) => {
-    if (!window.confirm(lang === 'uk' ? 'Назавжди видалити це завдання з історії? Відновити його буде неможливо.' : 'Permanently delete this task from history? It cannot be restored.')) return;
+    const task = currentDeletedTasksRef.current.find(item => item.id === id);
+    if (!task) return;
+    const confirmation = isCompletedArchivedTask(task)
+      ? (lang === 'uk' ? 'Назавжди видалити виконане завдання? Воно зникне з історії та статистики. Відновити його буде неможливо.' : 'Permanently delete this completed task? It will be removed from history and statistics and cannot be restored.')
+      : (lang === 'uk' ? 'Назавжди видалити це завдання з кошика? Відновити його буде неможливо.' : 'Permanently delete this task from trash? It cannot be restored.');
+    if (!window.confirm(confirmation)) return;
     sound.tick(300);
     setDeletedTasks((prev) => prev.filter((d) => d.id !== id));
+    setRecentlyDeleted(prev => prev?.id === id ? null : prev);
   };
 
   const handleClearDeletedHistory = () => {
-    if (deletedTasks.length && !window.confirm(lang === 'uk' ? 'Назавжди очистити історію видалених завдань? Відновити їх буде неможливо.' : 'Permanently clear deleted history? These tasks cannot be restored.')) return;
+    // HistoryView shows the single explicit confirmation; completed milestones stay intact.
     sound.tick(250);
-    setDeletedTasks([]);
+    setDeletedTasks(prev => selectRelevantArchivedTasks(latestTasksRef.current, prev).filter(isCompletedArchivedTask));
+    setRecentlyDeleted(null);
   };
 
   const handleAddTask = (newTask: NewTaskInput) => {
@@ -1589,7 +1625,7 @@ export default function App() {
     newTasks: (Omit<PSTask, 'id' | 'currentStep' | 'done' | 'pinned' | 'createdAt'> & AITimerSettings)[] = [],
     requestedTabs: TaskTab[] = [],
     taskUpdates: AITaskUpdate[] = [],
-    deletedTaskIds: string[] = [],
+    deletedTaskRefs: (string | AIDeletedTaskRef)[] = [],
   ) => {
     const currentTaskIds = new Set(latestTasksRef.current.map(task => task.id));
     const knownIds = new Set(tabs.map((tab) => tab.id));
@@ -1619,7 +1655,13 @@ export default function App() {
       }
       updatesMap.set(up.id, up);
     }
-    const toDeleteSet = new Set(deletedTaskIds);
+    const toDeleteSet = new Set(deletedTaskRefs.map(ref => typeof ref === 'string' ? ref : ref.id));
+    const deletionReasons = new Map<string, DeletedTask['deletionReason']>();
+    for (const ref of deletedTaskRefs) {
+      if (typeof ref !== 'string' && (ref.deletionReason === 'accidental' || ref.deletionReason === 'cancelled')) {
+        deletionReasons.set(ref.id, ref.deletionReason);
+      }
+    }
 
     if (updatesMap.size > 0 || toDeleteSet.size > 0) {
       setTasks((prev) => {
@@ -1627,7 +1669,8 @@ export default function App() {
         const nextList = prev
           .filter((t) => {
             if (toDeleteSet.has(t.id)) {
-              deletedToArchive.push({ ...pauseTaskTimer(t), deletedAt: Date.now() });
+              const deletionReason = deletionReasons.get(t.id);
+              deletedToArchive.push({ ...pauseTaskTimer(t), deletedAt: Date.now(), ...(deletionReason ? { deletionReason } : {}) });
               return false;
             }
             return true;
@@ -1639,7 +1682,8 @@ export default function App() {
           });
 
         if (deletedToArchive.length > 0) {
-          setDeletedTasks((prevDeleted) => [...deletedToArchive, ...prevDeleted]);
+          const archivedIds = new Set(deletedToArchive.map(task => task.id));
+          setDeletedTasks((prevDeleted) => [...deletedToArchive, ...prevDeleted.filter(task => !archivedIds.has(task.id))]);
         }
         return nextList;
       });
@@ -1676,7 +1720,8 @@ export default function App() {
       .filter((t) => t.done)
       .map((t) => ({ ...t, deletedAt: Date.now() }));
     if (completedToArchive.length > 0) {
-      setDeletedTasks((prev) => [...completedToArchive, ...prev]);
+      const archivedIds = new Set(completedToArchive.map(task => task.id));
+      setDeletedTasks((prev) => [...completedToArchive, ...prev.filter(task => !archivedIds.has(task.id))]);
     }
     setTasks((prev) => prev.filter((t) => !t.done));
   };
@@ -1697,6 +1742,8 @@ export default function App() {
     setSoundEnabled(!soundEnabled);
   };
 
+  const recentlyDeletedArchive = recentlyDeleted ? deletedTasks.find(task => task.id === recentlyDeleted.id) : undefined;
+
   return (
     <div className="min-h-screen bg-[#030303] text-[#f4f4f5] flex flex-col selection:bg-white selection:text-black relative overflow-x-clip">
       {/* Dynamic Fire Embers & Sparks Background */}
@@ -1713,7 +1760,7 @@ export default function App() {
         isAddOpen={isAddOpen}
         lang={lang}
         aiIconVariant={aiIconVariant}
-        historyCount={tasks.filter((t) => t.done).length + deletedTasks.length}
+        historyCount={completedHistoryCount}
         notesCount={notes.length}
         user={currentUser}
         isSyncing={isSyncing}
@@ -1844,6 +1891,7 @@ export default function App() {
             onRestoreDeleted={handleRestoreDeletedTask}
             onPermanentDelete={handlePermanentDeleteTask}
             onClearDeleted={handleClearDeletedHistory}
+            onClassifyDeleted={handleClassifyDeletedTask}
           />
         ) : (
           <>
@@ -2004,26 +2052,55 @@ export default function App() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 20, transition: { duration: 0.15 } }}
-              className="fixed bottom-20 left-1/2 -translate-x-1/2 z-40 bg-neutral-900 border border-neutral-700 px-4 py-2.5 flex items-center gap-3 shadow-2xl text-xs font-sans"
+              className="fixed bottom-24 left-1/2 -translate-x-1/2 z-40 w-[calc(100%-2rem)] max-w-xl bg-neutral-900 border border-neutral-700 p-3 flex flex-col gap-2 shadow-2xl text-sm font-sans"
             >
-              <span className="text-neutral-300">
+              <div className="flex items-start justify-between gap-3">
+              <span className="text-neutral-300 break-words" role="status">
                 {t.opRemoved} "{recentlyDeleted.title.slice(0, 26)}{recentlyDeleted.title.length > 26 ? '...' : ''}"
+                <span className="block text-neutral-400 mt-1 text-xs">
+                  {recentlyDeletedArchive?.deletionReason === 'accidental'
+                    ? (lang === 'uk' ? 'Додано помилково. Не враховується у статистиці та AI.' : 'Added by mistake. Excluded from statistics and AI.')
+                    : recentlyDeletedArchive?.deletionReason === 'cancelled' && !recentlyDeleted.done
+                    ? (lang === 'uk' ? 'Позначено як скасоване, окремо від виконаних.' : 'Marked cancelled, separate from completed tasks.')
+                    : recentlyDeleted.done
+                    ? (lang === 'uk' ? 'Виконання збережено в історії.' : 'Completion is preserved in history.')
+                    : (lang === 'uk' ? 'Не враховується у статистиці та AI, доки причину не уточнено.' : 'Excluded from statistics and AI until the reason is specified.')}
+                </span>
               </span>
-              <button
-                id="undo-delete-btn"
-                onClick={handleUndoDelete}
-                className="text-white font-extrabold underline hover:text-neutral-300 cursor-pointer"
-              >
-                {t.undo}
-              </button>
               <button
                 type="button"
                 onClick={() => setRecentlyDeleted(null)}
-                className="text-neutral-500 hover:text-white ml-1 font-bold text-xs p-0.5 cursor-pointer transition-colors"
-                title={lang === 'uk' ? 'Закрити' : 'Close'}
+                className="min-w-11 min-h-11 shrink-0 text-neutral-400 hover:text-white cursor-pointer transition-colors"
+                aria-label={lang === 'uk' ? 'Закрити повідомлення' : 'Dismiss notification'}
               >
-                ✕
+                <X className="w-5 h-5 mx-auto" />
               </button>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+              <button
+                id="undo-delete-btn"
+                onClick={handleUndoDelete}
+                className="min-h-11 px-3 text-white font-bold underline hover:text-neutral-300 cursor-pointer"
+              >
+                {lang === 'uk' ? 'Відновити' : 'Restore'}
+              </button>
+              <button
+                type="button"
+                aria-pressed={recentlyDeletedArchive?.deletionReason === 'accidental'}
+                onClick={() => handleClassifyDeletedTask(recentlyDeleted.id, 'accidental')}
+                className="min-h-11 px-3 border border-neutral-700 text-neutral-300 hover:text-white hover:border-white cursor-pointer"
+              >
+                {lang === 'uk' ? 'Додано помилково' : 'Added by mistake'}
+              </button>
+              {!recentlyDeleted.done && <button
+                type="button"
+                aria-pressed={recentlyDeletedArchive?.deletionReason === 'cancelled'}
+                onClick={() => handleClassifyDeletedTask(recentlyDeleted.id, 'cancelled')}
+                className="min-h-11 px-3 border border-neutral-700 text-neutral-300 hover:text-white hover:border-white cursor-pointer"
+              >
+                {lang === 'uk' ? 'Скасовано' : 'Cancelled'}
+              </button>}
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
@@ -2090,7 +2167,7 @@ export default function App() {
             <span className="text-neutral-200 font-bold">
               {selectedPhase === 'NOTES'
                 ? `${notes.length} ${lang === 'uk' ? (notes.length === 1 ? 'нотатка' : notes.length < 5 ? 'нотатки' : 'нотаток') : (notes.length === 1 ? 'note' : 'notes')}`
-                : selectedPhase === 'HISTORY' ? `${tasks.filter(task => task.done).length + deletedTasks.length} ${lang === 'uk' ? 'В ІСТОРІЇ' : 'IN HISTORY'}`
+                : selectedPhase === 'HISTORY' ? `${completedHistoryCount} ${lang === 'uk' ? 'ВИКОНАНО В ІСТОРІЇ' : 'COMPLETED IN HISTORY'}`
                 : selectedPhase === 'DASHBOARD' ? `${tasks.length} ${lang === 'uk' ? 'ЗАВДАНЬ' : 'TASKS'}` : `${filteredTasks.length} ${t.shownCount}`}
             </span>
             {selectedPhase !== 'NOTES' && tasks.some((t) => t.done) && (

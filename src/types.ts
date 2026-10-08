@@ -50,6 +50,7 @@ export type NewTaskInput = Pick<PSTask, 'title' | 'phase' | 'priority' | 'steps'
 
 export interface DeletedTask extends PSTask {
   deletedAt: number;
+  deletionReason?: 'accidental' | 'cancelled'; // Missing on legacy records: intent is unknown.
 }
 
 export interface NotepadNote {
@@ -109,6 +110,7 @@ export interface AITaskUpdate extends AITimerSettings {
 export interface AIDeletedTaskRef {
   id: string;
   reason?: string;
+  deletionReason?: 'accidental' | 'cancelled';
 }
 
 export interface AIResponse {

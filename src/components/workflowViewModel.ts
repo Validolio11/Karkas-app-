@@ -1,4 +1,5 @@
 import type { AnalyticsPeriod, DeletedTask, PSTask, TaskStepItem } from '../types';
+import { isCancelledArchivedTask, isCompletedArchivedTask, selectRelevantArchivedTasks } from '../utils/taskArchive';
 
 export function getPeriodBounds(period: AnalyticsPeriod, now: Date) {
   const year = now.getFullYear();
@@ -16,16 +17,17 @@ export function getPeriodBounds(period: AnalyticsPeriod, now: Date) {
 export function selectPeriodTasks(tasks: PSTask[], deletedTasks: DeletedTask[], period: AnalyticsPeriod, now: Date) {
   const { start, end } = getPeriodBounds(period, now);
   const inPeriod = (timestamp: number) => Number.isFinite(timestamp) && timestamp >= start && timestamp <= end;
+  const relevantArchive = selectRelevantArchivedTasks(tasks, deletedTasks);
   // Older saved tasks can lack a completion date. Preserve their historical fallback.
   const completedInPeriod = tasks.filter(task => task.done && inPeriod(task.completedAt || task.createdAt));
-  const deletedCompleted = deletedTasks.filter(task => task.done && inPeriod(task.completedAt || task.createdAt));
+  const deletedCompleted = relevantArchive.filter(task => isCompletedArchivedTask(task) && inPeriod(task.completedAt || task.createdAt));
   return {
     activeInPeriod: tasks.filter(task => !task.done && inPeriod(task.createdAt)),
     completedInPeriod,
     deletedCompleted,
-    deletedInPeriod: deletedTasks.filter(task => inPeriod(task.deletedAt)),
-    droppedInPeriod: deletedTasks.filter(task => !task.done && inPeriod(task.deletedAt)),
-    createdInPeriod: [...tasks, ...deletedTasks].filter(task => inPeriod(task.createdAt)),
+    deletedInPeriod: relevantArchive.filter(task => inPeriod(task.deletedAt)),
+    droppedInPeriod: relevantArchive.filter(task => isCancelledArchivedTask(task) && inPeriod(task.deletedAt)),
+    createdInPeriod: [...tasks, ...relevantArchive].filter(task => inPeriod(task.createdAt)),
   };
 }
 

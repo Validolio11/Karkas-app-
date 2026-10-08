@@ -84,10 +84,13 @@ test("empty productivity history reports zero tasks and grade C", async () => {
   assert.match(result.data.periodRetrospective, /Delivered 0 \(0%/);
 });
 
-test("explicit zero period metrics are preserved despite older completed tasks", async () => {
+test("period results come from task dates rather than contaminated client aggregates", async () => {
+  const previousMonth = new Date();
+  previousMonth.setDate(0);
   const result = await post("recommendations", {
-    lang: "en", tasks: [{ title: "Old result", done: true }],
-    periodMetrics: { totalCreated: 0, totalCompleted: 0, totalDeleted: 0, successRate: 0 },
+    period: "THIS_MONTH", lang: "en",
+    tasks: [{ title: "Old result", done: true, createdAt: previousMonth.getTime(), completedAt: previousMonth.getTime() }],
+    periodMetrics: { totalCreated: 100, totalCompleted: 100, totalDeleted: 0, successRate: 100 },
   });
   assert.equal(result.status, 200);
   assert.match(result.data.periodRetrospective, /tracked 0 tasks/);
@@ -95,14 +98,83 @@ test("explicit zero period metrics are preserved despite older completed tasks",
 });
 
 test("grade requires both enough delivered tasks and the matching success rate", async () => {
-  for (const [completed, successRate, grade] of [[5, 100, "C"], [6, 50, "B"], [10, 65, "A"],
-    [15, 80, "A+"], [20, 90, "S"], [20, 49, "C"]] as const) {
+  const timestamp = Date.now();
+  for (const [completed, cancelled, successRate, grade] of [[5, 0, 100, "C"], [6, 6, 50, "B"], [10, 5, 67, "A"],
+    [15, 3, 83, "A+"], [20, 2, 91, "S"], [20, 3, 87, "A+"], [20, 21, 49, "C"]] as const) {
     const result = await post("recommendations", {
-      period: "THIS_MONTH", periodMetrics: { totalCompleted: completed, successRate },
+      period: "THIS_MONTH", lang: "en",
+      tasks: Array.from({ length: completed }, (_, index) => ({ title: `Delivered ${index}`, done: true, createdAt: timestamp, completedAt: timestamp })),
+      deletedTasks: Array.from({ length: cancelled }, (_, index) => ({ title: `Cancelled ${index}`, done: false, deletionReason: "cancelled", createdAt: timestamp, deletedAt: timestamp })),
+      periodMetrics: { totalCompleted: 1000, successRate: 100 },
     });
     assert.equal(result.status, 200);
     assert.equal(result.data.productivityGrade, grade, `${completed}/${successRate}`);
+    assert.match(result.data.periodRetrospective, new RegExp(`Delivered ${completed} \\(${successRate}%`));
   }
+});
+
+test("period recommendations separate completed archives and cancellations while excluding accidental and unclassified work", async () => {
+  const timestamp = Date.now();
+  const previousMonth = new Date(timestamp);
+  previousMonth.setDate(0);
+  const older = previousMonth.getTime();
+  const archived = (title: string, done: boolean, deletionReason?: string, dates: any = {}) => ({
+    title, phase: "focus", priority: 2, done, createdAt: timestamp, deletedAt: timestamp, deletionReason, ...dates,
+  });
+  const result = await post("recommendations", {
+    period: "THIS_MONTH", lang: "en",
+    tasks: [
+      { title: "Active", done: false, createdAt: timestamp },
+      { title: "Delivered", done: true, createdAt: timestamp, completedAt: timestamp },
+      archived("Accident in live input", true, "accidental"),
+      archived("Unknown archive in live input", false),
+    ],
+    deletedTasks: [
+      archived("Legacy completed archive", true),
+      archived("Completed archive with cancellation label", true, "cancelled"),
+      archived("Completed now after older creation", true, undefined, { createdAt: older, completedAt: timestamp }),
+      archived("Explicit cancellation", false, "cancelled"),
+      archived("Accidental completed entry", true, "accidental"),
+      archived("Accidental unfinished entry", false, "accidental"),
+      archived("Unclassified unfinished archive", false),
+      archived("Earlier cancellation", false, "cancelled", { createdAt: older, deletedAt: older }),
+      archived("Earlier completion archived now", true, undefined, { createdAt: older, completedAt: older }),
+    ],
+    periodMetrics: { totalCreated: 500, totalCompleted: 400, totalDeleted: 100, totalActive: 300, successRate: 1 },
+  });
+  assert.equal(result.status, 200);
+  assert.match(result.data.periodRetrospective, /tracked 5 tasks/);
+  assert.match(result.data.periodRetrospective, /Delivered 4 \(80%/);
+  assert.match(result.data.dropoffAnalysis, /^1 unfinished tasks were deliberately cancelled/);
+  assert.equal(result.data.productivityGrade, "C");
+  assert.doesNotMatch(JSON.stringify(result.data), /Accident|Unknown archive|Unclassified|Earlier cancellation/);
+});
+
+test("offline analysis counts completed history and explicit cancellations without trusting client statistics", async () => {
+  const timestamp = Date.now();
+  const result = await post("assist", {
+    prompt: "Audit my workflow", action: "analyze", lang: "en",
+    fullAppContext: {
+      activeTasks: [
+        { title: "Active", done: false },
+        { title: "Accidental live entry", done: false, deletionReason: "accidental" },
+        { title: "Archived unfinished entry", done: false, deletedAt: timestamp },
+      ],
+      completedTasks: [{ title: "Delivered", done: true }],
+      deletedTasks: [
+        { title: "Completed history", done: true, deletedAt: timestamp },
+        { title: "Cancelled history", done: false, deletionReason: "cancelled", deletedAt: timestamp },
+        { title: "Accidental history", done: true, deletionReason: "accidental", deletedAt: timestamp },
+        { title: "Unclassified history", done: false, deletedAt: timestamp },
+      ],
+      stats: { total: 999, completed: 999, percent: 100 },
+      adaptiveProfile: { trackedTasks: 999, completedTasks: 999, activeLoad: 999 },
+    },
+  });
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.data.analyzedContext, { activeCount: 1, completedCount: 2, tabsCount: 0 });
+  assert.match(result.data.summary, /1 active tasks, 2 completed/);
+  assert.match(result.data.summary, /Deliberately cancelled: 1, counted separately/);
 });
 
 test("offline assistance retains user categories and consistent substep counts", async () => {

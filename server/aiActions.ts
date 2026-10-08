@@ -35,7 +35,10 @@ export const taskMutationProperties = {
     description: 'Delete entire existing tasks only; never use to delete a subtask.',
     items: {
       type: Type.OBJECT,
-      properties: { id: { type: Type.STRING }, reason: { type: Type.STRING } },
+      properties: {
+        id: { type: Type.STRING }, reason: { type: Type.STRING },
+        deletionReason: { type: Type.STRING, enum: ['accidental', 'cancelled'], description: 'Only for an explicit user request: accidental means added by mistake; cancelled means deliberately cancelled. Omit for ordinary deletion or an unclear reason.' },
+      },
       required: ['id'],
     },
   },
@@ -49,6 +52,8 @@ APPLICATION ACTION CONTRACT:
 - "tasks" is ONLY for genuinely NEW top-level tasks. To add, remove, rename, complete, or break down subtasks of an EXISTING task, use "taskUpdates" with that parent's exact id and the COMPLETE resulting "stepList". Never create a duplicate parent or a top-level task for a requested subtask.
 - Preserve all unrelated subtasks, their exact ids, order and done states. Omit id for new subtasks; new subtasks default to done:false. Remove only requested items; stepList:[] removes all subtasks. Omit stepList when no subtask change was requested.
 - "taskDeletions" archives an ENTIRE task, never a subtask. Use only IDs present in the current workspace; never invent target IDs. If the target is ambiguous, ask a short clarification with no mutations.
+- Ordinary deletion has an unknown reason: omit deletionReason. Use deletionReason:"accidental" only when the user explicitly says that the task was added by mistake, and "cancelled" only for explicit deliberate cancellation. Never infer a reason from the task title, notes, incomplete progress, elapsed time, or earlier conversation. Present the reason in the proposal awaiting the user's review; do not claim the task was already deleted.
+- Productivity context distinguishes unfinished active work, completed work, and deliberate cancellations. Unfinished active tasks are not failures or cancellations. Deliberately cancelled tasks are not completed; their cancellation alone does not reveal the user's motives. Accidental entries and unclassified unfinished archives are excluded from productivity statistics and must not be inferred from conversation as failures.
 - Return only requested changes. Advice/questions alone need no mutations. A breakdown of an existing task needs taskUpdates, not tasks.
 - Omit optional fields when unused; do not fill them with null. Use empty arrays for unused action lists. A new task without requested subtasks may use steps:0,stepList:[]. Do not invent subtasks just to attach a timer.
 - Changes are proposals awaiting the user's Apply button. Do not claim they were applied. The current workspace is authoritative; conversation can contain unapplied or rejected proposals.
@@ -81,7 +86,7 @@ export function normalizeAIOptionalFields(parsed: Record<string, any>) {
     if (Array.isArray(item?.stepList)) item.stepList = item.stepList.map((step: any) => omitOptionalNulls(step, ['id', 'done']));
     return item;
   });
-  if (Array.isArray(normalized.taskDeletions)) normalized.taskDeletions = normalized.taskDeletions.map((item: any) => omitOptionalNulls(item, ['reason']));
+  if (Array.isArray(normalized.taskDeletions)) normalized.taskDeletions = normalized.taskDeletions.map((item: any) => omitOptionalNulls(item, ['reason', 'deletionReason']));
   return normalized;
 }
 
@@ -125,6 +130,8 @@ export function validateTaskMutations(parsed: any, tasks: ({ id: string } & Time
     for (const item of parsed[field]) {
       if (!item || !ids.has(item.id) || seen.has(item.id)) throw new Error(`Invalid or duplicate ${field} target`);
       seen.add(item.id);
+      if (field === 'taskDeletions' && item.deletionReason !== undefined && !['accidental', 'cancelled'].includes(item.deletionReason)) throw new Error('Invalid deletion reason');
+      if (field === 'taskDeletions' && item.reason !== undefined && typeof item.reason !== 'string') throw new Error('Invalid deletion note');
       if (field === 'taskUpdates') {
         const editableFields = ['title', 'phase', 'priority', 'note', 'done', 'steps', 'stepList', 'timerMode', 'countdownDurationSeconds', 'timerAction'];
         if (!editableFields.some(key => item[key] !== undefined)) throw new Error('Task update contains no supported changes');

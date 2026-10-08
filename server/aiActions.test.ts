@@ -15,6 +15,22 @@ test('structured output exposes subtask replacement and entire-task deletion sep
   assert.ok(fields.stepList.items.properties.id);
   assert.ok(fields.stepList.items.properties.done);
   assert.ok(taskMutationProperties.taskDeletions.items.properties.id);
+  assert.deepEqual(taskMutationProperties.taskDeletions.items.properties.deletionReason.enum, ['accidental', 'cancelled']);
+  assert.deepEqual(taskMutationProperties.taskDeletions.items.required, ['id']);
+});
+
+test('deletion reason stays optional, preserves explicit intent and rejects unknown enum values', () => {
+  for (const deletionReason of ['accidental', 'cancelled']) {
+    const deletion = { id: 'parent', reason: 'Explicit user request', deletionReason };
+    assert.deepEqual(validateTaskMutations({ taskDeletions: [deletion] }, [parent]).taskDeletions, [deletion]);
+  }
+  const deletion = { id: 'parent', reason: null, deletionReason: null };
+  assert.deepEqual(validateTaskMutations({ taskDeletions: [deletion] }, [parent]).taskDeletions, [{ id: 'parent' }]);
+  assert.equal(deletion.deletionReason, null, 'normalization must not alter the original proposal');
+  for (const deletionReason of ['unknown', 'cancelled ', '', 1, false, {}, []]) {
+    assert.throws(() => validateTaskMutations({ taskDeletions: [{ id: 'parent', deletionReason }] }, [parent]), /Invalid deletion reason/);
+  }
+  assert.throws(() => validateTaskMutations({ taskDeletions: [{ id: 'parent', reason: 123 }] }, [parent]), /Invalid deletion note/);
 });
 
 test('timer contract exposes real configuration and explicit actions', () => {

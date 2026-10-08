@@ -35,8 +35,26 @@ import {
 import { AIIcon, AIIconId } from './AIIconTemplates';
 import { ActivityChart } from './ActivityChart';
 import { karkasApiFetch } from '../utils/desktopApi';
+import { selectRelevantArchivedTasks } from '../utils/taskArchive';
 
-const AI_ANALYSIS_STORAGE_KEY_PREFIX = 'karkas_ai_dashboard_analysis_cache_';
+// Previous cache entries included accidental/unknown deletions in their AI context.
+const AI_ANALYSIS_STORAGE_KEY_PREFIX = 'karkas_ai_dashboard_analysis_cache_archive_v2_';
+const getAnalysisContext = (tasks: PSTask[], archive: DeletedTask[], tabs: TaskTab[]) =>
+  JSON.stringify([tasks, archive, tabs]);
+const getAnalysisLifecycle = (tasks: PSTask[], archive: DeletedTask[]) => ({
+  tasks: tasks.map(({ id, done, completedAt }) => ({ id, done, completedAt })),
+  archive: JSON.stringify(archive.map(({ id, done, deletionReason, deletedAt }) => ({ id, done, deletionReason, deletedAt })).sort((a, b) => a.id.localeCompare(b.id))),
+});
+type AnalysisLifecycle = ReturnType<typeof getAnalysisLifecycle>;
+function hasAnalysisLifecycleChanged(before: AnalysisLifecycle, after: AnalysisLifecycle): boolean {
+  if (before.archive !== after.archive) return true;
+  const previous = new Map(before.tasks.map(task => [task.id, task]));
+  const current = new Map(after.tasks.map(task => [task.id, task]));
+  return before.tasks.some(task => {
+    const next = current.get(task.id);
+    return !next || next.done !== task.done || next.completedAt !== task.completedAt;
+  }) || after.tasks.some(task => task.done && !previous.has(task.id));
+}
 
 export type DailySlotType = 'MORNING' | 'MIDDAY' | 'EVENING';
 
@@ -47,6 +65,7 @@ interface CachedAnalysis {
   slotType: DailySlotType;
   lang: Language;
   period: AnalyticsPeriod;
+  context: string;
 }
 
 const getDailyAnalysisSlot = (d: Date = new Date()): { slotId: string; slotType: DailySlotType } => {
@@ -153,12 +172,17 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
 
   // Selected period for comprehensive historical analytics
   const [selectedPeriod, setSelectedPeriod] = useState<AnalyticsPeriod>('THIS_MONTH');
+  const relevantDeletedTasks = useMemo(() => selectRelevantArchivedTasks(tasks, deletedTasks), [tasks, deletedTasks]);
+  const analysisContext = useMemo(() => getAnalysisContext(tasks, relevantDeletedTasks, tabs), [tasks, relevantDeletedTasks, tabs]);
+  const analysisLifecycle = useMemo(() => getAnalysisLifecycle(tasks, deletedTasks), [tasks, deletedTasks]);
+  const analysisLifecycleRef = useRef(analysisLifecycle);
+  analysisLifecycleRef.current = analysisLifecycle;
 
   // Up-to-date refs for network calls
   const tasksRef = useRef(tasks);
   tasksRef.current = tasks;
-  const deletedTasksRef = useRef(deletedTasks);
-  deletedTasksRef.current = deletedTasks;
+  const deletedTasksRef = useRef(relevantDeletedTasks);
+  deletedTasksRef.current = relevantDeletedTasks;
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
 
@@ -171,7 +195,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
     const currentMonth = now.getMonth();
 
     const { activeInPeriod, completedInPeriod, deletedCompleted, droppedInPeriod, createdInPeriod } =
-      selectPeriodTasks(tasks, deletedTasks, selectedPeriod, now);
+      selectPeriodTasks(tasks, relevantDeletedTasks, selectedPeriod, now);
 
     const totalDelivered = completedInPeriod.length + deletedCompleted.length;
     const totalDropped = droppedInPeriod.length;
@@ -192,7 +216,9 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
       if (t.stepList && t.stepList.length > 0) {
         substepsCount += t.stepList.filter((s) => s.done).length;
       } else {
-        substepsCount += Math.max(1, t.steps || 1);
+        const stepCount = Number.isFinite(t.steps) ? Math.max(0, Math.floor(t.steps)) : 0;
+        const actualProgress = Number.isFinite(t.currentStep) ? Math.max(0, Math.floor(t.currentStep)) : 0;
+        substepsCount += Math.min(stepCount, actualProgress);
       }
     });
 
@@ -297,7 +323,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
         pEnd = nowMs;
       } else {
         // ALL_TIME: find earliest task or default to 30 days
-        const allTimestamps = [...tasks, ...deletedTasks]
+        const allTimestamps = [...tasks, ...relevantDeletedTasks]
           .map((t) => t.createdAt || 0)
           .filter((t) => t > 0);
         const earliest = allTimestamps.length > 0 ? Math.min(...allTimestamps) : nowMs - 30 * 24 * 60 * 60 * 1000;
@@ -413,7 +439,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
       grade,
       gradeReason,
     };
-  }, [tasks, deletedTasks, tabs, selectedPeriod, lang, t.phases]);
+  }, [tasks, relevantDeletedTasks, tabs, selectedPeriod, lang, t.phases]);
 
   // -------------------------------------------------------------
   // AI Recommendations & Period Strategic Retrospective
@@ -425,7 +451,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
       if (raw) {
         const cached: CachedAnalysis = JSON.parse(raw);
         const { slotId } = getDailyAnalysisSlot();
-        if (cached.slotId === slotId && cached.lang === lang && cached.recommendation) {
+        if (cached.slotId === slotId && cached.lang === lang && cached.context === analysisContext && cached.recommendation) {
           return cached.recommendation;
         }
       }
@@ -441,6 +467,19 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
   const [addedTaskTitles, setAddedTaskTitles] = useState<string[]>([]);
   const addedTitlesRef = useRef(new Set<string>());
   const recommendationsRequest = useRef<AbortController | null>(null);
+  const previousAnalysisLifecycle = useRef(analysisLifecycle);
+
+  useEffect(() => {
+    const changed = hasAnalysisLifecycleChanged(previousAnalysisLifecycle.current, analysisLifecycle);
+    previousAnalysisLifecycle.current = analysisLifecycle;
+    // Adding a suggested active task must leave the remaining cards available.
+    if (!changed) return;
+    recommendationsRequest.current?.abort();
+    setRecommendation(null);
+    setLastAnalyzedAt(null);
+    setLastSlotType(null);
+    setIsLoadingRecs(false);
+  }, [analysisLifecycle]);
 
   // Fetch AI Recommendations tailored to current period
   const fetchRecommendations = useCallback(
@@ -450,6 +489,11 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
       recommendationsRequest.current = controller;
       const { slotId, slotType } = getDailyAnalysisSlot();
       const cacheKey = `${AI_ANALYSIS_STORAGE_KEY_PREFIX}${periodToUse}`;
+      const currentTasks = tasksRef.current;
+      const currentDeleted = deletedTasksRef.current;
+      const currentTabs = tabsRef.current;
+      const requestContext = getAnalysisContext(currentTasks, currentDeleted, currentTabs);
+      const requestLifecycle = analysisLifecycleRef.current;
 
       if (!force) {
         try {
@@ -460,7 +504,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
             const isSameLang = cached.lang === lang;
             const isRecent = Date.now() - cached.timestamp < 14 * 60 * 60 * 1000;
 
-            if (isSameSlot && isSameLang && isRecent && cached.recommendation) {
+            if (isSameSlot && isSameLang && isRecent && cached.context === requestContext && cached.recommendation) {
               setRecommendation(cached.recommendation);
               setLastAnalyzedAt(cached.timestamp);
               setLastSlotType(cached.slotType);
@@ -474,9 +518,6 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
       }
 
       setIsLoadingRecs(true);
-      const currentTasks = tasksRef.current;
-      const currentDeleted = deletedTasksRef.current;
-      const currentTabs = tabsRef.current;
 
       try {
         const customKey = localStorage.getItem('karkas_custom_api_key') || '';
@@ -509,7 +550,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
 
         if (!res.ok) throw new Error('Failed to fetch recommendations');
         const data: AIRecommendation = await res.json();
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || recommendationsRequest.current !== controller || hasAnalysisLifecycleChanged(requestLifecycle, analysisLifecycleRef.current)) return;
         if (!Array.isArray(data.suggestedTasks)) throw new Error('Invalid recommendation response');
         setRecommendation(data);
         const timestamp = Date.now();
@@ -523,10 +564,11 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
           slotType,
           lang,
           period: periodToUse,
+          context: requestContext,
         };
         try { localStorage.setItem(cacheKey, JSON.stringify(cacheEntry)); } catch { /* Cache is optional. */ }
       } catch (err) {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || recommendationsRequest.current !== controller || hasAnalysisLifecycleChanged(requestLifecycle, analysisLifecycleRef.current)) return;
         console.warn('Could not load server AI recommendations, using local analytics fallback:', err);
         const isUk = lang === 'uk';
         const primaryTab = currentTabs[0]?.id || 'focus';
@@ -553,9 +595,9 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
             : `Tracked ${analyticsData.totalTracked} tasks for this period (${analyticsData.totalDelivered} completed, ${analyticsData.successRate}% success rate).`,
           dropoffAnalysis: isUk
             ? analyticsData.totalDropped > 0
-              ? `Утилізовано ${analyticsData.totalDropped} неактуальних завдань. Черга залишається чистий та сфокусованою.`
-              : 'Мінімальні втрати завдань: висока точність планування та доведення справ до кінця.'
-            : `${analyticsData.totalDropped} items pruned, keeping your focus tight.`,
+              ? `Скасовано ${analyticsData.totalDropped} незавершених завдань. Вони враховані окремо від виконаних та активних.`
+              : 'За цей період немає завдань, явно позначених як скасовані.'
+            : `${analyticsData.totalDropped} unfinished tasks were explicitly cancelled, separate from active and completed work.`,
           futureStrategy: isUk
             ? 'Зберігайте щотижневе рев’ю та декомпозицію складних завдань на підкроки.'
             : 'Maintain weekly retrospectives and clear stage milestones.',
@@ -593,6 +635,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
           slotType,
           lang,
           period: periodToUse,
+          context: requestContext,
         };
         try { localStorage.setItem(cacheKey, JSON.stringify(fallbackCache)); } catch { /* Cache is optional. */ }
       } finally {
@@ -828,7 +871,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
         completedLabel={tAnalytics.completed}
         deletedLabel={tAnalytics.dropped}
         unitLabel={lang === 'uk' ? '\u041a\u0456\u043b\u044c\u043a\u0456\u0441\u0442\u044c \u0437\u0430\u0432\u0434\u0430\u043d\u044c' : 'Task count'}
-        emptyLabel={lang === 'uk' ? '\u0417\u0430 \u0446\u0435\u0439 \u043f\u0435\u0440\u0456\u043e\u0434 \u0449\u0435 \u043d\u0435\u043c\u0430\u0454 \u0432\u0438\u043a\u043e\u043d\u0430\u043d\u0438\u0445 \u0447\u0438 \u0432\u0438\u0434\u0430\u043b\u0435\u043d\u0438\u0445 \u0437\u0430\u0432\u0434\u0430\u043d\u044c.' : 'No completed or deleted tasks in this period yet.'}
+        emptyLabel={lang === 'uk' ? 'За цей період ще немає виконаних чи явно скасованих завдань.' : 'No completed or explicitly cancelled tasks in this period yet.'}
       />
 
       {/* ------------------------------------------------------------- */}

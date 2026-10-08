@@ -16,6 +16,7 @@ import {
   Timer,
 } from 'lucide-react';
 import { sound } from '../utils/audio';
+import { isCompletedArchivedTask, selectArchivedTasks } from '../utils/taskArchive';
 
 interface HistoryViewProps {
   tasks: PSTask[];
@@ -27,9 +28,10 @@ interface HistoryViewProps {
   onRestoreDeleted: (task: DeletedTask) => void;
   onPermanentDelete: (taskId: string) => void;
   onClearDeleted: () => void;
+  onClassifyDeleted: (taskId: string, reason?: DeletedTask['deletionReason']) => void;
 }
 
-type HistoryTabFilter = 'ALL' | 'COMPLETED' | 'DELETED';
+type HistoryTabFilter = 'COMPLETED' | 'DELETED';
 
 const HistoryViewComponent: React.FC<HistoryViewProps> = ({
   tasks,
@@ -41,18 +43,25 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
   onRestoreDeleted,
   onPermanentDelete,
   onClearDeleted,
+  onClassifyDeleted,
 }) => {
   const t = TRANSLATIONS[lang];
   const hv = t.historyView;
 
-  const [activeSubFilter, setActiveSubFilter] = useState<HistoryTabFilter>('ALL');
+  const [activeSubFilter, setActiveSubFilter] = useState<HistoryTabFilter>('COMPLETED');
   const [searchQuery, setSearchQuery] = useState('');
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const visibleDeletedTasks = useMemo(() => selectArchivedTasks(tasks, deletedTasks), [tasks, deletedTasks]);
+  const clearableCount = visibleDeletedTasks.filter(task => !isCompletedArchivedTask(task)).length;
 
-  // Completed tasks from current active tasks
+  // Completion history stays separate from the recoverable trash.
   const completedTasks = useMemo(() => {
-    return tasks.filter((t) => t.done);
-  }, [tasks]);
+    const completed = new Map(tasks.filter(t => t.done).map(task => [task.id, task]));
+    for (const task of visibleDeletedTasks.filter(isCompletedArchivedTask)) {
+      completed.set(task.id, task);
+    }
+    return [...completed.values()];
+  }, [tasks, visibleDeletedTasks]);
 
   // Tab lookup map for fast tab names & colors
   const tabMap = useMemo(() => {
@@ -66,32 +75,26 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
     type: 'COMPLETED' | 'DELETED';
     task: PSTask | DeletedTask;
     timestamp: number;
+    archived: boolean;
   }
 
   const allHistoryItems = useMemo<HistoryItem[]>(() => {
     const list: HistoryItem[] = [];
 
-    // Add completed tasks
-    completedTasks.forEach((task) => {
-      list.push({
-        type: 'COMPLETED',
-        task,
-        timestamp: task.completedAt || task.createdAt,
-      });
-    });
-
-    // Add deleted tasks
-    deletedTasks.forEach((task) => {
-      list.push({
-        type: 'DELETED',
-        task,
-        timestamp: task.deletedAt,
-      });
-    });
+    if (activeSubFilter === 'COMPLETED') {
+      completedTasks.forEach(task => list.push({
+        type: 'COMPLETED', task, timestamp: task.completedAt || task.createdAt,
+        archived: 'deletedAt' in task,
+      }));
+    } else {
+      visibleDeletedTasks.forEach(task => list.push({
+        type: 'DELETED', task, timestamp: task.deletedAt, archived: true,
+      }));
+    }
 
     // Sort newest timestamp first
     return list.sort((a, b) => b.timestamp - a.timestamp);
-  }, [completedTasks, deletedTasks]);
+  }, [completedTasks, visibleDeletedTasks, activeSubFilter]);
 
   // Filtered by sub-tab and search query
   const filteredItems = useMemo(() => {
@@ -157,7 +160,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
         <div className="flex items-center gap-2 text-xs font-sans flex-wrap">
           <div className="px-2 py-1 bg-black border border-neutral-800 text-neutral-300 flex items-center gap-1.5">
             <span className="text-neutral-500">{hv.totalCount}:</span>
-            <span className="font-bold text-white">{allHistoryItems.length}</span>
+            <span className="font-bold text-white">{completedTasks.length}</span>
           </div>
           <div className="px-2 py-1 bg-black border border-neutral-800 text-neutral-300 flex items-center gap-1.5">
             <CheckCircle2 className="w-3 h-3 text-neutral-300" />
@@ -167,7 +170,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
           <div className="px-2 py-1 bg-black border border-neutral-800 text-neutral-300 flex items-center gap-1.5">
             <Trash2 className="w-3 h-3 text-neutral-400" />
             <span className="text-neutral-500">{hv.deletedCount}:</span>
-            <span className="font-bold text-white">{deletedTasks.length}</span>
+            <span className="font-bold text-white">{visibleDeletedTasks.length}</span>
           </div>
         </div>
       </div>
@@ -177,29 +180,13 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
         {/* Filter Switcher */}
         <div className="flex flex-wrap items-center gap-1">
           <button
-            id="history-filter-all"
-            aria-pressed={activeSubFilter === 'ALL'}
-            onClick={() => {
-              sound.tick(500);
-              setActiveSubFilter('ALL');
-            }}
-            className={`px-2.5 py-1 text-xs font-sans tracking-wider border uppercase transition-all cursor-pointer ${
-              activeSubFilter === 'ALL'
-                ? 'border-white bg-white text-black font-extrabold'
-                : 'border-neutral-800 bg-black text-neutral-400 hover:text-white hover:border-neutral-700'
-            }`}
-          >
-            {hv.all} ({allHistoryItems.length})
-          </button>
-
-          <button
             id="history-filter-completed"
             aria-pressed={activeSubFilter === 'COMPLETED'}
             onClick={() => {
               sound.tick(500);
               setActiveSubFilter('COMPLETED');
             }}
-            className={`flex items-center gap-1 px-2.5 py-1 text-xs font-sans tracking-wider border uppercase transition-all cursor-pointer ${
+            className={`min-h-11 flex items-center gap-1 px-3 py-2 text-sm font-sans border uppercase transition-all cursor-pointer ${
               activeSubFilter === 'COMPLETED'
                 ? 'border-white bg-white text-black font-extrabold'
                 : 'border-neutral-800 bg-black text-neutral-400 hover:text-white hover:border-neutral-700'
@@ -216,14 +203,14 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
               sound.tick(500);
               setActiveSubFilter('DELETED');
             }}
-            className={`flex items-center gap-1 px-2.5 py-1 text-xs font-sans tracking-wider border uppercase transition-all cursor-pointer ${
+            className={`min-h-11 flex items-center gap-1 px-3 py-2 text-sm font-sans border uppercase transition-all cursor-pointer ${
               activeSubFilter === 'DELETED'
                 ? 'border-white bg-white text-black font-extrabold'
                 : 'border-neutral-800 bg-black text-neutral-400 hover:text-white hover:border-neutral-700'
             }`}
           >
             <Trash2 className="w-3 h-3" />
-            <span>{hv.deleted} ({deletedTasks.length})</span>
+            <span>{hv.deleted} ({visibleDeletedTasks.length})</span>
           </button>
         </div>
 
@@ -253,7 +240,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
           </div>
 
           {/* Clear Deleted History Button */}
-          {deletedTasks.length > 0 && (
+          {activeSubFilter === 'DELETED' && clearableCount > 0 && (
             <button
               id="clear-deleted-history-btn"
               onClick={() => {
@@ -261,7 +248,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
                 setShowClearConfirm(true);
               }}
               title={hv.clearDeleted}
-              className="px-2 py-1 bg-black border border-neutral-800 hover:border-red-600 hover:text-red-400 text-neutral-400 text-xs font-sans tracking-wider uppercase transition-colors whitespace-nowrap cursor-pointer flex items-center gap-1"
+              className="min-h-11 px-3 py-2 bg-black border border-neutral-800 hover:border-red-600 hover:text-red-400 text-neutral-400 text-sm font-sans uppercase transition-colors whitespace-nowrap cursor-pointer flex items-center gap-1"
             >
               <Trash2 className="w-3 h-3" />
               <span>{hv.clearDeleted}</span>
@@ -270,8 +257,16 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
         </div>
       </div>
 
+      {activeSubFilter === 'DELETED' && (
+        <p className="text-sm leading-relaxed text-neutral-400 border border-neutral-800 bg-[#09090b] p-3">
+          {lang === 'uk'
+            ? 'Кошик зберігає завдання для відновлення. Додані помилково й незавершені з невідомою причиною не впливають на статистику та AI. Скасовані враховуються окремо.'
+            : 'Trash keeps tasks recoverable. Accidental tasks and unfinished tasks with an unknown removal reason are excluded from statistics and AI. Cancelled tasks are tracked separately.'}
+        </p>
+      )}
+
       {/* Confirmation Banner for Clearing Deleted Archive */}
-      {showClearConfirm && (
+      {showClearConfirm && activeSubFilter === 'DELETED' && clearableCount > 0 && (
         <div role="alert" className="p-3 bg-red-950/40 border border-red-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-sans animate-in fade-in">
           <div className="flex items-center gap-2 text-red-300 min-w-0">
             <AlertTriangle className="w-4 h-4 shrink-0 text-red-400" />
@@ -283,13 +278,13 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
                 onClearDeleted();
                 setShowClearConfirm(false);
               }}
-              className="px-2.5 py-1 bg-red-600 hover:bg-red-500 text-white font-bold uppercase transition-colors cursor-pointer"
+              className="min-h-11 px-3 py-2 bg-red-600 hover:bg-red-500 text-white text-sm font-bold uppercase transition-colors cursor-pointer"
             >
               {lang === 'uk' ? 'ТАК, ОЧИСТИТИ' : 'YES, CLEAR'}
             </button>
             <button
               onClick={() => setShowClearConfirm(false)}
-              className="px-2.5 py-1 border border-neutral-700 bg-neutral-900 text-neutral-300 hover:text-white uppercase transition-colors cursor-pointer"
+              className="min-h-11 px-3 py-2 border border-neutral-700 bg-neutral-900 text-neutral-300 hover:text-white text-sm uppercase transition-colors cursor-pointer"
             >
               {lang === 'uk' ? 'СКАСУВАТИ' : 'CANCEL'}
             </button>
@@ -331,7 +326,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
             )}
           </div>
         ) : (
-          filteredItems.map(({ type, task, timestamp }) => {
+          filteredItems.map(({ type, task, timestamp, archived }) => {
             const isCompleted = type === 'COMPLETED';
             const tabObj = tabMap.get(task.phase);
             const tabName = (t.phases as any)[task.phase] || tabObj?.name || task.phase;
@@ -361,14 +356,12 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
                     ) : (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 border border-neutral-700 bg-neutral-900 text-neutral-300 font-extrabold uppercase">
                         <Trash2 className="w-3 h-3 text-neutral-400" />
-                        <span>{hv.badgeDeleted}</span>
-                      </span>
-                    )}
-
-                    {!isCompleted && task.done && (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 border border-white bg-white text-black font-extrabold uppercase">
-                        <CheckCircle2 className="w-3 h-3" />
-                        <span>{hv.badgeCompleted}</span>
+                        <span>{'deletionReason' in task && task.deletionReason === 'accidental'
+                          ? (lang === 'uk' ? 'Додано помилково' : 'Added by mistake')
+                          : 'deletionReason' in task && task.deletionReason === 'cancelled' && !task.done
+                          ? (lang === 'uk' ? 'Скасовано' : 'Cancelled')
+                          : task.done ? hv.badgeCompleted
+                          : (lang === 'uk' ? 'Причину не уточнено' : 'Reason unknown')}</span>
                       </span>
                     )}
 
@@ -431,6 +424,25 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
                   </div>
                 </div>
 
+                {!isCompleted && (
+                  <label className="mb-3 flex flex-wrap items-center gap-2 text-sm text-neutral-400">
+                    <span>{lang === 'uk' ? 'Причина видалення' : 'Removal reason'}</span>
+                    <select
+                      aria-label={`${lang === 'uk' ? 'Причина видалення' : 'Removal reason'}: ${task.title}`}
+                      value={(task as DeletedTask).deletionReason === 'accidental' ? 'accidental' : task.done ? 'completed' : (task as DeletedTask).deletionReason || 'unknown'}
+                      onChange={event => {
+                        const value = event.target.value;
+                        onClassifyDeleted(task.id, value === 'accidental' || value === 'cancelled' ? value : undefined);
+                      }}
+                      className="min-h-11 max-w-full border border-neutral-700 bg-black text-white px-3 py-2 text-sm focus:border-white outline-none"
+                    >
+                      <option value={task.done ? 'completed' : 'unknown'}>{task.done ? hv.badgeCompleted : (lang === 'uk' ? 'Причину не уточнено' : 'Reason unknown')}</option>
+                      <option value="accidental">{lang === 'uk' ? 'Додано помилково — не враховувати' : 'Added by mistake — exclude'}</option>
+                      {!task.done && <option value="cancelled">{lang === 'uk' ? 'Скасовано — враховувати окремо' : 'Cancelled — track separately'}</option>}
+                    </select>
+                  </label>
+                )}
+
                 {/* Task Title */}
                 <div className="mb-2">
                   <h3
@@ -478,16 +490,17 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
                     <span>{hv.createdAtPrefix}: {formatTimestamp(task.createdAt)}</span>
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     {isCompleted ? (
                       /* Restore Completed Task to Active Queue */
                       <button
                         id={`restore-completed-task-${task.id}`}
                         onClick={() => {
                           sound.activate();
-                          onToggleDone(task.id);
+                          if (archived) onRestoreDeleted(task as DeletedTask);
+                          else onToggleDone(task.id);
                         }}
-                        className="flex items-center gap-1.5 px-3 py-1 bg-white hover:bg-neutral-200 text-black border border-white text-xs font-sans font-bold uppercase transition-colors cursor-pointer"
+                        className="min-h-11 flex items-center gap-1.5 px-3 py-2 bg-white hover:bg-neutral-200 text-black border border-white text-sm font-sans font-bold uppercase transition-colors cursor-pointer"
                       >
                         <RotateCcw className="w-3 h-3" />
                         <span>{hv.restoreToActive}</span>
@@ -501,7 +514,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
                             sound.activate();
                             onRestoreDeleted(task as DeletedTask);
                           }}
-                          className="flex items-center gap-1.5 px-3 py-1 bg-white hover:bg-neutral-200 text-black border border-white text-xs font-sans font-bold uppercase transition-colors cursor-pointer"
+                          className="min-h-11 flex items-center gap-1.5 px-3 py-2 bg-white hover:bg-neutral-200 text-black border border-white text-sm font-sans font-bold uppercase transition-colors cursor-pointer"
                         >
                           <RotateCcw className="w-3 h-3" />
                           <span>{hv.restoreDeleted}</span>
@@ -514,7 +527,8 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
                             onPermanentDelete(task.id);
                           }}
                           title={hv.permanentDelete}
-                          className="p-1 border border-neutral-800 hover:border-red-600 text-neutral-500 hover:text-red-400 bg-black transition-colors cursor-pointer"
+                          aria-label={`${hv.permanentDelete}: ${task.title}`}
+                          className="min-h-11 min-w-11 flex items-center justify-center border border-neutral-800 hover:border-red-600 text-neutral-500 hover:text-red-400 bg-black transition-colors cursor-pointer"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>

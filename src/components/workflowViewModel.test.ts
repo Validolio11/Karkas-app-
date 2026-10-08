@@ -24,12 +24,60 @@ test('completion is attributed to completion date even after later deletion', ()
 
 test('creation is not counted as deletion and later completion is not counted in last year', () => {
   const created = new Date(2025, 11, 30).getTime();
-  const deleted: DeletedTask[] = [{ ...task('dropped', { createdAt: created }), deletedAt: october }];
+  const deleted: DeletedTask[] = [{ ...task('dropped', { createdAt: created }), deletedAt: october, deletionReason: 'cancelled' }];
   const completed = task('completed', { createdAt: created, completedAt: october, done: true });
   const result = selectPeriodTasks([completed], deleted, 'LAST_YEAR', now);
   assert.equal(result.completedInPeriod.length, 0);
   assert.equal(result.droppedInPeriod.length, 0);
   assert.equal(result.createdInPeriod.length, 2);
+});
+
+test('archive analytics exclude accidental and unclassified unfinished tasks without changing recoverable data', () => {
+  const deleted: DeletedTask[] = [
+    { ...task('unknown', { createdAt: october }), deletedAt: october },
+    { ...task('accidental', { createdAt: october }), deletedAt: october, deletionReason: 'accidental' },
+    { ...task('accidental-completed', { createdAt: october, done: true, completedAt: october }), deletedAt: october, deletionReason: 'accidental' },
+    { ...task('cancelled', { createdAt: october }), deletedAt: october, deletionReason: 'cancelled' },
+    { ...task('legacy-completed', { createdAt: october, done: true }), deletedAt: october },
+  ];
+  const saved = structuredClone(deleted);
+  const result = selectPeriodTasks([], deleted, 'THIS_MONTH', now);
+  assert.deepEqual(result.deletedCompleted.map(item => item.id), ['legacy-completed']);
+  assert.deepEqual(result.droppedInPeriod.map(item => item.id), ['cancelled']);
+  assert.deepEqual(result.createdInPeriod.map(item => item.id), ['cancelled', 'legacy-completed']);
+  assert.deepEqual(result.deletedInPeriod.map(item => item.id), ['cancelled', 'legacy-completed']);
+  assert.deepEqual(deleted, saved);
+});
+
+test('cancelled work is attributed to deletion date, independently of creation and completion', () => {
+  const deleted: DeletedTask[] = [
+    { ...task('cancelled-this-month'), deletedAt: october, deletionReason: 'cancelled' },
+    { ...task('cancelled-last-month', { createdAt: october }), deletedAt: september, deletionReason: 'cancelled' },
+    { ...task('completed', { done: true, completedAt: september }), deletedAt: october, deletionReason: 'cancelled' },
+  ];
+  const result = selectPeriodTasks([], deleted, 'THIS_MONTH', now);
+  assert.deepEqual(result.droppedInPeriod.map(item => item.id), ['cancelled-this-month']);
+  assert.deepEqual(result.createdInPeriod.map(item => item.id), ['cancelled-last-month']);
+  assert.deepEqual(result.deletedInPeriod.map(item => item.id), ['cancelled-this-month', 'completed']);
+  assert.equal(result.deletedCompleted.length, 0);
+});
+
+test('restored tasks and repeated archive records are counted once, using the current task and first archive row', () => {
+  const current = [task('restored', { createdAt: october }), task('current-completed', { createdAt: october, done: true, completedAt: october })];
+  const deleted: DeletedTask[] = [
+    { ...task('restored', { createdAt: october, done: true, completedAt: october }), deletedAt: october },
+    { ...task('current-completed', { createdAt: october, done: true, completedAt: october }), deletedAt: october },
+    { ...task('archived-completed', { createdAt: october, done: true, completedAt: october }), deletedAt: october },
+    { ...task('archived-completed', { createdAt: october, done: true, completedAt: october }), deletedAt: october },
+    { ...task('excluded-newest', { createdAt: october, done: true, completedAt: october }), deletedAt: october, deletionReason: 'accidental' },
+    { ...task('excluded-newest', { createdAt: october, done: true, completedAt: october }), deletedAt: september },
+  ];
+  const result = selectPeriodTasks(current, deleted, 'THIS_MONTH', now);
+  assert.deepEqual(result.activeInPeriod.map(item => item.id), ['restored']);
+  assert.deepEqual(result.completedInPeriod.map(item => item.id), ['current-completed']);
+  assert.deepEqual(result.deletedCompleted.map(item => item.id), ['archived-completed']);
+  assert.deepEqual(result.createdInPeriod.map(item => item.id), ['restored', 'current-completed', 'archived-completed']);
+  assert.deepEqual(result.deletedInPeriod.map(item => item.id), ['archived-completed']);
 });
 
 test('rolling month includes day 29 and 30 and excludes future timestamps', () => {

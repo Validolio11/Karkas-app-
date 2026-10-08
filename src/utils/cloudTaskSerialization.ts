@@ -7,7 +7,10 @@ export function serializeTaskForCloud<T extends PSTask | DeletedTask>(task: T, n
     steps: task.steps, currentStep: task.currentStep, done: Boolean(task.done),
     pinned: Boolean(task.pinned), createdAt: task.createdAt || now,
   };
-  if ('deletedAt' in task) result.deletedAt = task.deletedAt || now;
+  if ('deletedAt' in task) {
+    result.deletedAt = task.deletedAt || now;
+    if ('deletionReason' in task && (task.deletionReason === 'accidental' || task.deletionReason === 'cancelled')) result.deletionReason = task.deletionReason;
+  }
   if (task.note != null) result.note = task.note;
   if (task.completedAt != null) result.completedAt = task.completedAt;
   if (Number.isFinite(task.startedAt)) result.startedAt = task.startedAt;

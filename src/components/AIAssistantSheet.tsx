@@ -9,6 +9,7 @@ import {
   AITaskUpdate,
   AIResponse,
   AITimerSettings,
+  AIDeletedTaskRef,
 } from '../types';
 import { sound } from '../utils/audio';
 import { createVoiceDictation, type VoicePhase } from '../utils/voiceDictation';
@@ -33,11 +34,13 @@ import {
   Loader2,
   Square,
   ArrowUp,
+  RefreshCw,
 } from 'lucide-react';
 import { AIIcon, AIIconId } from './AIIconTemplates';
 import { shouldVerifyAsApiKey } from '../utils/apiKey';
 import { verifyApiKey, keyVerificationMessage } from '../utils/verifyApiKey';
 import { desktopHasAiKey, karkasApiFetch } from '../utils/desktopApi';
+import { selectRelevantArchivedTasks } from '../utils/taskArchive';
 import { loadAIChatHistory, saveAIChatHistory } from '../services/chatHistory';
 import type { PersistedAIChatMessage } from '../services/chatHistory';
 import { getPendingTaskIndexes } from './workflowViewModel';
@@ -60,7 +63,7 @@ interface AIAssistantSheetProps {
     newTasks: (Omit<PSTask, 'id' | 'currentStep' | 'done' | 'pinned' | 'createdAt'> & AITimerSettings)[],
     newTabs?: TaskTab[],
     taskUpdates?: AITaskUpdate[],
-    deletedTaskIds?: string[],
+    deletedTaskIds?: (string | AIDeletedTaskRef)[],
   ) => AIApplyResult;
   accountId?: string | null;
 }
@@ -99,7 +102,45 @@ const isChatModel = (model: string) => {
 
 const TimerProposal: React.FC<{ settings: AITimerSettings; lang: Language }> = ({ settings, lang }) => {
   const description = describeAITimer(settings, lang);
-  return description ? <div className="mt-1 text-xs text-sky-300 whitespace-normal">{description}</div> : null;
+  return description ? <div className="mt-1 text-base leading-[1.6] text-sky-300 whitespace-normal">{description}</div> : null;
+};
+
+const deletionReasonLabel = (reason: AIDeletedTaskRef['deletionReason'], lang: Language) => reason === 'accidental'
+  ? (lang === 'uk' ? 'Додано помилково — без статистики та AI' : 'Added by mistake — excluded from statistics and AI')
+  : reason === 'cancelled' ? (lang === 'uk' ? 'Скасовано' : 'Cancelled')
+  : (lang === 'uk' ? 'Прибрано без уточненої причини' : 'Removed without a specified reason');
+
+const normalizedProposalText = (text: string | undefined) => (text || '').trim().replace(/\s+/g, ' ').toLowerCase();
+
+const ProposalSteps: React.FC<{ steps: (string | { id?: string; title: string; done?: boolean })[]; lang: Language }> = ({ steps, lang }) => (
+  <ol className="space-y-2">
+    {steps.map((step, index) => {
+      const title = typeof step === 'string' ? step : step.title;
+      const done = typeof step !== 'string' && step.done;
+      return <li key={typeof step === 'string' ? index : step.id || index} className="flex items-start gap-2 text-base leading-[1.6] text-neutral-300">
+        <span className="shrink-0 text-neutral-400" aria-hidden="true">{done ? '✓' : `${index + 1}.`}</span>
+        <span className="min-w-0 break-words">{title}{done && <span className="ml-2 text-sm text-neutral-400">{lang === 'uk' ? '(завершено)' : '(completed)'}</span>}</span>
+      </li>;
+    })}
+  </ol>
+);
+
+const TaskUpdatePreview: React.FC<{ update: AITaskUpdate; existing?: PSTask; tabs: TaskTab[]; lang: Language }> = ({ update, existing, tabs, lang }) => {
+  const phaseLabel = update.phase && ((TRANSLATIONS[lang].phases as any)[update.phase] || tabs.find(tab => tab.id === update.phase)?.name || update.phase);
+  return <div className="min-w-0 space-y-2 text-base leading-[1.6]">
+    {update.title && existing?.title && update.title !== existing.title && <p className="text-sm text-neutral-400 line-through break-words">{existing.title}</p>}
+    <p className="font-semibold text-neutral-100 break-words">{update.title || existing?.title || update.id}</p>
+    <TimerProposal settings={update} lang={lang} />
+    {update.stepList !== undefined && <div className="space-y-2">
+      <p className="text-sm font-semibold text-neutral-400">{lang === 'uk' ? 'Підзавдання' : 'Subtasks'} ({update.stepList.length})</p>
+      {update.stepList.length ? <ProposalSteps steps={update.stepList} lang={lang} /> : <p className="text-neutral-300">{lang === 'uk' ? 'Підзавдання буде прибрано.' : 'The subtasks will be removed.'}</p>}
+    </div>}
+    {update.stepList === undefined && update.steps !== undefined && <p className="text-neutral-300">{lang === 'uk' ? 'Кількість підзавдань' : 'Subtask count'}: {update.steps}</p>}
+    {update.done !== undefined && <p className="text-neutral-300">{lang === 'uk' ? 'Статус' : 'Status'}: {update.done ? (lang === 'uk' ? 'Завершено' : 'Completed') : (lang === 'uk' ? 'У роботі' : 'In progress')}</p>}
+    {phaseLabel && <p className="text-sm text-neutral-400">{lang === 'uk' ? 'Категорія' : 'Category'}: {phaseLabel}</p>}
+    {update.priority && <p className="text-sm text-amber-300">{lang === 'uk' ? 'Пріоритет' : 'Priority'}: P{update.priority}</p>}
+    {update.note !== undefined && (!update.note || normalizedProposalText(update.note) !== normalizedProposalText(update.title || existing?.title)) && <p className="text-neutral-300 whitespace-pre-wrap break-words">{update.note || (lang === 'uk' ? 'Примітку буде прибрано.' : 'The note will be removed.')}</p>}
+  </div>;
 };
 
 export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
@@ -165,7 +206,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   }, [adaptiveProfile, lang, presets, tabs]);
 
   const [initialDraft] = useState(() => readAIAssistantDraft(localStorage, accountId));
-  const [prompt, setPrompt] = useState(initialPrompt || initialDraft?.prompt || initialDraft?.recoverableRequest?.text || '');
+  const [prompt, setPrompt] = useState(initialPrompt || (initialDraft?.prompt ?? initialDraft?.recoverableRequest?.text ?? ''));
   const [mode, setMode] = useState<AIMode>(initialDraft?.mode || 'chat');
   const [recoverableRequest, setRecoverableRequest] = useState<AIRequest | null>(initialDraft?.recoverableRequest || null);
   const [requestError, setRequestError] = useState<string | null>(restoredAIRequestNotice(initialDraft?.recoverableRequest, lang));
@@ -175,6 +216,17 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   const contentRef = useRef<HTMLDivElement | null>(null);
   const [loading, setLoading] = useState(false);
   const [response, setResponse] = useState<AIResponse | null>(null);
+  const [responseRequest, setResponseRequest] = useState<AIRequest | null>(null);
+  const planningSourceRef = useRef<AIRequest | null>(null);
+  const preservedRequestDraftRef = useRef<string | null>(null);
+  const [responseProposalReady, setResponseProposalReady] = useState(false);
+  const responseProposalReadyRef = useRef(false);
+  const readyResponseRef = useRef<AIResponse | null>(null);
+  const setResponseProposalReadiness = (ready: boolean) => {
+    responseProposalReadyRef.current = ready;
+    if (!ready) readyResponseRef.current = null;
+    setResponseProposalReady(ready);
+  };
   const [applyNotice, setApplyNotice] = useState<string | null>(null);
   const [responsePartlyRejected, setResponsePartlyRejected] = useState(false);
   const [chatMessages, setChatMessages] = useState<AIChatMessage[]>(() => loadAIChatHistory(accountId));
@@ -184,7 +236,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   const [pendingChatTasks, setPendingChatTasks] = useState<NonNullable<AIResponse['tasks']>>([]);
   const [pendingChatTabs, setPendingChatTabs] = useState<TaskTab[]>([]);
   const [pendingChatUpdates, setPendingChatUpdates] = useState<AITaskUpdate[]>([]);
-  const [pendingChatDeletions, setPendingChatDeletions] = useState<string[]>([]);
+  const [pendingChatDeletions, setPendingChatDeletions] = useState<AIDeletedTaskRef[]>([]);
   const [chatProposalReady, setChatProposalReady] = useState(false);
   const chatProposalReadyRef = useRef(false);
   const setChatProposalReadiness = (ready: boolean) => {
@@ -192,10 +244,12 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     setChatProposalReady(ready);
   };
   const pendingChatConfirmed = useRef(false);
+  const [chatPlanningRequest, setChatPlanningRequest] = useState<AIRequest | null>(null);
+  const [chatPlanningResponse, setChatPlanningResponse] = useState<AIResponse | null>(null);
 
   const [awaitingApiKey, setAwaitingApiKey] = useState(false);
   const [keyStatus, setKeyStatus] = useState<string | null>(null);
-  const pendingRequest = useRef<{ text: string; mode: AIMode } | null>(null);
+  const pendingRequest = useRef<AIRequest | null>(null);
   const requestInFlight = useRef(false);
   const awaitingKeyRef = useRef(false);
   const verificationController = useRef<AbortController | null>(null);
@@ -217,9 +271,10 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     }
     if (!isOpen && activeRequest.current && draftAccountRef.current === accountId) {
       const interrupted = activeRequest.current;
-      setPrompt(previous => previous || interrupted.text);
+      setPrompt(previous => preservedRequestDraftRef.current ?? (previous || interrupted.text));
       setRecoverableRequest(interrupted);
       setRequestError(aiRequestErrorMessage(new AIRequestError('CANCELLED'), lang));
+      setResponseProposalReadiness(false);
     }
     activeRequest.current = null;
     requestGeneration.current += 1;
@@ -283,6 +338,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   useEffect(() => () => { voiceRef.current?.cancel(); }, []);
 
   const handleToggleVoiceInput = () => {
+    if (requestInFlight.current) return;
     if (isListening) { stopVoiceInput(); return; }
     if (isTranscribing || voiceRef.current) return;
     setVoiceNotice(null);
@@ -314,7 +370,13 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     setPendingChatTabs([]);
     setPendingChatUpdates([]);
     setPendingChatDeletions([]);
+    setChatPlanningRequest(null);
+    setChatPlanningResponse(null);
     setResponse(null);
+    setResponseRequest(null);
+    planningSourceRef.current = null;
+    preservedRequestDraftRef.current = null;
+    setResponseProposalReadiness(false);
     setApplyNotice(null);
     setResponsePartlyRejected(false);
     injectedIdsRef.current = [];
@@ -338,7 +400,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     draftAccountRef.current = accountId;
     skipDraftPersistRef.current = true;
     const draft = readAIAssistantDraft(localStorage, accountId);
-    setPrompt(draft?.prompt || draft?.recoverableRequest?.text || '');
+    setPrompt(draft?.prompt ?? draft?.recoverableRequest?.text ?? '');
     setMode(draft?.mode || 'chat');
     setRecoverableRequest(draft?.recoverableRequest || null);
     setRequestError(restoredAIRequestNotice(draft?.recoverableRequest, lang));
@@ -350,16 +412,16 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   useEffect(() => {
     if (skipDraftPersistRef.current) { skipDraftPersistRef.current = false; return; }
     // A key is entered in the same field, but must never enter draft storage.
-    saveAIAssistantDraft(localStorage, { prompt: awaitingApiKey ? '' : prompt, mode, recoverableRequest }, accountId);
+    saveAIAssistantDraft(localStorage, { prompt: awaitingApiKey ? preservedRequestDraftRef.current || '' : prompt, mode, recoverableRequest }, accountId);
   }, [accountId, prompt, mode, awaitingApiKey, recoverableRequest]);
 
   useEffect(() => {
     if (!isOpen) return;
     const frame = requestAnimationFrame(() => {
-      if (contentRef.current) contentRef.current.scrollTop = contentRef.current.scrollHeight;
+      if (contentRef.current) contentRef.current.scrollTop = mode === 'chat' || loading || awaitingApiKey ? contentRef.current.scrollHeight : 0;
     });
     return () => cancelAnimationFrame(frame);
-  }, [isOpen, chatMessages, loading, keyStatus, requestError, response]);
+  }, [isOpen, mode, chatMessages, loading, awaitingApiKey, keyStatus, requestError, response]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -437,6 +499,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     setPendingChatTabs([]);
     setPendingChatUpdates([]);
     setPendingChatDeletions([]);
+    setChatPlanningRequest(null);
+    setChatPlanningResponse(null);
 
     setChatMessages((previous) => [
       ...previous,
@@ -463,7 +527,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     }
   }, [initialPrompt]);
 
-  const handleGenerate = async (queryText?: string, selectedMode?: AIMode, resuming = false, preserveInput = false) => {
+  const handleGenerate = async (queryText?: string, selectedMode?: AIMode, resuming = false, preserveInput = false, planningSource?: AIRequest, internalAlternative = false) => {
     voiceRef.current?.cancel();
     voiceRef.current = null;
     setVoicePhase('idle');
@@ -474,6 +538,15 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
         ? (lang === 'uk' ? 'Повний аудит робочого процесу, вузьких місць і аналітика категорій' : 'Comprehensive workflow audit, bottleneck analysis, and category metrics')
         : ''
     );
+    const retryRequest = recoverableRequest?.text === requestText && recoverableRequest.mode === currentMode ? recoverableRequest : null;
+    const isAlternativeRequest = internalAlternative || retryRequest?.internalAlternative === true;
+    const keepDraft = preserveInput || isAlternativeRequest;
+    const sourceRequest = planningSource || retryRequest?.planningSource || { text: requestText, mode: currentMode };
+    const currentRequest: AIRequest = {
+      text: requestText,
+      mode: currentMode,
+      ...(isAlternativeRequest ? { internalAlternative: true, planningSource: { text: sourceRequest.text, mode: sourceRequest.mode } } : {}),
+    };
 
     if (!requestText) return;
     if (requestInFlight.current) return;
@@ -490,11 +563,15 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       return;
     }
     setChatProposalReadiness(false);
+    setResponseProposalReadiness(false);
     setApplyNotice(null);
+    if (closeAfterInject.current) { clearTimeout(closeAfterInject.current); closeAfterInject.current = null; }
     const generation = requestGeneration.current;
     const isKeyEntry = !resuming && shouldVerifyAsApiKey(requestText, awaitingKeyRef.current, queryText === undefined);
     if (!isKeyEntry) {
-      activeRequest.current = { text: requestText, mode: currentMode };
+      if (!resuming) preservedRequestDraftRef.current = keepDraft ? prompt : null;
+      planningSourceRef.current = sourceRequest;
+      activeRequest.current = currentRequest;
       setRecoverableRequest(activeRequest.current);
     }
     requestInFlight.current = true;
@@ -509,7 +586,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       setLoading(false);
       setRequestError(aiRequestErrorMessage(new AIRequestError('PROVIDER_ERROR'), lang));
       activeRequest.current = null;
-      if (!isKeyEntry) { setRecoverableRequest({ text: requestText, mode: currentMode }); setPrompt(previous => previous || requestText); }
+      if (!isKeyEntry) { setRecoverableRequest(currentRequest); setPrompt(previous => preservedRequestDraftRef.current ?? (previous || requestText)); }
       else { setAwaitingApiKey(true); awaitingKeyRef.current = true; setKeyStatus(aiRequestErrorMessage(new AIRequestError('PROVIDER_ERROR'), lang)); }
       return;
     }
@@ -526,7 +603,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       setPrompt('');
       setLoading(true);
       setKeyStatus(lang === 'uk' ? 'Перевіряю API-ключ…' : 'Verifying API key…');
-      let requestToResume: { text: string; mode: AIMode } | null = null;
+      let requestToResume: AIRequest | null = null;
       try {
         const models = await verifyApiKey(requestText, { signal: controller.signal });
         if (controller.signal.aborted) return;
@@ -548,6 +625,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
         awaitingKeyRef.current = false;
         setKeyStatus(null);
         setRequestError(null);
+        if (preservedRequestDraftRef.current !== null) setPrompt(preservedRequestDraftRef.current);
         sound.activate();
         requestToResume = pendingRequest.current;
         pendingRequest.current = null;
@@ -564,7 +642,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
         }
       }
       if (requestToResume && generation === requestGeneration.current) {
-        await handleGenerate(requestToResume.text, requestToResume.mode, true);
+        setMode(requestToResume.mode);
+        await handleGenerate(requestToResume.text, requestToResume.mode, true, preservedRequestDraftRef.current !== null, requestToResume.planningSource || planningSourceRef.current || undefined, requestToResume.internalAlternative);
       }
       return;
     }
@@ -573,7 +652,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       setPrompt('');
       setAwaitingApiKey(true);
       awaitingKeyRef.current = true;
-      pendingRequest.current = { text: requestText, mode: currentMode };
+      pendingRequest.current = currentRequest;
       activeRequest.current = null;
       setRecoverableRequest(pendingRequest.current);
       setRequestError(null);
@@ -586,26 +665,18 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     }
 
     sound.activate();
-    if (!preserveInput) setPrompt('');
+    if (!keepDraft) setPrompt('');
     setAwaitingApiKey(false);
     awaitingKeyRef.current = false;
     setKeyStatus(null);
     setRequestError(null);
-    const currentRequest = { text: requestText, mode: currentMode };
     activeRequest.current = currentRequest;
     setRecoverableRequest(currentRequest);
     pendingRequest.current = null;
     requestInFlight.current = true;
     setLoading(true);
-    setResponse(null);
-    setResponsePartlyRejected(false);
-    injectedIdsRef.current = [];
-    appliedUpdateIdsRef.current = [];
-    appliedTabIdsRef.current.clear();
-    appliedDeletionIdsRef.current.clear();
-    setInjectedIds([]);
-    setAppliedUpdateIds([]);
-    if (currentMode === 'chat') setChatMessages(previous => appendChatRequest(previous, requestText));
+    if (currentMode === 'chat') setChatMessages(previous => appendChatRequest(previous,
+      currentRequest.internalAlternative ? (lang === 'uk' ? 'Інший варіант планування' : 'Alternative plan') : requestText));
 
     const isTabMutation = /(?:вкладк|категорі|напрямок|розділ|секці|tab|category|section)/iu.test(requestText);
     const activeList = currentTasks.filter((t) => !t.done);
@@ -636,7 +707,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
           pendingChanges: currentMode === 'chat' ? {
             tasks: pendingChatTasks, tabs: pendingChatTabs,
             taskUpdates: pendingChatUpdates,
-            taskDeletions: pendingChatDeletions.map(id => ({ id })),
+            taskDeletions: pendingChatDeletions,
           } : undefined,
           allowNewTabs: isTabMutation,
           customApiKey: customEnabled ? customKey : undefined,
@@ -655,10 +726,18 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
               note: t.note,
             })),
             completedTasks: doneList.map(task => ({ ...task, ...getAITimerContext(task) })),
-            deletedTasks: deletedTasks.slice(0, 15).map((t) => ({
+            deletedTasks: selectRelevantArchivedTasks(currentTasks, deletedTasks).slice(0, 15).map((t) => ({
               id: t.id,
               title: t.title,
               phase: t.phase,
+              done: t.done,
+              deletionReason: t.deletionReason,
+              deletedAt: t.deletedAt,
+              completedAt: t.completedAt,
+              createdAt: t.createdAt,
+              timeSpentSeconds: t.timeSpentSeconds,
+              steps: t.steps,
+              currentStep: t.currentStep,
             })),
             tabs: tabs.map((tb) => ({ id: tb.id, name: tb.name, color: tb.color })),
             stats: stats || {
@@ -676,18 +755,23 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       if (!res.ok) throw responseRequestError(rawData, res.status);
       const data = readAIResponse(rawData, currentMode);
       activeRequest.current = null;
-      const hasPendingChatActions = currentMode === 'chat' && [data.tasks, data.tabs, data.taskUpdates, data.taskDeletions].some(actions => (actions?.length || 0) > 0);
-      setRecoverableRequest(hasPendingChatActions ? { ...currentRequest, purpose: 'proposal' } : null);
+      const hasPendingActions = [data.tasks, data.tabs, data.taskUpdates, data.taskDeletions].some(actions => (actions?.length || 0) > 0);
+      const hasPendingChatActions = currentMode === 'chat' && hasPendingActions;
+      setRecoverableRequest(hasPendingActions ? { ...currentRequest, purpose: 'proposal' } : null);
       setRequestError(null);
+      if (preservedRequestDraftRef.current !== null) setPrompt(preservedRequestDraftRef.current);
       if (data.fallbackUsed && data.usedModel) setKeyStatus(lang === 'uk' ? `Відповідь підготувала доступна модель ${data.usedModel}.` : `The response was generated by the available model ${data.usedModel}.`);
       if (currentMode === 'chat') {
+        const isPlanningResponse = !!data.tasks?.length || !!data.taskUpdates?.length || /план|\bplan(?:ning)?\b/iu.test((planningSourceRef.current || currentRequest).text);
+        setChatPlanningRequest(isPlanningResponse ? planningSourceRef.current || currentRequest : null);
+        setChatPlanningResponse(isPlanningResponse ? data : null);
         {
           pendingChatConfirmed.current = false;
           setChatProposalReadiness(hasPendingChatActions);
           setPendingChatTasks(data.tasks || []);
           setPendingChatTabs((data.tabs || []).map((tb) => ({ id: tb.id, name: tb.name, color: tb.color || '#6366f1' })));
           setPendingChatUpdates(data.taskUpdates || []);
-          setPendingChatDeletions((data.taskDeletions || []).map((d) => d.id));
+          setPendingChatDeletions(data.taskDeletions || []);
         }
 
         setChatMessages((previous) => [
@@ -698,7 +782,17 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
           },
         ]);
       } else {
+        setResponsePartlyRejected(false);
+        injectedIdsRef.current = [];
+        appliedUpdateIdsRef.current = [];
+        appliedTabIdsRef.current.clear();
+        appliedDeletionIdsRef.current.clear();
+        setInjectedIds([]);
+        setAppliedUpdateIds([]);
         setResponse(data);
+        setResponseRequest(planningSourceRef.current || currentRequest);
+        readyResponseRef.current = data;
+        setResponseProposalReadiness(true);
       }
       sound.activate();
     } catch (err) {
@@ -706,7 +800,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       const error = controller.signal.aborted ? new AIRequestError(timedOut ? 'TIMEOUT' : 'CANCELLED') : err;
       setRequestError(aiRequestErrorMessage(error, lang));
       setRecoverableRequest(currentRequest);
-      setPrompt(previous => previous || requestText);
+      setPrompt(previous => preservedRequestDraftRef.current ?? (previous || requestText));
       activeRequest.current = null;
       if (error instanceof AIRequestError && (error.code === 'INVALID_API_KEY' || error.code === 'MISSING_API_KEY')) {
         pendingRequest.current = currentRequest;
@@ -726,6 +820,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
 
   const cancelAIRequest = () => {
     setChatProposalReadiness(false);
+    setResponseProposalReadiness(false);
     requestGeneration.current += 1;
     assistController.current?.abort();
     assistController.current = null;
@@ -735,7 +830,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     setLoading(false);
     if (activeRequest.current) {
       const interrupted = activeRequest.current;
-      setPrompt(previous => previous || interrupted.text);
+      setPrompt(previous => preservedRequestDraftRef.current ?? (previous || interrupted.text));
       setRecoverableRequest(interrupted);
       setRequestError(aiRequestErrorMessage(new AIRequestError('CANCELLED'), lang));
       activeRequest.current = null;
@@ -751,15 +846,15 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     setAwaitingApiKey(false);
     awaitingKeyRef.current = false;
     setKeyStatus(null);
-    if (request) { setPrompt(request.text); setMode(request.mode); }
+    if (request) { setPrompt(preservedRequestDraftRef.current ?? (request.internalAlternative ? request.planningSource?.text || '' : request.text)); setMode(request.mode); }
   };
 
   const handleInjectAll = () => {
-    if (!response) return;
+    if (!response || !responseProposalReadyRef.current || readyResponseRef.current !== response || requestInFlight.current || requestError || responseRequest?.mode !== mode) return;
     const taskList = getPendingTaskIndexes(response.tasks?.length || 0, injectedIdsRef.current).map(index => response.tasks![index]);
     const tabList: TaskTab[] = (response.tabs || []).filter(tab => !appliedTabIdsRef.current.has(tab.id)).map((t) => ({ id: t.id, name: t.name, color: t.color || '#6366f1' }));
     const updateList = (response.taskUpdates || []).filter(update => !appliedUpdateIdsRef.current.includes(update.id));
-    const deleteList = (response.taskDeletions || []).map((d) => d.id).filter(id => !appliedDeletionIdsRef.current.has(id));
+    const deleteList = (response.taskDeletions || []).filter(deletion => !appliedDeletionIdsRef.current.has(deletion.id));
 
     if (!taskList.length && !tabList.length && !updateList.length && !deleteList.length) return;
     sound.activate();
@@ -770,8 +865,9 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     injectedIdsRef.current = (response.tasks || []).map((_, i) => i);
     appliedUpdateIdsRef.current = (response.taskUpdates || []).map((u) => u.id);
     tabList.forEach(tab => appliedTabIdsRef.current.add(tab.id));
-    deleteList.forEach(id => appliedDeletionIdsRef.current.add(id));
+    deleteList.forEach(deletion => appliedDeletionIdsRef.current.add(deletion.id));
     const result = onInjectTasks(formattedTasks, tabList, updateList, deleteList);
+    if (!result.rejected) setRecoverableRequest(null);
     setApplyNotice(describeAIApplyResult(result, lang));
     setResponsePartlyRejected(result.rejected > 0);
     setInjectedIds(injectedIdsRef.current);
@@ -782,7 +878,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   };
 
   const handleInjectSingle = (task: NonNullable<AIResponse['tasks']>[0], index: number) => {
-    if (injectedIdsRef.current.includes(index)) return;
+    if (!response || !responseProposalReadyRef.current || readyResponseRef.current !== response || requestInFlight.current || requestError || responseRequest?.mode !== mode || injectedIdsRef.current.includes(index)) return;
     sound.tick(600);
     const tabList: TaskTab[] = (response?.tabs || []).filter(tab => !appliedTabIdsRef.current.has(tab.id)).map((t) => ({ id: t.id, name: t.name, color: t.color || '#6366f1' }));
     const result = onInjectTasks([
@@ -792,15 +888,23 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     if (result.created) injectedIdsRef.current = [...injectedIdsRef.current, index];
     if (result.tabs) tabList.forEach(tab => appliedTabIdsRef.current.add(tab.id));
     setInjectedIds(injectedIdsRef.current);
+    if (!result.rejected && response && getPendingTaskIndexes(response.tasks?.length || 0, injectedIdsRef.current).length === 0
+      && !(response.taskUpdates || []).some(update => !appliedUpdateIdsRef.current.includes(update.id))
+      && !(response.tabs || []).some(tab => !appliedTabIdsRef.current.has(tab.id))
+      && !(response.taskDeletions || []).some(deletion => !appliedDeletionIdsRef.current.has(deletion.id))) setRecoverableRequest(null);
   };
 
   const handleApplySingleUpdate = (update: AITaskUpdate) => {
-    if (appliedUpdateIdsRef.current.includes(update.id)) return;
+    if (!response || !responseProposalReadyRef.current || readyResponseRef.current !== response || requestInFlight.current || requestError || responseRequest?.mode !== mode || appliedUpdateIdsRef.current.includes(update.id)) return;
     sound.tick(650);
     const result = onInjectTasks([], [], [update], []);
     setApplyNotice(describeAIApplyResult(result, lang));
     if (result.updated) appliedUpdateIdsRef.current = [...appliedUpdateIdsRef.current, update.id];
     setAppliedUpdateIds(appliedUpdateIdsRef.current);
+    if (!result.rejected && response && getPendingTaskIndexes(response.tasks?.length || 0, injectedIdsRef.current).length === 0
+      && !(response.taskUpdates || []).some(item => !appliedUpdateIdsRef.current.includes(item.id))
+      && !(response.tabs || []).some(tab => !appliedTabIdsRef.current.has(tab.id))
+      && !(response.taskDeletions || []).some(deletion => !appliedDeletionIdsRef.current.has(deletion.id))) setRecoverableRequest(null);
   };
 
   const remainingResponseActions = response
@@ -809,6 +913,45 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       + (response.tabs || []).filter(tab => !appliedTabIdsRef.current.has(tab.id)).length
       + (response.taskDeletions || []).filter(deletion => !appliedDeletionIdsRef.current.has(deletion.id)).length
     : 0;
+
+  const responseActionCount = response
+    ? (response.tasks?.length || 0) + (response.tabs?.length || 0) + (response.taskUpdates?.length || 0) + (response.taskDeletions?.length || 0)
+    : 0;
+  const hasAppliedResponseActions = remainingResponseActions < responseActionCount;
+  const responseMode = responseRequest?.mode;
+  const showStructuredResponse = !!response && responseMode === mode;
+  const canApplyResponse = responseProposalReady && !loading && !requestError && !awaitingApiKey;
+  const hasPlanningProposal = !!response && (responseMode === 'breakdown' || responseMode === 'generate' || responseActionCount > 0);
+  const seenInsights = new Set<string>();
+  const displayedInsights = (response?.insights || []).filter(insight => {
+    const normalized = normalizedProposalText(insight);
+    if (!normalized || normalized === normalizedProposalText(response?.summary) || seenInsights.has(normalized)) return false;
+    seenInsights.add(normalized);
+    return true;
+  });
+  const displayedBottlenecks = (response?.workloadDiagnosis?.bottlenecks || []).filter(item => item.trim());
+  const showResponseSummary = !!response?.summary.trim() && !(response?.tasks?.length === 1
+    && [response.tasks[0].title, response.tasks[0].note].some(text => normalizedProposalText(text) === normalizedProposalText(response.summary)));
+
+  const requestAlternativePlan = (source: AIRequest, previousResponse: AIResponse) => {
+    if (requestInFlight.current || awaitingKeyRef.current) return;
+    const previousPlan = JSON.stringify({
+      summary: previousResponse.summary,
+      reply: previousResponse.reply,
+      tasks: previousResponse.tasks || [],
+      taskUpdates: previousResponse.taskUpdates || [],
+      insights: previousResponse.insights || [],
+    });
+    const alternativePrompt = lang === 'uk'
+      ? `Початковий запит:\n${source.text}\n\nПопередня незастосована пропозиція, лише для порівняння:\n${previousPlan}\n\nЗапропонуй інший варіант планування того самого завдання або робочої мети. Зміни підхід, послідовність чи групування кроків; не повторюй попередній план іншими словами. Збережи вимоги початкового запиту й налаштування таймера. Для наявного завдання запропонуй оновлення за його точним id, не створюй дублікат. Попередня пропозиція ще не застосована — підготуй одну нову альтернативу, без застосування старих дій.`
+      : `Original request:\n${source.text}\n\nPrevious unapplied proposal, for comparison only:\n${previousPlan}\n\nSuggest an alternative plan for the same task or work goal. Change the approach, sequence, or grouping of steps instead of rephrasing the previous plan. Keep the original requirements and timer settings. For an existing task, propose an update using its exact id instead of creating a duplicate. The previous proposal has not been applied: prepare one new alternative without applying previous actions.`;
+    void handleGenerate(alternativePrompt, source.mode, false, true, source, true);
+  };
+
+  const handleAlternativePlan = () => {
+    if (!response || !responseRequest || hasAppliedResponseActions) return;
+    requestAlternativePlan(responseRequest, response);
+  };
 
   return (
     <AnimatePresence>
@@ -896,6 +1039,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
 
               <button
                 id="ai-mode-breakdown-btn"
+                aria-label={t.aiSheet.modes.breakdown}
+                title={t.aiSheet.modes.breakdown}
                 aria-pressed={mode === 'breakdown'}
                 type="button"
                 disabled={loading}
@@ -910,11 +1055,13 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                 }`}
               >
                 <Workflow aria-hidden="true" className="w-4 h-4 shrink-0" strokeWidth={1.75} />
-                <span className="min-w-0 whitespace-normal break-words leading-snug">{t.aiSheet.modes.breakdown}</span>
+                <span className="min-w-0 whitespace-normal break-words leading-snug">{lang === 'uk' ? 'Підзавдання' : 'Subtasks'}</span>
               </button>
 
               <button
                 id="ai-mode-analyze-btn"
+                aria-label={t.aiSheet.modes.analyze}
+                title={t.aiSheet.modes.analyze}
                 aria-pressed={mode === 'analyze'}
                 type="button"
                 disabled={loading}
@@ -930,11 +1077,13 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                 }`}
               >
                 <ChartNoAxesCombined aria-hidden="true" className="w-4 h-4 shrink-0" strokeWidth={1.75} />
-                <span className="min-w-0 whitespace-normal break-words leading-snug">{t.aiSheet.modes.analyze}</span>
+                <span className="min-w-0 whitespace-normal break-words leading-snug">{lang === 'uk' ? 'Аналіз і підказки' : 'Analysis'}</span>
               </button>
 
               <button
                 id="ai-mode-generate-btn"
+                aria-label={t.aiSheet.modes.generate}
+                title={t.aiSheet.modes.generate}
                 aria-pressed={mode === 'generate'}
                 type="button"
                 disabled={loading}
@@ -949,16 +1098,21 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                 }`}
               >
                 <ClipboardList aria-hidden="true" className="w-4 h-4 shrink-0" strokeWidth={1.75} />
-                <span className="min-w-0 whitespace-normal break-words leading-snug">{t.aiSheet.modes.generate}</span>
+                <span className="min-w-0 whitespace-normal break-words leading-snug">{lang === 'uk' ? 'План' : 'Plan'}</span>
               </button>
             </div>
 
             {/* Content Container (Scrollable) */}
             <div ref={contentRef} className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 sm:p-5 flex flex-col gap-4">
               {/* Presets Chips */}
-              <div>
-                <div className="text-[10px] font-sans uppercase tracking-widest text-neutral-400 mb-2">
-                  {t.aiSheet.blueprints}
+              {mode !== 'chat' && !showStructuredResponse && !loading && <div>
+                {mode !== 'chat' && <p className="mb-3 text-base leading-[1.6] text-neutral-300">
+                  {mode === 'breakdown' ? (lang === 'uk' ? 'Вкажіть завдання — AI запропонує послідовність підзавдань.' : 'Describe a task and AI will suggest a sequence of subtasks.')
+                    : mode === 'analyze' ? (lang === 'uk' ? 'AI перегляне поточні завдання та підкаже, що допоможе рухатися далі.' : 'AI will review your current tasks and suggest ways to move forward.')
+                    : (lang === 'uk' ? 'Опишіть мету — AI запропонує завдання й порядок роботи.' : 'Describe your goal and AI will suggest tasks and a working order.')}
+                </p>}
+                {mode === 'generate' && <><div className="text-sm font-sans font-semibold text-neutral-400 mb-2">
+                  {lang === 'uk' ? 'Приклади запитів' : 'Example requests'}
                 </div>
                 <div className="flex flex-wrap gap-1.5">
                   {personalizedPresets.map((preset, i) => (
@@ -970,13 +1124,13 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                         setPrompt(preset);
                         handleGenerate(preset);
                       }}
-                      className="text-[11px] font-sans text-left px-2 py-1 bg-[#08080a] border border-neutral-800 text-neutral-400 hover:border-neutral-600 hover:text-neutral-200 disabled:opacity-40 transition-colors cursor-pointer"
+                      className="min-h-11 text-sm leading-relaxed font-sans text-left px-3 py-2 bg-[#08080a] border border-neutral-800 text-neutral-300 hover:border-neutral-600 hover:text-white disabled:opacity-40 transition-colors cursor-pointer"
                     >
                       + {preset}
                     </button>
                   ))}
-                </div>
-              </div>
+                </div></>}
+              </div>}
 
               {/* Chat View */}
               {mode === 'chat' && chatMessages.length > 0 && (
@@ -994,6 +1148,11 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                         {message.role === 'user' ? (lang === 'uk' ? 'ВИ' : 'YOU') : 'KARKAS AI'}
                       </div>
                       {(() => {
+                        const isCurrentPlanningReply = message.role === 'assistant' && chatPlanningResponse
+                          && message.content === (chatPlanningResponse.reply || chatPlanningResponse.summary);
+                        if (isCurrentPlanningReply) return pendingChangeCount > 0
+                          ? <details className="text-base leading-[1.6]"><summary className="min-h-11 py-2 cursor-pointer text-neutral-300">{lang === 'uk' ? 'Пояснення AI' : 'AI explanation'}</summary><div className="pt-2">{message.content}</div></details>
+                          : <div className="text-base leading-[1.6]">{message.content}</div>;
                         const parsed = message.role === 'assistant' ? parseChatOptions(message.content) : { body: message.content, options: [] };
                         return (
                           <>
@@ -1006,7 +1165,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                                     type="button"
                                     disabled={loading}
                                     onClick={() => handleGenerate(option.text)}
-                                    className="w-full text-left border border-neutral-700 bg-[#08080a] px-3 py-2 text-xs text-neutral-200 hover:border-white hover:text-white disabled:opacity-40 transition-colors cursor-pointer"
+                                    className="min-h-11 w-full text-left border border-neutral-700 bg-[#08080a] px-3 py-2 text-base leading-[1.6] text-neutral-200 hover:border-white hover:text-white disabled:opacity-40 transition-colors cursor-pointer"
                                   >
                                     <span className="inline-flex min-w-5 h-5 items-center justify-center mr-2 border border-neutral-600 text-[10px] font-bold text-neutral-400">
                                       {option.label}
@@ -1025,32 +1184,23 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   {/* Proposed Workspace Actions in Chat */}
                   {chatProposalReady && pendingChangeCount > 0 && !loading && !requestError && (
                     <div className="border border-emerald-800/80 bg-[#0a120c] p-3 space-y-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                          <span>{lang === 'uk' ? 'Запропоновані зміни робочого простору' : 'Proposed Workspace Changes'}</span>
+                      <div className="flex flex-wrap items-center gap-3">
+                        <span className="text-sm font-semibold text-neutral-200 flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4" aria-hidden="true" />
+                          <span>{lang === 'uk' ? 'Запропоновані зміни' : 'Proposed changes'}</span>
                         </span>
-                        <button
-                          type="button"
-                          onClick={confirmChatChanges}
-                          className="border border-emerald-600 bg-emerald-500 hover:bg-emerald-400 text-black px-3 py-1 text-[11px] font-extrabold uppercase tracking-wider transition-colors cursor-pointer"
-                        >
-                          {lang === 'uk'
-                            ? `Підтвердити всі зміни (${pendingChangeCount})`
-                            : `Confirm all changes (${pendingChangeCount})`}
-                        </button>
                       </div>
 
                       {/* Pending Tabs */}
                       {pendingChatTabs.length > 0 && (
                         <div className="space-y-1">
-                          <div className="text-[9px] uppercase tracking-wider text-neutral-400 flex items-center gap-1">
-                            <FolderPlus className="w-3 h-3 text-sky-400" />
-                            <span>{lang === 'uk' ? 'Нові вкладки:' : 'New tabs:'}</span>
+                          <div className="text-sm font-semibold text-neutral-400 flex items-center gap-2">
+                            <FolderPlus className="w-4 h-4 text-sky-400" aria-hidden="true" />
+                            <span>{lang === 'uk' ? 'Нові категорії' : 'New categories'}</span>
                           </div>
                           <div className="flex flex-wrap gap-1.5">
                             {pendingChatTabs.map((tb) => (
-                              <span key={tb.id} className="text-xs bg-sky-950/40 border border-sky-800 text-sky-300 px-2 py-0.5">
+                              <span key={tb.id} className="text-sm bg-sky-950/40 border border-sky-800 text-sky-300 px-2 py-1">
                                 {tb.name}
                               </span>
                             ))}
@@ -1061,22 +1211,25 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                       {/* Pending Tasks */}
                       {pendingChatTasks.length > 0 && (
                         <div className="space-y-1.5">
-                          <div className="text-[9px] uppercase tracking-wider text-neutral-400 flex items-center gap-1">
-                            <Plus className="w-3 h-3 text-emerald-400" />
-                            <span>{lang === 'uk' ? 'Нові завдання:' : 'New tasks:'}</span>
+                          <div className="text-sm font-semibold text-neutral-400 flex items-center gap-2">
+                            <Plus className="w-4 h-4 text-emerald-400" aria-hidden="true" />
+                            <span>{lang === 'uk' ? 'Нові завдання' : 'New tasks'}</span>
                           </div>
                           <div className="space-y-1">
-                            {pendingChatTasks.map((t, idx) => (
-                              <div key={idx} className="bg-black/60 border border-neutral-800 p-2 text-xs flex items-start justify-between gap-2">
-                                <div className="min-w-0">
-                                  <div className="flex items-center gap-2 flex-wrap">
-                                    <span className="text-[9px] text-emerald-400 font-bold">P{t.priority}</span>
-                                    <span className="text-neutral-200 break-words">{t.title}</span>
-                                    <span className="text-[10px] text-neutral-500">[{t.phase}]</span>
-                                  </div>
-                                  <TimerProposal settings={t} lang={lang} />
+                            {pendingChatTasks.map((task, idx) => (
+                              <div key={idx} className="bg-black/60 border border-neutral-800 p-3 space-y-2 text-base leading-[1.6]">
+                                <div className="flex items-center gap-2 flex-wrap text-sm text-neutral-400">
+                                  <span className="text-emerald-400 font-semibold">P{task.priority}</span>
+                                  <span>{(t.phases as any)[task.phase] || tabs.find(tab => tab.id === task.phase)?.name || task.phase}</span>
                                 </div>
-                                <span className="text-[10px] text-neutral-400 shrink-0">{t.steps} {lang === 'uk' ? 'кроків' : 'steps'}</span>
+                                <p className="font-semibold text-neutral-100 break-words">{task.title}</p>
+                                {task.note && normalizedProposalText(task.note) !== normalizedProposalText(task.title) && <p className="text-neutral-300 whitespace-pre-wrap break-words">{task.note}</p>}
+                                <TimerProposal settings={task} lang={lang} />
+                                {!!task.stepList?.length && <div className="space-y-2">
+                                  <p className="text-sm font-semibold text-neutral-400">{lang === 'uk' ? 'Підзавдання' : 'Subtasks'} ({task.stepList.length})</p>
+                                  <ProposalSteps steps={task.stepList} lang={lang} />
+                                </div>}
+                                {!task.stepList?.length && task.steps > 0 && <p className="text-sm text-neutral-400">{lang === 'uk' ? 'Підзавдання' : 'Subtasks'}: {task.steps}</p>}
                               </div>
                             ))}
                           </div>
@@ -1084,37 +1237,57 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                       )}
 
                       {pendingChatDeletions.length > 0 && (
-                        <div className="space-y-1 text-xs text-red-300">
-                          <div>{lang === 'uk' ? 'Видалення завдань:' : 'Tasks to delete:'}</div>
-                          {pendingChatDeletions.map(id => <div key={id}>{currentTasks.find(task => task.id === id)?.title || id}</div>)}
+                        <div className="space-y-2 text-base leading-[1.6] text-red-300">
+                          <div className="text-sm font-semibold">{lang === 'uk' ? 'Видалення завдань' : 'Tasks to delete'}</div>
+                          {pendingChatDeletions.map(deletion => <div key={deletion.id}>
+                            {currentTasks.find(task => task.id === deletion.id)?.title || deletion.id}
+                            <div className="text-sm leading-relaxed text-neutral-400">{deletionReasonLabel(deletion.deletionReason, lang)}</div>
+                          </div>)}
                         </div>
                       )}
 
                       {/* Pending Updates / Edits */}
                       {pendingChatUpdates.length > 0 && (
                         <div className="space-y-1.5">
-                          <div className="text-[9px] uppercase tracking-wider text-neutral-400 flex items-center gap-1">
-                            <Edit3 className="w-3 h-3 text-amber-400" />
-                            <span>{lang === 'uk' ? 'Редагування існуючих завдань:' : 'Updates to existing tasks:'}</span>
+                          <div className="text-sm font-semibold text-neutral-400 flex items-center gap-2">
+                            <Edit3 className="w-4 h-4 text-amber-400" aria-hidden="true" />
+                            <span>{lang === 'uk' ? 'Оновлення завдань' : 'Task updates'}</span>
                           </div>
                           <div className="space-y-1">
                             {pendingChatUpdates.map((u, idx) => {
                               const existing = currentTasks.find((ct) => ct.id === u.id);
                               return (
-                                <div key={idx} className="bg-black/60 border border-neutral-800 p-2 text-xs flex items-center justify-between gap-2">
-                                  <div className="min-w-0 break-words">
-                                    <span className="text-neutral-400">{existing?.title || u.id} → </span>
-                                    <span className="text-amber-300 font-bold">{u.title || (u.priority ? `P${u.priority}` : u.note || (lang === 'uk' ? 'Зміна параметрів' : 'Settings update'))}</span>
-                                    <TimerProposal settings={u} lang={lang} />
-                                  </div>
+                                <div key={idx} className="bg-black/60 border border-neutral-800 p-3">
+                                  <TaskUpdatePreview update={u} existing={existing} tabs={tabs} lang={lang} />
                                 </div>
                               );
                             })}
                           </div>
                         </div>
                       )}
+                      <button
+                        id="ai-chat-apply-changes-btn"
+                        type="button"
+                        onClick={confirmChatChanges}
+                        className="inline-flex min-h-11 items-center justify-center gap-2 border border-white bg-white hover:bg-neutral-200 text-black px-3 py-2 text-sm font-semibold transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+                      >
+                        <CheckCircle2 className="w-4 h-4" aria-hidden="true" />
+                        {lang === 'uk' ? `Застосувати зміни (${pendingChangeCount})` : `Apply changes (${pendingChangeCount})`}
+                      </button>
                     </div>
                   )}
+                  {chatPlanningRequest && chatPlanningResponse && (pendingChangeCount === 0 || chatProposalReady) && !pendingChatConfirmed.current && !loading && !requestError && !awaitingApiKey && <button
+                    id="ai-chat-alternative-plan-btn"
+                    type="button"
+                    onClick={() => {
+                      if (pendingChangeCount > 0 && !chatProposalReadyRef.current) return;
+                      requestAlternativePlan(chatPlanningRequest, chatPlanningResponse);
+                    }}
+                    className="self-start inline-flex min-h-11 items-center justify-center gap-2 border border-neutral-700 bg-[#08080a] px-3 py-2 text-sm font-semibold text-neutral-200 hover:border-white hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+                  >
+                    <RefreshCw className="w-4 h-4" aria-hidden="true" />
+                    {lang === 'uk' ? 'Інший варіант планування' : 'Alternative plan'}
+                  </button>}
                 </div>
               )}
 
@@ -1157,18 +1330,19 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
               )}
 
               {/* Structured Response Section */}
-              {response && !loading && (
+              {response && showStructuredResponse && !loading && (
                 <div className="border border-neutral-800 bg-[#0d0d10] p-4 flex flex-col gap-4">
                   {/* Strategy Summary & Inject All */}
-                  <div className="flex flex-wrap items-start justify-between gap-3 border-b border-neutral-800 pb-3">
-                    <div className="space-y-1">
-                      <div className="text-[10px] font-sans uppercase text-neutral-400 tracking-widest flex items-center gap-1.5">
-                        <AIIcon className="w-3 h-3" />
-                        <span>{mode === 'analyze' ? (lang === 'uk' ? 'ДІАГНОСТИКА ПРОЦЕСУ' : 'WORKFLOW AUDIT') : t.aiSheet.strategyHeader}</span>
+                  <div className="flex flex-col gap-3 border-b border-neutral-800 pb-3">
+                    <div className="space-y-2 min-w-0">
+                      <div className="text-sm font-sans font-semibold text-neutral-100 flex items-center gap-2">
+                        <AIIcon className="w-4 h-4" />
+                        <span>{responseMode === 'analyze' ? (lang === 'uk' ? 'Аналіз роботи' : 'Workflow analysis')
+                          : responseMode === 'breakdown' ? (lang === 'uk' ? 'Підзавдання' : 'Subtasks') : (lang === 'uk' ? 'План дій' : 'Action plan')}</span>
                       </div>
-                      <p className="text-[15px] font-bold text-neutral-100 leading-[1.6]">
+                      {showResponseSummary && <p className="text-base text-neutral-300 leading-[1.6] break-words whitespace-pre-wrap">
                         {response.summary}
-                      </p>
+                      </p>}
                       {response.source === 'local-fallback' && (
                         <p role="status" className="text-xs text-amber-300">
                           {lang === 'uk' ? 'Локальні рекомендації: ШІ-запит не завершився.' : 'Local recommendations: the AI request did not complete.'}
@@ -1176,43 +1350,47 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                       )}
                     </div>
 
-                    {((response.tasks && response.tasks.length > 0) || (response.tabs && response.tabs.length > 0) || (response.taskUpdates && response.taskUpdates.length > 0) || (response.taskDeletions && response.taskDeletions.length > 0)) && (
-                      <button
-                        id="ai-inject-all-btn"
-                        disabled={remainingResponseActions === 0}
-                        onClick={handleInjectAll}
-                        className="whitespace-nowrap px-3 py-1.5 bg-white text-black font-extrabold text-xs font-sans tracking-wider hover:bg-neutral-200 transition-colors flex items-center gap-1.5 shrink-0 disabled:opacity-50 disabled:cursor-default"
-                      >
-                        <Plus className="w-3.5 h-3.5" />
-                        <span>{remainingResponseActions === 0 ? t.aiSheet.added : `${t.aiSheet.injectAll} (${remainingResponseActions})`}</span>
-                      </button>
-                    )}
+                    {!canApplyResponse && remainingResponseActions > 0 && <p className="text-sm leading-relaxed text-neutral-400">
+                      {lang === 'uk' ? 'Попередня пропозиція доступна для перегляду. Щоб застосувати зміни, повторіть останній запит.' : 'The previous proposal is available for review. Retry the latest request before applying changes.'}
+                    </p>}
+                    {hasPlanningProposal && <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      id="ai-alternative-plan-btn"
+                      type="button"
+                      disabled={loading || awaitingApiKey || hasAppliedResponseActions}
+                      onClick={handleAlternativePlan}
+                      title={hasAppliedResponseActions ? (lang === 'uk' ? 'Частину пропозиції вже застосовано. Для нового плану напишіть новий запит.' : 'Part of this proposal has already been applied. Start a new request for another plan.') : undefined}
+                      className="inline-flex min-h-11 items-center justify-center gap-2 border border-neutral-600 px-3 py-2 text-sm font-semibold text-neutral-100 transition-colors hover:border-white hover:bg-neutral-900 disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
+                      <RefreshCw className="h-4 w-4" aria-hidden="true" />
+                      {lang === 'uk' ? 'Інший варіант планування' : 'Alternative plan'}
+                    </button>
+                    </div>}
                   </div>
 
                   {/* Workload Diagnosis (in Analyze mode or when provided) */}
-                  {response.workloadDiagnosis && (
+                  {response.workloadDiagnosis && (response.workloadDiagnosis.status || displayedBottlenecks.length > 0) && (
                     <div className="bg-[#101015] border border-neutral-800 p-3.5 space-y-2.5">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-sans text-neutral-400 uppercase tracking-wider flex items-center gap-1.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-sm font-sans font-semibold text-neutral-300 flex items-center gap-2">
                           <Activity className="w-3.5 h-3.5 text-indigo-400" />
-                          <span>{lang === 'uk' ? 'Стан робочого навантаження' : 'Workload Status'}</span>
+                          <span>{lang === 'uk' ? 'Навантаження' : 'Workload'}</span>
                         </span>
                         {response.workloadDiagnosis.status && (
-                          <span className="text-[10px] font-bold px-2 py-0.5 bg-indigo-950/60 border border-indigo-700 text-indigo-300">
+                          <span className="text-sm leading-relaxed font-semibold px-2 py-0.5 bg-indigo-950/60 border border-indigo-700 text-indigo-300 break-words">
                             {response.workloadDiagnosis.status}
                           </span>
                         )}
                       </div>
 
-                      {response.workloadDiagnosis.bottlenecks && response.workloadDiagnosis.bottlenecks.length > 0 && (
+                      {displayedBottlenecks.length > 0 && (
                         <div className="space-y-1">
-                          <div className="text-[9px] uppercase tracking-wider text-amber-400 flex items-center gap-1 font-bold">
+                          <div className="text-sm text-amber-300 flex items-center gap-2 font-semibold">
                             <AlertTriangle className="w-3 h-3" />
-                            <span>{lang === 'uk' ? 'Виявлені вузькі місця:' : 'Identified Bottlenecks:'}</span>
+                            <span>{lang === 'uk' ? 'Що заважає' : 'What gets in the way'}</span>
                           </div>
                           <ul className="space-y-1 pl-1">
-                            {response.workloadDiagnosis.bottlenecks.map((b, idx) => (
-                              <li key={idx} className="text-xs text-neutral-300 flex items-start gap-1.5">
+                            {displayedBottlenecks.map((b, idx) => (
+                              <li key={idx} className="text-base leading-[1.6] text-neutral-300 flex items-start gap-2">
                                 <span className="text-amber-400">›</span>
                                 <span>{b}</span>
                               </li>
@@ -1226,27 +1404,27 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   {/* Category Health Matrix */}
                   {response.categoryHealth && response.categoryHealth.length > 0 && (
                     <div className="space-y-2">
-                      <div className="text-[10px] font-sans uppercase tracking-wider text-neutral-400 flex items-center gap-1.5">
+                      <div className="text-sm font-sans font-semibold text-neutral-300 flex items-center gap-2">
                         <ClipboardList aria-hidden="true" className="w-4 h-4 text-neutral-300" strokeWidth={1.75} />
-                        <span>{lang === 'uk' ? 'Аналітика балансу категорій' : 'Category Balance Matrix'}</span>
+                        <span>{lang === 'uk' ? 'Категорії' : 'Categories'}</span>
                       </div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         {response.categoryHealth.map((ch, idx) => (
                           <div key={idx} className="p-2.5 bg-black/60 border border-neutral-800 space-y-1">
-                            <div className="flex items-center justify-between text-xs">
+                            <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
                               <span className="font-bold text-neutral-200">{ch.phaseName}</span>
-                              <span className={`text-[9px] uppercase font-bold px-1.5 py-0.2 border ${
+                              <span className={`text-xs font-semibold px-1.5 py-0.5 border ${
                                 ch.status === 'overloaded'
                                   ? 'border-red-800 text-red-400 bg-red-950/30'
                                   : ch.status === 'stagnant'
                                   ? 'border-amber-800 text-amber-400 bg-amber-950/30'
                                   : 'border-emerald-800 text-emerald-400 bg-emerald-950/30'
                               }`}>
-                                {ch.status} ({ch.taskCount})
+                                {lang === 'uk' ? ({ balanced: 'Баланс', overloaded: 'Перевантажено', empty: 'Порожньо', stagnant: 'Без прогресу' }[ch.status] || ch.status) : ch.status} ({ch.taskCount})
                               </span>
                             </div>
                             {ch.recommendation && (
-                              <p className="text-[15px] text-neutral-400 leading-[1.6]">
+                              <p className="text-base text-neutral-300 leading-[1.6] break-words">
                                 {ch.recommendation}
                               </p>
                             )}
@@ -1257,15 +1435,15 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   )}
 
                   {/* Tactical Insights */}
-                  {response.insights && response.insights.length > 0 && (
+                  {displayedInsights.length > 0 && (
                     <div className="bg-[#121216] border border-neutral-800 p-3 space-y-2">
-                      <div className="text-[10px] font-sans text-neutral-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
+                      <div className="text-sm font-sans text-neutral-300 font-semibold flex items-center gap-2">
                         <Lightbulb className="w-3.5 h-3.5 text-amber-400" />
-                        <span>{t.aiSheet.insightsHeader}</span>
+                        <span>{lang === 'uk' ? 'Підказки' : 'Suggestions'}</span>
                       </div>
                       <ul className="space-y-1.5">
-                        {response.insights.map((insight, idx) => (
-                          <li key={idx} className="text-[15px] leading-[1.6] font-sans text-neutral-300 flex items-start gap-2">
+                        {displayedInsights.map((insight, idx) => (
+                          <li key={idx} className="text-base leading-[1.6] font-sans text-neutral-300 flex items-start gap-2">
                             <span className="text-white font-bold shrink-0">›</span>
                             <span>{insight}</span>
                           </li>
@@ -1276,10 +1454,10 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
 
                   {/* Proposed Tabs */}
                   {response.tabs && response.tabs.length > 0 && (
-                    <div className="border border-sky-900/70 bg-sky-950/20 p-3 text-xs font-sans text-sky-200 space-y-2">
-                      <span className="text-[10px] uppercase tracking-wider text-sky-400 flex items-center gap-1.5">
+                    <div className="border border-sky-900/70 bg-sky-950/20 p-3 text-sm font-sans text-sky-200 space-y-2">
+                      <span className="text-sm font-semibold text-sky-300 flex items-center gap-2">
                         <FolderPlus className="w-3.5 h-3.5" />
-                        <span>{lang === 'uk' ? 'Запропоновані нові вкладки' : 'Suggested new tabs'}</span>
+                        <span>{lang === 'uk' ? 'Нові категорії' : 'New categories'}</span>
                       </span>
                       <div className="flex flex-wrap gap-1.5">
                         {response.tabs.map((tab) => (
@@ -1292,47 +1470,41 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   )}
 
                   {!!response.taskDeletions?.length && (
-                    <div className="space-y-1 text-xs text-red-300">
-                      <div>{lang === 'uk' ? 'Видалення завдань:' : 'Tasks to delete:'}</div>
-                      {response.taskDeletions.map(({ id }) => <div key={id}>{currentTasks.find(task => task.id === id)?.title || id}</div>)}
+                    <div className="space-y-2 text-base leading-[1.6] text-red-300">
+                      <div className="text-sm font-semibold">{lang === 'uk' ? 'Прибрати завдання' : 'Remove tasks'}</div>
+                      {response.taskDeletions.map(deletion => <div key={deletion.id}>
+                        {currentTasks.find(task => task.id === deletion.id)?.title || deletion.id}
+                        <div className="text-sm leading-relaxed text-neutral-400">{deletionReasonLabel(deletion.deletionReason, lang)}</div>
+                      </div>)}
                     </div>
                   )}
 
                   {/* Proposed Task Edits / Updates */}
                   {response.taskUpdates && response.taskUpdates.length > 0 && (
                     <div className="space-y-2">
-                      <div className="text-[10px] font-sans uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
+                      <div className="text-sm font-sans font-semibold text-neutral-300 flex items-center gap-2">
                         <Edit3 className="w-3.5 h-3.5" />
-                        <span>{lang === 'uk' ? 'Редагування завдань' : 'Task Modifications'}</span>
+                        <span>{lang === 'uk' ? 'Оновлення завдань' : 'Task updates'}</span>
                       </div>
                       <div className="flex flex-col gap-2">
                         {response.taskUpdates.map((up) => {
                           const existing = currentTasks.find((ct) => ct.id === up.id);
                           const isApplied = appliedUpdateIds.includes(up.id);
                           return (
-                            <div key={up.id} className="p-3 bg-black border border-neutral-800 flex items-center justify-between gap-3">
-                              <div className="space-y-0.5 text-xs">
-                                <div className="text-neutral-400 line-through text-[11px]">{existing?.title || up.id}</div>
-                                <div className="text-white font-bold">{up.title || existing?.title}</div>
-                                <TimerProposal settings={up} lang={lang} />
-                                {up.stepList !== undefined && <div className="text-neutral-300">
-                                  {lang === 'uk' ? 'Підзавдання після зміни' : 'Subtasks after update'}: {up.stepList.length}
-                                  {up.stepList.map((step, index) => <div key={step.id || index}>{step.done ? '?' : '?'} {step.title}</div>)}
-                                </div>}
-                                {up.priority && <span className="text-[10px] text-amber-400">P{up.priority} </span>}
-                                {up.note && <span className="text-[10px] text-neutral-400">// {up.note}</span>}
-                              </div>
+                            <div key={up.id} className="p-3 bg-black border border-neutral-800 flex flex-col items-start gap-3">
+                              <TaskUpdatePreview update={up} existing={existing} tabs={tabs} lang={lang} />
                               <button
                                 type="button"
                                 onClick={() => handleApplySingleUpdate(up)}
-                                disabled={isApplied}
-                                className={`px-2.5 py-1 text-[10px] font-bold uppercase border shrink-0 transition-colors ${
+                                disabled={!canApplyResponse || isApplied}
+                                className={`min-h-11 px-3 py-2 text-sm font-semibold border shrink-0 transition-colors inline-flex items-center justify-center gap-2 disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white ${
                                   isApplied
                                     ? 'border-emerald-700 text-emerald-400 bg-emerald-950/40'
                                     : 'border-amber-700 text-amber-300 hover:border-white hover:text-white bg-amber-950/30'
                                 }`}
                               >
-                                {isApplied ? (responsePartlyRejected ? (lang === 'uk' ? 'Опрацьовано' : 'Processed') : t.aiSheet.added) : (lang === 'uk' ? 'Застосувати' : 'Apply')}
+                                <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+                                {isApplied ? (lang === 'uk' ? 'Опрацьовано' : 'Processed') : (lang === 'uk' ? 'Оновити завдання' : 'Update task')}
                               </button>
                             </div>
                           );
@@ -1344,8 +1516,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   {/* Generated Tasks List with Sub-Steps */}
                   {response.tasks && response.tasks.length > 0 && (
                     <div className="flex flex-col gap-2.5">
-                      <div className="text-[10px] font-sans uppercase tracking-wider text-neutral-400">
-                        {lang === 'uk' ? 'Заплановані завдання' : 'Actionable Tasks'} ({response.tasks.length})
+                      <div className="text-sm font-sans font-semibold text-neutral-300">
+                        {lang === 'uk' ? 'Нові завдання' : 'New tasks'} ({response.tasks.length})
                       </div>
                       {response.tasks.map((task, i) => {
                         const isInjected = injectedIds.includes(i);
@@ -1359,10 +1531,10 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                             id={`ai-suggested-task-${i}`}
                             className="flex flex-col gap-2 p-3 bg-black border border-neutral-800 hover:border-neutral-700 transition-colors"
                           >
-                            <div className="flex items-start justify-between gap-2">
-                              <div className="flex flex-col gap-1">
+                            <div className="flex flex-col gap-3">
+                              <div className="flex min-w-0 flex-col gap-2">
                                 <div className="flex items-center gap-2 flex-wrap">
-                                  <span className="text-[10px] font-sans text-neutral-400 font-bold flex items-center gap-1">
+                                  <span className="text-sm font-sans text-neutral-400 font-semibold flex items-center gap-1">
                                     {matchedTab?.color && (
                                       <span
                                         className="w-1.5 h-1.5 rounded-full shrink-0 shadow-sm"
@@ -1372,7 +1544,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                                     [{phaseLabel}]
                                   </span>
                                   <span
-                                    className={`text-[9px] font-sans font-bold px-1 py-0.2 border ${
+                                    className={`text-sm font-sans font-semibold px-1.5 py-0.5 border ${
                                       task.priority === 1
                                         ? 'border-red-900/70 text-red-400 bg-red-950/30'
                                         : task.priority === 2
@@ -1382,59 +1554,59 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                                   >
                                     P{task.priority}
                                   </span>
-                                  <span className="text-xs sm:text-sm font-bold text-neutral-100">
+                                  <span className="w-full text-base leading-[1.6] font-semibold text-neutral-100 break-words">
                                     {task.title}
                                   </span>
                                 </div>
-                                {task.note && (
-                                  <span className="text-[10px] font-sans text-neutral-400">
-                                    // {task.note}
+                                {task.note && normalizedProposalText(task.note) !== normalizedProposalText(task.title) && (
+                                  <span className="text-base leading-[1.6] font-sans text-neutral-300 whitespace-pre-wrap break-words">
+                                    {task.note}
                                   </span>
                                 )}
                                 <TimerProposal settings={task} lang={lang} />
                               </div>
 
-                              <button
-                                id={`ai-inject-single-btn-${i}`}
-                                onClick={() => handleInjectSingle(task, i)}
-                                disabled={isInjected}
-                                className={`px-2.5 py-1 text-[10px] font-sans uppercase font-bold border transition-all shrink-0 ${
-                                  isInjected
-                                    ? 'border-emerald-700 text-emerald-400 bg-emerald-950/40'
-                                    : 'border-neutral-700 text-neutral-300 hover:border-white hover:text-white bg-neutral-900'
-                                }`}
-                              >
-                                {isInjected ? (responsePartlyRejected ? (lang === 'uk' ? 'Опрацьовано' : 'Processed') : t.aiSheet.added) : t.aiSheet.injectSingle}
-                              </button>
                             </div>
 
                             {/* Sub-steps preview */}
                             {subSteps.length > 0 && (
-                              <div className="pt-2 border-t border-neutral-900/80 space-y-1">
-                                <div className="text-[9px] font-sans text-neutral-500 uppercase font-bold">
-                                  {t.aiSheet.subStepsTitle} ({subSteps.length})
+                              <div className="pt-2 border-t border-neutral-900/80 space-y-2">
+                                <div className="text-sm font-sans text-neutral-400 font-semibold">
+                                  {lang === 'uk' ? 'Підзавдання' : 'Subtasks'} ({subSteps.length})
                                 </div>
-                                <div className="grid grid-cols-1 gap-1">
-                                  {subSteps.map((st, sIdx) => {
-                                    const titleText = typeof st === 'string' ? st : st.title;
-                                    return (
-                                      <div
-                                        key={sIdx}
-                                        className="text-[10px] font-sans text-neutral-300 bg-[#0c0c0f] border border-neutral-900 px-2 py-1 flex items-center gap-1.5"
-                                      >
-                                        <span className="text-neutral-500 font-bold">{sIdx + 1}.</span>
-                                        <span>{titleText}</span>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
+                                <ProposalSteps steps={subSteps} lang={lang} />
                               </div>
                             )}
+                            <button
+                              id={`ai-inject-single-btn-${i}`}
+                              onClick={() => handleInjectSingle(task, i)}
+                              type="button"
+                              disabled={!canApplyResponse || isInjected}
+                              className={`self-start inline-flex min-h-11 items-center justify-center gap-2 px-3 py-2 text-sm font-sans font-semibold border transition-colors shrink-0 disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white ${
+                                isInjected
+                                  ? 'border-emerald-700 text-emerald-400 bg-emerald-950/40'
+                                  : 'border-neutral-700 text-neutral-300 hover:border-white hover:text-white bg-neutral-900'
+                              }`}
+                            >
+                              <Plus className="h-4 w-4" aria-hidden="true" />
+                              {isInjected ? (responsePartlyRejected ? (lang === 'uk' ? 'Опрацьовано' : 'Processed') : t.aiSheet.added) : (lang === 'uk' ? 'Додати завдання' : 'Add task')}
+                            </button>
                           </div>
                         );
                       })}
                     </div>
                   )}
+                  {(responseActionCount > 1 || !!response.tabs?.length || !!response.taskDeletions?.length) && <button
+                    id="ai-inject-all-btn"
+                    type="button"
+                    disabled={!canApplyResponse || remainingResponseActions === 0}
+                    onClick={handleInjectAll}
+                    className="self-start min-h-11 px-3 py-2 bg-white text-black font-semibold text-sm font-sans hover:bg-neutral-200 transition-colors inline-flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-default focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+                  >
+                    <CheckCircle2 className="w-4 h-4" aria-hidden="true" />
+                    <span>{remainingResponseActions === 0 ? (lang === 'uk' ? 'Опрацьовано' : 'Processed')
+                      : `${lang === 'uk' ? 'Застосувати зміни' : 'Apply changes'} (${remainingResponseActions})`}</span>
+                  </button>}
                 </div>
               )}
             </div>
@@ -1537,7 +1709,9 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                       voiceRef.current?.cancel();
                       voiceRef.current = null;
                       setVoicePhase('idle');
-                      setPrompt(e.target.value);
+                      const nextPrompt = e.target.value;
+                      if (!awaitingKeyRef.current && preservedRequestDraftRef.current !== null) preservedRequestDraftRef.current = nextPrompt;
+                      setPrompt(nextPrompt);
                     }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void handleGenerate(); }
@@ -1551,17 +1725,17 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                         ? (lang === 'uk' ? 'Уточніть фокус аналізу (напр. перевірити пріоритети, дедлайни)...' : 'Refine audit focus (e.g. check priorities, deadlines)...')
                         : t.aiSheet.inputPlaceholder
                     }
-                    className="w-full min-h-11 bg-[#050507] border border-neutral-800 text-white placeholder:text-neutral-500 text-base leading-[1.6] font-sans pl-3.5 pr-10 py-2.5 focus:outline-none focus:border-white transition-colors"
+                    className="w-full min-h-11 bg-[#050507] border border-neutral-800 text-white placeholder:text-neutral-500 text-base leading-[1.6] font-sans pl-3.5 pr-14 py-2.5 focus:outline-none focus:border-white transition-colors"
                   />
                   {/* Voice dictation button embedded in input field */}
                   <button
                     id="ai-voice-dictation-btn"
                     type="button"
                     onClick={handleToggleVoiceInput}
-                    disabled={awaitingApiKey || isTranscribing}
+                    disabled={loading || awaitingApiKey || isTranscribing}
                     title={isListening ? t.aiSheet.voiceStop : t.aiSheet.voiceInput}
                     aria-label={isListening ? t.aiSheet.voiceStop : t.aiSheet.voiceInput}
-                    className={`absolute right-1.5 p-1.5 rounded transition-all cursor-pointer ${
+                    className={`absolute right-1 min-w-11 min-h-11 flex items-center justify-center rounded transition-all cursor-pointer ${
                       isListening
                         ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
                         : isTranscribing

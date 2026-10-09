@@ -63,6 +63,7 @@ interface AIAssistantSheetProps {
   stats?: WorkflowStats;
   adaptiveProfile?: AdaptiveProfile;
   initialPrompt?: string;
+  initialPromptAsDraft?: boolean;
   aiIconVariant?: AIIconId;
   onInjectTasks: (
     newTasks: (Omit<PSTask, 'id' | 'currentStep' | 'done' | 'pinned' | 'createdAt'> & AITimerSettings)[],
@@ -180,6 +181,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   stats,
   adaptiveProfile,
   initialPrompt = '',
+  initialPromptAsDraft = false,
   aiIconVariant,
   onInjectTasks,
   accountId = null,
@@ -587,12 +589,12 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     if (initialPrompt) {
       const normalizedPrompt = initialPrompt.trim().toLowerCase().replace(/[!?.,]/g, '');
       const isGreeting = /^(привіт|вітаю|добрий день|доброго ранку|добрий вечір|hello|hi|hey)$/.test(normalizedPrompt);
-      const initialMode: AIMode = isGreeting ? 'chat' : 'breakdown';
+      const initialMode: AIMode = initialPromptAsDraft || isGreeting ? 'chat' : 'breakdown';
       setPrompt(initialPrompt);
       setMode(initialMode);
-      handleGenerate(initialPrompt, initialMode);
+      if (!initialPromptAsDraft) handleGenerate(initialPrompt, initialMode);
     }
-  }, [initialPrompt]);
+  }, [initialPrompt, initialPromptAsDraft]);
 
   const handleGenerate = async (queryText?: string, selectedMode?: AIMode, resuming = false, preserveInput = false, planningSource?: AIRequest, internalAlternative = false) => {
     voiceRef.current?.cancel();

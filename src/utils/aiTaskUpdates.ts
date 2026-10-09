@@ -58,7 +58,7 @@ export function applyAITaskUpdate(
         while (used.has(id) || reserved.has(id)) id = `${base}-${suffix++}`;
       }
       used.add(id);
-      return { id, title, done: typeof step.done === 'boolean' ? step.done : previous?.done || false };
+      return { ...previous, id, title, done: typeof step.done === 'boolean' ? step.done : previous?.done || false };
     });
     next.steps = next.stepList.length;
   } else if (hasStepCount && !next.stepList?.length) {

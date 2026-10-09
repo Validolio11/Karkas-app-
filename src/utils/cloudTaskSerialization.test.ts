@@ -95,3 +95,34 @@ test('cloud roundtrip preserves pending daily plan cursor and occurrence identit
   assert.equal(roundtrip.scheduledFor, occurrence.scheduledFor);
   assert.equal(roundtrip.schedulePlanId, 'plan-1');
 });
+
+test('cloud roundtrip preserves initial plan, stage evidence and the captured running stage', () => {
+  const measured: PSTask = { ...task, timerRunning: true, timerStartedAt: 100, timerStepId: 'collect', plannedDurationSeconds: 600,
+    stepList: [{ id: 'collect', title: 'Collect', done: false, estimatedDurationSeconds: 300, timeSpentSeconds: 40 }] };
+  const snapshot = structuredClone(measured);
+  const restored = JSON.parse(JSON.stringify(serializeTaskForCloud(measured)));
+  assert.equal(restored.plannedDurationSeconds, 600);
+  assert.equal(restored.timerStepId, 'collect');
+  assert.deepEqual(restored.stepList, measured.stepList);
+  restored.stepList[0].timeSpentSeconds = 999;
+  assert.deepEqual(measured, snapshot);
+});
+
+test('cloud payload rejects invalid estimates and ambiguous captured stages without erasing valid zero measurements', () => {
+  const malformed: PSTask = { ...task, timerRunning: true, timerStepId: 'duplicate', plannedDurationSeconds: Infinity,
+    stepList: [
+      { id: 'duplicate', title: 'A', done: false, estimatedDurationSeconds: -1, timeSpentSeconds: NaN },
+      { id: 'duplicate', title: 'B', done: false, estimatedDurationSeconds: 1.5, timeSpentSeconds: -1 },
+      { id: 'valid', title: 'C', done: false, estimatedDurationSeconds: 60, timeSpentSeconds: 0 },
+    ] };
+  const value = serializeTaskForCloud(malformed);
+  assert.equal('plannedDurationSeconds' in value, false);
+  assert.equal('timerStepId' in value, false);
+  for (const step of value.stepList!.slice(0, 2)) {
+    assert.equal('estimatedDurationSeconds' in step, false);
+    assert.equal('timeSpentSeconds' in step, false);
+  }
+  assert.equal(value.stepList?.[2].timeSpentSeconds, 0);
+  assert.equal(value.stepList?.[2].estimatedDurationSeconds, 60);
+  assert.equal('timerStepId' in serializeTaskForCloud({ ...malformed, timerStepId: 'valid', timerRunning: false }), false);
+});

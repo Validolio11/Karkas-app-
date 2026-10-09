@@ -52,6 +52,11 @@ test('reapplying the same configuration preserves consumed countdown and active 
   const running = base({ timerMode: 'countdown', countdownDurationSeconds: 600, countdownRemainingSeconds: 390,
     timerRunning: true, timerStartedAt: 1000 });
   assert.equal(applyAITimerSettings(running, { timerMode: 'countdown', countdownDurationSeconds: 600 }, 5000), running);
+  assert.equal(applyAITimerSettings(running, { countdownDurationSeconds: 600 }, 5000).plannedDurationSeconds, undefined,
+    'the same legacy budget may already include extensions and cannot establish the initial plan');
+  const changed = applyAITimerSettings(running, { countdownDurationSeconds: 900 }, 5000);
+  assert.equal(changed.plannedDurationSeconds, 900);
+  assert.equal(applyAITimerSettings(changed, { countdownDurationSeconds: 1200 }, 6000).plannedDurationSeconds, 900);
 });
 
 test('invalid AI timer fields leave work intact and completed tasks cannot be started', () => {

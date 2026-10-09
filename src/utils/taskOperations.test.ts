@@ -44,7 +44,9 @@ test('checking the last step leaves its parent active until explicit completion 
   assert.deepEqual(materializeStepList(running).map(step => step.done), [true, false, false]);
   const allSteps = setTaskProgress(running, 99, 120_000);
   assert.equal(allSteps.done, false);
-  assert.equal(allSteps.timerRunning, true);
+  assert.equal(allSteps.timerRunning, false, 'an already expired countdown stays paused during checklist edits');
+  assert.equal(allSteps.timeSpentSeconds, 80);
+  assert.equal(allSteps.countdownRemainingSeconds, 0);
   assert.equal(allSteps.completedAt, undefined);
   const done = completeTask(allSteps, 120_000);
   assert.equal(done.done, true);

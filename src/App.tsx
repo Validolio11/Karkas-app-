@@ -52,6 +52,12 @@ import packageMetadata from '../package.json';
 import { taskBreakdownContext } from './utils/taskBreakdownContext';
 import { materializeScheduledWorkspace, normalizeTaskSchedule } from './utils/taskScheduling';
 import { describeSchedule } from './utils/schedulePresentation';
+import { buildWorkInsights } from './utils/workInsights';
+import { discardTaskStepAttribution } from './utils/taskWorkTelemetry';
+import { WorkInsightsPanel } from './components/WorkInsightsPanel';
+import { TaskWorkPlanDialog } from './components/TaskWorkPlanDialog';
+import { applyTaskWorkPlan, type WorkPlanEdit } from './utils/taskWorkPlan';
+import { useWorkReminders } from './components/useWorkReminders';
 
 const STORAGE_KEY = 'life_todo_tasks_v2';
 const DELETED_STORAGE_KEY = 'karkas_deleted_tasks_v2';
@@ -488,8 +494,9 @@ export default function App() {
     return getSavedAIIconId();
   });
   const [aiPromptSeed, setAiPromptSeed] = useState('');
+  const [aiSeedAsDraft, setAiSeedAsDraft] = useState(false);
   useEffect(() => {
-    if (!isAIOpen) setAiPromptSeed('');
+    if (!isAIOpen) { setAiPromptSeed(''); setAiSeedAsDraft(false); }
   }, [isAIOpen]);
   const [breakingDownTaskId, setBreakingDownTaskId] = useState<string | null>(null);
   const [isWindowMinimized, setIsWindowMinimized] = useState(false);
@@ -1383,6 +1390,39 @@ export default function App() {
 
   const operationalTasks = useMemo(() => tasks.filter(task => !task.scheduledPending), [tasks]);
   const scheduledPlans = useMemo(() => tasks.filter(task => task.scheduledPending), [tasks]);
+  const [insightNow, setInsightNow] = useState(() => Date.now());
+  const [workPlanTaskId, setWorkPlanTaskId] = useState<string | null>(null);
+  useEffect(() => {
+    const interval = setInterval(() => setInsightNow(Date.now()), 30000);
+    return () => clearInterval(interval);
+  }, []);
+  useEffect(() => { setWorkPlanTaskId(null); }, [currentUser?.uid]);
+  const workInsights = useMemo(() => buildWorkInsights(tasks, deletedTasks, {
+    now: insightNow, lang, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Kyiv',
+  }), [tasks, deletedTasks, insightNow, lang]);
+  const workReminders = useWorkReminders(currentUser?.uid || null,
+    timerWorkspaceReadyRef.current && workspaceOwnerRef.current === (currentUser?.uid || null),
+    workInsights, tasks, lang, setTimerNotice);
+  const workPlanTask = workPlanTaskId ? tasks.find(task => task.id === workPlanTaskId && !task.done && !task.scheduledPending) : undefined;
+  const saveWorkPlan = (id: string, edit: WorkPlanEdit): boolean => {
+    if (!timerWorkspaceReadyRef.current || workspaceOwnerRef.current !== (currentUser?.uid || null)) return false;
+    const current = latestTasksRef.current.find(task => task.id === id && !task.done && !task.scheduledPending);
+    if (!current) return false;
+    const now = Date.now();
+    const stepLabel = lang === 'uk' ? 'Крок' : 'Step';
+    if (!applyTaskWorkPlan(current, edit, now, stepLabel)) return false;
+    setTasks(previous => previous.map(task => {
+      if (task.id !== id) return task;
+      return applyTaskWorkPlan(task, edit, now, stepLabel) || task;
+    }));
+    return true;
+  };
+  const applySuggestedPriority = (id: string, from: 1 | 2 | 3, to: 1 | 2 | 3) => {
+    if (!timerWorkspaceReadyRef.current || workspaceOwnerRef.current !== (currentUser?.uid || null)) return;
+    const proposal = workInsights.prioritySuggestions.find(item => item.taskId === id && item.currentPriority === from && item.suggestedPriority === to);
+    if (!proposal) return;
+    setTasks(previous => previous.map(task => task.id === id && task.priority === from && !task.done && !task.scheduledPending && !task.startedAt && !task.timerRunning ? { ...task, priority: to } : task));
+  };
   // Compute live stats per tab
   const stats: WorkflowStats = useMemo(() => {
     const total = operationalTasks.length;
@@ -1619,7 +1659,7 @@ export default function App() {
       prev.map((t) => {
         if (t.id === id) {
           return {
-            ...pauseTaskTimer(t),
+            ...discardTaskStepAttribution(pauseTaskTimer(t)),
             timeSpentSeconds: 0,
             timerRunning: false,
             timerStartedAt: undefined,
@@ -2032,6 +2072,12 @@ export default function App() {
           <span className="min-w-0 flex-1 break-words">{timerNotice}</span>
           <button type="button" aria-label={lang === 'uk' ? 'Закрити сповіщення' : 'Dismiss notification'} onClick={() => setTimerNotice(null)} className="flex h-11 w-11 shrink-0 items-center justify-center hover:bg-white/10"><X className="h-5 w-5" /></button>
         </div>}
+        {timerWorkspaceReadyRef.current && workspaceOwnerRef.current === (currentUser?.uid || null) && (selectedPhase === 'DASHBOARD' || workInsights.prioritySuggestions.length > 0 && selectedPhase !== 'NOTES' && selectedPhase !== 'HISTORY') && <WorkInsightsPanel
+          key={`${currentUser?.uid || 'guest'}:${selectedPhase === 'DASHBOARD'}`} insights={workInsights} tasks={tasks} lang={lang}
+          expanded={selectedPhase === 'DASHBOARD'} remindersEnabled={workReminders.enabled} onRemindersChange={workReminders.setEnabled}
+          onApplyPriority={applySuggestedPriority} onEditPlan={setWorkPlanTaskId}
+          onReviewAI={prompt => { setAiPromptSeed(prompt); setAiSeedAsDraft(true); setIsAIOpen(true); }}
+        />}
         {selectedPhase === 'DASHBOARD' ? (
           <DashboardView
             tasks={operationalTasks}
@@ -2294,6 +2340,7 @@ export default function App() {
           )}
         </AnimatePresence>
       </main>
+      {workPlanTask && timerWorkspaceReadyRef.current && workspaceOwnerRef.current === (currentUser?.uid || null) && <TaskWorkPlanDialog key={`${currentUser?.uid || 'guest'}:${workPlanTask.id}`} task={workPlanTask} lang={lang} onClose={() => setWorkPlanTaskId(null)} onSave={saveWorkPlan} />}
 
       {/* All bottom controls share the same responsive layout. */}
       <footer className="fixed bottom-0 left-0 right-0 z-30 bg-[#060608]/95 backdrop-blur-md border-t border-neutral-800/80 px-3 sm:px-4 py-2.5 app-no-drag pointer-events-auto">
@@ -2416,6 +2463,7 @@ export default function App() {
         stats={stats}
         adaptiveProfile={adaptiveProfile}
         initialPrompt={aiPromptSeed}
+        initialPromptAsDraft={aiSeedAsDraft}
         aiIconVariant={aiIconVariant}
         accountId={currentUser?.uid ?? null}
         onInjectTasks={handleInjectAITasks}

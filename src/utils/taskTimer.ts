@@ -1,4 +1,5 @@
 import type { PSTask, TimerMode } from '../types';
+import { activeTaskStepId, bankTaskStepSession, initialTaskPlanSeconds } from './taskWorkTelemetry';
 
 export function getTaskTimerMode(task: PSTask): TimerMode {
   if (task.timerMode === 'none' || task.timerMode === 'stopwatch' || task.timerMode === 'countdown') return task.timerMode;
@@ -39,10 +40,11 @@ export function getTaskRemainingSeconds(task: PSTask, now = Date.now()): number 
 export function pauseTaskTimer(task: PSTask, now = Date.now()): PSTask {
   const remaining = getTaskRemainingSeconds(task, now);
   return {
-    ...task,
+    ...bankTaskStepSession(task, getTaskSessionSeconds(task, now)),
     timeSpentSeconds: getTaskTotalSeconds(task, now),
     timerRunning: false,
     timerStartedAt: undefined,
+    timerStepId: undefined,
     ...(remaining === undefined ? {} : { countdownRemainingSeconds: remaining }),
   };
 }
@@ -59,6 +61,7 @@ export function startTaskTimer(task: PSTask, now = Date.now()): PSTask {
     timerRunning: true,
     startedAt: Number.isFinite(task.startedAt) ? task.startedAt : now,
     timerStartedAt: now,
+    timerStepId: activeTaskStepId(paused),
     autoPausedOverdue: false,
     ...(remaining === undefined ? {} : {
       countdownRemainingSeconds: remaining || seconds(task.countdownDurationSeconds),
@@ -75,9 +78,11 @@ export function configureTaskCountdown(task: PSTask, durationSeconds: number, no
     ...pauseTaskTimer(task, now),
     timerMode: 'countdown',
     countdownDurationSeconds: duration,
+    plannedDurationSeconds: initialTaskPlanSeconds(task, duration),
     countdownRemainingSeconds: duration,
     timerRunning: true,
     timerStartedAt: now,
+    timerStepId: activeTaskStepId(task),
     startedAt: Number.isFinite(task.startedAt) ? task.startedAt : now,
     autoPausedOverdue: false,
   };
@@ -104,6 +109,7 @@ export function extendTaskCountdown(task: PSTask, extraSeconds: number, now = Da
     countdownRemainingSeconds: remaining + extraSeconds,
     timerRunning: running,
     timerStartedAt: running ? now : undefined,
+    timerStepId: running ? activeTaskStepId(paused) : undefined,
     autoPausedOverdue: false,
   };
 }

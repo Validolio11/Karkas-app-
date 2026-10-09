@@ -105,8 +105,10 @@ export function getDueScheduledOccurrences(plans: ScheduledTaskPlan[], now = Dat
     if (known.has(id)) continue;
     known.add(id);
     const task = {
-      ...plan.task, stepList: plan.task.stepList?.map(step => ({ ...step, done: false })), id, done: false, pinned: false, currentStep: 0, createdAt: now,
+      ...plan.task, stepList: plan.task.stepList?.map(step => { const fresh = { ...step, done: false }; delete fresh.timeSpentSeconds; return fresh; }), id, done: false, pinned: false, currentStep: 0, createdAt: now,
       timerRunning: false, timeSpentSeconds: 0,
+      timerStartedAt: undefined, timerStepId: undefined,
+      ...(plan.task.timerMode === 'countdown' && plan.task.countdownDurationSeconds ? { plannedDurationSeconds: plan.task.plannedDurationSeconds ?? plan.task.countdownDurationSeconds } : {}),
       ...(plan.task.timerMode === 'countdown' && plan.task.countdownDurationSeconds ? { countdownRemainingSeconds: plan.task.countdownDurationSeconds } : {}),
       schedulePlanId: plan.id, scheduledFor: occurrence,
     } as PSTask;
@@ -131,6 +133,7 @@ export function materializeScheduledWorkspace(records: PSTask[], deletedIds: Ite
       ...(record.note !== undefined ? { note: record.note } : {}),
       ...(record.timerMode !== undefined ? { timerMode: record.timerMode } : {}),
       ...(record.countdownDurationSeconds !== undefined ? { countdownDurationSeconds: record.countdownDurationSeconds } : {}),
+      ...(record.plannedDurationSeconds !== undefined ? { plannedDurationSeconds: record.plannedDurationSeconds } : {}),
     };
     plans.push({ id: record.id, task, schedule, nextStartAt });
   }

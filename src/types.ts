@@ -12,6 +12,8 @@ export interface TaskStepItem {
   id: string;
   title: string;
   done: boolean;
+  timeSpentSeconds?: number; // Only work measured while this step was active; missing means unknown.
+  estimatedDurationSeconds?: number; // Optional explicit estimate, never inferred from total task time.
 }
 
 export type TimerMode = 'none' | 'stopwatch' | 'countdown';
@@ -50,6 +52,8 @@ export interface PSTask {
   completedAt?: number;
   timerMode?: TimerMode; // Missing on legacy tasks: countdown if configured, otherwise stopwatch
   timeSpentSeconds?: number; // Total accumulated seconds spent on this task
+  plannedDurationSeconds?: number; // First explicit countdown estimate; extensions do not rewrite it.
+  timerStepId?: string; // Step owning this measured session; legacy sessions have no attribution.
   timerRunning?: boolean; // Is stopwatch currently active
   timerStartedAt?: number; // Timestamp (ms) when current stopwatch session started
   countdownDurationSeconds?: number; // Configured focus session duration
@@ -58,7 +62,7 @@ export interface PSTask {
 }
 
 export type NewTaskInput = Pick<PSTask, 'title' | 'phase' | 'priority' | 'steps'> &
-  Partial<Pick<PSTask, 'stepList' | 'note' | 'timerMode' | 'countdownDurationSeconds' | 'schedule'>>;
+  Partial<Pick<PSTask, 'stepList' | 'note' | 'timerMode' | 'countdownDurationSeconds' | 'plannedDurationSeconds' | 'schedule'>>;
 
 export interface DeletedTask extends PSTask {
   deletedAt: number;

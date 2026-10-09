@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { AITaskUpdate, PSTask } from '../types';
 import { applyAITaskUpdate } from './aiTaskUpdates';
+import { getTaskTotalSeconds, pauseTaskTimer } from './taskTimer';
 
 const tabs = new Set(['focus', 'work']);
 const task = (overrides: Partial<PSTask> = {}): PSTask => ({
@@ -33,15 +34,18 @@ test('adding a subtask preserves existing identities and completed progress', ()
 });
 
 test('deleting the remaining incomplete subtask does not implicitly complete or stop the parent', () => {
-  const result = applyAITaskUpdate(task({ timerRunning: true, timerStartedAt: 1000, timeSpentSeconds: 5 }), {
+  const original = task({ timerRunning: true, timerStartedAt: 1000, timeSpentSeconds: 5 });
+  const result = applyAITaskUpdate(original, {
     id: 'task-1', stepList: [{ id: 'a', title: 'Research' }],
   } as AITaskUpdate, tabs, 11000);
   assert.equal(result.done, false);
   assert.equal(result.currentStep, 1);
   assert.equal(result.completedAt, undefined);
   assert.equal(result.timerRunning, true);
-  assert.equal(result.timerStartedAt, 1000);
-  assert.equal(result.timeSpentSeconds, 5);
+  assert.equal(getTaskTotalSeconds(result, 11000), getTaskTotalSeconds(original, 11000));
+  assert.equal(getTaskTotalSeconds(result, 16000), 20, 'time continues after the checklist edit');
+  assert.equal(pauseTaskTimer(result, 16000).timeSpentSeconds, 20, 'banked time is never counted twice');
+  assert.equal(result.timerStepId, undefined, 'all remaining stages are done, so later work has no invented stage');
 });
 
 test('deleting all subtasks preserves explicit parent completion with a valid zero-step task', () => {

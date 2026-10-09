@@ -1,6 +1,7 @@
 import type { NewTaskInput, PSTask, TaskStepItem } from '../types';
 import { normalizeTaskSchedule } from './taskScheduling';
 import { getTaskRemainingSeconds, getTaskTimerMode, getTaskTotalSeconds, pauseTaskTimer, startTaskTimer } from './taskTimer';
+import { activeTaskStepId, bankTaskStepSession, discardTaskStepAttribution, initialTaskPlanSeconds } from './taskWorkTelemetry';
 
 const MAX_RUNNING_SESSION_SECONDS = 2 * 60 * 60;
 
@@ -17,10 +18,11 @@ export function sanitizeTasksTimerSafeguard(taskList: PSTask[], now = Date.now()
     const elapsedSeconds = Math.floor((now - task.timerStartedAt) / 1000);
     if (elapsedSeconds <= MAX_RUNNING_SESSION_SECONDS) return task;
     return {
-      ...task,
+      ...bankTaskStepSession(task, MAX_RUNNING_SESSION_SECONDS),
       timeSpentSeconds: getTaskTotalSeconds({ ...task, timerRunning: false }, now) + MAX_RUNNING_SESSION_SECONDS,
       timerRunning: false,
       timerStartedAt: undefined,
+      timerStepId: undefined,
       autoPausedOverdue: true,
     };
   });
@@ -52,7 +54,8 @@ export function createTask(input: NewTaskInput, id: string, now = Date.now()): P
     let suffix = 1;
     while (used.has(stepId)) stepId = `${base}-${suffix++}`;
     used.add(stepId);
-    return { id: stepId, title: step.title.trim(), done: false };
+    return { id: stepId, title: step.title.trim(), done: false,
+      ...(Number.isFinite(step.estimatedDurationSeconds) && step.estimatedDurationSeconds! >= 1 && step.estimatedDurationSeconds! <= Number.MAX_SAFE_INTEGER ? { estimatedDurationSeconds: Math.floor(step.estimatedDurationSeconds!) } : {}) };
   });
   return {
     id: id.trim(), title: input.title.trim(), phase: input.phase.trim(), priority: input.priority,
@@ -63,6 +66,7 @@ export function createTask(input: NewTaskInput, id: string, now = Date.now()): P
     ...(schedule ? { schedule, scheduledPending: true, scheduleNextStartAt: schedule.startAt } : {}),
     ...(mode === 'countdown' ? {
       countdownDurationSeconds: input.countdownDurationSeconds,
+      plannedDurationSeconds: initialTaskPlanSeconds(input, input.countdownDurationSeconds!),
       countdownRemainingSeconds: input.countdownDurationSeconds,
     } : {}),
   };
@@ -99,12 +103,24 @@ export function materializeStepList(task: PSTask, stepLabel = 'Крок'): TaskS
 
 /** Editing a checklist does not change the parent's explicit completion state. */
 export function setTaskSteps(task: PSTask, stepList: TaskStepItem[], now: number): PSTask {
-  const list = stepList.map((step) => ({ ...step }));
+  const base = task.timerRunning || task.done ? pauseTaskTimer(task, now) : task;
+  const recorded = new Map<string, number | undefined>(base.stepList?.map(step => [step.id, step.timeSpentSeconds]));
+  const list = stepList.map((step) => {
+    const next = { ...step };
+    // A caller builds its replacement before banking the active session.
+    // Preserve the freshly banked measurement by stable step identity.
+    if (recorded.has(step.id)) {
+      const measured = recorded.get(step.id);
+      if (measured === undefined) delete next.timeSpentSeconds;
+      else next.timeSpentSeconds = measured;
+    } else delete next.timeSpentSeconds;
+    return next;
+  });
   const completed = list.filter((step) => step.done).length;
-  const base = task.done ? pauseTaskTimer(task, now) : task;
-  return {
+  const next = {
     ...base, stepList: list, steps: list.length, currentStep: completed,
   };
+  return task.timerRunning && !task.done && getTaskRemainingSeconds(base, now) !== 0 ? startTaskTimer(next, now) : next;
 }
 
 export function toggleTaskDone(task: PSTask, now: number, _stepLabel = 'Крок'): PSTask {
@@ -139,11 +155,12 @@ export function deleteTaskStep(task: PSTask, index: number, now: number, stepLab
 
 /** Manual totals include live elapsed time without resetting a countdown budget. */
 export function setTaskTimeSpent(task: PSTask, value: number, now: number): PSTask {
-  if (!Number.isFinite(value)) return task;
+  if (!Number.isFinite(value) || value > Number.MAX_SAFE_INTEGER) return task;
   const remaining = getTaskRemainingSeconds(task, now);
   return {
-    ...task, timeSpentSeconds: nonnegativeInteger(value),
+    ...discardTaskStepAttribution(task), timeSpentSeconds: nonnegativeInteger(value),
     timerStartedAt: task.timerRunning ? now : undefined, autoPausedOverdue: false,
+    timerStepId: task.timerRunning ? activeTaskStepId(task) : undefined,
     ...(remaining === undefined ? {} : { countdownRemainingSeconds: remaining }),
   };
 }

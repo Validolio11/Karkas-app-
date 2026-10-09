@@ -1,5 +1,6 @@
 import type { AITimerSettings, PSTask } from '../types';
 import { getTaskTimerMode, pauseTaskTimer, startTaskTimer } from './taskTimer';
+import { initialTaskPlanSeconds } from './taskWorkTelemetry';
 
 /** Configure without starting or losing recorded work; only explicit actions run time. */
 export function isAITimerSettingsValid(task: PSTask, settings: AITimerSettings): boolean {
@@ -24,9 +25,10 @@ export function applyAITimerSettings(task: PSTask, settings: AITimerSettings, no
   let next = task;
   const changed = mode !== getTaskTimerMode(task) || (mode === 'countdown' && countdown !== task.countdownDurationSeconds);
   if (changed) {
-    next = { ...pauseTaskTimer(task, now), timerMode: mode, autoPausedOverdue: false };
+    next = { ...pauseTaskTimer(next, now), timerMode: mode, autoPausedOverdue: false };
     if (mode === 'countdown') {
       next.countdownDurationSeconds = countdown;
+      if (duration !== undefined) next.plannedDurationSeconds = initialTaskPlanSeconds(task, duration);
       next.countdownRemainingSeconds = countdown;
     } else {
       delete next.countdownDurationSeconds;

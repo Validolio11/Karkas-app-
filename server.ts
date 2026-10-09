@@ -8,6 +8,7 @@ import { AIRequestError, aiRequestFailure, classifyAIRequestError, generateGemin
 import { isCompletedArchivedTask, isCancelledArchivedTask, selectRelevantArchivedTasks } from "./src/utils/taskArchive";
 import { selectPeriodTasks } from "./src/components/workflowViewModel";
 import { recordedTaskSeconds, summarizeTaskTime } from "./src/utils/taskTimeStats";
+import { buildWorkInsights } from "./src/utils/workInsights";
 
 dotenv.config();
 
@@ -142,6 +143,15 @@ function workspaceProductivityContext(activeTasks: any[], completedTasks: any[],
 }
 
 const isLiveProductivityTask = (task: any) => task.deletedAt === undefined && task.deletionReason !== 'accidental' && !task.scheduledPending;
+
+const workInsightInstructions = `
+ADAPTIVE WORK ANALYSIS:
+- workInsights is recomputed by the application from supplied task records; use its measurement coverage, evidence and limitations rather than a client-authored summary or conversation claims. Unknown data means insufficient evidence, not zero work.
+- If workload indicates a risk, proactively suggest a priority review in plain language and explain the evidence. Keep the existing priorities intact. An analysis request or detected overload alone does not authorize any task mutation. Return priority taskUpdates only when the user explicitly asks to review/change priorities; these remain proposals requiring the Apply button.
+- Compare stage actual time with an estimate only when that stage has both recorded timeSpentSeconds and explicit estimatedDurationSeconds. plannedDurationSeconds is the task's original recorded estimate; countdownDurationSeconds is the current budget and may include extensions. Do not invent historical estimates or assign all task time to an unmeasured stage. Without stage evidence, explain what must be measured and suggest a simpler next step rather than claiming a proven bottleneck.
+- forecasts are ranges of remaining measured work effort based on comparable completed tasks, not promised calendar deadlines. State the sample size, range and missing coverage. Without a known work schedule, dependencies and availability, never convert these ranges into an exact completion date. queueForecast, when present, is only a conditional calendar range for clearing the whole current queue at the observed weekly pace; disclose its unchanged-queue/scope/pace assumption and low confidence. Never present that range as an individual task deadline. Scheduled start times are not deadlines.
+- workingPattern and reminderCandidates describe observed local start/completion times and explicit schedules, not attention, mood, context switching or a detected flow state. Prefer actual task boundaries and pauses for reminders; avoid interrupting a running timer. Describe low-confidence timing as a suggestion. Do not claim a reminder was enabled or sent; the application controls reminders and must remain running (including in the tray).
+`;
 
 // Initialize Gemini Client
 let geminiClient: GoogleGenAI | null = null;
@@ -320,6 +330,9 @@ export async function assistHandler(req: any, res: any) {
     const productivity = workspaceProductivityContext(effectiveActiveTasks, effectiveCompletedTasks, effectiveDeletedTasks, [...currentActiveRecords, ...currentCompletedRecords]);
     const effectiveStats = productivity.stats;
     const effectiveAdaptiveProfile = productivity.adaptiveProfile;
+    const workInsights = buildWorkInsights([...currentActiveRecords, ...currentCompletedRecords], effectiveDeletedTasks, {
+      now: Date.parse(clientClock.now), timeZone: clientClock.timeZone, lang: isUk ? 'uk' : 'en',
+    });
 
     // Preserve tab names and colors for analysis
     const tabList = contextTabs.length > 0 ? contextTabs : (Array.isArray(tabs) ? tabs : []);
@@ -359,6 +372,7 @@ ${JSON.stringify({
             countdownDurationSeconds: t.countdownDurationSeconds ?? null,
             countdownRemainingSeconds: t.countdownRemainingSeconds ?? null,
             timeSpentSeconds: t.timeSpentSeconds || 0,
+            plannedDurationSeconds: t.plannedDurationSeconds ?? null,
             done: !!t.done,
           })),
           completedTasksCount: effectiveStats.completed,
@@ -369,9 +383,11 @@ ${JSON.stringify({
           availableTabs: tabList,
           stats: effectiveStats,
           adaptiveProfile: effectiveAdaptiveProfile,
+          workInsights,
         }, null, 2)}
 
 INSTRUCTIONS:
+${workInsightInstructions}
 For time analysis, timeStatistics counts only completed tasks with positive recorded work. Report measurement coverage. Missing readings are unknown, never zero. Recorded time excludes pauses and may omit untracked work; do not infer time from createdAt/completedAt. Countdown duration is the current timer budget, may include extensions, and is not necessarily the original estimate. Recommend time blocks and buffers with uncertainty; an analysis request alone does not authorize task changes.
 1. Provide a natural, concise, empowering conversational "reply".
    Make the reply easy to scan: use short paragraphs separated by blank lines, **bold** only for key facts, and numbered or bulleted lists for actual steps. Use a brief heading only for a longer answer. A small, relevant emoji is welcome when helpful, but avoid decoration in every paragraph. Format only the reply string this way; keep task titles and structured fields plain, and return valid JSON with escaped newlines.
@@ -494,6 +510,7 @@ For time analysis, timeStatistics counts only completed tasks with positive reco
             source: "gemini-chat",
             usedModel: chatResponse.usedModel,
             fallbackUsed: chatResponse.fallbackUsed,
+            workInsights,
           });
         }
       } catch (chatError) {
@@ -521,6 +538,7 @@ ${isTabCreationRequested ? `You may return 1-3 new tabs in "tabs" if organizing 
 
 CURRENT CLIENT CLOCK (authoritative for relative dates): ${JSON.stringify(clientClock)}.
 Requirements:
+${workInsightInstructions}
 For time analysis use recorded work and timeStatistics, disclose measurement coverage, and never treat missing readings as zero. Timestamp differences are not measured effort. Current countdown duration may include extensions and is not an original estimate. Recommendations should acknowledge untracked work and uncertainty; do not change tasks for an analysis-only request.
 1. "summary": Punchy diagnosis or strategy summary (2-3 sentences).
 2. "insights": 2-4 tactical observations on priorities, workload distribution, and execution momentum.
@@ -559,6 +577,7 @@ Return valid JSON adhering to schema.`;
             scheduledPending: t.scheduledPending,
             timerRunning: !!t.timerRunning,
             timeSpentSeconds: t.timeSpentSeconds || 0,
+            plannedDurationSeconds: t.plannedDurationSeconds ?? null,
             timerMode: t.timerMode ?? (t.countdownDurationSeconds > 0 ? 'countdown' : 'stopwatch'),
             countdownDurationSeconds: t.countdownDurationSeconds ?? null,
             countdownRemainingSeconds: t.countdownRemainingSeconds ?? null,
@@ -568,6 +587,7 @@ Return valid JSON adhering to schema.`;
           completedHistory: productivity.completedHistory,
           cancelledTasks: productivity.cancelledTasks,
           timeStatistics: productivity.timeStatistics,
+          workInsights,
         };
 
         const response = await generateGeminiContentWithFallback({
@@ -708,6 +728,7 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
             source: "gemini",
             usedModel: response.usedModel,
             fallbackUsed: response.fallbackUsed,
+            workInsights,
           });
         }
       } catch (geminiError) {
@@ -879,6 +900,7 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
         tabsCount: tabList.length,
       },
       source: "life-rule-engine",
+      workInsights,
     });
   } catch (err: any) {
     return sendAIRequestFailure(res, classifyAIRequestError(err), req.body?.lang !== 'en');
@@ -1058,6 +1080,7 @@ export async function recommendationsHandler(req: any, res: any) {
       selectedModel,
     } = req.body;
     const isUk = lang === "uk";
+    const clientClock = schedulingClockContext(req.body.clientClock);
     
     // Dynamic AI Client setup
     let ai = getGeminiClient();
@@ -1084,6 +1107,9 @@ export async function recommendationsHandler(req: any, res: any) {
     const completedTasks = [...periodTasks.completedInPeriod, ...periodTasks.deletedCompleted];
     const timeStatistics = summarizeTaskTime(completedTasks);
     const cancelledTasks = periodTasks.droppedInPeriod;
+    const workInsights = buildWorkInsights(suppliedTasks, suppliedDeletedTasks, {
+      now: Date.parse(clientClock.now), timeZone: clientClock.timeZone, lang: isUk ? 'uk' : 'en',
+    });
     const p1Count = activeTasks.filter((t: any) => t.priority === 1).length;
     const p2Count = activeTasks.filter((t: any) => t.priority === 2).length;
 
@@ -1138,6 +1164,8 @@ This includes unfinished active work, successfully completed work (including com
 Active unfinished tasks are not failures and are not cancelled. Cancelled tasks are not completed. Do not infer why the user cancelled a task or equate cancellation with procrastination or poor discipline.
 Accidental entries and unfinished archives with unknown reasons are excluded entirely from these metrics and context. Do not reconstruct them from earlier conversation or treat them as workload, output, or failures.
 TIME ANALYSIS: In periodRetrospective or optimizationTip discuss the supplied recorded work time, measurement coverage, realistic work blocks and buffer time when available. Unknown readings are not zero. Only measured completed tasks contribute to the average; no readings means insufficient time data. Do not infer effort from creation/completion timestamps. Recorded time excludes pauses and untracked work. Current timer budgets may include added time and must not be called original estimates. A small measured sample does not justify confident duration predictions.
+${workInsightInstructions}
+Adaptive workspace insights use all available history and the current active queue. Keep them distinct from selected-period performance metrics; do not attribute all-history readings to the selected period. Discuss priority-review evidence, measured stage overruns, remaining effort ranges and reminder timing in the existing optimizationTip, focusAdvice and futureStrategy fields when supported.
 
 TASK VOLUME BENCHMARKS & DENSITY RULES:
 - Standard monthly workload benchmark is 20 to 30 tasks per month (target norm: ~${targetNorm} tasks for ${periodHumanName}).
@@ -1178,8 +1206,10 @@ Return valid JSON adhering to the schema.`;
 - Target Period Norm: ${targetNorm} tasks
 - Metrics Overview: ${JSON.stringify(safePeriodMetrics)}
 - Recorded completed work time (seconds, selected period): ${JSON.stringify(timeStatistics)}
+- Adaptive work insights (all available history/current queue; not selected-period totals): ${JSON.stringify(workInsights)}
+- Client local clock: ${JSON.stringify(clientClock)}
 - Active Tasks (${activeTasks.length}): ${JSON.stringify(activeTasks.slice(0, 15).map((t: any) => ({ title: t.title, phase: t.phase, priority: t.priority, steps: t.steps })))}
-- Completed Tasks (${completedTasks.length}; first 15 shown): ${JSON.stringify(completedTasks.slice(0, 15).map((t: any) => ({ title: t.title, phase: t.phase, recordedWorkSeconds: recordedTaskSeconds(t), currentTimerBudgetSeconds: t.countdownDurationSeconds ?? null })))}
+- Completed Tasks (${completedTasks.length}; first 15 shown): ${JSON.stringify(completedTasks.slice(0, 15).map((t: any) => ({ title: t.title, phase: t.phase, recordedWorkSeconds: recordedTaskSeconds(t), plannedDurationSeconds: t.plannedDurationSeconds ?? null, currentTimerBudgetSeconds: t.countdownDurationSeconds ?? null })))}
 - Deliberately Cancelled Unfinished Tasks (${cancelledTasks.length}): ${JSON.stringify(cancelledTasks.slice(0, 15).map((t: any) => ({ title: t.title, phase: t.phase, deletionReason: 'cancelled', done: false })))}
 - Category List: ${JSON.stringify(tabs)}
 - Urgent P1 count: ${p1Count}, Standard P2 count: ${p2Count}
@@ -1252,6 +1282,7 @@ Language: ${isUk ? "Ukrainian" : "English"}.`,
             futureStrategy: textOr(parsed.futureStrategy),
             productivityGrade,
             suggestedTasks: validatedSuggestedTasks,
+            workInsights,
             source: "gemini",
             usedModel: response.usedModel,
             fallbackUsed: response.fallbackUsed,
@@ -1364,6 +1395,7 @@ Language: ${isUk ? "Ukrainian" : "English"}.`,
       futureStrategy,
       productivityGrade,
       suggestedTasks: suggestedTasks.slice(0, 3),
+      workInsights,
       source: "rule-engine",
     });
   } catch (err: any) {

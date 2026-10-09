@@ -39,7 +39,7 @@ import { selectRelevantArchivedTasks } from '../utils/taskArchive';
 import { formatRecordedDuration, recordedTaskSeconds, summarizeTaskTime } from '../utils/taskTimeStats';
 
 // Previous cache entries included accidental/unknown deletions in their AI context.
-const AI_ANALYSIS_STORAGE_KEY_PREFIX = 'karkas_ai_dashboard_analysis_cache_time_v3_';
+const AI_ANALYSIS_STORAGE_KEY_PREFIX = 'karkas_ai_dashboard_analysis_cache_work_v4_';
 const getAnalysisContext = (tasks: PSTask[], archive: DeletedTask[], tabs: TaskTab[]) =>
   JSON.stringify([tasks, archive, tabs]);
 const getAnalysisLifecycle = (tasks: PSTask[], archive: DeletedTask[]) => ({
@@ -538,6 +538,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
             deletedTasks: currentDeleted,
             tabs: currentTabs,
             lang,
+            clientClock: { now: new Date().toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Kyiv' },
             period: periodToUse,
             customApiKey: customEnabled ? customKey : undefined,
             selectedModel: customEnabled ? customModel : undefined,

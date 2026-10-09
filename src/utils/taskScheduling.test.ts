@@ -134,3 +134,27 @@ test('invalid durable schedules remain visible for correction without crashing s
   const records = [invalid];
   assert.equal(materializeScheduledWorkspace(records).records, records);
 });
+
+test('daily occurrences clear prior stage measurements and session identity but retain explicit estimates', () => {
+  const template: PSTask = { ...pending('daily'), timerMode: 'countdown', countdownDurationSeconds: 900,
+    plannedDurationSeconds: 600, steps: 1, currentStep: 1, timerRunning: true, timerStartedAt: 50,
+    timerStepId: 'collect', timeSpentSeconds: 100, startedAt: 10, completedAt: 40,
+    stepList: [{ id: 'collect', title: 'Collect', done: true, estimatedDurationSeconds: 300, timeSpentSeconds: 100 }] };
+  const snapshot = structuredClone(template);
+  const first = materializeScheduledWorkspace([template], [], at('2026-10-09T19:55:00+03:00'));
+  const occurrence = first.records[0];
+  assert.equal(occurrence.plannedDurationSeconds, 600);
+  assert.equal(occurrence.countdownRemainingSeconds, 900);
+  assert.equal(occurrence.timerRunning, false);
+  assert.equal(occurrence.timeSpentSeconds, 0);
+  assert.equal(occurrence.timerStepId, undefined);
+  assert.equal(occurrence.timerStartedAt, undefined);
+  assert.equal(occurrence.startedAt, undefined);
+  assert.equal(occurrence.completedAt, undefined);
+  assert.deepEqual(occurrence.stepList, [{ id: 'collect', title: 'Collect', done: false, estimatedDurationSeconds: 300 }]);
+  const second = materializeScheduledWorkspace(first.records, [], at('2026-10-10T19:55:00+03:00'));
+  assert.notEqual(second.records[0].id, occurrence.id);
+  assert.deepEqual(second.records[0].stepList, occurrence.stepList);
+  assert.notEqual(second.records[0].stepList, occurrence.stepList);
+  assert.deepEqual(template, snapshot);
+});

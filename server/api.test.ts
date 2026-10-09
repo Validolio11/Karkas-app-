@@ -147,7 +147,7 @@ test("period recommendations separate completed archives and cancellations while
   assert.match(result.data.periodRetrospective, /Delivered 4 \(80%/);
   assert.match(result.data.dropoffAnalysis, /^1 unfinished tasks were deliberately cancelled/);
   assert.equal(result.data.productivityGrade, "C");
-  assert.doesNotMatch(JSON.stringify(result.data), /Accident|Unknown archive|Unclassified|Earlier cancellation/);
+  assert.doesNotMatch(JSON.stringify(result.data), /\bAccident|Unknown archive|Unclassified|Earlier cancellation/);
 });
 
 test("offline analysis counts completed history and explicit cancellations without trusting client statistics", async () => {

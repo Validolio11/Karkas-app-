@@ -4,6 +4,7 @@ import App from './App.tsx';
 import './index.css';
 import './components/TaskTimeDialog.css';
 import './components/aiComposer.css';
+import './components/chatMessages.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

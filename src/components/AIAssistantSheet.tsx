@@ -14,6 +14,9 @@ import {
 import { sound } from '../utils/audio';
 import { createVoiceDictation, type VoicePhase } from '../utils/voiceDictation';
 import { createVoiceDraft } from '../utils/voiceDraft';
+import { AIModelSelect } from './AIModelSelect';
+import { AIEmojiPicker } from './AIEmojiPicker';
+import { AIChatText } from './AIChatText';
 import { Language, TRANSLATIONS, AI_PRESETS_UK, AI_PRESETS_EN } from '../utils/i18n';
 import {
   X,
@@ -84,13 +87,35 @@ const parseChatOptions = (content: string): { body: string; options: AIChatOptio
   const lines = (content || '').split('\n');
   const options: AIChatOption[] = [];
   const bodyLines: string[] = [];
+  let choiceSection = false;
+  let choicesStarted = false;
+  let inCodeBlock = false;
 
   for (const line of lines) {
+    if (/^\s{0,3}```/.test(line)) {
+      inCodeBlock = !inCodeBlock;
+      choiceSection = false;
+      bodyLines.push(line);
+      continue;
+    }
+    if (inCodeBlock) {
+      bodyLines.push(line);
+      continue;
+    }
+    const plain = line.trim().replace(/[*#]/g, '');
+    if (/(?:оберіть|виберіть).*(?:варіант|відповідь)|(?:choose|select).*(?:option|response|one)|^(?:варіанти відповіді|response options)\s*:?$/i.test(plain)) {
+      choiceSection = true;
+      choicesStarted = false;
+      bodyLines.push(line);
+      continue;
+    }
     const match = line.trim().match(/^(\d+|[А-Яа-яA-Za-z])\s*[.)\-:]\s+(.+)$/);
-    if (match) {
+    if (match && choiceSection) {
       options.push({ label: match[1].toUpperCase(), text: match[2].trim() });
+      choicesStarted = true;
     } else {
       bodyLines.push(line);
+      if (plain || choicesStarted) choiceSection = false;
     }
   }
 
@@ -1009,6 +1034,18 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       if (prompt.trim() && !requestInFlight.current && !isTranscribing) void handleGenerate();
     }
   };
+  const insertEmoji = (emoji: string) => {
+    if (awaitingKeyRef.current) return;
+    const field = promptInputRef.current;
+    const start = field?.selectionStart ?? prompt.length;
+    const end = field?.selectionEnd ?? start;
+    changePrompt(`${prompt.slice(0, start)}${emoji}${prompt.slice(end)}`);
+    requestAnimationFrame(() => {
+      if (promptInputRef.current !== field || !field?.isConnected) return;
+      field.focus();
+      field.setSelectionRange(start + emoji.length, start + emoji.length);
+    });
+  };
 
   return (
     <AnimatePresence>
@@ -1191,29 +1228,29 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
 
               {/* Chat View */}
               {mode === 'chat' && chatMessages.length > 0 && (
-                <div role="log" aria-label={lang === 'uk' ? 'Розмова з AI' : 'AI conversation'} aria-live="polite" aria-relevant="additions text" className="flex flex-col gap-3">
+                <div role="log" aria-label={lang === 'uk' ? 'Розмова з AI' : 'AI conversation'} aria-live="polite" aria-relevant="additions text" className="karkas-ai-conversation">
                   {chatMessages.map((message, index) => (
                     <div
                       key={`${message.role}-${index}`}
-                      className={`max-w-[92%] border p-3 text-[15px] leading-[1.6] whitespace-pre-wrap break-words ${
+                      className={`karkas-ai-message ${
                         message.role === 'user'
-                          ? 'self-end bg-white text-black border-white'
-                          : 'self-start bg-[#111116] text-neutral-200 border-neutral-800'
+                          ? 'is-user'
+                          : 'is-assistant'
                       }`}
                     >
-                      <div className="mb-1 text-[9px] font-bold uppercase tracking-widest opacity-60">
+                      <div className="karkas-ai-message-author">
                         {message.role === 'user' ? (lang === 'uk' ? 'ВИ' : 'YOU') : 'KARKAS AI'}
                       </div>
                       {(() => {
                         const isCurrentPlanningReply = message.role === 'assistant' && chatPlanningResponse
                           && message.content === (chatPlanningResponse.reply || chatPlanningResponse.summary);
                         if (isCurrentPlanningReply) return pendingChangeCount > 0
-                          ? <details className="text-base leading-[1.6]"><summary className="min-h-11 py-2 cursor-pointer text-neutral-300">{lang === 'uk' ? 'Пояснення AI' : 'AI explanation'}</summary><div className="pt-2">{message.content}</div></details>
-                          : <div className="text-base leading-[1.6]">{message.content}</div>;
+                          ? <details><summary className="min-h-11 py-2 cursor-pointer text-neutral-300">{lang === 'uk' ? 'Пояснення AI' : 'AI explanation'}</summary><div className="pt-2"><AIChatText text={message.content} /></div></details>
+                          : <AIChatText text={message.content} />;
                         const parsed = message.role === 'assistant' ? parseChatOptions(message.content) : { body: message.content, options: [] };
                         return (
                           <>
-                            <div>{parsed.body}</div>
+                            {message.role === 'assistant' ? <AIChatText text={parsed.body} /> : <div className="whitespace-pre-wrap">{parsed.body}</div>}
                             {parsed.options.length > 0 && (
                               <div className="flex flex-col gap-1.5 mt-3">
                                 {parsed.options.map((option) => (
@@ -1748,15 +1785,18 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   placeholder={lang === 'uk' ? 'Напишіть повідомлення…' : 'Write a message…'}
                   className="karkas-ai-composer-field"
                 />}
-                <div className="flex items-center gap-1 px-2 pb-2">
-                <select
-                  aria-label={lang === 'uk' ? 'Модель AI' : 'AI model'}
+                <div className="karkas-ai-composer-toolbar">
+                <AIModelSelect
+                  key={accountId || 'guest'}
+                  models={availableModels}
+                  label={lang === 'uk' ? 'Модель AI' : 'AI model'}
+                  emptyLabel={lang === 'uk' ? 'Модель не налаштована' : 'Model not configured'}
                   value={customModel}
                   disabled={loading || availableModels.length === 0}
-                  onChange={(e) => {
-                    const model = e.target.value;
+                  onChange={(model) => {
                     chooseCustomModel(model);
-                    localStorage.setItem('karkas_custom_model', model);
+                    try { localStorage.setItem('karkas_custom_model', model); }
+                    catch { setKeyStatus(lang === 'uk' ? 'Вибір моделі діє зараз, але його не вдалося зберегти на пристрої.' : 'This model is selected for now, but could not be saved on this device.'); }
                     if (window.karkasDesktop) {
                       void window.karkasDesktop.preferences.update({ karkas_custom_model: model }).then(result => {
                         if ('error' in result) setKeyStatus(lang === 'uk' ? 'Не вдалося зберегти вибір моделі. Вона діє для поточного запиту; виберіть її знову після перезапуску.' : 'Could not save the model selection. It applies to this session; select it again after restarting.');
@@ -1764,18 +1804,10 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                     }
                     sound.tick(400);
                   }}
-                  className="min-w-0 max-w-[180px] bg-transparent text-neutral-300 text-xs font-sans px-2 py-2.5 disabled:opacity-50"
-                >
-                  {availableModels.length === 0 ? (
-                    <option value="">{lang === 'uk' ? 'Модель не налаштована' : 'Model not configured'}</option>
-                  ) : (
-                    availableModels.map((model) => (
-                      <option key={model} value={model}>{model}</option>
-                    ))
-                  )}
-                </select>
+                />
 
                 <div className="flex-1" />
+                  <AIEmojiPicker key={accountId || 'guest'} lang={lang} disabled={awaitingApiKey} onChoose={insertEmoji} />
                   {prompt && <button
                     type="button"
                     onClick={() => { changePrompt(''); document.getElementById('ai-prompt-input')?.focus(); }}

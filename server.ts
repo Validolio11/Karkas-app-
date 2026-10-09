@@ -374,6 +374,7 @@ ${JSON.stringify({
 INSTRUCTIONS:
 For time analysis, timeStatistics counts only completed tasks with positive recorded work. Report measurement coverage. Missing readings are unknown, never zero. Recorded time excludes pauses and may omit untracked work; do not infer time from createdAt/completedAt. Countdown duration is the current timer budget, may include extensions, and is not necessarily the original estimate. Recommend time blocks and buffers with uncertainty; an analysis request alone does not authorize task changes.
 1. Provide a natural, concise, empowering conversational "reply".
+   Make the reply easy to scan: use short paragraphs separated by blank lines, **bold** only for key facts, and numbered or bulleted lists for actual steps. Use a brief heading only for a longer answer. A small, relevant emoji is welcome when helpful, but avoid decoration in every paragraph. Format only the reply string this way; keep task titles and structured fields plain, and return valid JSON with escaped newlines.
 2. If the user asks to create, plan, add, break down, edit, update, rename, delete tasks or tabs, or configure/start/pause/stop timers, YOU MUST ALSO POPULATE the structured JSON fields ("tasks", "tabs", "taskUpdates", "taskDeletions").
 3. "tasks": New tasks to create. Each task must have:
    - "title": Actionable concise title

@@ -1,0 +1,38 @@
+.karkas-ai-chat-text {
+  font-size: 16px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.karkas-ai-chat-text > * { margin: 0; }
+.karkas-ai-chat-text > * + * { margin-top: 12px; }
+.karkas-ai-chat-text p { white-space: pre-wrap; }
+.karkas-ai-chat-text strong { color: #f5f5f5; font-weight: 700; }
+.karkas-ai-chat-text .karkas-ai-chat-heading {
+  color: #f5f5f5;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+.karkas-ai-chat-text ul,
+.karkas-ai-chat-text ol { padding-left: 24px; }
+.karkas-ai-chat-text ul { list-style: disc outside; }
+.karkas-ai-chat-text ol { list-style: decimal outside; }
+.karkas-ai-chat-text li + li { margin-top: 7px; }
+.karkas-ai-chat-text li::marker { color: #a3a3a3; }
+.karkas-ai-chat-text code {
+  border: 1px solid #303036;
+  padding: 1px 5px;
+  background: #17171b;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: .88em;
+}
+.karkas-ai-chat-text pre {
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 12px;
+  border: 1px solid #303036;
+  background: #101014;
+  line-height: 1.6;
+  white-space: pre;
+}
+.karkas-ai-chat-text pre code { padding: 0; border: 0; background: transparent; }

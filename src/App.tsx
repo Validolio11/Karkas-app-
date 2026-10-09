@@ -1,4 +1,4 @@
-import { pauseTaskTimer, startTaskTimer, configureTaskCountdown, clearTaskCountdown } from './utils/taskTimer';
+import { pauseTaskTimer, startTaskTimer, configureTaskCountdown, clearTaskCountdown, extendTaskCountdown, getTaskRemainingSeconds } from './utils/taskTimer';
 import { applyAITaskUpdate } from './utils/aiTaskUpdates';
 import { applyAITimerSettings, isAITimerSettingsValid } from './utils/aiTaskTimer';
 import { isNewerAppVersion, isValidAppVersion } from './utils/appVersion';
@@ -50,6 +50,8 @@ import { karkasApiFetch } from './utils/desktopApi';
 import { sanitizeTasksTimerSafeguard, completeTask, reopenTask, startTaskWork, createTask, setTaskProgress, toggleTaskStep, addTaskStep, deleteTaskStep, setTaskTimeSpent, setTaskSteps, materializeStepList } from './utils/taskOperations';
 import packageMetadata from '../package.json';
 import { taskBreakdownContext } from './utils/taskBreakdownContext';
+import { materializeScheduledWorkspace, normalizeTaskSchedule } from './utils/taskScheduling';
+import { describeSchedule } from './utils/schedulePresentation';
 
 const STORAGE_KEY = 'life_todo_tasks_v2';
 const DELETED_STORAGE_KEY = 'karkas_deleted_tasks_v2';
@@ -206,17 +208,57 @@ export default function App() {
   });
   const latestTasksRef = React.useRef(tasks);
   latestTasksRef.current = tasks;
+  const notifiedTimersRef = React.useRef(new Set<string>());
+  const timerNoticeScopeRef = React.useRef(0);
+  const timerWorkspaceReadyRef = React.useRef(true);
+  const [timerNotice, setTimerNotice] = useState<string | null>(null);
+  const notifiedSchedulesRef = React.useRef(new Set<string>());
+  const archivedScheduleIdsRef = React.useRef<string[]>([]);
 
   // Reconcile deadlines globally, including tasks hidden by filters or tabs.
   useEffect(() => {
     const interval = setInterval(() => {
+      if (!timerWorkspaceReadyRef.current) return;
+      const now = Date.now();
+      const scheduled = materializeScheduledWorkspace(latestTasksRef.current, archivedScheduleIdsRef.current, now);
+      if (scheduled.records !== latestTasksRef.current) {
+        latestTasksRef.current = scheduled.records;
+        setTasks(previous => materializeScheduledWorkspace(previous, archivedScheduleIdsRef.current, now).records);
+      }
+      for (const occurrence of scheduled.notifications) {
+        if (notifiedSchedulesRef.current.has(occurrence.taskId)) continue;
+        notifiedSchedulesRef.current.add(occurrence.taskId);
+        const title = lang === 'uk' ? 'Karkas · Нове завдання' : 'Karkas · New task';
+        const at = new Intl.DateTimeFormat(lang === 'uk' ? 'uk-UA' : 'en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(occurrence.scheduledFor);
+        const body = `${occurrence.title} · ${lang === 'uk' ? 'Заплановано на' : 'Planned for'} ${at}`;
+        const scope = timerNoticeScopeRef.current;
+        setTimerNotice(body);
+        if (window.karkasDesktop) void window.karkasDesktop.system.showNotification({ title, body }).then(result => {
+          if (!result.ok && scope === timerNoticeScopeRef.current) setTimerNotice(`${body} ${lang === 'uk' ? 'Сповіщення Windows недоступне.' : 'Windows notification unavailable.'}`);
+        }).catch(() => { if (scope === timerNoticeScopeRef.current) setTimerNotice(body); });
+      }
+      const expired = latestTasksRef.current.filter(task => !task.done && task.timerRunning && getTaskRemainingSeconds(task, now) === 0);
+      for (const task of expired) {
+        const key = `${task.id}:${task.timerStartedAt}`;
+        if (notifiedTimersRef.current.has(key)) continue;
+        notifiedTimersRef.current.add(key);
+        const title = lang === 'uk' ? 'Karkas · Час вийшов' : 'Karkas · Time is up';
+        const body = lang === 'uk' ? `${task.title}. Завершіть завдання або додайте час.` : `${task.title}. Complete the task or add more time.`;
+        const noticeScope = timerNoticeScopeRef.current;
+        setTimerNotice(body);
+        if (window.karkasDesktop) {
+          void window.karkasDesktop.system.showNotification({ title, body }).then(result => {
+            if (!result.ok && noticeScope === timerNoticeScopeRef.current) setTimerNotice(`${body} ${lang === 'uk' ? 'Сповіщення Windows недоступне.' : 'Windows notification unavailable.'}`);
+          }).catch(() => { if (noticeScope === timerNoticeScopeRef.current) setTimerNotice(body); });
+        }
+      }
       setTasks(previous => {
-        const updated = sanitizeTasksTimerSafeguard(previous);
+        const updated = sanitizeTasksTimerSafeguard(previous, now);
         return updated.some((task, index) => task !== previous[index]) ? updated : previous;
       });
     }, 1000);
     return () => clearInterval(interval);
-  }, []);
+  }, [lang]);
 
   const [activeFilter, setActiveFilter] = useState<FilterMode>('ALL');
   const [selectedPhase, setSelectedPhase] = useState<string>(() => {
@@ -561,7 +603,7 @@ export default function App() {
     const requestTimeout = window.setTimeout(() => requestController.abort(), 35_000);
 
     try {
-      const activeTasks = tasks.filter((t) => !t.done);
+      const activeTasks = tasks.filter((t) => !t.done && !t.scheduledPending);
       const completedTasks = tasks.filter((t) => t.done);
 
       const customKey = localStorage.getItem('karkas_custom_api_key') || '';
@@ -574,6 +616,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           taskId: targetTask.id,
+          clientClock: { now: new Date().toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' },
           title: targetTask.title,
           note: targetTask.note,
           currentSteps: targetTask.stepList?.map((s) => s.title) || [],
@@ -743,6 +786,7 @@ export default function App() {
   currentTabsRef.current = tabs;
   const currentDeletedTasksRef = React.useRef(deletedTasks);
   currentDeletedTasksRef.current = deletedTasks;
+  archivedScheduleIdsRef.current = deletedTasks.map(task => task.id);
   const currentSoundEnabledRef = React.useRef(soundEnabled);
   currentSoundEnabledRef.current = soundEnabled;
   const currentFireEnabledRef = React.useRef(fireEnabled);
@@ -854,6 +898,10 @@ export default function App() {
     }
   };
   const applyWorkspace = (value: WorkspaceState) => {
+    ++timerNoticeScopeRef.current;
+    setTimerNotice(null);
+    latestTasksRef.current = value.tasks;
+    archivedScheduleIdsRef.current = value.deletedTasks.map(task => task.id);
     currentTasksRef.current = value.tasks;
     currentTabsRef.current = value.tabs;
     currentDeletedTasksRef.current = value.deletedTasks;
@@ -885,6 +933,12 @@ export default function App() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       const generation = ++authGenerationRef.current;
+      ++timerNoticeScopeRef.current;
+      setTimerNotice(null);
+      notifiedTimersRef.current.clear();
+      notifiedSchedulesRef.current.clear();
+      latestTasksRef.current = [];
+      timerWorkspaceReadyRef.current = false;
       savingRef.current = null;
       queuedRemoteRef.current = null;
       const uid = user?.uid || null;
@@ -938,6 +992,7 @@ export default function App() {
         } else {
           persistWorkspace();
         }
+        timerWorkspaceReadyRef.current = true;
         if (!user) return;
         setIsSyncing(true);
         const data = await fetchUserCloudData(user.uid);
@@ -988,6 +1043,10 @@ export default function App() {
         setSyncStatus(navigator.onLine ? 'error' : 'offline');
       } finally {
         if (generation === authGenerationRef.current) {
+          if (workspaceOwnerRef.current === uid) {
+            latestTasksRef.current = currentTasksRef.current;
+            timerWorkspaceReadyRef.current = true;
+          }
           cloudSyncReadyRef.current = Boolean(user);
           setIsCloudSyncReady(Boolean(user));
           setIsSyncing(false);
@@ -1291,6 +1350,12 @@ export default function App() {
       setNextSyncRetryAt(null);
       setSyncError(null);
       setSyncStatus('synced');
+    } catch (error) {
+      if (generation === authGenerationRef.current && auth.currentUser?.uid === uid) {
+        setSyncError(error instanceof Error ? error.message : 'Cloud restore failed');
+        setSyncStatus(navigator.onLine ? 'error' : 'offline');
+      }
+      throw error;
     } finally {
       if (generation === authGenerationRef.current) {
         savingRef.current = null;
@@ -1313,10 +1378,12 @@ export default function App() {
     sound.tick(650);
   };
 
+  const operationalTasks = useMemo(() => tasks.filter(task => !task.scheduledPending), [tasks]);
+  const scheduledPlans = useMemo(() => tasks.filter(task => task.scheduledPending), [tasks]);
   // Compute live stats per tab
   const stats: WorkflowStats = useMemo(() => {
-    const total = tasks.length;
-    const completed = tasks.filter((t) => t.done).length;
+    const total = operationalTasks.length;
+    const completed = operationalTasks.filter((t) => t.done).length;
     const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
 
     const phaseCounts: Record<string, number> = {};
@@ -1324,21 +1391,22 @@ export default function App() {
       phaseCounts[tb.id] = 0;
     });
 
-    tasks.forEach((t) => {
+    operationalTasks.forEach((t) => {
       phaseCounts[t.phase] = (phaseCounts[t.phase] || 0) + 1;
     });
 
     return { total, completed, percent, phaseCounts };
-  }, [tasks, tabs]);
+  }, [operationalTasks, tabs]);
 
   const adaptiveProfile: AdaptiveProfile = useMemo(() => {
-    const archivedRelevant = selectRelevantArchivedTasks(tasks, deletedTasks);
-    const tracked = [...tasks, ...archivedRelevant];
+    const archivedRelevant = selectRelevantArchivedTasks(operationalTasks, deletedTasks);
+    const tracked = [...operationalTasks, ...archivedRelevant];
     const completedTasks = tracked.filter((task) => task.done);
     const trackedTasks = tracked.length;
     const completionRate = trackedTasks > 0 ? Math.round((completedTasks.length / trackedTasks) * 100) : 0;
-    const averageCompletionMinutes = completedTasks.length > 0
-      ? Math.round(completedTasks.reduce((total, task) => total + (task.timeSpentSeconds || 0), 0) / completedTasks.length / 60)
+    const timedCompletedTasks = completedTasks.filter(task => Number.isFinite(task.timeSpentSeconds) && task.timeSpentSeconds! > 0);
+    const averageCompletionMinutes = timedCompletedTasks.length > 0
+      ? Math.round(timedCompletedTasks.reduce((total, task) => total + task.timeSpentSeconds!, 0) / timedCompletedTasks.length / 60)
       : 0;
     const tasksWithSteps = tracked.filter((task) => task.steps > 0);
     const averageStepCount = tasksWithSteps.length > 0
@@ -1347,7 +1415,7 @@ export default function App() {
     const completedByPhase = new Map<string, number>();
     const activeByPhase = new Map<string, number>();
     completedTasks.forEach(task => completedByPhase.set(task.phase, (completedByPhase.get(task.phase) || 0) + 1));
-    tasks.filter(task => !task.done).forEach(task => activeByPhase.set(task.phase, (activeByPhase.get(task.phase) || 0) + 1));
+    operationalTasks.filter(task => !task.done).forEach(task => activeByPhase.set(task.phase, (activeByPhase.get(task.phase) || 0) + 1));
     const preferredPhases = [...completedByPhase.entries()]
       .sort((a, b) => b[1] - a[1])
       .slice(0, 3)
@@ -1356,8 +1424,8 @@ export default function App() {
       .filter(([, count]) => count >= 4)
       .sort((a, b) => b[1] - a[1])
       .map(([phase]) => phase);
-    const activeLoad = tasks.filter((task) => !task.done).length;
-    const urgentLoad = tasks.filter((task) => !task.done && task.priority === 1).length;
+    const activeLoad = operationalTasks.filter((task) => !task.done).length;
+    const urgentLoad = operationalTasks.filter((task) => !task.done && task.priority === 1).length;
 
     return {
       trackedTasks,
@@ -1371,18 +1439,18 @@ export default function App() {
       urgentLoad,
       recommendedActiveLimit: urgentLoad >= 3 || activeLoad >= 8 ? 3 : 5,
     };
-  }, [tasks, deletedTasks]);
+  }, [operationalTasks, deletedTasks]);
 
   const completedHistoryCount = useMemo(() => {
     return new Set([
-      ...tasks.filter(task => task.done).map(task => task.id),
-      ...selectRelevantArchivedTasks(tasks, deletedTasks).filter(isCompletedArchivedTask).map(task => task.id),
+      ...operationalTasks.filter(task => task.done).map(task => task.id),
+      ...selectRelevantArchivedTasks(operationalTasks, deletedTasks).filter(isCompletedArchivedTask).map(task => task.id),
     ]).size;
-  }, [tasks, deletedTasks]);
+  }, [operationalTasks, deletedTasks]);
 
   // Filtered & Sorted Tasks (Running timers & Pinned on top, then by search, priority, creation)
   const filteredTasks = useMemo(() => {
-    return tasks
+    return operationalTasks
       .filter((t) => {
         if (activeFilter !== 'DONE' && t.done) return false;
         if (activeFilter === 'DONE' && !t.done) return false;
@@ -1397,7 +1465,7 @@ export default function App() {
         return true;
       })
       .sort((a, b) => {
-        // Active timer running tasks pinned on very top!
+        // Active timer running operationalTasks pinned on very top!
         if (a.timerRunning && !b.timerRunning) return -1;
         if (!a.timerRunning && b.timerRunning) return 1;
         // Pinned first
@@ -1410,14 +1478,14 @@ export default function App() {
         if (a.priority !== b.priority) return a.priority - b.priority;
         return b.createdAt - a.createdAt;
       });
-  }, [tasks, activeFilter, selectedPhase, searchQuery]);
+  }, [operationalTasks, activeFilter, selectedPhase, searchQuery]);
 
   const listCounts = useMemo(() => {
-    const visible = tasks.filter(task => activeFilter === 'DONE' ? task.done : !task.done);
+    const visible = operationalTasks.filter(task => activeFilter === 'DONE' ? task.done : !task.done);
     const phaseCounts: Record<string, number> = {};
     visible.forEach(task => { phaseCounts[task.phase] = (phaseCounts[task.phase] || 0) + 1; });
     return { total: visible.length, phaseCounts };
-  }, [tasks, activeFilter]);
+  }, [operationalTasks, activeFilter]);
 
   // Edit Task Title and Note
   const handleEditTask = (id: string, updatedTitle: string, updatedNote?: string) => {
@@ -1528,6 +1596,11 @@ export default function App() {
   const handleStopTimer = (id: string) => {
     const now = Date.now();
     setTasks(previous => previous.map(task => task.id === id ? pauseTaskTimer(task, now) : task));
+  };
+
+  const handleExtendCountdown = (id: string, extraSeconds: number) => {
+    const now = Date.now();
+    setTasks(previous => previous.map(task => task.id === id ? extendTaskCountdown(task, extraSeconds, now) : task));
   };
 
   const handleClearCountdown = (id: string) => {
@@ -1749,7 +1822,7 @@ export default function App() {
     let rejectedUpdates = 0;
     for (const up of taskUpdates) {
       const current = latestTasksRef.current.find(task => task.id === up?.id);
-      if (!current || !isAITimerSettingsValid({ ...current, done: typeof up.done === 'boolean' ? up.done : current.done }, up)) {
+      if (!current || (up.schedule !== undefined && (!normalizeTaskSchedule(up.schedule) || current.done || current.timerRunning || current.startedAt || (current.timeSpentSeconds ?? 0) > 0)) || ((current.scheduledPending || up.schedule) && (up.timerAction === 'start' || up.done === true)) || !isAITimerSettingsValid({ ...current, done: typeof up.done === 'boolean' ? up.done : current.done }, up)) {
         rejectedUpdates++;
         continue;
       }
@@ -1803,7 +1876,7 @@ export default function App() {
         stepList: t.stepList,
         timerMode: t.timerMode || (t.countdownDurationSeconds !== undefined ? 'countdown' : 'none'),
       }, `task-${now}-${i}-${Math.random().toString(36).substr(2, 4)}`, now + i);
-      return created && isAITimerSettingsValid(created, t) ? applyAITimerSettings(created, t, now) : null;
+      return created && !(created.scheduledPending && t.timerAction === 'start') && isAITimerSettingsValid(created, t) ? applyAITimerSettings(created, t, now) : null;
     }).filter((task): task is PSTask => task !== null);
     if (items.length > 0) setTasks((prev) => [...items, ...prev]);
     if (tabsToAdd.length > 0 && items.length === 0) setSelectedPhase(tabsToAdd[0].id);
@@ -1952,9 +2025,13 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-4xl w-full mx-auto px-5 sm:px-8 py-7 sm:py-8 pb-32 relative z-10">
+        {timerNotice && <div role="status" className="mb-5 flex items-center gap-3 border border-amber-800 bg-amber-950/20 p-3 text-sm leading-relaxed text-amber-200">
+          <span className="min-w-0 flex-1 break-words">{timerNotice}</span>
+          <button type="button" aria-label={lang === 'uk' ? 'Закрити сповіщення' : 'Dismiss notification'} onClick={() => setTimerNotice(null)} className="flex h-11 w-11 shrink-0 items-center justify-center hover:bg-white/10"><X className="h-5 w-5" /></button>
+        </div>}
         {selectedPhase === 'DASHBOARD' ? (
           <DashboardView
-            tasks={tasks}
+            tasks={operationalTasks}
             deletedTasks={deletedTasks}
             tabs={tabs}
             stats={stats}
@@ -1982,7 +2059,7 @@ export default function App() {
           />
         ) : selectedPhase === 'HISTORY' ? (
           <HistoryView
-            tasks={tasks}
+            tasks={operationalTasks}
             deletedTasks={deletedTasks}
             tabs={tabs}
             lang={lang}
@@ -1995,6 +2072,14 @@ export default function App() {
           />
         ) : (
           <>
+            {scheduledPlans.length > 0 && <details className="mb-6 border border-neutral-800 bg-[#0c0c0e] p-4" open>
+              <summary className="cursor-pointer text-sm font-semibold text-neutral-200">{lang === 'uk' ? 'Заплановані завдання' : 'Scheduled tasks'} ({scheduledPlans.length})</summary>
+              <p className="mt-2 text-sm leading-relaxed text-neutral-400">{lang === 'uk' ? 'З’являться в черзі перед зазначеним часом. Сповіщення працюють, поки Karkas відкритий або в треї.' : 'Added to the queue before the scheduled time. Notifications require Karkas open or running in the tray.'}</p>
+              <div className="mt-3 divide-y divide-neutral-800">{scheduledPlans.map(plan => <div key={plan.id} className="flex flex-wrap items-center gap-3 py-3">
+                <div className="min-w-0 flex-1"><p className="break-words text-base font-semibold text-neutral-100">{plan.title}</p><p className="mt-1 break-words text-sm leading-relaxed text-emerald-300">{plan.schedule ? describeSchedule(plan.schedule, lang, plan.scheduleNextStartAt) : (lang === 'uk' ? 'Розклад некоректний — уточніть його через AI' : 'Invalid schedule — update it through AI')}</p></div>
+                <button type="button" onClick={() => { handleDelete(plan.id); setActionNotice(lang === 'uk' ? 'Розклад скасовано. Його можна відновити з кошика.' : 'Schedule cancelled. You can restore it from trash.'); }} className="min-h-11 border border-neutral-700 px-3 text-sm text-neutral-300 hover:border-neutral-400 hover:text-white">{lang === 'uk' ? 'Скасувати розклад' : 'Cancel schedule'}</button>
+              </div>)}</div>
+            </details>}
             {/* Search Input Bar with Hotkeys Badge */}
             <div className="mb-6 flex items-center gap-3">
               <div className="relative flex-1">
@@ -2124,6 +2209,7 @@ export default function App() {
                       onAIBreakdown={handleAIBreakdownTask}
                       isBreakingDown={breakingDownTaskId === task.id}
                       onConfigureCountdown={handleConfigureCountdown}
+                      onExtendCountdown={handleExtendCountdown}
                       onClearCountdown={handleClearCountdown}
                       onToggleTimer={handleToggleTimer}
                       onStopTimer={handleStopTimer}

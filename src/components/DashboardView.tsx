@@ -36,9 +36,10 @@ import { AIIcon, AIIconId } from './AIIconTemplates';
 import { ActivityChart } from './ActivityChart';
 import { karkasApiFetch } from '../utils/desktopApi';
 import { selectRelevantArchivedTasks } from '../utils/taskArchive';
+import { formatRecordedDuration, recordedTaskSeconds, summarizeTaskTime } from '../utils/taskTimeStats';
 
 // Previous cache entries included accidental/unknown deletions in their AI context.
-const AI_ANALYSIS_STORAGE_KEY_PREFIX = 'karkas_ai_dashboard_analysis_cache_archive_v2_';
+const AI_ANALYSIS_STORAGE_KEY_PREFIX = 'karkas_ai_dashboard_analysis_cache_time_v3_';
 const getAnalysisContext = (tasks: PSTask[], archive: DeletedTask[], tabs: TaskTab[]) =>
   JSON.stringify([tasks, archive, tabs]);
 const getAnalysisLifecycle = (tasks: PSTask[], archive: DeletedTask[]) => ({
@@ -198,6 +199,8 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
       selectPeriodTasks(tasks, relevantDeletedTasks, selectedPeriod, now);
 
     const totalDelivered = completedInPeriod.length + deletedCompleted.length;
+    const completedTimeTasks = [...completedInPeriod, ...deletedCompleted];
+    const timeSummary = summarizeTaskTime(completedTimeTasks);
     const totalDropped = droppedInPeriod.length;
     const totalActive = activeInPeriod.length;
     const totalTracked = totalDelivered + totalDropped + totalActive;
@@ -416,6 +419,8 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
     }
 
     return {
+      completedTimeTasks,
+      timeSummary,
       totalTracked,
       totalCreated: createdInPeriod.length,
       totalDelivered,
@@ -685,6 +690,17 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
     { id: 'ALL_TIME', label: tAnalytics.periods.ALL_TIME },
   ];
 
+  const handleAnalyzeTime = () => {
+    const periodLabel = periodsList.find(item => item.id === selectedPeriod)?.label || selectedPeriod;
+    const summary = analyticsData.timeSummary;
+    const examples = analyticsData.completedTimeTasks.filter(task => recordedTaskSeconds(task) !== null)
+      .sort((a, b) => (recordedTaskSeconds(b) || 0) - (recordedTaskSeconds(a) || 0)).slice(0, 5)
+      .map(task => `${task.title}: ${formatRecordedDuration(recordedTaskSeconds(task), lang)}`).join('; ');
+    onOpenAI(lang === 'uk'
+      ? `Проаналізуй час роботи за період «${periodLabel}», спираючись насамперед на ці дані періоду. Виміряно ${summary.measuredTasks} із ${analyticsData.totalDelivered} завершених завдань; всього ${formatRecordedDuration(summary.totalSeconds, lang)}, середнє ${formatRecordedDuration(summary.averageSeconds, lang)}. Найдовші виміряні завдання (до 5): ${examples}. Запропонуй зручні блоки роботи й резерв часу.`
+      : `Analyze work time for "${periodLabel}", prioritizing these selected-period facts. Measured ${summary.measuredTasks} of ${analyticsData.totalDelivered} completed tasks; total ${formatRecordedDuration(summary.totalSeconds, lang)}, average ${formatRecordedDuration(summary.averageSeconds, lang)}. Longest measured tasks (up to 5): ${examples}. Suggest practical work blocks and buffer time.`);
+  };
+
   return (
     <div className="space-y-8 font-sans leading-relaxed">
       {/* ------------------------------------------------------------- */}
@@ -829,6 +845,28 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
       </div>
 
       {/* ------------------------------------------------------------- */}
+      <section className="border border-neutral-800/70 bg-[#09090b] p-5" aria-label={lang === 'uk' ? 'Час виконання завдань' : 'Task completion time'}>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="flex items-center gap-2 text-base font-bold text-white"><Clock className="h-4 w-4" />{lang === 'uk' ? 'Час виконання завдань' : 'Task completion time'}</h2>
+          <button type="button" disabled={analyticsData.timeSummary.measuredTasks === 0}
+            onClick={handleAnalyzeTime}
+            className="flex min-h-11 items-center gap-2 border border-neutral-700 px-4 py-2 text-sm font-semibold text-white hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-40">
+            <AIIcon id={aiIconVariant} className="h-4 w-4" />{lang === 'uk' ? 'Аналіз часу AI' : 'AI time analysis'}
+          </button>
+        </div>
+        <dl className="mt-4 grid gap-4 sm:grid-cols-2">
+          <div><dt className="text-sm text-neutral-400">{lang === 'uk' ? 'Всього за завершені завдання' : 'Total for completed tasks'}</dt><dd className="mt-1 text-2xl font-bold tabular-nums text-white">{formatRecordedDuration(analyticsData.timeSummary.measuredTasks ? analyticsData.timeSummary.totalSeconds : null, lang)}</dd></div>
+          <div><dt className="text-sm text-neutral-400">{lang === 'uk' ? 'Середній час виміряного завдання' : 'Average per measured task'}</dt><dd className="mt-1 text-2xl font-bold tabular-nums text-white">{formatRecordedDuration(analyticsData.timeSummary.averageSeconds, lang)}</dd></div>
+        </dl>
+        <p className="mt-3 text-sm leading-relaxed text-neutral-400">{lang === 'uk'
+          ? `Виміряно ${analyticsData.timeSummary.measuredTasks} із ${analyticsData.totalDelivered} завершених завдань. Враховано час роботи таймера, без пауз. Завдання без записаного часу не занижують середнє.`
+          : `Measured ${analyticsData.timeSummary.measuredTasks} of ${analyticsData.totalDelivered} completed tasks. Includes recorded timer work, excluding pauses. Tasks without recorded time do not lower the average.`}</p>
+        {analyticsData.completedTimeTasks.length > 0 && <details className="mt-3 border-t border-neutral-800">
+          <summary className="flex min-h-11 cursor-pointer items-center py-2 text-sm font-semibold text-neutral-200">{lang === 'uk' ? 'Час кожного завдання' : 'Time per task'}</summary>
+          <ul className="max-h-72 overflow-auto divide-y divide-neutral-800">{analyticsData.completedTimeTasks.map(task => <li key={task.id} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 py-3 text-sm"><span className="min-w-0 break-words text-neutral-200">{task.title}</span><span className="shrink-0 tabular-nums text-neutral-400">{formatRecordedDuration(recordedTaskSeconds(task), lang)}</span></li>)}</ul>
+        </details>}
+      </section>
+
       {/* TASK VOLUME QUOTA & DENSITY PROGRESS BAR */}
       {/* ------------------------------------------------------------- */}
       <div className="border-b border-neutral-800/70 pb-5">

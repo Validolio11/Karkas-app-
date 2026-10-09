@@ -264,7 +264,8 @@ test('recommendations send server-derived period metrics and distinct completion
     const metrics = JSON.parse(/Metrics Overview: (.+)/.exec(contents)![1]);
     assert.deepEqual(metrics, { totalCreated: 4, totalCompleted: 2, totalActive: 1, totalCancelled: 1, totalDeleted: 1, successRate: 67 });
     assert.match(contents, /Active Tasks \(1\): \[{"title":"live"/);
-    assert.match(contents, /Completed Tasks \(2\):.*"title":"completed".*"title":"archived-completed"/);
+    assert.match(contents, /Completed Tasks \(2; first 15 shown\):.*"title":"completed".*"title":"archived-completed"/);
+    assert.match(contents, /"recordedWorkSeconds":null/);
     assert.match(contents, /Deliberately Cancelled Unfinished Tasks \(1\): \[{"title":"cancelled"/);
     assert.match(body.systemInstruction.parts[0].text, /Active unfinished tasks are not failures/);
     return success({ focusAdvice: 'Review results.', optimizationTip: 'Plan next steps.', workloadStatus: 'LOW VOLUME',

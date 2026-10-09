@@ -2,12 +2,12 @@ import type { DeletedTask, PSTask } from '../types';
 
 /** Explicit completion remains valid in legacy archives unless marked accidental. */
 export function isCompletedArchivedTask(task: DeletedTask): boolean {
-  return task.done && task.deletionReason !== 'accidental';
+  return !task.scheduledPending && task.done && task.deletionReason !== 'accidental';
 }
 
 /** Unknown legacy deletion intent must never be inferred as cancellation. */
 export function isCancelledArchivedTask(task: DeletedTask): boolean {
-  return !task.done && task.deletionReason === 'cancelled';
+  return !task.scheduledPending && !task.done && task.deletionReason === 'cancelled';
 }
 
 /** Select only derived analytics/AI context; keep the persisted archive complete. */

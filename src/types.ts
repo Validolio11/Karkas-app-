@@ -22,6 +22,13 @@ export interface AITimerSettings {
   timerAction?: 'start' | 'pause' | 'stop';
 }
 
+export interface TaskSchedule {
+  startAt: string; // ISO timestamp with explicit UTC offset
+  recurrence: 'once' | 'daily';
+  timeZone: string; // IANA zone; daily occurrences preserve local wall-clock time
+  leadMinutes: number; // Add the occurrence this many minutes before its start
+}
+
 export interface PSTask {
   id: string;
   title: string;
@@ -34,6 +41,11 @@ export interface PSTask {
   pinned: boolean;
   note?: string;
   createdAt: number;
+  schedule?: TaskSchedule;
+  scheduledPending?: boolean; // Future plan template, excluded from work statistics
+  scheduledFor?: number; // Planned start of materialized occurrence
+  schedulePlanId?: string; // Stable parent template ID
+  scheduleNextStartAt?: string; // Persisted daily cursor, original schedule remains the wall-time anchor
   startedAt?: number; // First explicit start of work; preserved through pauses and reopening
   completedAt?: number;
   timerMode?: TimerMode; // Missing on legacy tasks: countdown if configured, otherwise stopwatch
@@ -46,7 +58,7 @@ export interface PSTask {
 }
 
 export type NewTaskInput = Pick<PSTask, 'title' | 'phase' | 'priority' | 'steps'> &
-  Partial<Pick<PSTask, 'stepList' | 'note' | 'timerMode' | 'countdownDurationSeconds'>>;
+  Partial<Pick<PSTask, 'stepList' | 'note' | 'timerMode' | 'countdownDurationSeconds' | 'schedule'>>;
 
 export interface DeletedTask extends PSTask {
   deletedAt: number;
@@ -97,6 +109,7 @@ export interface SuggestedTask {
 }
 
 export interface AITaskUpdate extends AITimerSettings {
+  schedule?: TaskSchedule;
   id: string;
   title?: string;
   phase?: string;
@@ -118,6 +131,7 @@ export interface AIResponse {
   insights?: string[];
   reply?: string;
   tasks?: (AITimerSettings & {
+    schedule?: TaskSchedule;
     title: string;
     phase: string;
     priority: 1 | 2 | 3;

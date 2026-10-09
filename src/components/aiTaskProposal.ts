@@ -35,6 +35,7 @@ export function prepareAITask(task: NonNullable<AIResponse['tasks']>[number], ma
     timerMode: task.timerMode,
     countdownDurationSeconds: task.countdownDurationSeconds,
     timerAction: task.timerAction,
+    schedule: task.schedule,
   };
 }
 

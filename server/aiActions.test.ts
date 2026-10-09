@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { taskMutationProperties, taskTimerProperties, taskActionInstructions, validateTaskMutations, validatedTimerFields, normalizeAIOptionalFields } from './aiActions';
+import { taskMutationProperties, taskTimerProperties, taskActionInstructions, validateTaskMutations, validatedTimerFields, normalizeAIOptionalFields, taskScheduleProperties, validatedScheduleFields, schedulingClockContext } from './aiActions';
 import { applyAITaskUpdate } from '../src/utils/aiTaskUpdates';
 import type { PSTask } from '../src/types';
 
@@ -122,4 +122,39 @@ test('unknown, duplicate, conflicting targets and malformed subtasks are rejecte
     { taskUpdates: [{ id: 'parent', stepList: [{ title: '' }] }] },
     { taskUpdates: [{ id: 'parent', stepList: [{ id: 'a', title: 'A' }, { id: 'a', title: 'B' }] }] },
   ]) assert.throws(() => validateTaskMutations(response, [parent]));
+});
+
+const dailySchedule = { startAt: '2026-10-10T20:00:00+03:00', recurrence: 'daily', timeZone: 'Europe/Kyiv', leadMinutes: 5 };
+test('future and recurring schedule proposals survive new and existing task validation', () => {
+  assert.deepEqual(taskScheduleProperties.schedule.required, ['startAt', 'recurrence', 'timeZone', 'leadMinutes']);
+  assert.deepEqual(validatedScheduleFields({ schedule: dailySchedule }), { schedule: dailySchedule });
+  assert.deepEqual(validateTaskMutations({ taskUpdates: [{ id: parent.id, schedule: dailySchedule }] }, [parent]).taskUpdates, [{ id: parent.id, schedule: dailySchedule }]);
+  assert.deepEqual(normalizeAIOptionalFields({ tasks: [{ title: 'Typing', schedule: null }] }).tasks, [{ title: 'Typing' }]);
+});
+test('schedule validation rejects rollover dates, absent offset, invalid timezone and accounting forgery', () => {
+  for (const startAt of ['2026-02-30T20:00:00Z', '2026-13-01T20:00:00Z', '2026-10-10T24:00:00Z', '2026-10-10T20:00:00', '2026-10-10T20:00:00+14:30']) {
+    assert.throws(() => validatedScheduleFields({ schedule: { ...dailySchedule, startAt } }), /Invalid task schedule/);
+  }
+  for (const override of [{ timeZone: 'unknown/zone' }, { recurrence: 'hourly' }, { leadMinutes: -1 }, { leadMinutes: 1.5 }, { leadMinutes: 1441 }, { arbitrary: true }]) {
+    assert.throws(() => validatedScheduleFields({ schedule: { ...dailySchedule, ...override } }), /Invalid task schedule/);
+  }
+  assert.throws(() => validatedScheduleFields({ schedule: dailySchedule, timerAction: 'start' }), /remain paused/);
+  assert.throws(() => validatedScheduleFields({ scheduledPending: false }), /accounting field/);
+});
+test('clock context uses client timezone calendar day instead of host date', () => {
+  const clock = schedulingClockContext({ now: '2026-10-09T22:30:00Z', timeZone: 'Europe/Kyiv' });
+  assert.equal(clock.localDateTime, '2026-10-10 01:30:00');
+  assert.equal(clock.timeZone, 'Europe/Kyiv');
+  assert.throws(() => schedulingClockContext({ now: 'tomorrow', timeZone: 'Europe/Kyiv' }));
+  assert.throws(() => schedulingClockContext({ now: '2026-10-09T22:30:00Z', timeZone: 'bad' }));
+});
+
+test('pending existing scheduled templates reject completion and start even without a new schedule field', () => {
+  const plan = { ...parent, scheduledPending: true, timerMode: 'stopwatch' as const };
+  for (const changes of [{ done: true }, { timerAction: 'start' }, { stepList: [{ title: 'Typing', done: true }] }]) {
+    assert.throws(() => validateTaskMutations({ taskUpdates: [{ id: plan.id, ...changes }] }, [plan]), /cannot be started or completed/);
+  }
+  assert.deepEqual(validateTaskMutations({ taskUpdates: [{ id: plan.id, title: 'Practice typing', timerAction: 'pause' }] }, [plan]).taskUpdates,
+    [{ id: plan.id, title: 'Practice typing', timerAction: 'pause' }]);
+  assert.throws(() => validateTaskMutations({ taskUpdates: [{ id: parent.id, schedule: dailySchedule, done: true }] }, [parent]), /cannot be started or completed/);
 });

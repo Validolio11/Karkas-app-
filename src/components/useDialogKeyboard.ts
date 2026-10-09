@@ -10,7 +10,7 @@ export function useDialogKeyboard(isOpen: boolean, onClose: () => void, dialogId
     const focusable = () => {
       const dialog = document.getElementById(dialogId);
       return Array.from(dialog?.querySelectorAll<HTMLElement>(
-        'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex="0"]',
+        'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], summary, [tabindex="0"]',
       ) || []).filter(element => element.getClientRects().length > 0);
     };
     const frame = requestAnimationFrame(() => {

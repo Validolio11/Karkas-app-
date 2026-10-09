@@ -4,6 +4,7 @@ import { getTaskTimerMode, pauseTaskTimer, startTaskTimer } from './taskTimer';
 /** Configure without starting or losing recorded work; only explicit actions run time. */
 export function isAITimerSettingsValid(task: PSTask, settings: AITimerSettings): boolean {
   const { timerMode, countdownDurationSeconds: duration, timerAction } = settings;
+  if (task.scheduledPending && timerAction === 'start') return false;
   if (timerMode !== undefined && !['none', 'stopwatch', 'countdown'].includes(timerMode)) return false;
   if (duration !== undefined && (!Number.isInteger(duration) || duration < 60 || duration > 86400)) return false;
   if (timerAction !== undefined && !['start', 'pause', 'stop'].includes(timerAction)) return false;

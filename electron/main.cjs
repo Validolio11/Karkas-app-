@@ -451,9 +451,30 @@ function registerIpc() {
     await shell.openExternal(parsed.toString());
   });
   handle('karkas:system:get-version', () => app.getVersion());
-  handle('karkas:system:notify', ({ title, body }) => {
+  handle('karkas:system:notify', async ({ title, body }) => {
     if (!Notification.isSupported()) throw new Error('System notifications are unavailable');
-    new Notification({ title: String(title).slice(0, 120), body: String(body).slice(0, 1000), icon: appIconPath() }).show();
+    const notification = new Notification({ title: String(title).slice(0, 120), body: String(body).slice(0, 1000), icon: appIconPath() });
+    notification.on('click', () => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show();
+        mainWindow.focus();
+      }
+    });
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => finish(new Error('System notification did not confirm delivery')), 5000);
+      const shown = () => finish();
+      const failed = (_event, error) => finish(new Error(error || 'System notification failed'));
+      const finish = error => {
+        clearTimeout(timeout);
+        notification.removeListener('show', shown);
+        notification.removeListener('failed', failed);
+        if (error) reject(error); else resolve();
+      };
+      notification.once('show', shown);
+      notification.once('failed', failed);
+      try { notification.show(); } catch (error) { finish(error); }
+    });
   });
   handle('karkas:system:get-startup', () => app.getLoginItemSettings().openAtLogin);
   handle('karkas:system:set-startup', async ({ enabled }) => {
@@ -469,7 +490,7 @@ async function createWindow() {
   mainWindow = new BrowserWindow({
     ...(savedBounds || { width: 1280, height: 850 }), minWidth: 760, minHeight: 540, show: false,
     backgroundColor: '#09090b', icon: windowIcon(), frame: false, autoHideMenuBar: true, title: 'Karkas',
-    webPreferences: { zoomFactor: 1, nodeIntegration: false, contextIsolation: true, sandbox: true, preload: path.join(__dirname, 'preload.cjs') },
+    webPreferences: { zoomFactor: 1, backgroundThrottling: false, nodeIntegration: false, contextIsolation: true, sandbox: true, preload: path.join(__dirname, 'preload.cjs') },
   });
   mainWindow.removeMenu();
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {

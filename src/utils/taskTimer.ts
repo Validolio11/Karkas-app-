@@ -90,3 +90,20 @@ export function clearTaskCountdown(task: PSTask, now = Date.now()): PSTask {
   delete paused.countdownRemainingSeconds;
   return paused;
 }
+
+/** Extend the remaining budget without erasing work or starting a paused task. */
+export function extendTaskCountdown(task: PSTask, extraSeconds: number, now = Date.now()): PSTask {
+  if (task.done || getTaskTimerMode(task) !== 'countdown' || !Number.isInteger(extraSeconds) || extraSeconds <= 0) return task;
+  const remaining = getTaskRemainingSeconds(task, now);
+  if (remaining === undefined || seconds(task.countdownDurationSeconds) + extraSeconds > 86400) return task;
+  const paused = pauseTaskTimer(task, now);
+  const running = !!task.timerRunning && remaining > 0;
+  return {
+    ...paused,
+    countdownDurationSeconds: seconds(task.countdownDurationSeconds) + extraSeconds,
+    countdownRemainingSeconds: remaining + extraSeconds,
+    timerRunning: running,
+    timerStartedAt: running ? now : undefined,
+    autoPausedOverdue: false,
+  };
+}

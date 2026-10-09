@@ -51,3 +51,14 @@ test('a fully rejected timer edit never claims successful application', () => {
   assert.match(message, /^No changes were applied\./);
   assert.match(message, /Not applied: 1/);
 });
+
+test('review mapper preserves the exact requested future schedule alongside timer configuration', () => {
+  const schedule = { startAt: '2026-10-10T20:00:00+03:00', recurrence: 'daily' as const, timeZone: 'Europe/Kyiv', leadMinutes: 5 };
+  const input = { title: 'Typing', phase: 'focus', priority: 2 as const, steps: 0, schedule, timerMode: 'countdown' as const, countdownDurationSeconds: 1200 };
+  const saved = structuredClone(input);
+  const proposal = prepareAITask(input, index => `step-${index}`);
+  assert.deepEqual(proposal.schedule, schedule);
+  assert.equal(proposal.countdownDurationSeconds, 1200);
+  assert.equal(proposal.timerAction, undefined);
+  assert.deepEqual(input, saved);
+});

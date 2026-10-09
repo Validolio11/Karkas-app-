@@ -1,5 +1,6 @@
 import type { AIResponse } from '../types';
 import { looksLikeGeminiApiKey } from '../utils/apiKey';
+import { normalizeTaskSchedule } from '../utils/taskScheduling';
 
 export type AIMode = 'chat' | 'breakdown' | 'analyze' | 'generate';
 export interface AIRequest {
@@ -90,6 +91,9 @@ export function readAIResponse(value: unknown, mode: AIMode): AIResponse & { use
   const hasInvalidText = (item: Record<string, unknown>, fields: string[]) => fields.some(field => item[field] !== undefined && typeof item[field] !== 'string');
   const hasInvalidSteps = (item: Record<string, unknown>) => item.stepList !== undefined && (!Array.isArray(item.stepList)
     || item.stepList.some(step => !step || typeof step !== 'object' || typeof step.title !== 'string'));
+  for (const item of [...(record.tasks || []), ...(record.taskUpdates || [])]) {
+    if (item.schedule !== undefined && !normalizeTaskSchedule(item.schedule)) throw new AIRequestError('INVALID_RESPONSE');
+  }
   if (record.tasks?.some((item: Record<string, unknown>) => typeof item.title !== 'string' || !item.title.trim()
     || hasInvalidText(item, ['title', 'note', 'phase']) || hasInvalidSteps(item) || (item.steps !== undefined && typeof item.steps !== 'number'))) throw new AIRequestError('INVALID_RESPONSE');
   if (record.tabs?.some((item: Record<string, unknown>) => typeof item.id !== 'string' || typeof item.name !== 'string' || hasInvalidText(item, ['color']))) throw new AIRequestError('INVALID_RESPONSE');

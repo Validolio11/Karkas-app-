@@ -237,3 +237,19 @@ test("desktop IPC uses the same validation and computes calendar labels for the 
     else process.env.GEMINI_API_KEY = savedKey;
   }
 });
+
+test('malformed scheduling clock is rejected before provider access', async () => {
+  for (const clientClock of [null, {}, { now: 'tomorrow', timeZone: 'Europe/Kyiv' }, { now: '2026-10-09T12:00:00Z', timeZone: 'Unknown/Zone' }]) {
+    assert.equal((await post('assist', { prompt: 'Schedule typing tomorrow', clientClock })).status, 400);
+  }
+});
+test('offline scheduling never silently creates immediate tasks instead of tomorrow', async () => {
+  const response = await post('assist', { prompt: 'Schedule typing tomorrow at 20:00', action: 'generate', clientClock: { now: '2026-10-09T12:00:00Z', timeZone: 'Europe/Kyiv' } });
+  assert.equal(response.status, 503);
+  assert.deepEqual(response.data.tasks, []);
+});
+test('pending plans are excluded from offline productivity counts', async () => {
+  const response = await post('recommendations', { lang: 'en', tasks: [{ id: 'future', title: 'Typing', done: false, scheduledPending: true, createdAt: Date.now() }] });
+  assert.equal(response.status, 200);
+  assert.match(response.data.periodRetrospective, /tracked 0 tasks/);
+});

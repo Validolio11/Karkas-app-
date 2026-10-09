@@ -12,6 +12,11 @@ export function serializeTaskForCloud<T extends PSTask | DeletedTask>(task: T, n
     if ('deletionReason' in task && (task.deletionReason === 'accidental' || task.deletionReason === 'cancelled')) result.deletionReason = task.deletionReason;
   }
   if (task.note != null) result.note = task.note;
+  if (task.schedule) result.schedule = { ...task.schedule };
+  if (task.scheduledPending !== undefined) result.scheduledPending = Boolean(task.scheduledPending);
+  if (task.scheduleNextStartAt) result.scheduleNextStartAt = task.scheduleNextStartAt;
+  if (Number.isFinite(task.scheduledFor)) result.scheduledFor = task.scheduledFor;
+  if (task.schedulePlanId) result.schedulePlanId = task.schedulePlanId;
   if (task.completedAt != null) result.completedAt = task.completedAt;
   if (Number.isFinite(task.startedAt)) result.startedAt = task.startedAt;
   if (task.timerMode === 'none' || task.timerMode === 'stopwatch' || task.timerMode === 'countdown') result.timerMode = task.timerMode;

@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { User } from 'firebase/auth';
 import { Language, TRANSLATIONS } from '../utils/i18n';
 import { sound } from '../utils/audio';
+import { getCloudSyncErrorMessage, isCloudBackupMissing, isFirestoreServiceDisabled } from '../utils/cloudSyncError';
 import { UserCloudState } from '../services/firebase';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { 
@@ -42,6 +43,62 @@ const CopyableDomain: React.FC<{ domain: string; lang: string }> = ({ domain, la
       >
         {copied ? (lang === 'uk' ? 'Скопійовано' : 'Copied') : (lang === 'uk' ? 'Копіювати' : 'Copy')}
       </button>
+    </div>
+  );
+};
+
+const CloudSyncErrorNotice: React.FC<{ error: string; lang: Language; operation?: 'sync' | 'restore' }> = ({ error, lang, operation }) => {
+  const serviceDisabled = isFirestoreServiceDisabled(error);
+  const backupMissing = isCloudBackupMissing(error);
+  const projectId = firebaseConfig.projectId;
+  const enableUrl = `https://console.cloud.google.com/apis/library/firestore.googleapis.com?project=${encodeURIComponent(projectId)}`;
+
+  return (
+    <div className="flex items-start gap-3 border-t border-rose-950 bg-rose-950/20 p-4 text-sm leading-relaxed text-rose-300" role="status">
+      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+      <div className="min-w-0 flex-1 space-y-3 [overflow-wrap:anywhere]">
+        <p className="font-semibold text-rose-200">
+          {serviceDisabled
+            ? (lang === 'uk' ? 'Хмарна служба недоступна' : 'Cloud service unavailable')
+            : backupMissing
+              ? (lang === 'uk' ? 'Хмарної копії ще немає' : 'No cloud backup yet')
+              : operation === 'restore'
+                ? (lang === 'uk' ? 'Не вдалося відновити дані з хмари' : 'Could not restore cloud data')
+                : (lang === 'uk' ? 'Не вдалося синхронізувати дані' : 'Could not sync data')}
+        </p>
+        {serviceDisabled ? (
+          <>
+            <p>
+              {lang === 'uk'
+                ? `Google акаунт підключено, але службу Cloud Firestore API для проєкту ${projectId} вимкнено або ще не ввімкнено. Власник проєкту має ввімкнути її в Google Cloud, а потім повторити синхронізацію.`
+                : `Your Google account is connected, but Cloud Firestore API for project ${projectId} is disabled or has not been enabled yet. The project owner needs to enable it in Google Cloud, then retry syncing.`}
+            </p>
+            <p className="text-neutral-300">
+              {lang === 'uk'
+                ? 'Ця помилка не видаляє локальні завдання. Останні зміни можуть ще не бути у хмарі.'
+                : 'This error does not delete local tasks. Your latest changes may not be in the cloud yet.'}
+            </p>
+            <a href={enableUrl} target="_blank" rel="noopener noreferrer"
+              className="inline-flex min-h-11 items-center border border-neutral-600 bg-neutral-900 px-3 py-2 text-sm font-semibold text-white transition-colors hover:border-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
+              {lang === 'uk' ? 'Увімкнути Cloud Firestore API ↗' : 'Enable Cloud Firestore API ↗'}
+            </a>
+          </>
+        ) : backupMissing ? (
+          <p>
+            {lang === 'uk'
+              ? `Немає копії, з якої можна відновити дані. Щоб створити хмарну копію поточних завдань, спершу натисніть «${TRANSLATIONS[lang].account.syncNow}» і перевірте результат синхронізації. Ця спроба відновлення не змінює локальні завдання.`
+              : `There is no backup to restore. To create a cloud copy of your current tasks, first select “${TRANSLATIONS[lang].account.syncNow}” and check the sync result. This restore attempt does not change local tasks.`}
+          </p>
+        ) : (
+          <p>{lang === 'uk' ? 'Причина наведена у технічних подробицях. Спробуйте ще раз після її усунення.' : 'The reason is shown in the technical details. Retry after resolving it.'}</p>
+        )}
+        <details className="border-t border-rose-900/60">
+          <summary className="min-h-11 cursor-pointer py-3 text-sm font-semibold text-neutral-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
+            {lang === 'uk' ? 'Технічні подробиці' : 'Technical details'}
+          </summary>
+          <pre className="whitespace-pre-wrap pb-2 font-mono text-xs leading-relaxed text-neutral-300 [overflow-wrap:anywhere]">{error}</pre>
+        </details>
+      </div>
     </div>
   );
 };
@@ -87,6 +144,13 @@ export const AccountModal: React.FC<AccountModalProps> = ({
 
   const [authLoading, setAuthLoading] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; text: React.ReactNode } | null>(null);
+  const [manualCloudError, setManualCloudError] = useState<{ userId: string; message: string; operation: 'sync' | 'restore' } | null>(null);
+
+  useEffect(() => { setManualCloudError(null); }, [user?.uid, syncError]);
+
+  const currentManualError = manualCloudError?.userId === user?.uid ? manualCloudError : null;
+  const displayedSyncError = currentManualError?.message || syncError;
+  const serviceDisabled = isFirestoreServiceDisabled(displayedSyncError);
 
   if (!isOpen) return null;
 
@@ -208,18 +272,15 @@ export const AccountModal: React.FC<AccountModalProps> = ({
   const handleManualSync = async () => {
     try {
       setFeedbackMsg(null);
+      setManualCloudError(null);
       sound.tick(500);
       await onSyncNow();
-      sound.activate();
-      setFeedbackMsg({
-        type: 'success',
-        text: acc.syncSuccess,
-      });
-    } catch (err: any) {
+    } catch (err: unknown) {
       sound.tick(250);
-      setFeedbackMsg({
-        type: 'error',
-        text: lang === 'uk' ? 'Помилка синхронізації.' : 'Sync failed.',
+      setManualCloudError({
+        userId: user?.uid || '',
+        message: getCloudSyncErrorMessage(err) || (lang === 'uk' ? 'Помилка синхронізації.' : 'Sync failed.'),
+        operation: 'sync',
       });
     }
   };
@@ -227,18 +288,15 @@ export const AccountModal: React.FC<AccountModalProps> = ({
   const handleManualRestore = async () => {
     try {
       setFeedbackMsg(null);
+      setManualCloudError(null);
       sound.tick(500);
       await onRestoreFromCloud();
-      sound.activate();
-      setFeedbackMsg({
-        type: 'success',
-        text: acc.restoreSuccess,
-      });
-    } catch (err: any) {
+    } catch (err: unknown) {
       sound.tick(250);
-      setFeedbackMsg({
-        type: 'error',
-        text: lang === 'uk' ? 'Помилка відновлення з хмари.' : 'Restore failed.',
+      setManualCloudError({
+        userId: user?.uid || '',
+        message: getCloudSyncErrorMessage(err) || (lang === 'uk' ? 'Помилка відновлення з хмари.' : 'Restore failed.'),
+        operation: 'restore',
       });
     }
   };
@@ -382,20 +440,17 @@ export const AccountModal: React.FC<AccountModalProps> = ({
                   </button>
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-neutral-800 bg-neutral-950/50 px-4 py-3 text-xs">
-                  <span className={`flex items-center gap-2 ${autoSyncEnabled ? syncStatusView.color : 'text-neutral-400'}`} title={syncError || undefined}>
-                    {syncStatus === 'offline' ? <WifiOff className="h-3.5 w-3.5" /> : <span className={`h-1.5 w-1.5 ${autoSyncEnabled ? syncStatusView.dot : 'bg-neutral-500'}`} />}
-                    {autoSyncEnabled ? syncStatusView.label : acc.autoSyncOff}
+                  <span className={`flex items-center gap-2 ${serviceDisabled ? 'text-rose-400' : autoSyncEnabled ? syncStatusView.color : 'text-neutral-400'}`}>
+                    {syncStatus === 'offline' && !serviceDisabled ? <WifiOff className="h-3.5 w-3.5" /> : <span className={`h-1.5 w-1.5 ${serviceDisabled ? 'bg-rose-400' : autoSyncEnabled ? syncStatusView.dot : 'bg-neutral-500'}`} />}
+                    {serviceDisabled ? (lang === 'uk' ? 'Хмарна служба недоступна' : 'Cloud service unavailable') : autoSyncEnabled ? syncStatusView.label : acc.autoSyncOff}
                   </span>
                   <span className="flex items-center gap-1.5 text-neutral-400" aria-live="polite">
                     <History className="h-3 w-3 shrink-0" />
                     <span>{acc.lastSynced} <span className="text-neutral-200">{formatLastSync(lastSyncTime)}</span></span>
                   </span>
                 </div>
-                {syncError && (syncStatus === 'error' || syncStatus === 'offline') && (
-                  <div className="flex items-start gap-2 border-t border-rose-950 bg-rose-950/20 px-4 py-2.5 text-[10px] leading-relaxed text-rose-300" role="status">
-                    <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
-                    <span>{syncError}</span>
-                  </div>
+                {displayedSyncError && (
+                  <CloudSyncErrorNotice error={displayedSyncError} lang={lang} operation={currentManualError?.operation} />
                 )}
               </section>
 

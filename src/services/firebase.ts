@@ -13,7 +13,6 @@ import {
   getFirestore,
   doc,
   runTransaction,
-  getDoc,
   getDocFromServer,
   onSnapshot,
 } from 'firebase/firestore';
@@ -51,17 +50,6 @@ export const db =
   firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== '(default)'
     ? getFirestore(app, firebaseConfig.firestoreDatabaseId)
     : getFirestore(app);
-
-// Validate connection to Firestore on boot gracefully
-async function testFirestoreConnection() {
-  try {
-    await getDoc(doc(db, 'test', 'connection'));
-  } catch (error) {
-    // Fail silently or log mild debug info if offline
-    console.debug('Firestore offline mode active or document inaccessible.');
-  }
-}
-testFirestoreConnection();
 
 export interface UserCloudState {
   userId: string;

@@ -105,6 +105,10 @@ export async function generateGeminiWithFallback({
       return { ...response, text: response.text, usedModel: model, fallbackUsed: model !== models[0], validatedResponse };
     } catch (error) {
       const failure = classifyAIRequestError(error);
+      // This attempt was allotted the entire remaining operation budget. A transport
+      // timeout can fire fractionally before Date.now reaches the deadline; do not
+      // spend that rounding remainder on another fallback request.
+      if (failure.code === 'TIMEOUT' && attemptMs === remaining) throw failure;
       if (failure.code !== 'MODEL_UNAVAILABLE' || lastError.code === 'MODEL_UNAVAILABLE') lastError = failure;
       // Invalid structured output may recover on another model; credentials and request errors cannot.
       if (['INVALID_API_KEY', 'ACCESS_DENIED', 'INVALID_AI_REQUEST'].includes(failure.code) ||

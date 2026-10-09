@@ -1,5 +1,19 @@
 import { Type } from '@google/genai';
 
+export const taskScheduleProperties = {
+  schedule: {
+    type: Type.OBJECT,
+    description: 'Create a future scheduled task or daily template only when requested. All fields required.',
+    properties: {
+      startAt: { type: Type.STRING, description: 'First planned start as ISO timestamp with explicit UTC offset. Resolve tomorrow using clientClock local date.' },
+      recurrence: { type: Type.STRING, enum: ['once', 'daily'] },
+      timeZone: { type: Type.STRING, description: 'Client IANA timezone, e.g. Europe/Kyiv; daily repetitions preserve local start time across daylight saving changes.' },
+      leadMinutes: { type: Type.INTEGER, minimum: 0, maximum: 1440, description: 'Create task and notify this many minutes before planned start; default 5.' },
+    },
+    required: ['startAt', 'recurrence', 'timeZone', 'leadMinutes'],
+  },
+};
+
 export const taskTimerProperties = {
   timerMode: { type: Type.STRING, enum: ['none', 'stopwatch', 'countdown'], description: 'Timer configuration. New or changed timers are paused unless timerAction:start is explicitly requested.' },
   countdownDurationSeconds: { type: Type.INTEGER, minimum: 60, maximum: 86400, description: 'Countdown duration in whole seconds, 1 minute to 24 hours. Converts minutes to seconds; never put the time only in a note.' },
@@ -17,6 +31,7 @@ export const taskMutationProperties = {
         note: { type: Type.STRING }, done: { type: Type.BOOLEAN },
         steps: { type: Type.INTEGER },
         ...taskTimerProperties,
+        ...taskScheduleProperties,
         stepList: {
           type: Type.ARRAY,
           description: 'Complete resulting subtask list. Preserve unchanged items, IDs and done states. Empty array removes all subtasks.',
@@ -46,6 +61,9 @@ export const taskMutationProperties = {
 
 export const taskActionInstructions = `
 APPLICATION ACTION CONTRACT:
+- Existing tasks with scheduledPending:true are future templates, not active work or unfinished failures. Preserve their schedules unless explicitly asked to change them. Never output application-owned schedulePlanId, scheduledFor, scheduledPending or scheduleNextStartAt.
+- You can schedule future tasks and recurring daily tasks using schedule:{startAt,recurrence,timeZone,leadMinutes}. Use the supplied clientClock local date/time and timezone for tomorrow, today and every day; never guess from training knowledge. startAt is the intended work start, NOT the notification time. Default leadMinutes:5 means add the task and notify 5 minutes before start. For daily 20:00 pick the next future 20:00 in the client's timezone. Keep daily local time across DST. Never encode scheduling only in notes. If a date-only request (e.g. tomorrow) lacks a start time, ask one concise clarification and return no mutations. For impossible/ambiguous local times ask for clarification. Future tasks stay scheduled until due; do not claim they were already created. Daily recurrence creates one occurrence per day, never a list of speculative tasks. Scheduling does not start the task timer. Changes still require Apply. Notifications require the app running (including in the tray); do not promise notifications when fully quit.
+
 - You can create tasks and category tabs, edit existing tasks and their subtasks, configure/start/pause/stop task timers, complete/reopen tasks, and archive entire tasks. You cannot rename/delete tabs, restore archived tasks, or change app settings. Explain unsupported requests honestly.
 - Timer changes must use structured fields, not a note: timerMode:"none" removes the timer, "stopwatch" measures elapsed time, "countdown" sets a time budget with countdownDurationSeconds (integer 60..86400). Convert requested minutes/hours to seconds: 40 minutes means countdownDurationSeconds:2400, never 40. New or reconfigured timers default to paused; omit timerAction when no action was requested and use timerAction:"start" ONLY if the user explicitly asks to start. "pause" and "stop" end the running session while preserving remaining time and recorded work time; neither resets the countdown budget. Never output raw timerRunning, timerStartedAt, timeSpentSeconds or countdownRemainingSeconds.
 - For existing tasks use taskUpdates with the exact task id and only requested timer fields. Preserve unrelated task content, progress, and recorded time. For new tasks include timer fields in tasks. A countdown needs a duration; if the user did not give one and no configured duration exists, ask a short clarification with no mutations. Start is forbidden for completed tasks unless explicitly reopened using done:false. Ask which task when the target is ambiguous.
@@ -61,9 +79,9 @@ APPLICATION ACTION CONTRACT:
 Example: parent id=t1 has [{id:s1,title:A,done:true},{id:s2,title:B,done:false}]. Add C => taskUpdates:[{id:t1,stepList:[{id:s1,title:A,done:true},{id:s2,title:B,done:false},{title:C,done:false}]}], tasks:[] . Remove B => taskUpdates:[{id:t1,stepList:[{id:s1,title:A,done:true}]}], taskDeletions:[] .
 `;
 
-type TimerContext = { timerMode?: unknown; countdownDurationSeconds?: unknown; done?: unknown };
+type TimerContext = { timerMode?: unknown; countdownDurationSeconds?: unknown; done?: unknown; scheduledPending?: unknown };
 
-const mutationOptionalFields = ['title', 'phase', 'priority', 'note', 'done', 'steps', 'stepList', 'timerMode', 'countdownDurationSeconds', 'timerAction'];
+const mutationOptionalFields = ['title', 'phase', 'priority', 'note', 'done', 'steps', 'stepList', 'timerMode', 'countdownDurationSeconds', 'timerAction', 'schedule'];
 
 /** Null on an optional field means absent, never clear content or perform an action. */
 function omitOptionalNulls(item: any, fields: string[]) {
@@ -80,7 +98,7 @@ export function normalizeAIOptionalFields(parsed: Record<string, any>) {
   }
   if (normalized.workloadDiagnosis === null) delete normalized.workloadDiagnosis;
   if (Array.isArray(normalized.tasks)) normalized.tasks = normalized.tasks.map((task: any) =>
-    omitOptionalNulls(task, ['note', 'stepList', 'timerMode', 'countdownDurationSeconds', 'timerAction']));
+    omitOptionalNulls(task, ['note', 'stepList', 'timerMode', 'countdownDurationSeconds', 'timerAction', 'schedule']));
   if (Array.isArray(normalized.taskUpdates)) normalized.taskUpdates = normalized.taskUpdates.map((update: any) => {
     const item = omitOptionalNulls(update, mutationOptionalFields);
     if (Array.isArray(item?.stepList)) item.stepList = item.stepList.map((step: any) => omitOptionalNulls(step, ['id', 'done']));
@@ -133,7 +151,7 @@ export function validateTaskMutations(parsed: any, tasks: ({ id: string } & Time
       if (field === 'taskDeletions' && item.deletionReason !== undefined && !['accidental', 'cancelled'].includes(item.deletionReason)) throw new Error('Invalid deletion reason');
       if (field === 'taskDeletions' && item.reason !== undefined && typeof item.reason !== 'string') throw new Error('Invalid deletion note');
       if (field === 'taskUpdates') {
-        const editableFields = ['title', 'phase', 'priority', 'note', 'done', 'steps', 'stepList', 'timerMode', 'countdownDurationSeconds', 'timerAction'];
+        const editableFields = ['title', 'phase', 'priority', 'note', 'done', 'steps', 'stepList', 'timerMode', 'countdownDurationSeconds', 'timerAction', 'schedule'];
         if (!editableFields.some(key => item[key] !== undefined)) throw new Error('Task update contains no supported changes');
         for (const key of ['title', 'phase']) {
           if (item[key] !== undefined && (typeof item[key] !== 'string' || !item[key].trim())) throw new Error('Invalid task text');
@@ -142,7 +160,13 @@ export function validateTaskMutations(parsed: any, tasks: ({ id: string } & Time
             item.priority !== undefined && ![1, 2, 3].includes(item.priority) ||
             item.done !== undefined && typeof item.done !== 'boolean' ||
             item.steps !== undefined && (!Number.isInteger(item.steps) || item.steps < 0 || item.steps > 50)) throw new Error('Invalid task update value');
-        Object.assign(item, validatedTimerFields(item, tasks.find(task => task.id === item.id)));
+        const existing = tasks.find(task => task.id === item.id);
+        if ((existing?.scheduledPending || item.schedule) && (item.timerAction === 'start' || item.done === true ||
+            Array.isArray(item.stepList) && item.stepList.length > 0 && item.stepList.every((step: any) => step.done === true))) {
+          throw new Error('Pending scheduled plans cannot be started or completed');
+        }
+        Object.assign(item, validatedScheduleFields(item));
+        Object.assign(item, validatedTimerFields(item, existing));
       }
       if (field === 'taskUpdates' && item.stepList !== undefined) {
         if (!Array.isArray(item.stepList) || item.stepList.some((s: any) => !s || typeof s.title !== 'string' || !s.title.trim() || s.done !== undefined && typeof s.done !== 'boolean')) {
@@ -156,4 +180,45 @@ export function validateTaskMutations(parsed: any, tasks: ({ id: string } & Time
   const deleted = new Set((parsed.taskDeletions || []).map((item: any) => item.id));
   if ((parsed.taskUpdates || []).some((item: any) => deleted.has(item.id))) throw new Error('Conflicting task actions');
   return { taskUpdates: parsed.taskUpdates || [], taskDeletions: parsed.taskDeletions || [] };
+}
+
+/** Strict timestamps reject rollover dates and missing offsets; unknown zones are unsafe for recurrence. */
+export function isValidScheduleTimestamp(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,3})?(Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if (!match || !Number.isFinite(Date.parse(value))) return false;
+  const [, year, month, day, hour, minute, second, offset] = match;
+  const maximumDay = new Date(Date.UTC(Number(year), Number(month), 0)).getUTCDate();
+  return Number(year) >= 2000 && Number(year) <= 2100 && Number(month) >= 1 && Number(month) <= 12 &&
+    Number(day) >= 1 && Number(day) <= maximumDay && Number(hour) < 24 && Number(minute) < 60 && Number(second) < 60 &&
+    (offset === 'Z' || Number(offset.slice(1, 3)) <= 14 && Number(offset.slice(4)) < 60 && (Number(offset.slice(1, 3)) < 14 || Number(offset.slice(4)) === 0));
+}
+
+export function isValidTimeZone(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length > 100) return false;
+  try { new Intl.DateTimeFormat('en', { timeZone: value }); return true; } catch { return false; }
+}
+
+export function validatedScheduleFields(item: any) {
+  for (const key of ['schedulePlanId', 'scheduledFor', 'scheduledPending', 'scheduleNextStartAt']) {
+    if (item[key] !== undefined) throw new Error('Unsupported schedule accounting field');
+  }
+  if (item.schedule === undefined || item.schedule === null) return {};
+  const schedule = item.schedule;
+  if (!schedule || typeof schedule !== 'object' || Array.isArray(schedule) ||
+      !isValidScheduleTimestamp(schedule.startAt) || !['once', 'daily'].includes(schedule.recurrence) ||
+      !isValidTimeZone(schedule.timeZone) || !Number.isInteger(schedule.leadMinutes) || schedule.leadMinutes < 0 || schedule.leadMinutes > 1440 ||
+      Object.keys(schedule).some(key => !['startAt', 'recurrence', 'timeZone', 'leadMinutes'].includes(key))) throw new Error('Invalid task schedule');
+  if (item.timerAction === 'start') throw new Error('Scheduled task timers must remain paused');
+  return { schedule: { startAt: schedule.startAt, recurrence: schedule.recurrence, timeZone: schedule.timeZone, leadMinutes: schedule.leadMinutes } };
+}
+
+export function schedulingClockContext(clock?: any, fallbackNow = Date.now()) {
+  if (clock !== undefined && (!clock || typeof clock !== 'object' || Array.isArray(clock) || clock.now === undefined || clock.timeZone === undefined)) throw new Error('Invalid clientClock');
+  const now = clock?.now ?? new Date(fallbackNow).toISOString();
+  const timeZone = clock?.timeZone ?? 'UTC';
+  if (!isValidScheduleTimestamp(now) || !isValidTimeZone(timeZone)) throw new Error('Invalid clientClock');
+  return { now, timeZone, localDateTime: new Intl.DateTimeFormat('sv-SE', {
+    timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }).format(new Date(now)) };
 }

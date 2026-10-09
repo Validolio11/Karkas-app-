@@ -78,3 +78,20 @@ test('timer choice, first work timestamp and zero-subtask tasks survive cloud se
   }
   assert.equal('timerMode' in serializeTaskForCloud(task), false);
 });
+
+test('cloud roundtrip preserves pending daily plan cursor and occurrence identity without mutating input', () => {
+  const plan: PSTask = { ...task, schedule: { startAt: '2026-10-09T20:00:00+03:00', recurrence: 'daily', timeZone: 'Europe/Kyiv', leadMinutes: 5 },
+    scheduledPending: true, scheduleNextStartAt: '2026-10-10T17:00:00.000Z' };
+  const saved = structuredClone(plan);
+  const recovered = JSON.parse(JSON.stringify(serializeTaskForCloud(plan)));
+  assert.deepEqual(recovered.schedule, plan.schedule);
+  assert.equal(recovered.scheduledPending, true);
+  assert.equal(recovered.scheduleNextStartAt, plan.scheduleNextStartAt);
+  assert.notEqual(serializeTaskForCloud(plan).schedule, plan.schedule);
+  assert.deepEqual(plan, saved);
+  const occurrence = { ...task, scheduledPending: false, scheduledFor: 1791651600000, schedulePlanId: 'plan-1' };
+  const roundtrip = JSON.parse(JSON.stringify(serializeTaskForCloud(occurrence)));
+  assert.equal(roundtrip.scheduledPending, false);
+  assert.equal(roundtrip.scheduledFor, occurrence.scheduledFor);
+  assert.equal(roundtrip.schedulePlanId, 'plan-1');
+});

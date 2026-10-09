@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { PSTask } from '../types';
 import {
-  clearTaskCountdown, configureTaskCountdown, getTaskRemainingSeconds,
+  extendTaskCountdown, clearTaskCountdown, configureTaskCountdown, getTaskRemainingSeconds,
   getTaskSessionSeconds, getTaskTimerMode, getTaskTotalSeconds, pauseTaskTimer, startTaskTimer,
 } from './taskTimer';
 
@@ -100,4 +100,42 @@ test('disabled timers and completed tasks cannot be started while legacy timer b
   assert.equal(getTaskTimerMode(task({ timerMode: 'stopwatch', countdownDurationSeconds: 60 })), 'stopwatch');
   assert.equal(getTaskRemainingSeconds(task({ timerMode: 'stopwatch', countdownDurationSeconds: 60 })), undefined);
   assert.equal(startTaskTimer(task(), 1000).startedAt, 1000);
+});
+
+test('adding budget to a running countdown banks elapsed work once and keeps running', () => {
+  const running = configureTaskCountdown(task({ timeSpentSeconds: 20 }), 120, 1000);
+  const extended = extendTaskCountdown(running, 300, 31_000);
+  assert.equal(extended.timeSpentSeconds, 50);
+  assert.equal(extended.countdownDurationSeconds, 420);
+  assert.equal(extended.countdownRemainingSeconds, 390);
+  assert.equal(extended.timerRunning, true);
+  assert.equal(extended.timerStartedAt, 31_000);
+  assert.equal(getTaskTotalSeconds(extended, 41_000), 60);
+  assert.equal(getTaskRemainingSeconds(extended, 41_000), 380);
+  assert.equal(running.timeSpentSeconds, 20);
+});
+test('adding budget to paused and expired countdowns preserves work without starting', () => {
+  const running = configureTaskCountdown(task({ timeSpentSeconds: 20 }), 60, 1000);
+  const paused = pauseTaskTimer(running, 31_000);
+  const pausedExtended = extendTaskCountdown(paused, 60, 100_000);
+  assert.equal(pausedExtended.timerRunning, false);
+  assert.equal(pausedExtended.timeSpentSeconds, 50);
+  assert.equal(pausedExtended.countdownRemainingSeconds, 90);
+  for (const expired of [running, pauseTaskTimer(running, 61_000)]) {
+    const extended = extendTaskCountdown(expired, 60, 100_000);
+    assert.equal(extended.timerRunning, false);
+    assert.equal(extended.timeSpentSeconds, 80);
+    assert.equal(extended.countdownRemainingSeconds, 60);
+    assert.equal(extended.countdownDurationSeconds, 120);
+    assert.equal(extended.timerStartedAt, undefined);
+  }
+});
+test('extension respects the 24-hour budget and rejects malformed values or finished work', () => {
+  const original = task({ timerMode: 'countdown', countdownDurationSeconds: 86340, countdownRemainingSeconds: 60, timerRunning: false });
+  assert.equal(extendTaskCountdown(original, 60).countdownDurationSeconds, 86400);
+  for (const extra of [0, -60, 0.5, NaN, Infinity, 61]) assert.equal(extendTaskCountdown(original, extra), original);
+  const done = { ...original, done: true };
+  assert.equal(extendTaskCountdown(done, 60), done);
+  const stopwatch = task({ timerMode: 'stopwatch' });
+  assert.equal(extendTaskCountdown(stopwatch, 60), stopwatch);
 });

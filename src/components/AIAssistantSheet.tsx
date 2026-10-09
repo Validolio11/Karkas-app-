@@ -46,6 +46,7 @@ import type { PersistedAIChatMessage } from '../services/chatHistory';
 import { getPendingTaskIndexes } from './workflowViewModel';
 import { useDialogKeyboard } from './useDialogKeyboard';
 import { describeAIApplyResult, describeAITimer, getAITimerContext, prepareAITask, type AIApplyResult } from './aiTaskProposal';
+import { describeSchedule } from '../utils/schedulePresentation';
 import { AIRequestError, aiRequestErrorMessage, appendChatRequest, readAIAssistantDraft, readAIResponse, responseRequestError, restoredAIRequestNotice, saveAIAssistantDraft, selectAIModel, type AIMode, type AIRequest } from './aiAssistantState';
 
 interface AIAssistantSheetProps {
@@ -100,9 +101,9 @@ const isChatModel = (model: string) => {
   return name.includes('gemini') && !/(embedding|image|tts|transcrib|robotics|computer-use)/.test(name);
 };
 
-const TimerProposal: React.FC<{ settings: AITimerSettings; lang: Language }> = ({ settings, lang }) => {
+const TimerProposal: React.FC<{ settings: AITimerSettings & { schedule?: import('../types').TaskSchedule }; lang: Language }> = ({ settings, lang }) => {
   const description = describeAITimer(settings, lang);
-  return description ? <div className="mt-1 text-base leading-[1.6] text-sky-300 whitespace-normal">{description}</div> : null;
+  return <>{description && <div className="mt-1 text-base leading-[1.6] text-sky-300 whitespace-normal">{description}</div>}{settings.schedule && <div className="mt-2 text-base leading-relaxed text-emerald-300">{describeSchedule(settings.schedule, lang)}<p className="mt-1 text-sm text-neutral-400">{lang === 'uk' ? 'Сповіщення надходять, поки Karkas працює, зокрема в треї. Після повного закриття пропущене завдання з’явиться при відкритті.' : 'Notifications require Karkas running, including in the tray. Missed tasks appear when you reopen it.'}</p></div>}</>;
 };
 
 const deletionReasonLabel = (reason: AIDeletedTaskRef['deletionReason'], lang: Language) => reason === 'accidental'
@@ -512,7 +513,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     sound.activate();
   };
 
-  const activeCount = currentTasks.filter((t) => !t.done).length;
+  const activeCount = currentTasks.filter((t) => !t.done && !t.scheduledPending).length;
   const completedCount = currentTasks.filter((t) => t.done).length;
 
   // Sync initialPrompt
@@ -679,7 +680,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       currentRequest.internalAlternative ? (lang === 'uk' ? 'Інший варіант планування' : 'Alternative plan') : requestText));
 
     const isTabMutation = /(?:вкладк|категорі|напрямок|розділ|секці|tab|category|section)/iu.test(requestText);
-    const activeList = currentTasks.filter((t) => !t.done);
+    const activeList = currentTasks.filter((t) => !t.done && !t.scheduledPending);
     const doneList = currentTasks.filter((t) => t.done);
 
     let requestTimeout: number | undefined;
@@ -698,6 +699,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
         signal: controller.signal,
         body: JSON.stringify({
           prompt: requestText,
+          clientClock: { now: new Date().toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' },
           action: currentMode,
           lang,
           tabs: tabs.map((tb) => tb.id),
@@ -713,6 +715,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
           customApiKey: customEnabled ? customKey : undefined,
           selectedModel: customModelRef.current || undefined,
           fullAppContext: {
+            scheduledPlans: currentTasks.filter(task => task.scheduledPending),
             activeTasks: activeList.map((t) => ({
               id: t.id,
               title: t.title,
@@ -741,9 +744,9 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
             })),
             tabs: tabs.map((tb) => ({ id: tb.id, name: tb.name, color: tb.color })),
             stats: stats || {
-              total: currentTasks.length,
+              total: activeCount + completedCount,
               completed: completedCount,
-              percent: currentTasks.length > 0 ? Math.round((completedCount / currentTasks.length) * 100) : 0,
+              percent: activeCount + completedCount > 0 ? Math.round((completedCount / (activeCount + completedCount)) * 100) : 0,
             },
             adaptiveProfile,
           },

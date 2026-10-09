@@ -1,5 +1,5 @@
 import express from "express";
-import { taskMutationProperties, taskTimerProperties, taskActionInstructions, validateTaskMutations, validatedTimerFields, normalizeAIOptionalFields } from "./server/aiActions";
+import { taskMutationProperties, taskTimerProperties, taskActionInstructions, validateTaskMutations, validatedTimerFields, normalizeAIOptionalFields, taskScheduleProperties, validatedScheduleFields, schedulingClockContext } from "./server/aiActions";
 import path from "path";
 import dotenv from "dotenv";
 import { GoogleGenAI, Modality, Type } from "@google/genai";
@@ -7,6 +7,7 @@ import { verifyGeminiKey } from "./server/geminiKeyVerification";
 import { AIRequestError, aiRequestFailure, classifyAIRequestError, generateGeminiWithFallback } from "./server/geminiGeneration";
 import { isCompletedArchivedTask, isCancelledArchivedTask, selectRelevantArchivedTasks } from "./src/utils/taskArchive";
 import { selectPeriodTasks } from "./src/components/workflowViewModel";
+import { recordedTaskSeconds, summarizeTaskTime } from "./src/utils/taskTimeStats";
 
 dotenv.config();
 
@@ -37,13 +38,14 @@ const priorityOr = (value: unknown, fallback = 2): number =>
 // Shared by HTTP handlers and the desktop IPC bridge, which bypasses middleware.
 function requestValidationError(body: unknown): string | undefined {
   if (!isRecord(body)) return 'JSON object is required';
+  try { if (body.clientClock !== undefined) schedulingClockContext(body.clientClock); } catch { return 'Invalid clientClock'; }
   const contexts = [body];
   if (body.fullAppContext !== undefined) {
     if (!isRecord(body.fullAppContext)) return 'Invalid fullAppContext';
     contexts.push(body.fullAppContext);
   }
   for (const context of contexts) {
-    for (const key of ['tasks', 'currentTasks', 'allTasks', 'activeTasks', 'completedTasks', 'deletedTasks']) {
+    for (const key of ['tasks', 'currentTasks', 'allTasks', 'activeTasks', 'completedTasks', 'deletedTasks', 'scheduledPlans']) {
       if (context[key] !== undefined && (!Array.isArray(context[key]) ||
         !context[key].every((task: unknown) => isRecord(task) && nonEmptyText(task.title)))) {
         return `Invalid ${key}: expected tasks with non-empty titles`;
@@ -80,6 +82,7 @@ function validateAssistProposal(rawText: string, action: string, tasks: any[]) {
   for (const task of parsed.tasks || []) {
     if (!isRecord(task) || !nonEmptyText(task.title)) throw new Error('Invalid new task title');
     validatedTimerFields(task);
+    validatedScheduleFields(task);
   }
   Object.assign(parsed, validateTaskMutations(parsed, tasks));
   for (const category of parsed.categoryHealth || []) {
@@ -112,6 +115,7 @@ function workspaceProductivityContext(activeTasks: any[], completedTasks: any[],
   const completedHistory = relevantArchive.filter(isCompletedArchivedTask);
   const cancelledTasks = relevantArchive.filter(isCancelledArchivedTask);
   const completed = [...completedTasks, ...completedHistory];
+  const timeStatistics = summarizeTaskTime(completed);
   const tracked = [...activeTasks, ...completedTasks, ...relevantArchive];
   const phaseCounts: Record<string, number> = {};
   const completedByPhase = new Map<string, number>();
@@ -123,11 +127,11 @@ function workspaceProductivityContext(activeTasks: any[], completedTasks: any[],
   const urgentLoad = activeTasks.filter(task => task.priority === 1).length;
   const completionRate = tracked.length ? Math.round(completed.length / tracked.length * 100) : 0;
   return {
-    completedHistory, cancelledTasks,
+    completedHistory, cancelledTasks, timeStatistics,
     stats: { total: tracked.length, completed: completed.length, active: activeTasks.length, cancelled: cancelledTasks.length, percent: completionRate, phaseCounts },
     adaptiveProfile: {
       trackedTasks: tracked.length, completedTasks: completed.length, completionRate,
-      averageCompletionMinutes: completed.length ? Math.round(completed.reduce((sum, task) => sum + (Number.isFinite(task.timeSpentSeconds) ? task.timeSpentSeconds : 0), 0) / completed.length / 60) : 0,
+      averageCompletionMinutes: timeStatistics.averageSeconds === null ? 0 : Math.round(timeStatistics.averageSeconds / 60),
       averageStepCount: tasksWithSteps.length ? Math.round(tasksWithSteps.reduce((sum, task) => sum + task.steps, 0) / tasksWithSteps.length * 10) / 10 : 0,
       preferredPhases: [...completedByPhase].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([phase]) => phase),
       overloadedPhases: [...activeByPhase].filter(([, count]) => count >= 4).sort((a, b) => b[1] - a[1]).map(([phase]) => phase),
@@ -137,7 +141,7 @@ function workspaceProductivityContext(activeTasks: any[], completedTasks: any[],
   };
 }
 
-const isLiveProductivityTask = (task: any) => task.deletedAt === undefined && task.deletionReason !== 'accidental';
+const isLiveProductivityTask = (task: any) => task.deletedAt === undefined && task.deletionReason !== 'accidental' && !task.scheduledPending;
 
 // Initialize Gemini Client
 let geminiClient: GoogleGenAI | null = null;
@@ -265,6 +269,7 @@ export async function assistHandler(req: any, res: any) {
       return res.status(400).json({ error: "Prompt is required" });
     }
 
+    const clientClock = schedulingClockContext(req.body.clientClock);
     const isUk = lang === "uk" || /[а-яіїєґ]/i.test(prompt);
     const normalizedPrompt = prompt.trim().toLowerCase().replace(/[!?.,]/g, "");
     const isSimpleGreeting = /^(привіт|вітаю|добрий день|доброго ранку|добрий вечір|hello|hi|hey)$/.test(normalizedPrompt);
@@ -309,6 +314,8 @@ export async function assistHandler(req: any, res: any) {
         : currentTasks.filter((t: any) => t.done);
     const effectiveActiveTasks = currentActiveRecords.filter((task: any) => !task.done && isLiveProductivityTask(task));
     const effectiveCompletedTasks = currentCompletedRecords.filter((task: any) => task.done && isLiveProductivityTask(task));
+    const scheduledPlans = (Array.isArray(suppliedContext.scheduledPlans) ? suppliedContext.scheduledPlans : currentActiveRecords.filter((task: any) => task.scheduledPending)).filter((task: any) => task.scheduledPending && !task.done);
+    const mutationTargets = [...effectiveActiveTasks, ...effectiveCompletedTasks, ...scheduledPlans];
     const effectiveDeletedTasks = deletedTasks.length > 0 ? deletedTasks : contextDeletedTasks;
     const productivity = workspaceProductivityContext(effectiveActiveTasks, effectiveCompletedTasks, effectiveDeletedTasks, [...currentActiveRecords, ...currentCompletedRecords]);
     const effectiveStats = productivity.stats;
@@ -320,12 +327,14 @@ export async function assistHandler(req: any, res: any) {
     const primaryTab = activeTabIds[0] || "focus";
 
     const isTabCreationRequested = allowNewTabs || /(?:вкладк|категорі|розділ|напрямок|проєкт|проект|секці|tab|category|section|project)/iu.test(prompt);
+    const isScheduleRequest = /(?:tomorrow|today|daily|every day|every evening|schedule|\d{1,2}:\d{2}|\d{4}-\d{2}-\d{2}|завтра|щодн|кожн|сьогодні|на\s+\d{1,2}\s*(?:год|веч))/iu.test(prompt);
     const isTimerRequest = /(?:таймер|секундомір|відлік|timer|stopwatch|countdown)/iu.test(prompt);
 
     if (ai && action === "chat") {
       try {
         const chatPrompt = `You are Karkas AI, an elite conversational task architect and productivity strategist embedded directly in the user's workspace.
 LANGUAGE: ${isUk ? "Ukrainian" : "English"}.
+CURRENT CLIENT CLOCK (authoritative for relative dates): ${JSON.stringify(clientClock)}.
 CURRENT USER PROMPT: "${prompt}".
 RECENT CONVERSATION:
 ${JSON.stringify(Array.isArray(conversation) ? conversation.slice(-10) : [], null, 2)}
@@ -334,6 +343,7 @@ ${JSON.stringify(pendingChanges || {})}
 If the user revises this proposal, return the entire revised proposal. If they cancel it, return empty action arrays. Never assume it has been applied; actual application happens via the UI button.
 WORKSPACE CONTEXT:
 ${JSON.stringify({
+          scheduledPlans,
           activeTasks: effectiveActiveTasks.map((t: any) => ({
             id: t.id,
             title: t.title,
@@ -342,6 +352,8 @@ ${JSON.stringify({
             progress: `${t.currentStep || 0}/${t.steps || 1}`,
             stepList: t.stepList || [],
             note: t.note || '',
+            schedule: t.schedule,
+            scheduledPending: t.scheduledPending,
             timerRunning: !!t.timerRunning,
             timerMode: t.timerMode ?? (t.countdownDurationSeconds > 0 ? 'countdown' : 'stopwatch'),
             countdownDurationSeconds: t.countdownDurationSeconds ?? null,
@@ -353,12 +365,14 @@ ${JSON.stringify({
           completedTasks: effectiveCompletedTasks,
           completedHistory: productivity.completedHistory,
           cancelledTasks: productivity.cancelledTasks,
+          timeStatistics: productivity.timeStatistics,
           availableTabs: tabList,
           stats: effectiveStats,
           adaptiveProfile: effectiveAdaptiveProfile,
         }, null, 2)}
 
 INSTRUCTIONS:
+For time analysis, timeStatistics counts only completed tasks with positive recorded work. Report measurement coverage. Missing readings are unknown, never zero. Recorded time excludes pauses and may omit untracked work; do not infer time from createdAt/completedAt. Countdown duration is the current timer budget, may include extensions, and is not necessarily the original estimate. Recommend time blocks and buffers with uncertainty; an analysis request alone does not authorize task changes.
 1. Provide a natural, concise, empowering conversational "reply".
 2. If the user asks to create, plan, add, break down, edit, update, rename, delete tasks or tabs, or configure/start/pause/stop timers, YOU MUST ALSO POPULATE the structured JSON fields ("tasks", "tabs", "taskUpdates", "taskDeletions").
 3. "tasks": New tasks to create. Each task must have:
@@ -397,6 +411,7 @@ INSTRUCTIONS:
                       steps: { type: Type.INTEGER },
                       note: { type: Type.STRING },
                       ...taskTimerProperties,
+                      ...taskScheduleProperties,
                       stepList: {
                         type: Type.ARRAY,
                         items: {
@@ -429,7 +444,7 @@ INSTRUCTIONS:
           },
           customAi: ai,
           selectedModel,
-          validateResponse: text => validateAssistProposal(text, action, [...effectiveActiveTasks, ...effectiveCompletedTasks]),
+          validateResponse: text => validateAssistProposal(text, action, mutationTargets),
         });
 
         if (chatResponse?.text) {
@@ -464,6 +479,7 @@ INSTRUCTIONS:
               stepList: finalStepList,
               note: textOr(t.note),
               ...validatedTimerFields(t),
+              ...validatedScheduleFields(t),
             };
           });
 
@@ -473,7 +489,7 @@ INSTRUCTIONS:
             insights: Array.isArray(parsed.insights) ? parsed.insights.filter(nonEmptyText).slice(0, 10) : [],
             tasks: validatedTasks,
             tabs: validatedTabs,
-            ...validateTaskMutations(parsed, [...effectiveActiveTasks, ...effectiveCompletedTasks]),
+            ...validateTaskMutations(parsed, mutationTargets),
             source: "gemini-chat",
             usedModel: chatResponse.usedModel,
             fallbackUsed: chatResponse.fallbackUsed,
@@ -502,7 +518,9 @@ LANGUAGE REQUIREMENT: ${isUk ? "All output (summary, insights, task titles, step
 AVAILABLE CATEGORY TABS: ${JSON.stringify(activeTabIds)}.
 ${isTabCreationRequested ? `You may return 1-3 new tabs in "tabs" if organizing a new project area. Each new tab must have a short "name" and an ASCII "id".` : 'Do not create tabs unless clearly requested.'}
 
+CURRENT CLIENT CLOCK (authoritative for relative dates): ${JSON.stringify(clientClock)}.
 Requirements:
+For time analysis use recorded work and timeStatistics, disclose measurement coverage, and never treat missing readings as zero. Timestamp differences are not measured effort. Current countdown duration may include extensions and is not an original estimate. Recommendations should acknowledge untracked work and uncertainty; do not change tasks for an analysis-only request.
 1. "summary": Punchy diagnosis or strategy summary (2-3 sentences).
 2. "insights": 2-4 tactical observations on priorities, workload distribution, and execution momentum.
 3. "tasks": New top-level tasks only when requested; use an empty array for edits or breakdowns of existing tasks.
@@ -527,6 +545,7 @@ Return valid JSON adhering to schema.`;
           },
           behavioralProfile: effectiveAdaptiveProfile,
           categoryTabs: tabList,
+          scheduledPlans,
           activeTasks: effectiveActiveTasks.map((t: any) => ({
             id: t.id,
             title: t.title,
@@ -535,6 +554,8 @@ Return valid JSON adhering to schema.`;
             progress: `${t.currentStep || 0}/${t.steps || 1}`,
             subSteps: t.stepList || [],
             note: t.note || "",
+            schedule: t.schedule,
+            scheduledPending: t.scheduledPending,
             timerRunning: !!t.timerRunning,
             timeSpentSeconds: t.timeSpentSeconds || 0,
             timerMode: t.timerMode ?? (t.countdownDurationSeconds > 0 ? 'countdown' : 'stopwatch'),
@@ -545,6 +566,7 @@ Return valid JSON adhering to schema.`;
           completedTasks: effectiveCompletedTasks,
           completedHistory: productivity.completedHistory,
           cancelledTasks: productivity.cancelledTasks,
+          timeStatistics: productivity.timeStatistics,
         };
 
         const response = await generateGeminiContentWithFallback({
@@ -574,6 +596,7 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
                       steps: { type: Type.INTEGER },
                       note: { type: Type.STRING },
                       ...taskTimerProperties,
+                      ...taskScheduleProperties,
                       stepList: {
                         type: Type.ARRAY,
                         items: {
@@ -628,7 +651,7 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
           },
           customAi: ai,
           selectedModel: selectedModel,
-          validateResponse: text => validateAssistProposal(text, action, [...effectiveActiveTasks, ...effectiveCompletedTasks]),
+          validateResponse: text => validateAssistProposal(text, action, mutationTargets),
         });
 
         if (response && response.text) {
@@ -664,6 +687,7 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
               stepList: finalStepList,
               note: textOr(t.note),
               ...validatedTimerFields(t),
+              ...validatedScheduleFields(t),
             };
           });
 
@@ -672,7 +696,7 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
             insights: Array.isArray(parsed.insights) ? parsed.insights.filter(nonEmptyText).slice(0, 10) : [],
             tasks: validatedTasks,
             tabs: validatedTabs,
-            ...validateTaskMutations(parsed, [...effectiveActiveTasks, ...effectiveCompletedTasks]),
+            ...validateTaskMutations(parsed, mutationTargets),
             workloadDiagnosis: parsed.workloadDiagnosis,
             categoryHealth: parsed.categoryHealth,
             analyzedContext: {
@@ -690,7 +714,7 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
       }
     }
 
-    if (isTimerRequest || action === 'chat') return sendAIRequestFailure(res, new AIRequestError('MISSING_API_KEY'), isUk);
+    if (isTimerRequest || isScheduleRequest || action === 'chat') return sendAIRequestFailure(res, new AIRequestError('MISSING_API_KEY'), isUk);
 
     // High quality offline rule-based Assistant fallback
     const lower = prompt.toLowerCase();
@@ -882,6 +906,7 @@ export async function breakdownTaskHandler(req: any, res: any) {
       return res.status(400).json({ error: "Task with title is required" });
     }
 
+    const clientClock = schedulingClockContext(req.body.clientClock);
     const isUk = lang === "uk" || /[а-яіїєґ]/i.test(task.title);
     
     // Dynamic AI Client setup
@@ -907,6 +932,7 @@ export async function breakdownTaskHandler(req: any, res: any) {
     if (ai) {
       try {
         const systemInstruction = `You are an expert tactical task decomposition engine for the app "Karkas".
+CURRENT CLIENT CLOCK: ${JSON.stringify(clientClock)}.
 Your mission: Break down a single specific task using a lightweight Work Breakdown Structure (WBS) into 2 to 5 concrete, actionable, sequential sub-steps.
 LANGUAGE REQUIREMENT: ${isUk ? "All output (sub-step titles, note, explanation) MUST be in UKRAINIAN." : "All output must be in English."}
 
@@ -1055,6 +1081,7 @@ export async function recommendationsHandler(req: any, res: any) {
     const periodTasks = selectPeriodTasks(tasks, relevantArchive, period, new Date());
     const activeTasks = periodTasks.activeInPeriod;
     const completedTasks = [...periodTasks.completedInPeriod, ...periodTasks.deletedCompleted];
+    const timeStatistics = summarizeTaskTime(completedTasks);
     const cancelledTasks = periodTasks.droppedInPeriod;
     const p1Count = activeTasks.filter((t: any) => t.priority === 1).length;
     const p2Count = activeTasks.filter((t: any) => t.priority === 2).length;
@@ -1109,6 +1136,7 @@ Your task is to critically analyze the user's complete productivity performance 
 This includes unfinished active work, successfully completed work (including completed archives), and explicitly deliberately cancelled unfinished tasks as three separate groups.
 Active unfinished tasks are not failures and are not cancelled. Cancelled tasks are not completed. Do not infer why the user cancelled a task or equate cancellation with procrastination or poor discipline.
 Accidental entries and unfinished archives with unknown reasons are excluded entirely from these metrics and context. Do not reconstruct them from earlier conversation or treat them as workload, output, or failures.
+TIME ANALYSIS: In periodRetrospective or optimizationTip discuss the supplied recorded work time, measurement coverage, realistic work blocks and buffer time when available. Unknown readings are not zero. Only measured completed tasks contribute to the average; no readings means insufficient time data. Do not infer effort from creation/completion timestamps. Recorded time excludes pauses and untracked work. Current timer budgets may include added time and must not be called original estimates. A small measured sample does not justify confident duration predictions.
 
 TASK VOLUME BENCHMARKS & DENSITY RULES:
 - Standard monthly workload benchmark is 20 to 30 tasks per month (target norm: ~${targetNorm} tasks for ${periodHumanName}).
@@ -1148,8 +1176,9 @@ Return valid JSON adhering to the schema.`;
           contents: `USER PRODUCTIVITY DATA FOR PERIOD [${periodHumanName}]:
 - Target Period Norm: ${targetNorm} tasks
 - Metrics Overview: ${JSON.stringify(safePeriodMetrics)}
+- Recorded completed work time (seconds, selected period): ${JSON.stringify(timeStatistics)}
 - Active Tasks (${activeTasks.length}): ${JSON.stringify(activeTasks.slice(0, 15).map((t: any) => ({ title: t.title, phase: t.phase, priority: t.priority, steps: t.steps })))}
-- Completed Tasks (${completedTasks.length}): ${JSON.stringify(completedTasks.slice(0, 15).map((t: any) => ({ title: t.title, phase: t.phase })))}
+- Completed Tasks (${completedTasks.length}; first 15 shown): ${JSON.stringify(completedTasks.slice(0, 15).map((t: any) => ({ title: t.title, phase: t.phase, recordedWorkSeconds: recordedTaskSeconds(t), currentTimerBudgetSeconds: t.countdownDurationSeconds ?? null })))}
 - Deliberately Cancelled Unfinished Tasks (${cancelledTasks.length}): ${JSON.stringify(cancelledTasks.slice(0, 15).map((t: any) => ({ title: t.title, phase: t.phase, deletionReason: 'cancelled', done: false })))}
 - Category List: ${JSON.stringify(tabs)}
 - Urgent P1 count: ${p1Count}, Standard P2 count: ${p2Count}

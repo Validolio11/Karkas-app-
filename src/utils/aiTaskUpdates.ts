@@ -1,6 +1,7 @@
 import { completeTask, materializeStepList, reopenTask, setTaskSteps } from './taskOperations';
 import type { AITaskUpdate, PSTask, TaskStepItem } from '../types';
 import { applyAITimerSettings } from './aiTaskTimer';
+import { normalizeTaskSchedule } from './taskScheduling';
 
 /** Apply only supported AI fields; stepList is the complete replacement checklist. */
 export function applyAITaskUpdate(
@@ -10,7 +11,17 @@ export function applyAITaskUpdate(
   now = Date.now(),
 ): PSTask {
   if (!update || update.id !== task.id) return task;
+  if (task.scheduledPending && (update.done === true || update.timerAction === 'start')) return task;
   const next = { ...task };
+  if (update.schedule !== undefined) {
+    const schedule = normalizeTaskSchedule(update.schedule);
+    if (!schedule) return task;
+    if (task.done || task.timerRunning || task.startedAt || (task.timeSpentSeconds ?? 0) > 0) return task;
+    next.schedule = schedule;
+    next.scheduleNextStartAt = schedule.startAt;
+    next.scheduledPending = true;
+    next.timerRunning = false;
+  }
   if (typeof update.title === 'string' && update.title.trim()) next.title = update.title.trim();
   if (typeof update.note === 'string') next.note = update.note;
   if (typeof update.phase === 'string' && availableTabIds.has(update.phase)) next.phase = update.phase;

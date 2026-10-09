@@ -1,4 +1,5 @@
 import type { NewTaskInput, PSTask, TaskStepItem } from '../types';
+import { normalizeTaskSchedule } from './taskScheduling';
 import { getTaskRemainingSeconds, getTaskTimerMode, getTaskTotalSeconds, pauseTaskTimer, startTaskTimer } from './taskTimer';
 
 const MAX_RUNNING_SESSION_SECONDS = 2 * 60 * 60;
@@ -36,6 +37,8 @@ export function createTask(input: NewTaskInput, id: string, now = Date.now()): P
     !Number.isFinite(now) || now < 0 || !Number.isInteger(input.steps) || input.steps < 0 ||
     ![1, 2, 3].includes(input.priority)) return null;
   const mode = input.timerMode ?? 'none';
+  const schedule = input.schedule === undefined ? undefined : normalizeTaskSchedule(input.schedule);
+  if (input.schedule !== undefined && !schedule) return null;
   if (!['none', 'stopwatch', 'countdown'].includes(mode)) return null;
   if (mode === 'countdown' && (!Number.isInteger(input.countdownDurationSeconds) ||
     input.countdownDurationSeconds! < 60 || input.countdownDurationSeconds! > 86400)) return null;
@@ -57,6 +60,7 @@ export function createTask(input: NewTaskInput, id: string, now = Date.now()): P
     ...(list ? { stepList: list } : {}),
     ...(input.note !== undefined ? { note: input.note.trim() } : {}),
     done: false, pinned: false, createdAt: now, timerMode: mode, timerRunning: false, timeSpentSeconds: 0,
+    ...(schedule ? { schedule, scheduledPending: true, scheduleNextStartAt: schedule.startAt } : {}),
     ...(mode === 'countdown' ? {
       countdownDurationSeconds: input.countdownDurationSeconds,
       countdownRemainingSeconds: input.countdownDurationSeconds,

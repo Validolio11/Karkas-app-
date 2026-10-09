@@ -13,6 +13,7 @@ import {
 } from '../types';
 import { sound } from '../utils/audio';
 import { createVoiceDictation, type VoicePhase } from '../utils/voiceDictation';
+import { createVoiceDraft } from '../utils/voiceDraft';
 import { Language, TRANSLATIONS, AI_PRESETS_UK, AI_PRESETS_EN } from '../utils/i18n';
 import {
   X,
@@ -207,7 +208,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   }, [adaptiveProfile, lang, presets, tabs]);
 
   const [initialDraft] = useState(() => readAIAssistantDraft(localStorage, accountId));
-  const [prompt, setPrompt] = useState(initialPrompt || (initialDraft?.prompt ?? initialDraft?.recoverableRequest?.text ?? ''));
+  const [prompt, setPrompt] = useState(initialPrompt);
+  const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
   const [mode, setMode] = useState<AIMode>(initialDraft?.mode || 'chat');
   const [recoverableRequest, setRecoverableRequest] = useState<AIRequest | null>(initialDraft?.recoverableRequest || null);
   const [requestError, setRequestError] = useState<string | null>(restoredAIRequestNotice(initialDraft?.recoverableRequest, lang));
@@ -272,10 +274,13 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     }
     if (!isOpen && activeRequest.current && draftAccountRef.current === accountId) {
       const interrupted = activeRequest.current;
-      setPrompt(previous => preservedRequestDraftRef.current ?? (previous || interrupted.text));
       setRecoverableRequest(interrupted);
       setRequestError(aiRequestErrorMessage(new AIRequestError('CANCELLED'), lang));
       setResponseProposalReadiness(false);
+    }
+    if (!isOpen) {
+      setPrompt('');
+      preservedRequestDraftRef.current = null;
     }
     activeRequest.current = null;
     requestGeneration.current += 1;
@@ -315,7 +320,9 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   const [voiceLevel, setVoiceLevel] = useState(0);
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
+  const [voiceReviewText, setVoiceReviewText] = useState('');
   const voiceRef = useRef<ReturnType<typeof createVoiceDictation> | null>(null);
+  const voiceDraftRef = useRef<ReturnType<typeof createVoiceDraft> | null>(null);
   const isListening = ['starting', 'connecting', 'listening', 'recording'].includes(voicePhase);
   const isTranscribing = voicePhase === 'finishing';
 
@@ -328,13 +335,19 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   }, [isListening]);
 
   useEffect(() => {
-    if (!isOpen) {
+    voiceRef.current?.cancel();
+    voiceRef.current = null;
+    voiceDraftRef.current = null;
+    setVoicePhase('idle');
+    setVoiceLevel(0);
+    setVoiceNotice(null);
+    setVoiceReviewText('');
+    return () => {
       voiceRef.current?.cancel();
       voiceRef.current = null;
-      setVoicePhase('idle');
-      setVoiceLevel(0);
-    }
-  }, [isOpen]);
+      voiceDraftRef.current = null;
+    };
+  }, [isOpen, accountId]);
 
   useEffect(() => () => { voiceRef.current?.cancel(); }, []);
 
@@ -343,16 +356,36 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     if (isListening) { stopVoiceInput(); return; }
     if (isTranscribing || voiceRef.current) return;
     setVoiceNotice(null);
-    const base = prompt.trim();
+    setVoiceReviewText('');
+    const draft = createVoiceDraft(prompt);
+    voiceDraftRef.current = draft;
     const dictation = createVoiceDictation({
       lang,
       onPhase: phase => {
+        if (voiceDraftRef.current !== draft) return;
         setVoicePhase(phase);
-        if (phase === 'idle') voiceRef.current = null;
+        if (phase === 'idle') { voiceRef.current = null; voiceDraftRef.current = null; }
       },
-      onLevel: setVoiceLevel,
-      onText: spoken => setPrompt(base ? `${base} ${spoken}` : spoken),
-      onError: setVoiceNotice,
+      onLevel: level => { if (voiceDraftRef.current === draft) setVoiceLevel(level); },
+      onText: spoken => {
+        if (voiceDraftRef.current !== draft) return;
+        const result = draft.receive(spoken);
+        const field = promptInputRef.current;
+        const selection = field && document.activeElement === field ? [field.selectionStart, field.selectionEnd] : null;
+        const followEnd = field && selection && selection[0] === field.value.length && selection[1] === field.value.length;
+        setPrompt(result.text);
+        setVoiceReviewText(previous => previous ? spoken : previous);
+        if (result.needsReview) {
+          setVoiceReviewText(spoken);
+          setVoiceNotice(lang === 'uk'
+            ? 'Частину уточненого запису не вставлено, щоб зберегти ваші правки. Перевірте повний розпізнаний текст нижче.'
+            : 'Part of the revised recording was not inserted to preserve your edits. Review the full recognized text below.');
+        }
+        if (selection) requestAnimationFrame(() => {
+          if (promptInputRef.current === field && document.activeElement === field) field?.setSelectionRange(followEnd ? result.text.length : selection[0], followEnd ? result.text.length : selection[1]);
+        });
+      },
+      onError: message => { if (voiceDraftRef.current === draft) setVoiceNotice(message); },
     });
     voiceRef.current = dictation;
     void dictation.start();
@@ -401,7 +434,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     draftAccountRef.current = accountId;
     skipDraftPersistRef.current = true;
     const draft = readAIAssistantDraft(localStorage, accountId);
-    setPrompt(draft?.prompt ?? draft?.recoverableRequest?.text ?? '');
+    setPrompt('');
     setMode(draft?.mode || 'chat');
     setRecoverableRequest(draft?.recoverableRequest || null);
     setRequestError(restoredAIRequestNotice(draft?.recoverableRequest, lang));
@@ -413,8 +446,16 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   useEffect(() => {
     if (skipDraftPersistRef.current) { skipDraftPersistRef.current = false; return; }
     // A key is entered in the same field, but must never enter draft storage.
-    saveAIAssistantDraft(localStorage, { prompt: awaitingApiKey ? preservedRequestDraftRef.current || '' : prompt, mode, recoverableRequest }, accountId);
-  }, [accountId, prompt, mode, awaitingApiKey, recoverableRequest]);
+    saveAIAssistantDraft(localStorage, { prompt: '', mode, recoverableRequest }, accountId);
+  }, [accountId, mode, recoverableRequest]);
+
+  useEffect(() => {
+    const field = promptInputRef.current;
+    if (!field) return;
+    field.style.height = 'auto';
+    field.style.height = `${Math.min(160, Math.max(52, field.scrollHeight))}px`;
+    field.style.overflowY = field.scrollHeight > 160 ? 'auto' : 'hidden';
+  }, [prompt, isOpen, awaitingApiKey]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -531,6 +572,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   const handleGenerate = async (queryText?: string, selectedMode?: AIMode, resuming = false, preserveInput = false, planningSource?: AIRequest, internalAlternative = false) => {
     voiceRef.current?.cancel();
     voiceRef.current = null;
+    voiceDraftRef.current = null;
     setVoicePhase('idle');
     const textToQuery = queryText !== undefined ? queryText : prompt;
     const currentMode = selectedMode || mode;
@@ -954,6 +996,18 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   const handleAlternativePlan = () => {
     if (!response || !responseRequest || hasAppliedResponseActions) return;
     requestAlternativePlan(responseRequest, response);
+  };
+
+  const changePrompt = (value: string) => {
+    voiceDraftRef.current?.edit(value);
+    if (!awaitingKeyRef.current && preservedRequestDraftRef.current !== null) preservedRequestDraftRef.current = value;
+    setPrompt(value);
+  };
+  const composerKeyDown = (event: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) {
+      event.preventDefault();
+      if (prompt.trim() && !requestInFlight.current && !isTranscribing) void handleGenerate();
+    }
   };
 
   return (
@@ -1617,22 +1671,14 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
             {/* Custom Prompt Input at the bottom of the sheet */}
             <div className="shrink-0 px-4 sm:px-5 py-3 bg-[#08080a] border-t border-neutral-800 space-y-2">
               {/* Voice recording / transcription status indicator */}
-              {(isListening || isTranscribing || voiceNotice) && (
+              {voiceNotice && <div role="status" className="flex items-center gap-2 text-amber-400 text-xs">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span className="flex-1">{voiceNotice}</span>
+                <button type="button" onClick={() => setVoiceNotice(null)} aria-label={lang === 'uk' ? 'Приховати повідомлення' : 'Dismiss message'} className="min-w-11 min-h-11 flex items-center justify-center text-neutral-400 hover:text-white"><X className="w-4 h-4" /></button>
+              </div>}
+              {(isListening || isTranscribing) && (
                 <div className="flex items-center justify-between px-3 py-1.5 bg-[#050507] border border-neutral-800 text-xs font-sans">
-                  {voiceNotice ? (
-                    <div className="flex items-center gap-2 text-amber-400 w-full justify-between">
-                      <div className="flex items-center gap-1.5">
-                        <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                        <span className="text-[11px]">{voiceNotice}</span>
-                      </div>
-                      <button
-                        onClick={() => setVoiceNotice(null)}
-                        className="text-neutral-500 hover:text-white text-[10px] uppercase font-bold"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  ) : isTranscribing ? (
+                  {isTranscribing ? (
                     <div className="flex items-center gap-2 text-neutral-300">
                       <Loader2 className="w-3.5 h-3.5 animate-spin text-neutral-400" />
                       <span className="text-[11px] text-neutral-300">{t.aiSheet.voiceTranscribing}</span>
@@ -1675,7 +1721,34 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                 </div>
               )}
 
-              <div className="flex flex-wrap items-center gap-2">
+              {voiceReviewText && <details className="mb-3 text-sm text-neutral-300">
+                <summary className="cursor-pointer min-h-11 flex items-center">{lang === 'uk' ? 'Переглянути розпізнаний текст' : 'Review recognized text'}</summary>
+                <p className="whitespace-pre-wrap break-words max-h-32 overflow-auto py-2 select-text">{voiceReviewText}</p>
+              </details>}
+              <div className="karkas-ai-composer">
+                {awaitingApiKey ? <input
+                  id="ai-prompt-input"
+                  type="password"
+                  autoComplete="off"
+                  aria-label={lang === 'uk' ? 'Gemini API-ключ' : 'Gemini API key'}
+                  value={prompt}
+                  onChange={event => changePrompt(event.target.value)}
+                  onKeyDown={composerKeyDown}
+                  placeholder={lang === 'uk' ? 'Вставте Gemini API-ключ сюди…' : 'Paste your Gemini API key here…'}
+                  className="karkas-ai-composer-field"
+                /> : <textarea
+                  ref={promptInputRef}
+                  id="ai-prompt-input"
+                  rows={1}
+                  aria-label={t.aiSheet.inputPlaceholder}
+                  aria-describedby="ai-composer-hint"
+                  value={prompt}
+                  onChange={event => changePrompt(event.target.value)}
+                  onKeyDown={composerKeyDown}
+                  placeholder={lang === 'uk' ? 'Напишіть повідомлення…' : 'Write a message…'}
+                  className="karkas-ai-composer-field"
+                />}
+                <div className="flex items-center gap-1 px-2 pb-2">
                 <select
                   aria-label={lang === 'uk' ? 'Модель AI' : 'AI model'}
                   value={customModel}
@@ -1691,7 +1764,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                     }
                     sound.tick(400);
                   }}
-                  className="w-full sm:w-auto sm:max-w-[150px] bg-[#050507] border border-neutral-800 text-neutral-300 text-xs font-sans px-2 py-2.5 focus:outline-none focus:border-white disabled:opacity-50"
+                  className="min-w-0 max-w-[180px] bg-transparent text-neutral-300 text-xs font-sans px-2 py-2.5 disabled:opacity-50"
                 >
                   {availableModels.length === 0 ? (
                     <option value="">{lang === 'uk' ? 'Модель не налаштована' : 'Model not configured'}</option>
@@ -1702,35 +1775,14 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   )}
                 </select>
 
-                <div className="relative flex-1 min-w-0 flex items-center">
-                  <input
-                    id="ai-prompt-input"
-                    aria-label={awaitingApiKey ? (lang === 'uk' ? 'Gemini API-ключ' : 'Gemini API key') : t.aiSheet.inputPlaceholder}
-                    type={awaitingApiKey ? 'password' : 'text'}
-                    value={prompt}
-                    onChange={(e) => {
-                      voiceRef.current?.cancel();
-                      voiceRef.current = null;
-                      setVoicePhase('idle');
-                      const nextPrompt = e.target.value;
-                      if (!awaitingKeyRef.current && preservedRequestDraftRef.current !== null) preservedRequestDraftRef.current = nextPrompt;
-                      setPrompt(nextPrompt);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void handleGenerate(); }
-                    }}
-                    placeholder={
-                      awaitingApiKey
-                        ? (lang === 'uk' ? 'Вставте Gemini API-ключ сюди...' : 'Paste your Gemini API key here...')
-                        : mode === 'chat'
-                        ? (lang === 'uk' ? 'Напишіть запитання або дію (напр. «додай задачу X», «зміни пріоритет Y»)...' : 'Ask a question or request action (e.g. "add task X", "change priority of Y")...')
-                        : mode === 'analyze'
-                        ? (lang === 'uk' ? 'Уточніть фокус аналізу (напр. перевірити пріоритети, дедлайни)...' : 'Refine audit focus (e.g. check priorities, deadlines)...')
-                        : t.aiSheet.inputPlaceholder
-                    }
-                    className="w-full min-h-11 bg-[#050507] border border-neutral-800 text-white placeholder:text-neutral-500 text-base leading-[1.6] font-sans pl-3.5 pr-14 py-2.5 focus:outline-none focus:border-white transition-colors"
-                  />
-                  {/* Voice dictation button embedded in input field */}
+                <div className="flex-1" />
+                  {prompt && <button
+                    type="button"
+                    onClick={() => { changePrompt(''); document.getElementById('ai-prompt-input')?.focus(); }}
+                    aria-label={lang === 'uk' ? 'Очистити введений текст' : 'Clear entered text'}
+                    title={lang === 'uk' ? 'Очистити текст' : 'Clear text'}
+                    className="min-w-11 min-h-11 flex items-center justify-center text-neutral-400 hover:text-white"
+                  ><X className="w-4 h-4" /></button>}
                   <button
                     id="ai-voice-dictation-btn"
                     type="button"
@@ -1738,7 +1790,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                     disabled={loading || awaitingApiKey || isTranscribing}
                     title={isListening ? t.aiSheet.voiceStop : t.aiSheet.voiceInput}
                     aria-label={isListening ? t.aiSheet.voiceStop : t.aiSheet.voiceInput}
-                    className={`absolute right-1 min-w-11 min-h-11 flex items-center justify-center rounded transition-all cursor-pointer ${
+                    className={`min-w-11 min-h-11 flex items-center justify-center rounded transition-all cursor-pointer ${
                       isListening
                         ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
                         : isTranscribing
@@ -1754,13 +1806,11 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                       <Mic className="w-4 h-4" />
                     )}
                   </button>
-                </div>
-
                 <button
                   id="ai-generate-submit-btn"
                   type="button"
                   onClick={() => handleGenerate()}
-                  disabled={loading || !prompt.trim()}
+                  disabled={loading || isTranscribing || !prompt.trim()}
                   title={t.aiSheet.execute}
                   aria-label={t.aiSheet.execute}
                   className="w-11 h-11 bg-white text-black hover:bg-neutral-200 disabled:opacity-30 disabled:hover:bg-white transition-all flex items-center justify-center cursor-pointer shrink-0"
@@ -1771,7 +1821,9 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                     <ArrowUp className="w-4 h-4 stroke-[2.5]" />
                   )}
                 </button>
+                </div>
               </div>
+              {!awaitingApiKey && <p id="ai-composer-hint" className="mt-2 text-xs text-neutral-500">{lang === 'uk' ? 'Enter — надіслати · Shift + Enter — новий рядок. Голосовий текст можна редагувати під час запису.' : 'Enter to send · Shift + Enter for a new line. Edit dictated text while recording.'}</p>}
             </div>
 
             {/* Bottom Footer Hint */}

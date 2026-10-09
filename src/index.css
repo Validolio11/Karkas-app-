@@ -99,3 +99,10 @@ select:focus-visible,
     scroll-behavior: auto !important;
   }
 }
+
+/* The inline tab form owns the focus border; its text field must not add a second ring. */
+.inline-tab-form .inline-tab-name:focus,
+.inline-tab-form .inline-tab-name:focus-visible {
+  outline: none;
+  box-shadow: none;
+}

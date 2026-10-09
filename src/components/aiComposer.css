@@ -1,0 +1,28 @@
+.karkas-ai-composer {
+  border: 1px solid #404040;
+  background: #050507;
+  transition: border-color 120ms;
+}
+.karkas-ai-composer:focus-within { border-color: #ededed; }
+.karkas-ai-composer .karkas-ai-composer-field {
+  display: block;
+  width: 100%;
+  min-height: 52px;
+  max-height: 160px;
+  box-sizing: border-box;
+  padding: 12px 14px;
+  border: 0;
+  outline: none;
+  box-shadow: none;
+  resize: none;
+  background: transparent;
+  color: #fff;
+  font: inherit;
+  font-size: 16px;
+  line-height: 1.6;
+}
+.karkas-ai-composer .karkas-ai-composer-field:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+.karkas-ai-composer-field::placeholder { color: #737373; }

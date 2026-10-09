@@ -463,15 +463,16 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
 
             {/* Inline Quick Add Tab Input or Button */}
             {isInlineAdding ? (
-              <form onSubmit={handleInlineAdd} className="flex h-[34px] shrink-0 items-center gap-1 border border-white bg-black px-1 whitespace-nowrap">
+              <form onSubmit={handleInlineAdd} className="inline-tab-form flex h-[34px] shrink-0 items-center gap-1 border border-neutral-700 focus-within:border-white bg-black px-1 whitespace-nowrap">
                 <input
                   type="text"
                   autoFocus
                   value={inlineTabName}
                   onChange={(e) => setInlineTabName(e.target.value)}
                   placeholder={t.tabNamePlaceholder}
+                  aria-label={t.tabNamePlaceholder}
                   maxLength={20}
-                  className="bg-transparent text-xs font-sans text-white placeholder:text-neutral-300 outline-none w-24 px-1"
+                  className="inline-tab-name bg-transparent text-xs font-sans text-white placeholder:text-neutral-300 w-24 min-w-0 px-1 border-0"
                 />
                 <button
                   type="submit"

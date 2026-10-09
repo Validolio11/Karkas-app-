@@ -488,6 +488,9 @@ export default function App() {
     return getSavedAIIconId();
   });
   const [aiPromptSeed, setAiPromptSeed] = useState('');
+  useEffect(() => {
+    if (!isAIOpen) setAiPromptSeed('');
+  }, [isAIOpen]);
   const [breakingDownTaskId, setBreakingDownTaskId] = useState<string | null>(null);
   const [isWindowMinimized, setIsWindowMinimized] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);

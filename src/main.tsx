@@ -3,6 +3,7 @@ import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
 import './components/TaskTimeDialog.css';
+import './components/aiComposer.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

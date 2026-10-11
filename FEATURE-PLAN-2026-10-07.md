@@ -299,3 +299,5 @@ Google Cloud відкрито в браузері Codex на сторінці Fi
 - Поточна підготовка Windows інсталятора використовує локальну офіційну Electron distribution через блокування extraction rename Windows; запуск встановленого застосунку не виконується.
 
 - Фінальна перевірка Windows 1.3.0 успішна: FileVersion, SHA512/latest.yml/blockmap, 2/2 packaged runtime; renderer/server в app.asar відповідають перевіреному final dist. Публікація погоджена планом користувача; не моніторити GitHub після завершення й не запускати встановлений застосунок.
+
+- Випуск 1.3.0 завершено: commit 29e233b, bare tag 1.3.0, stable release https://github.com/Validolio11/Karkas-app-/releases/tag/1.3.0, publishedAt 2026-10-11T15:58:56Z. Завантажено перевірені installer/blockmap/latest.yml. Не повторювати випуск, не моніторити GitHub, не перезапускати встановлений Karkas.

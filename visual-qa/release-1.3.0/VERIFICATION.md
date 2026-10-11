@@ -19,3 +19,5 @@
 Особиста пам'ять локальна для цього пристрою. Нагадування потребують відкритого Karkas або роботи в треї. Невирішені архітектурні питання з доказами та пріоритетами наведено в [аудиті](../../LOGIC-AUDIT-2026-10-11.md).
 
 Windows-збірка: успішно. FileVersion та package version — 1.3.0. Інсталятор 138881901 bytes; SHA512 відповідає latest.yml, blockmap наявний. Packaged runtime: 2/2 перевірки успішні. Renderer app-Dcb79afr.js та server.cjs у app.asar байтово відповідають фінальному production dist. Маніфест: [release-manifest.json](release-manifest.json).
+
+Опубліковано stable 1.3.0: 2026-10-11T15:58:56Z. [Випуск](https://github.com/Validolio11/Karkas-app-/releases/tag/1.3.0); перевірені installer/blockmap/latest.yml завантажено до публікації. Підтвердження API: [publication.json](publication.json).

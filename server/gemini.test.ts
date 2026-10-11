@@ -160,10 +160,10 @@ test("AI breakdown derives the count from valid steps and normalizes scalar fiel
   assert.equal(typeof data.explanation, "string");
 });
 
-test("AI recommendations cannot override the computed grade or insert invalid task fields", async () => {
+test("AI recommendations cannot insert a productivity grade or invalid task fields", async () => {
   const data = await post("recommendations", { tabs: ["custom"], periodMetrics: { totalCompleted: 0, successRate: 0 } });
   assert.equal(data.source, "gemini");
-  assert.equal(data.productivityGrade, "C");
+  assert.equal(data.productivityGrade, undefined);
   assert.equal(data.suggestedTasks.length, 1);
   assert.equal(data.suggestedTasks[0].phase, "custom");
   assert.equal(data.suggestedTasks[0].steps, 2);

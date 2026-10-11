@@ -6,9 +6,9 @@ import { GoogleGenAI, Modality, Type } from "@google/genai";
 import { verifyGeminiKey } from "./server/geminiKeyVerification";
 import { AIRequestError, aiRequestFailure, classifyAIRequestError, generateGeminiWithFallback } from "./server/geminiGeneration";
 import { isCompletedArchivedTask, isCancelledArchivedTask, selectRelevantArchivedTasks } from "./src/utils/taskArchive";
-import { selectPeriodTasks } from "./src/components/workflowViewModel";
 import { recordedTaskSeconds, summarizeTaskTime } from "./src/utils/taskTimeStats";
 import { buildWorkInsights } from "./src/utils/workInsights";
+import type { AIStrategyResponse } from './src/types';
 
 dotenv.config();
 
@@ -39,6 +39,8 @@ const priorityOr = (value: unknown, fallback = 2): number =>
 // Shared by HTTP handlers and the desktop IPC bridge, which bypasses middleware.
 function requestValidationError(body: unknown): string | undefined {
   if (!isRecord(body)) return 'JSON object is required';
+  if (body.intent !== undefined && !['auto', 'plan', 'analysis', 'steps'].includes(body.intent)) return 'Invalid intent';
+  if (body.strategyContext !== undefined && !isRecord(body.strategyContext)) return 'Invalid strategyContext';
   try { if (body.clientClock !== undefined) schedulingClockContext(body.clientClock); } catch { return 'Invalid clientClock'; }
   const contexts = [body];
   if (body.fullAppContext !== undefined) {
@@ -86,6 +88,7 @@ function validateAssistProposal(rawText: string, action: string, tasks: any[]) {
     validatedScheduleFields(task);
   }
   Object.assign(parsed, validateTaskMutations(parsed, tasks));
+  if (parsed.strategy !== undefined) parsed.strategy = validateStrategyResponse(parsed.strategy, tasks);
   for (const category of parsed.categoryHealth || []) {
     if (!isRecord(category) || ['phase', 'phaseName', 'status', 'recommendation'].some(key => category[key] !== undefined && typeof category[key] !== 'string') ||
       category.taskCount !== undefined && typeof category.taskCount !== 'number') throw new Error('Invalid category analysis');
@@ -96,6 +99,65 @@ function validateAssistProposal(rawText: string, action: string, tasks: any[]) {
       ['bottlenecks', 'strengths'].some(key => diagnosis[key] !== undefined && (!Array.isArray(diagnosis[key]) || diagnosis[key].some((item: unknown) => typeof item !== 'string')))) throw new Error('Invalid workload diagnosis');
   }
   return parsed;
+}
+
+const memoryEntrySchema = { type: Type.OBJECT, properties: {
+  id: { type: Type.STRING }, text: { type: Type.STRING }, source: { type: Type.STRING, enum: ['user', 'hypothesis'] },
+}, required: ['id', 'text', 'source'] };
+const strategySchema = { type: Type.OBJECT, properties: {
+  status: { type: Type.STRING, enum: ['getting_to_know', 'clarifying', 'ready'] }, question: { type: Type.STRING },
+  narrative: { type: Type.STRING }, nextAction: { type: Type.STRING }, focusTaskId: { type: Type.STRING },
+  memoryPatch: { type: Type.OBJECT, properties: {
+    onboardingStatus: { type: Type.STRING, enum: ['new', 'in_progress', 'complete'] }, phase: { type: Type.STRING },
+    goals: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: {
+      id: { type: Type.STRING }, title: { type: Type.STRING }, motive: { type: Type.STRING }, agreed: { type: Type.BOOLEAN },
+      taskIds: { type: Type.ARRAY, items: { type: Type.STRING } }, categoryIds: { type: Type.ARRAY, items: { type: Type.STRING } },
+    }, required: ['id', 'title', 'motive', 'agreed', 'taskIds', 'categoryIds'] } },
+    facts: { type: Type.ARRAY, items: memoryEntrySchema }, barriers: { type: Type.ARRAY, items: memoryEntrySchema }, preferences: { type: Type.ARRAY, items: memoryEntrySchema },
+  } },
+  actions: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: {
+    id: { type: Type.STRING }, goalId: { type: Type.STRING }, reason: { type: Type.STRING }, type: { type: Type.STRING, enum: ['create', 'update'] }, taskId: { type: Type.STRING },
+    changes: { type: Type.OBJECT, properties: { title: { type: Type.STRING }, phase: { type: Type.STRING }, priority: { type: Type.INTEGER }, note: { type: Type.STRING },
+      ...taskScheduleProperties, stepTitles: { type: Type.ARRAY, items: { type: Type.STRING } } } },
+  }, required: ['id', 'goalId', 'reason', 'type', 'changes'] } },
+} };
+
+/** Provider output cannot supply permissions or unvalidated autonomous accounting fields. */
+function validateStrategyResponse(value: unknown, tasks: any[]): AIStrategyResponse {
+  if (!isRecord(value)) throw new Error('Invalid strategy');
+  const output: AIStrategyResponse = {};
+  if (value.status !== undefined) {
+    if (!['getting_to_know', 'clarifying', 'ready'].includes(value.status)) throw new Error('Invalid strategy status');
+    output.status = value.status;
+  }
+  for (const key of ['question', 'narrative', 'nextAction', 'focusTaskId'] as const) {
+    if (value[key] !== undefined && typeof value[key] !== 'string') throw new Error('Invalid strategy text');
+    if (value[key] !== undefined) output[key] = value[key].slice(0, 6000);
+  }
+  if (value.memoryPatch !== undefined) {
+    if (!isRecord(value.memoryPatch)) throw new Error('Invalid strategy memory');
+    const patch = value.memoryPatch;
+    for (const key of ['facts', 'barriers', 'preferences']) {
+      if (patch[key] !== undefined && (!Array.isArray(patch[key]) || patch[key].some((entry: any) => !isRecord(entry) || !nonEmptyText(entry.id) || !nonEmptyText(entry.text) || !['user', 'hypothesis'].includes(entry.source)))) throw new Error('Invalid strategy memory entry');
+    }
+    if (patch.goals !== undefined && (!Array.isArray(patch.goals) || patch.goals.some((goal: any) => !isRecord(goal) || !nonEmptyText(goal.id) || !nonEmptyText(goal.title) || typeof goal.motive !== 'string' || typeof goal.agreed !== 'boolean' || !Array.isArray(goal.taskIds) || !goal.taskIds.every((id: any) => typeof id === 'string') || !Array.isArray(goal.categoryIds) || !goal.categoryIds.every((id: any) => typeof id === 'string')))) throw new Error('Invalid strategy goals');
+    output.memoryPatch = patch;
+  }
+  if (value.actions !== undefined) {
+    if (!Array.isArray(value.actions) || value.actions.length > 20) throw new Error('Invalid strategy actions');
+    output.actions = value.actions.map((action: any) => {
+      if (!isRecord(action) || !nonEmptyText(action.id) || !nonEmptyText(action.goalId) || !nonEmptyText(action.reason) || !['create', 'update'].includes(action.type) || !isRecord(action.changes)) throw new Error('Invalid strategy action');
+      if (Object.keys(action.changes).some(key => !['title', 'phase', 'priority', 'note', 'schedule', 'stepTitles'].includes(key))) throw new Error('Forbidden autonomous task field');
+      const changes = action.changes;
+      if (changes.title !== undefined && !nonEmptyText(changes.title) || changes.phase !== undefined && !nonEmptyText(changes.phase) || changes.priority !== undefined && ![1, 2, 3].includes(changes.priority) || changes.note !== undefined && typeof changes.note !== 'string' || changes.stepTitles !== undefined && (!Array.isArray(changes.stepTitles) || !changes.stepTitles.every(nonEmptyText))) throw new Error('Invalid strategy changes');
+      validatedScheduleFields(changes);
+      const target = tasks.find(task => task.id === action.taskId);
+      if (action.type === 'update' && !target) throw new Error('Unknown autonomous target');
+      return { id: action.id, goalId: action.goalId, reason: action.reason, type: action.type, taskId: action.taskId, changes,
+        ...(target ? { expectedTask: JSON.parse(JSON.stringify(target)) } : {}) };
+    });
+  }
+  return output;
 }
 
 function normalizedSteps(value: unknown, count: unknown, isUk: boolean, prefix: string, min = 1, max = 50) {
@@ -132,7 +194,7 @@ function workspaceProductivityContext(activeTasks: any[], completedTasks: any[],
     stats: { total: tracked.length, completed: completed.length, active: activeTasks.length, cancelled: cancelledTasks.length, percent: completionRate, phaseCounts },
     adaptiveProfile: {
       trackedTasks: tracked.length, completedTasks: completed.length, completionRate,
-      averageCompletionMinutes: timeStatistics.averageSeconds === null ? 0 : Math.round(timeStatistics.averageSeconds / 60),
+      averageCompletionMinutes: timeStatistics.averageSeconds === null ? null : Math.round(timeStatistics.averageSeconds / 60),
       averageStepCount: tasksWithSteps.length ? Math.round(tasksWithSteps.reduce((sum, task) => sum + task.steps, 0) / tasksWithSteps.length * 10) / 10 : 0,
       preferredPhases: [...completedByPhase].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([phase]) => phase),
       overloadedPhases: [...activeByPhase].filter(([, count]) => count >= 4).sort((a, b) => b[1] - a[1]).map(([phase]) => phase),
@@ -253,6 +315,42 @@ export function slugifyTabId(rawName: string, requestedId?: string): string {
   return slug || `tab_${Date.now().toString(36)}`;
 }
 
+function strategyPromptContext(input: any) {
+  if (!isRecord(input)) return null;
+  return { onboardingStatus: input.onboardingStatus, phase: input.phase, goals: input.goals,
+    facts: input.facts, barriers: input.barriers, preferences: input.preferences,
+    feedback: Array.isArray(input.feedback) ? input.feedback.slice(-20) : [],
+    latestStrategy: input.latestStrategy ? { narrative: input.latestStrategy.narrative, nextAction: input.latestStrategy.nextAction } : undefined };
+}
+const reservedTabIds = new Set(['ALL', 'DASHBOARD', 'STRATEGY', 'NOTES', 'HISTORY']);
+function selectClientPeriodTasks(tasks: any[], archive: any[], period: string, clock: { now: string; timeZone: string }) {
+  const end = Date.parse(clock.now);
+  const date = new Date(end);
+  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: clock.timeZone, year: 'numeric', month: '2-digit' }).formatToParts(date);
+  const year = Number(parts.find(part => part.type === 'year')!.value);
+  const month = Number(parts.find(part => part.type === 'month')!.value) - 1;
+  const midnight = (y: number, m: number) => {
+    const wall = Date.UTC(y, m, 1);
+    let timestamp = wall;
+    const formatter = new Intl.DateTimeFormat('en-GB', { timeZone: clock.timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+    for (let iteration = 0; iteration < 4; iteration++) {
+      const values = Object.fromEntries(formatter.formatToParts(new Date(timestamp)).filter(part => part.type !== 'literal').map(part => [part.type, Number(part.value)]));
+      const observed = Date.UTC(values.year, values.month - 1, values.day, values.hour, values.minute, values.second);
+      timestamp += wall - observed;
+    }
+    return timestamp;
+  };
+  const start = period === 'THIS_YEAR' ? midnight(year, 0) : period === 'LAST_YEAR' ? midnight(year - 1, 0)
+    : period === 'THIS_MONTH' ? midnight(year, month) : period === 'LAST_30_DAYS' ? end - 30 * 86400000 : -Infinity;
+  const periodEnd = period === 'LAST_YEAR' ? midnight(year, 0) - 1 : end;
+  const included = (at: number) => Number.isFinite(at) && at >= start && at <= periodEnd;
+  return { activeInPeriod: tasks.filter(task => !task.done && included(task.createdAt)),
+    completedInPeriod: tasks.filter(task => task.done && included(task.completedAt || task.createdAt)),
+    deletedCompleted: archive.filter(task => isCompletedArchivedTask(task) && included(task.completedAt || task.createdAt)),
+    droppedInPeriod: archive.filter(task => isCancelledArchivedTask(task) && included(task.deletedAt)),
+    createdInPeriod: [...tasks, ...archive].filter(task => included(task.createdAt)) };
+}
+
 // Smart AI Assistant & Full App Context Analyzer Endpoint
 export async function assistHandler(req: any, res: any) {
   try {
@@ -273,6 +371,8 @@ export async function assistHandler(req: any, res: any) {
       pendingChanges,
       fullAppContext,
       allowNewTabs = false,
+      intent = 'auto',
+      strategyContext,
     } = req.body;
 
     if (!nonEmptyText(prompt)) {
@@ -284,7 +384,7 @@ export async function assistHandler(req: any, res: any) {
     const normalizedPrompt = prompt.trim().toLowerCase().replace(/[!?.,]/g, "");
     const isSimpleGreeting = /^(привіт|вітаю|добрий день|доброго ранку|добрий вечір|hello|hi|hey)$/.test(normalizedPrompt);
 
-    if (action === "chat" && isSimpleGreeting) {
+    if (action === "chat" && isSimpleGreeting && !strategyContext) {
       return res.json({
         reply: isUk
           ? "Привіт. Я поруч і бачу весь контекст твоїх задач. Розкажи, що зараз плануєш зробити, яку задачу хочеш розбити чи змінити, або що викликає затримку."
@@ -345,10 +445,20 @@ export async function assistHandler(req: any, res: any) {
 
     if (ai && action === "chat") {
       try {
-        const chatPrompt = `You are Karkas AI, an elite conversational task architect and productivity strategist embedded directly in the user's workspace.
+        const chatPrompt = `You are Karkas AI, a thoughtful conversational productivity assistant embedded directly in the user's workspace.
 LANGUAGE: ${isUk ? "Ukrainian" : "English"}.
 CURRENT CLIENT CLOCK (authoritative for relative dates): ${JSON.stringify(clientClock)}.
 CURRENT USER PROMPT: "${prompt}".
+MESSAGE INTENT: ${intent}. auto understands natural-language intent. analysis is read-only analysis. plan creates a realistic plan for the stated or agreed goal; steps works on one concrete task. If the goal or task is ambiguous, ask one clarification before making changes.
+PERSONAL STRATEGY MEMORY (persistent independently of recent conversation; user statements and AI hypotheses are distinct):
+${JSON.stringify(strategyPromptContext(strategyContext))}
+${strategyContext ? `PERSONAL GUIDANCE:
+Get to know this person deeply through one meaningful question at a time: their life aspirations, reasons productivity matters, present work, circumstances, resources, barriers and previous attempts. Never assume a profession or portfolio goal. Existing tasks cannot prove life motives. Ordinary requests remain available during onboarding; do not force an interview.
+Summarize understanding and ask agreement to goals before autonomous planning. Populate strategy.memoryPatch using stable goal/entry ids reused from memory. New goals start agreed:false; only explicitly confirmed previously proposed goals become agreed:true. Attach existing relevant taskIds/categoryIds to goals. Facts source:user must quote the person's actual words; interpretations are source:hypothesis. No clinical diagnosis or fixed psychotype. Inferences require clarification.
+Omit memoryPatch.goals when goals are unchanged. Do not paraphrase or drop the fields of an agreed goal. Changing its title, motive, taskIds or categoryIds proposes a revised goal requiring a separate user confirmation before any autonomous action in that revised scope.
+When a user says they refused, did not start or got distracted and has not explained why, ask what happened and WAIT. Never infer laziness, lack of discipline or procrastination cause from an unfinished task. After their answer, adapt for fatigue, ambiguity, intimidating scope, external constraints, rest or a changed goal. Be direct and demanding about agreed commitments, without humiliation, blame or treating a human like a machine. If even a small step is difficult, explore why.
+For goals ALREADY agreed in supplied memory you may autonomously create/update/schedule related tasks during conversation, using strategy.actions exclusively. Existing updates must be goal.taskIds, category must be goal.categoryIds. Max 3 useful changes; reuse existing tasks, avoid queue inflation after refusals. Give reason for each change. Never autonomously delete, complete, change recorded time/progress, start/configure timers, or invent new categories. New stepTitles preserve measured/completed steps. Return strategy narrative/nextAction/focusTaskId for later display, and memoryPatch for new observations. Do not put the same autonomous changes in legacy tasks/taskUpdates arrays. Outside agreed scope, legacy proposals require a UI application action.
+analysis never authorizes changes. All goal agreement must be based on current user confirmation, not your own strategy status.` : ''}
 RECENT CONVERSATION:
 ${JSON.stringify(Array.isArray(conversation) ? conversation.slice(-10) : [], null, 2)}
 PENDING UNAPPLIED PROPOSAL:
@@ -371,7 +481,7 @@ ${JSON.stringify({
             timerMode: t.timerMode ?? (t.countdownDurationSeconds > 0 ? 'countdown' : 'stopwatch'),
             countdownDurationSeconds: t.countdownDurationSeconds ?? null,
             countdownRemainingSeconds: t.countdownRemainingSeconds ?? null,
-            timeSpentSeconds: t.timeSpentSeconds || 0,
+            timeSpentSeconds: recordedTaskSeconds(t),
             plannedDurationSeconds: t.plannedDurationSeconds ?? null,
             done: !!t.done,
           })),
@@ -455,6 +565,7 @@ For time analysis, timeStatistics counts only completed tasks with positive reco
                   },
                 },
                 ...taskMutationProperties,
+                strategy: strategySchema,
               },
               required: ["reply"],
             },
@@ -466,6 +577,10 @@ For time analysis, timeStatistics counts only completed tasks with positive reco
 
         if (chatResponse?.text) {
           const parsed = chatResponse.validatedResponse;
+          if (intent === 'analysis') {
+            parsed.tasks = []; parsed.taskUpdates = []; parsed.taskDeletions = []; parsed.tabs = [];
+            if (parsed.strategy) parsed.strategy.actions = [];
+          }
           const existingTabIds = new Set(activeTabIds);
           const validatedTabs: { id: string; name: string }[] = [];
           if (isTabCreationRequested && Array.isArray(parsed.tabs)) {
@@ -473,6 +588,7 @@ For time analysis, timeStatistics counts only completed tasks with positive reco
               const name = typeof rawTab?.name === 'string' ? rawTab.name.trim().slice(0, 32) : '';
               if (!name) continue;
               const baseId = slugifyTabId(name, rawTab.id);
+              if (reservedTabIds.has(baseId.toUpperCase())) continue;
               let id = baseId;
               let suffix = 2;
               while (existingTabIds.has(id) || validatedTabs.some((tb) => tb.id === id)) {
@@ -511,6 +627,7 @@ For time analysis, timeStatistics counts only completed tasks with positive reco
             usedModel: chatResponse.usedModel,
             fallbackUsed: chatResponse.fallbackUsed,
             workInsights,
+            strategy: parsed.strategy,
           });
         }
       } catch (chatError) {
@@ -576,7 +693,7 @@ Return valid JSON adhering to schema.`;
             schedule: t.schedule,
             scheduledPending: t.scheduledPending,
             timerRunning: !!t.timerRunning,
-            timeSpentSeconds: t.timeSpentSeconds || 0,
+            timeSpentSeconds: recordedTaskSeconds(t),
             plannedDurationSeconds: t.plannedDurationSeconds ?? null,
             timerMode: t.timerMode ?? (t.countdownDurationSeconds > 0 ? 'countdown' : 'stopwatch'),
             countdownDurationSeconds: t.countdownDurationSeconds ?? null,
@@ -685,6 +802,7 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
               const name = typeof rawTab?.name === 'string' ? rawTab.name.trim().slice(0, 32) : '';
               if (!name) continue;
               const baseId = slugifyTabId(name, rawTab.id);
+              if (reservedTabIds.has(baseId.toUpperCase())) continue;
               let id = baseId;
               let suffix = 2;
               while (existingTabIds.has(id) || validatedTabs.some((tb) => tb.id === id)) {
@@ -1102,7 +1220,7 @@ export async function recommendationsHandler(req: any, res: any) {
 
     const tasks = suppliedTasks.filter(isLiveProductivityTask);
     const relevantArchive = selectRelevantArchivedTasks(suppliedTasks, suppliedDeletedTasks);
-    const periodTasks = selectPeriodTasks(tasks, relevantArchive, period, new Date());
+    const periodTasks = selectClientPeriodTasks(tasks, relevantArchive, period, clientClock);
     const activeTasks = periodTasks.activeInPeriod;
     const completedTasks = [...periodTasks.completedInPeriod, ...periodTasks.deletedCompleted];
     const timeStatistics = summarizeTaskTime(completedTasks);
@@ -1114,7 +1232,7 @@ export async function recommendationsHandler(req: any, res: any) {
     const p2Count = activeTasks.filter((t: any) => t.priority === 2).length;
 
     // Period label humanized
-    const currentYear = new Date().getFullYear();
+    const currentYear = Number(new Intl.DateTimeFormat('en', { timeZone: clientClock.timeZone, year: 'numeric' }).format(new Date(clientClock.now)));
     const lastYear = currentYear - 1;
     const periodNames: Record<string, string> = isUk
       ? {
@@ -1133,15 +1251,6 @@ export async function recommendationsHandler(req: any, res: any) {
         };
     const periodHumanName = periodNames[period] || period;
 
-    const isMonthPeriod = period === "THIS_MONTH" || period === "LAST_30_DAYS";
-    const isYearPeriod = period === "THIS_YEAR" || period === "LAST_YEAR";
-    const targetNorm = isMonthPeriod ? 25 : isYearPeriod ? 200 : 40;
-    const minDeliveredForGrade = isMonthPeriod
-      ? { S: 20, APlus: 15, A: 10, B: 6 }
-      : isYearPeriod
-      ? { S: 150, APlus: 100, A: 60, B: 30 }
-      : { S: 30, APlus: 20, A: 12, B: 6 };
-
     const totalAll = periodTasks.createdInPeriod.length;
     const completedAll = completedTasks.length;
     const cancelledAll = cancelledTasks.length;
@@ -1151,15 +1260,11 @@ export async function recommendationsHandler(req: any, res: any) {
       totalCreated: totalAll, totalCompleted: completedAll, totalActive: activeTasks.length,
       totalCancelled: cancelledAll, totalDeleted: cancelledAll, successRate,
     };
-    const productivityGrade = successRate >= 90 && completedAll >= minDeliveredForGrade.S ? 'S'
-      : successRate >= 80 && completedAll >= minDeliveredForGrade.APlus ? 'A+'
-      : successRate >= 65 && completedAll >= minDeliveredForGrade.A ? 'A'
-      : successRate >= 50 && completedAll >= minDeliveredForGrade.B ? 'B' : 'C';
 
     if (ai) {
       try {
         const systemInstruction = `You are an elite strategic AI Productivity Analyst for the "KARKAS // TASK ARCHITECT" workspace.
-Your task is to critically analyze the user's complete productivity performance and TASK VOLUME DENSITY for the specified timeframe (${periodHumanName}).
+Your task is to analyze the user's recorded work and progress for the specified timeframe (${periodHumanName}), with respect for personal circumstances and goals.
 This includes unfinished active work, successfully completed work (including completed archives), and explicitly deliberately cancelled unfinished tasks as three separate groups.
 Active unfinished tasks are not failures and are not cancelled. Cancelled tasks are not completed. Do not infer why the user cancelled a task or equate cancellation with procrastination or poor discipline.
 Accidental entries and unfinished archives with unknown reasons are excluded entirely from these metrics and context. Do not reconstruct them from earlier conversation or treat them as workload, output, or failures.
@@ -1167,30 +1272,21 @@ TIME ANALYSIS: In periodRetrospective or optimizationTip discuss the supplied re
 ${workInsightInstructions}
 Adaptive workspace insights use all available history and the current active queue. Keep them distinct from selected-period performance metrics; do not attribute all-history readings to the selected period. Discuss priority-review evidence, measured stage overruns, remaining effort ranges and reminder timing in the existing optimizationTip, focusAdvice and futureStrategy fields when supported.
 
-TASK VOLUME BENCHMARKS & DENSITY RULES:
-- Standard monthly workload benchmark is 20 to 30 tasks per month (target norm: ~${targetNorm} tasks for ${periodHumanName}).
-- CRITICAL VOLUME RULE: If the user has only recorded a handful of tasks (e.g. 1 to 5 tasks in a whole month), a 100% success rate on 3 tasks is NOT high productivity. It represents insufficient operational density or under-decomposition (e.g. doing 1 single commit/animation a month).
-- In cases of low task volume (<${minDeliveredForGrade.B} completed tasks), your "periodRetrospective" and "focusAdvice" MUST explicitly call out the low task volume deficit, advise breaking work into daily atomic milestones, and assign Grade "C" due to insufficient sample size.
-
-GRADE CRITERIA (Requires BOTH high success rate AND meeting task volume quota):
-- "S" (Elite): Success rate >= 90% AND completed >= ${minDeliveredForGrade.S} tasks in period.
-- "A+" (High Output): Success rate >= 80% AND completed >= ${minDeliveredForGrade.APlus} tasks in period.
-- "A" (Solid Output): Success rate >= 65% AND completed >= ${minDeliveredForGrade.A} tasks in period.
-- "B" (Baseline Minimum): Success rate >= 50% AND completed >= ${minDeliveredForGrade.B} tasks in period.
-- "C" (Deficit / Low Volume): Success rate < 50% OR completed < ${minDeliveredForGrade.B} tasks in period.
+PERSONAL PROGRESS RULES:
+There is no universal task-count quota, productivity grade, or required daily cadence. Task size, profession, goals, rest and untracked work differ. Small samples are uncertain, not proof of low productivity. Report measured evidence and ask about unknown goals/motives; do not blame or infer barriers.
+Use the supplied personal goals, motives, circumstances, reported barriers and feedback to relate the period to what matters to this person. Keep hypotheses unconfirmed, do not prescribe a profession, and say when personal context is absent. This audit is read-only and does not authorize changing goals or tasks.
 
 LANGUAGE REQUIREMENT: ${isUk ? "All output (focusAdvice, optimizationTip, workloadStatus, periodRetrospective, dropoffAnalysis, futureStrategy, suggested task titles, notes, and reasons) MUST be in UKRAINIAN." : "All output must be in English."}
 AVAILABLE CATEGORY TABS: ${JSON.stringify(activeTabIds)}.
 Each suggested task must have a phase belonging to: ${JSON.stringify(activeTabIds)}.
 
 Provide:
-1. "focusAdvice": 1-2 punchy, tactical sentences on what immediate priority to tackle next (or how to ramp up task logging density if volume is low).
+1. "focusAdvice": 1-2 clear sentences on one useful next action supported by the current queue.
 2. "optimizationTip": 1 actionable tip on cadence, batching, daily decomposition, or workload management.
 3. "workloadStatus": Short badge string (e.g. ${isUk ? '"🔥 ВИСОКИЙ ТЕМП", "⚡ ОПТИМАЛЬНИЙ БАЛАНС", "⚠️ НИЗЬКИЙ ОБСЯГ", "🌱 ЧЕРГА ВІЛЬНА"' : '"🔥 HIGH TEMPO", "⚡ OPTIMAL BALANCE", "⚠️ LOW VOLUME", "🌱 LOW LOAD"'}).
-4. "periodRetrospective": 2-3 deep analytical sentences evaluating output velocity, completion discipline, and task volume density against the target norm of ${targetNorm} tasks for "${periodHumanName}". Refer to concrete numbers (e.g. "закрито X із норми Y завдань").
+4. "periodRetrospective": 2-3 analytical sentences about recorded progress for "${periodHumanName}". Refer to concrete supplied numbers, measurement coverage and uncertainty.
 5. "dropoffAnalysis": 1-2 constructive sentences about explicitly cancelled unfinished tasks only. Use their supplied count; do not invent motives or mix them with active work, completed archives or accidental entries. When there are none, say there were no classified cancellations in this period.
 6. "futureStrategy": 1-2 strategic recommendations for the upcoming work cycles (focusing on consistent daily task cadence).
-7. "productivityGrade": One grade code: "S", "A+", "A", "B", or "C" strictly matching the volume+completion rules above.
 8. "suggestedTasks": 2 to 3 high-impact next step tasks that naturally complement their workflow. Each with:
    - "title": Actionable task title (max 7-8 words)
    - "phase": One of ${JSON.stringify(activeTabIds)}
@@ -1203,7 +1299,7 @@ Return valid JSON adhering to the schema.`;
 
         const response = await generateGeminiContentWithFallback({
           contents: `USER PRODUCTIVITY DATA FOR PERIOD [${periodHumanName}]:
-- Target Period Norm: ${targetNorm} tasks
+- Personal goals, motives and working context (AI hypotheses are unconfirmed; no action journal): ${JSON.stringify(strategyPromptContext(req.body.strategyContext))}
 - Metrics Overview: ${JSON.stringify(safePeriodMetrics)}
 - Recorded completed work time (seconds, selected period): ${JSON.stringify(timeStatistics)}
 - Adaptive work insights (all available history/current queue; not selected-period totals): ${JSON.stringify(workInsights)}
@@ -1226,7 +1322,6 @@ Language: ${isUk ? "Ukrainian" : "English"}.`,
                 periodRetrospective: { type: Type.STRING },
                 dropoffAnalysis: { type: Type.STRING },
                 futureStrategy: { type: Type.STRING },
-                productivityGrade: { type: Type.STRING },
                 suggestedTasks: {
                   type: Type.ARRAY,
                   items: {
@@ -1250,7 +1345,6 @@ Language: ${isUk ? "Ukrainian" : "English"}.`,
                 "periodRetrospective",
                 "dropoffAnalysis",
                 "futureStrategy",
-                "productivityGrade",
                 "suggestedTasks",
               ],
             },
@@ -1280,7 +1374,6 @@ Language: ${isUk ? "Ukrainian" : "English"}.`,
             periodRetrospective: textOr(parsed.periodRetrospective),
             dropoffAnalysis: textOr(parsed.dropoffAnalysis),
             futureStrategy: textOr(parsed.futureStrategy),
-            productivityGrade,
             suggestedTasks: validatedSuggestedTasks,
             workInsights,
             source: "gemini",
@@ -1304,15 +1397,7 @@ Language: ${isUk ? "Ukrainian" : "English"}.`,
 
     const p1Active = activeTasks.find((t: any) => t.priority === 1);
 
-    if (completedAll < minDeliveredForGrade.B) {
-      workloadStatus = isUk ? "⚠️ НИЗЬКИЙ ОБСЯГ" : "⚠️ LOW VOLUME";
-      focusAdvice = isUk
-        ? `Зафіксовано лише ${completedAll} закритих завдань із рекомендованої норми ${targetNorm}. Декомпозуйте щоденну роботу на менші конкретні задачі.`
-        : `Only ${completedAll} tasks delivered out of ${targetNorm} target benchmark. Break workflows into daily actionable tasks.`;
-      optimizationTip = isUk
-        ? "Додавайте принаймні 1-2 конкретні атомарні справи щодня, щоб вийти на робочу норму."
-        : "Capture at least 1-2 daily atomic tasks to reach operational quota.";
-    } else if (p1Count >= 3) {
+    if (p1Count >= 3) {
       workloadStatus = isUk ? "🔥 ВИСОКИЙ ТЕМП" : "🔥 HIGH TEMPO";
       focusAdvice = isUk
         ? `У вас ${p1Count} термінових справ P1. Сфокусуйтеся на «${p1Active?.title || "найважливішій справі"}» та не перемикайте контекст.`
@@ -1339,8 +1424,8 @@ Language: ${isUk ? "Ukrainian" : "English"}.`,
     }
 
     periodRetrospective = isUk
-      ? `За період «${periodHumanName}» зафіксовано ${totalAll} завдань (цільова норма: ${targetNorm}). Успішно закрито ${completedAll} (${successRate}% успішності). ${completedAll < minDeliveredForGrade.B ? "Поточний обсяг замалий для повноцінної високої оцінки — збільшуйте щільність щоденного планування." : "Ви демонструєте достатню щільність та дисципліну закриття."}`
-      : `For "${periodHumanName}", tracked ${totalAll} tasks (target norm: ${targetNorm}). Delivered ${completedAll} (${successRate}% success rate). ${completedAll < minDeliveredForGrade.B ? "Volume is below baseline quota — increase daily task decomposition." : "Solid task output and execution cadence."}`;
+      ? `За період «${periodHumanName}» додано ${totalAll} завдань, виконано ${completedAll}. Час виміряно для ${timeStatistics.measuredTasks} із ${completedAll} виконаних завдань. Кількість записів сама по собі не визначає продуктивність або поступ до ваших цілей.`
+      : `For "${periodHumanName}", ${totalAll} tasks were added and ${completedAll} completed. Time was measured for ${timeStatistics.measuredTasks} of ${completedAll} completed tasks. Record counts alone do not determine productivity or progress toward your goals.`;
 
     dropoffAnalysis = isUk
       ? cancelledAll > 0
@@ -1393,7 +1478,6 @@ Language: ${isUk ? "Ukrainian" : "English"}.`,
       periodRetrospective,
       dropoffAnalysis,
       futureStrategy,
-      productivityGrade,
       suggestedTasks: suggestedTasks.slice(0, 3),
       workInsights,
       source: "rule-engine",

@@ -6,9 +6,10 @@ import { Language, TRANSLATIONS } from '../utils/i18n';
 import { karkasApiFetch } from '../utils/desktopApi';
 import { Plus, X } from 'lucide-react';
 import { AIIcon } from './AIIconTemplates';
-import { buildQuickAddSteps, hasQuickAddDraftContent, mergeQuickAddSuggestions, readQuickAddDraft, saveQuickAddDraft } from './quickAddDraft';
+import { buildQuickAddSteps, hasQuickAddDraftContent, mergeQuickAddSuggestions, quickAddDraftKey, readQuickAddDraft, saveQuickAddDraft } from './quickAddDraft';
 
 interface QuickAddDrawerProps {
+  ownerId?: string | null;
   isOpen: boolean;
   lang: Language;
   tabs: TaskTab[];
@@ -18,14 +19,19 @@ interface QuickAddDrawerProps {
   onOpenAIWithPrompt?: (prompt: string) => void;
 }
 
-export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({ isOpen, lang, tabs, selectedPhase, onClose, onAddTask }) => {
+// Remount the draft session on account changes so fields and in-flight AI results cannot cross accounts.
+export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = props =>
+  <QuickAddDraftSession key={quickAddDraftKey(props.ownerId ?? null)} {...props} />;
+
+const QuickAddDraftSession: React.FC<QuickAddDrawerProps> = ({ ownerId = null, isOpen, lang, tabs, selectedPhase, onClose, onAddTask }) => {
   const t = TRANSLATIONS[lang];
   const uk = lang === 'uk';
-  const [savedDraft] = useState(() => { try { return readQuickAddDraft(localStorage); } catch { return null; } });
+  const [savedDraft] = useState(() => { try { return readQuickAddDraft(localStorage, ownerId); } catch { return null; } });
   const [title, setTitle] = useState(savedDraft?.title || '');
   const [note, setNote] = useState(savedDraft?.note || '');
   const [phase, setPhase] = useState(() => {
-    if (savedDraft?.phase && tabs.some(tab => tab.id === savedDraft.phase)) return savedDraft.phase;
+    // Account tabs can still be hydrating; validate the saved category when the drawer opens.
+    if (savedDraft?.phase) return savedDraft.phase;
     return tabs.some(tab => tab.id === selectedPhase) ? selectedPhase! : tabs[0]?.id || 'focus';
   });
   const [priority, setPriority] = useState<1 | 2 | 3>(savedDraft?.priority || 2);
@@ -51,7 +57,7 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({ isOpen, lang, ta
   const buttonClass = 'min-h-11 px-3 py-2 text-xs border transition-colors';
 
   useEffect(() => {
-    try { saveQuickAddDraft(localStorage, { title, note, phase, priority, steps, customSteps, timerMode, countdownMinutes: validMinutes ? minutes : undefined, countdownInput: countdownMinutes }); } catch { /* Keep the in-memory draft if storage is unavailable. */ }
+    try { saveQuickAddDraft(localStorage, { title, note, phase, priority, steps, customSteps, timerMode, countdownMinutes: validMinutes ? minutes : undefined, countdownInput: countdownMinutes }, ownerId); } catch { /* Keep the in-memory draft if storage is unavailable. */ }
   }, [title, note, phase, priority, steps, customSteps, timerMode, countdownMinutes]);
 
   const cancelAi = () => {
@@ -110,7 +116,7 @@ export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = ({ isOpen, lang, ta
       }
       sound.activate();
       cancelAi();
-      try { saveQuickAddDraft(localStorage, { title: '', note: '', phase, priority, steps: 0, customSteps: [], timerMode: 'none', countdownMinutes: 25 }); } catch { /* Storage is optional. */ }
+      try { saveQuickAddDraft(localStorage, { title: '', note: '', phase, priority, steps: 0, customSteps: [], timerMode: 'none', countdownMinutes: 25 }, ownerId); } catch { /* Storage is optional. */ }
       setTitle(''); setNote(''); setCustomSteps([]); setSteps(0); setTimerMode('none'); setCountdownMinutes('25'); setNotice(''); setError('');
       onClose();
     } catch {

@@ -58,6 +58,15 @@ import { WorkInsightsPanel } from './components/WorkInsightsPanel';
 import { TaskWorkPlanDialog } from './components/TaskWorkPlanDialog';
 import { applyTaskWorkPlan, type WorkPlanEdit } from './utils/taskWorkPlan';
 import { useWorkReminders } from './components/useWorkReminders';
+import { StrategyView } from './components/StrategyView';
+import { useStrategyReminders } from './components/useStrategyReminders';
+import { createPersonalStrategyProfile, readPersonalStrategy, savePersonalStrategy, clearPersonalStrategy, applyStrategyResponse } from './utils/personalStrategy';
+import { applyStrategyActions, undoStrategyAction } from './utils/strategyActions';
+import { claimPlanningNotice } from './utils/planningNotices';
+import { stageStrategyTransaction, recoverStrategyTransaction, clearStrategyTransaction, completeStrategyTransaction, strategyTransactionKey, readStrategyTransaction, markStrategyTransactionConflict } from './utils/strategyTransaction';
+import type { PersonalStrategyProfile, AIResponse, AIIntent } from './types';
+import { isSystemView, migrateSystemCategories } from './utils/systemViews';
+import { writeRecoverableJson } from './utils/recoverableLocalStorage';
 
 const STORAGE_KEY = 'life_todo_tasks_v2';
 const DELETED_STORAGE_KEY = 'karkas_deleted_tasks_v2';
@@ -185,7 +194,7 @@ export default function App() {
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed) && parsed.length > 0) {
             loaded = parsed.map((t: PSTask) => {
-              if (t.phase === 'DASHBOARD' || t.phase === 'ALL') {
+              if (isSystemView(t.phase) && !tabs.some(tab => tab.id === t.phase)) {
                 return { ...t, phase: 'focus' };
               }
               return t;
@@ -198,7 +207,7 @@ export default function App() {
             const parsedLegacy = JSON.parse(legacy);
             if (Array.isArray(parsedLegacy) && parsedLegacy.length > 0) {
               loaded = parsedLegacy.map((t: PSTask) => {
-                if (t.phase === 'DASHBOARD' || t.phase === 'ALL') {
+                if (isSystemView(t.phase) && !tabs.some(tab => tab.id === t.phase)) {
                   return { ...t, phase: 'focus' };
                 }
                 return t;
@@ -231,16 +240,23 @@ export default function App() {
         latestTasksRef.current = scheduled.records;
         setTasks(previous => materializeScheduledWorkspace(previous, archivedScheduleIdsRef.current, now).records);
       }
-      for (const occurrence of scheduled.notifications) {
-        if (notifiedSchedulesRef.current.has(occurrence.taskId)) continue;
-        notifiedSchedulesRef.current.add(occurrence.taskId);
-        const title = lang === 'uk' ? 'Karkas · Нове завдання' : 'Karkas · New task';
-        const at = new Intl.DateTimeFormat(lang === 'uk' ? 'uk-UA' : 'en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(occurrence.scheduledFor);
-        const body = `${occurrence.title} · ${lang === 'uk' ? 'Заплановано на' : 'Planned for'} ${at}`;
+      const liveDue = latestTasksRef.current.filter(task => !task.done && !task.scheduledPending && !task.startedAt && task.scheduledFor && now >= task.scheduledFor && now - task.scheduledFor < 10 * 60000).map(task => ({ taskId: task.id, title: task.title, scheduledFor: task.scheduledFor! }));
+      const due = [...scheduled.notifications, ...liveDue].filter(occurrence => {
+        const key = occurrence.taskId + ':' + occurrence.scheduledFor;
+        if (notifiedSchedulesRef.current.has(key)) return false;
+        notifiedSchedulesRef.current.add(key);
+        return claimPlanningNotice(localStorage, workspaceOwnerRef.current, 'scheduled:' + key, now, true);
+      });
+      if (due.length) {
+        const title = lang === 'uk' ? 'Karkas · Запланована робота' : 'Karkas · Scheduled work';
+        const body = due.map(occurrence => {
+          const at = new Intl.DateTimeFormat(lang === 'uk' ? 'uk-UA' : 'en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(occurrence.scheduledFor);
+          return occurrence.title + ' · ' + (lang === 'uk' ? 'Заплановано на' : 'Planned for') + ' ' + at;
+        }).join('\n');
         const scope = timerNoticeScopeRef.current;
         setTimerNotice(body);
-        if (window.karkasDesktop) void window.karkasDesktop.system.showNotification({ title, body }).then(result => {
-          if (!result.ok && scope === timerNoticeScopeRef.current) setTimerNotice(`${body} ${lang === 'uk' ? 'Сповіщення Windows недоступне.' : 'Windows notification unavailable.'}`);
+        if (window.karkasDesktop) void window.karkasDesktop.system.showNotification({ title, body, target: { view: 'STRATEGY', ownerId: workspaceOwnerRef.current, taskId: due[0].taskId } }).then(result => {
+          if (!result.ok && scope === timerNoticeScopeRef.current) setTimerNotice(body + ' ' + (lang === 'uk' ? 'Сповіщення Windows недоступне.' : 'Windows notification unavailable.'));
         }).catch(() => { if (scope === timerNoticeScopeRef.current) setTimerNotice(body); });
       }
       const expired = latestTasksRef.current.filter(task => !task.done && task.timerRunning && getTaskRemainingSeconds(task, now) === 0);
@@ -271,6 +287,7 @@ export default function App() {
     if (typeof window !== 'undefined') {
       const hash = window.location.hash;
       if (hash === '#dashboard') return 'DASHBOARD';
+      if (hash === '#strategy') return 'STRATEGY';
       if (hash === '#notes' || hash === '#notepad') return 'NOTES';
       if (hash === '#history') return 'HISTORY';
     }
@@ -717,6 +734,16 @@ export default function App() {
 
   // Google Cloud Auth & Sync state
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const strategyOwner = currentUser?.uid ?? null;
+  const [personalProfile, setPersonalProfile] = useState(() => readPersonalStrategy(localStorage, localStorage.getItem('karkas_workspace_owner')));
+  const [profileOwner, setProfileOwner] = useState<string | null>(() => localStorage.getItem('karkas_workspace_owner'));
+  const personalProfileRef = React.useRef(personalProfile);
+  personalProfileRef.current = personalProfile;
+  useEffect(() => {
+    const next = readPersonalStrategy(localStorage, strategyOwner);
+    personalProfileRef.current = next; setPersonalProfile(next); setProfileOwner(strategyOwner);
+  }, [strategyOwner]);
+
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSyncTime, setLastSyncTime] = useState<number | null>(() => {
     if (typeof window !== 'undefined') {
@@ -809,7 +836,7 @@ export default function App() {
   // Persist each committed change before paint, with no pending timer on close.
   React.useLayoutEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+      writeRecoverableJson(localStorage, STORAGE_KEY, JSON.stringify(tasks));
     } catch (e) {
       console.error('Failed to save tasks to localStorage', e);
     }
@@ -818,7 +845,7 @@ export default function App() {
   // Sync deletedTasks with localStorage
   useEffect(() => {
     try {
-      localStorage.setItem(DELETED_STORAGE_KEY, JSON.stringify(deletedTasks));
+      writeRecoverableJson(localStorage, DELETED_STORAGE_KEY, JSON.stringify(deletedTasks));
     } catch (e) {
       console.error('Failed to save deleted tasks to localStorage', e);
     }
@@ -827,7 +854,7 @@ export default function App() {
   // Sync tabs with localStorage
   useEffect(() => {
     try {
-      localStorage.setItem(TABS_KEY, JSON.stringify(tabs));
+      writeRecoverableJson(localStorage, TABS_KEY, JSON.stringify(tabs));
     } catch (e) {
       console.error('Failed to save tabs to localStorage', e);
     }
@@ -847,11 +874,13 @@ export default function App() {
     if (typeof window !== 'undefined') {
       if (selectedPhase === 'DASHBOARD') {
         window.location.hash = '#dashboard';
+      } else if (selectedPhase === 'STRATEGY') {
+        window.location.hash = '#strategy';
       } else if (selectedPhase === 'NOTES') {
         window.location.hash = '#notes';
       } else if (selectedPhase === 'HISTORY') {
         window.location.hash = '#history';
-      } else if (window.location.hash === '#dashboard' || window.location.hash === '#notes' || window.location.hash === '#notepad' || window.location.hash === '#history') {
+      } else if (window.location.hash === '#dashboard' || window.location.hash === '#strategy' || window.location.hash === '#notes' || window.location.hash === '#notepad' || window.location.hash === '#history') {
         history.replaceState(null, '', window.location.pathname);
       }
     }
@@ -861,9 +890,10 @@ export default function App() {
     const handleHashChange = () => {
       const hash = window.location.hash;
       if (hash === '#dashboard') setSelectedPhase('DASHBOARD');
+      else if (hash === '#strategy') setSelectedPhase('STRATEGY');
       else if (hash === '#notes' || hash === '#notepad') setSelectedPhase('NOTES');
       else if (hash === '#history') setSelectedPhase('HISTORY');
-      else if (selectedPhase === 'DASHBOARD' || selectedPhase === 'NOTES' || selectedPhase === 'HISTORY') setSelectedPhase('ALL');
+      else if (isSystemView(selectedPhase) && selectedPhase !== 'ALL') setSelectedPhase('ALL');
     };
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
@@ -880,6 +910,7 @@ export default function App() {
     } catch { baseWorkspaceRef.current = null; }
   }
   const authGenerationRef = React.useRef(0);
+  const strategyPersistenceGenerationRef = React.useRef(0);
   const savingRef = React.useRef<number | null>(null);
   const queuedRemoteRef = React.useRef<UserCloudState | null>(null);
   const autoSyncEnabledRef = React.useRef(autoSyncEnabled);
@@ -896,18 +927,26 @@ export default function App() {
       aiIconVariant: currentAiIconVariantRef.current,
     },
   });
-  const persistWorkspace = () => {
+  const persistWorkspace = (): Promise<boolean> => {
+    const ownerId = workspaceOwnerRef.current;
     const record = {
       workspace: readWorkspace(),
       base: baseWorkspaceRef.current,
       lastSyncTime: lastSyncTimeRef.current,
     };
-    localStorage.setItem(accountKey(workspaceOwnerRef.current), JSON.stringify(record));
-    if (desktopWorkspaceReadyRef.current && window.karkasDesktop) {
-      void window.karkasDesktop.workspace.saveAccount({ ownerId: workspaceOwnerRef.current, record });
-    }
+    const serialized = JSON.stringify(record);
+    writeRecoverableJson(localStorage, accountKey(ownerId), serialized);
+    if (!window.karkasDesktop) return Promise.resolve(true);
+    if (!desktopWorkspaceReadyRef.current) return Promise.resolve(false);
+    // Capture an immutable record: refs and base can change while IPC is pending.
+    const capturedRecord = JSON.parse(serialized);
+    try {
+      return window.karkasDesktop.workspace.saveAccount({ ownerId, record: capturedRecord })
+        .then(result => result.ok).catch(() => false);
+    } catch { return Promise.resolve(false); }
   };
-  const applyWorkspace = (value: WorkspaceState) => {
+  const applyWorkspace = (input: WorkspaceState) => {
+    const value = migrateSystemCategories(input);
     ++timerNoticeScopeRef.current;
     setTimerNotice(null);
     latestTasksRef.current = value.tasks;
@@ -927,9 +966,9 @@ export default function App() {
     setFireEnabled(value.settings.fireEnabled);
     setLang(value.settings.lang as Language);
     setAiIconVariant(value.settings.aiIconVariant as AIIconId);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(value.tasks));
-    localStorage.setItem(TABS_KEY, JSON.stringify(value.tabs));
-    localStorage.setItem(DELETED_STORAGE_KEY, JSON.stringify(value.deletedTasks));
+    writeRecoverableJson(localStorage, STORAGE_KEY, JSON.stringify(value.tasks));
+    writeRecoverableJson(localStorage, TABS_KEY, JSON.stringify(value.tabs));
+    writeRecoverableJson(localStorage, DELETED_STORAGE_KEY, JSON.stringify(value.deletedTasks));
     localStorage.setItem(AI_ICON_KEY, value.settings.aiIconVariant);
     persistWorkspace();
   };
@@ -966,7 +1005,11 @@ export default function App() {
         if (window.karkasDesktop) {
           const desktopCached = await window.karkasDesktop.workspace.loadAccount(uid);
           if (generation !== authGenerationRef.current || (auth.currentUser?.uid ?? null) !== uid) return;
-          if (desktopCached.ok && desktopCached.value) cached = desktopCached.value;
+          if (desktopCached.ok && desktopCached.value) {
+            // A pending paired commit makes its local snapshot authoritative until recovery finishes.
+            const recoverLocal = cached?.workspace && readStrategyTransaction(localStorage, uid);
+            cached = recoverLocal ? { ...desktopCached.value, ...cached } : desktopCached.value;
+          }
           const activeOwner = await window.karkasDesktop.workspace.setActiveOwner(uid);
           if ('error' in activeOwner) throw new Error(activeOwner.error.message);
           if (generation !== authGenerationRef.current || (auth.currentUser?.uid ?? null) !== uid) return;
@@ -1187,17 +1230,19 @@ export default function App() {
       const queued = queuedRemoteRef.current;
       queuedRemoteRef.current = null;
       const latest = queued && (queued.revision || 0) > (saved.revision || 0) ? queued : saved;
-      const merged = mergeWorkspace(submitted, readWorkspace(), latest);
-      baseWorkspaceRef.current = latest;
       let remainingPending: DesktopPendingSync | null = null;
       if (window.karkasDesktop && mutationId) {
         const acknowledged = await window.karkasDesktop.workspace.acknowledgeSync({
           ownerId: uid, mutationId, base: latest, lastSyncTime: latest.updatedAt,
         });
+        if (generation !== authGenerationRef.current || auth.currentUser?.uid !== uid || workspaceOwnerRef.current !== uid) return false;
         if ('error' in acknowledged) throw new Error(acknowledged.error.message);
         if (!acknowledged.value.acknowledged) throw new Error('Stale sync acknowledgement rejected');
         remainingPending = acknowledged.value.pending;
       }
+      if (generation !== authGenerationRef.current || auth.currentUser?.uid !== uid || workspaceOwnerRef.current !== uid) return false;
+      const merged = mergeWorkspace(submitted, readWorkspace(), latest);
+      baseWorkspaceRef.current = latest;
       applyWorkspace(merged);
       setCloudData(latest);
       updateLastSyncTime(latest.updatedAt);
@@ -1211,7 +1256,7 @@ export default function App() {
           mutationId,
           message: error instanceof Error ? error.message : 'Cloud save failed',
         });
-        if (failed.ok) setNextSyncRetryAt(failed.value?.nextAttemptAt ?? null);
+        if (generation === authGenerationRef.current && auth.currentUser?.uid === uid && failed.ok) setNextSyncRetryAt(failed.value?.nextAttemptAt ?? null);
       }
       if (generation === authGenerationRef.current && auth.currentUser?.uid === uid) {
         setSyncError(error instanceof Error ? error.message : 'Cloud save failed');
@@ -1345,12 +1390,14 @@ export default function App() {
       localStorage.setItem(accountKey(uid) + ':before-restore', JSON.stringify(readWorkspace()));
       if (window.karkasDesktop) {
         const recovery = await window.karkasDesktop.workspace.createRecoveryPoint(uid);
+        if (generation !== authGenerationRef.current || auth.currentUser?.uid !== uid || workspaceOwnerRef.current !== uid) return;
         if ('error' in recovery) throw new Error(recovery.error.message);
         const replaced = await window.karkasDesktop.workspace.replaceWithCloud({
           ownerId: uid,
           workspace: data,
           lastSyncTime: data.updatedAt,
         });
+        if (generation !== authGenerationRef.current || auth.currentUser?.uid !== uid || workspaceOwnerRef.current !== uid) return;
         if ('error' in replaced) throw new Error(replaced.error.message);
       }
       baseWorkspaceRef.current = data;
@@ -1400,6 +1447,127 @@ export default function App() {
   const workInsights = useMemo(() => buildWorkInsights(tasks, deletedTasks, {
     now: insightNow, lang, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Kyiv',
   }), [tasks, deletedTasks, insightNow, lang]);
+  const strategyReady = profileOwner === strategyOwner && timerWorkspaceReadyRef.current && workspaceOwnerRef.current === strategyOwner;
+  const updatePersonalProfile = (next: PersonalStrategyProfile): boolean => {
+    if (!strategyReady || workspaceOwnerRef.current !== strategyOwner) return false;
+    if (readStrategyTransaction(localStorage, strategyOwner)) {
+      setTimerNotice(lang === 'uk' ? 'Спершу потрібно завершити відновлення зміни плану. Нову пам’ять поки не збережено.' : 'Finish recovering the plan change first. New memory has not been saved.'); return false;
+    }
+    const stored = savePersonalStrategy(localStorage, strategyOwner, next);
+    personalProfileRef.current = next; setPersonalProfile(next);
+    if (!stored) setTimerNotice(lang === 'uk' ? 'Пам’ять діє в цьому сеансі, але її не вдалося зберегти на пристрої.' : 'Memory applies in this session but could not be saved on this device.');
+    return stored;
+  };
+  const openStrategyChat = (text: string) => {
+    setAiPromptSeed(text); setAiSeedAsDraft(true); setIsAIOpen(true);
+  };
+  const resetPersonalMemory = () => {
+    if (!strategyReady) return;
+    // Invalidate pending acknowledgements before removing the old journal/profile.
+    ++strategyPersistenceGenerationRef.current;
+    if (!clearStrategyTransaction(localStorage, strategyOwner)) {
+      setTimerNotice(lang === 'uk' ? 'Не вдалося очистити журнал стратегії. Спробуйте ще раз.' : 'Could not clear the strategy journal. Please try again.'); return;
+    }
+    if (!clearPersonalStrategy(localStorage, strategyOwner)) {
+      setTimerNotice(lang === 'uk' ? 'Не вдалося очистити пам’ять. Спробуйте ще раз.' : 'Could not clear memory. Please try again.'); return;
+    }
+    try {
+      localStorage.removeItem(`karkas_ai_chat_welcome:${strategyOwner || 'guest'}`);
+      const prefix = `karkas_strategy_audit_v1:${encodeURIComponent(strategyOwner === null ? 'guest' : `account:${strategyOwner}`)}:`;
+      Object.keys(localStorage).filter(key => key.startsWith(prefix)).forEach(key => localStorage.removeItem(key));
+    } catch { /* The new empty profile still replaces the current in-memory view. */ }
+    // A fresh paired snapshot also protects existing tasks if an earlier desktop save is still pending.
+    const emptyProfile = createPersonalStrategyProfile();
+    if (!commitStrategyState(latestTasksRef.current, emptyProfile)) updatePersonalProfile(emptyProfile);
+  };
+  const handleChatWelcome = (owner: string | null) => {
+    if (!strategyReady || owner !== strategyOwner || personalProfileRef.current.onboardingStatus !== 'new') return;
+    updatePersonalProfile({ ...personalProfileRef.current, onboardingStatus: 'in_progress' });
+  };
+  const commitStrategyState = (nextTasks: PSTask[], nextProfile: PersonalStrategyProfile): boolean => {
+    if (!strategyReady || workspaceOwnerRef.current !== strategyOwner) return false;
+    if (!stageStrategyTransaction(localStorage, strategyOwner, latestTasksRef.current, nextTasks, nextProfile)) {
+      setTimerNotice(lang === 'uk' ? 'Не вдалося зберегти зміну плану. Завдання не змінено; перевірте незавершене відновлення.' : 'Could not persist the plan change. Tasks were not changed; check pending recovery.'); return false;
+    }
+    latestTasksRef.current = nextTasks; currentTasksRef.current = nextTasks; setTasks(nextTasks);
+    personalProfileRef.current = nextProfile; setPersonalProfile(nextProfile);
+    try {
+      const owner = strategyOwner;
+      const generation = authGenerationRef.current;
+      const persistenceGeneration = ++strategyPersistenceGenerationRef.current;
+      const journal = localStorage.getItem(strategyTransactionKey(owner));
+      const workspaceSaved = persistWorkspace();
+      writeRecoverableJson(localStorage, STORAGE_KEY, JSON.stringify(nextTasks));
+      if (savePersonalStrategy(localStorage, owner, nextProfile)) {
+        const isCurrent = () => generation === authGenerationRef.current
+          && persistenceGeneration === strategyPersistenceGenerationRef.current
+          && owner === workspaceOwnerRef.current && owner === (auth.currentUser?.uid ?? null);
+        void completeStrategyTransaction(localStorage, owner, journal, workspaceSaved, isCurrent).then(completed => {
+          if (!completed && isCurrent()) setTimerNotice(lang === 'uk' ? 'Зміну збережено для відновлення; запис на пристрій ще не підтверджено.' : 'The change is journaled for recovery; device storage has not been confirmed.');
+        });
+      }
+      else setTimerNotice(lang === 'uk' ? 'Зміну збережено для відновлення; запис пам’яті поки недоступний.' : 'The change is journaled for recovery; memory storage is currently unavailable.');
+    } catch { setTimerNotice(lang === 'uk' ? 'Зміну збережено в журналі відновлення. Не вдалося завершити локальний запис.' : 'The change is in the recovery journal. Local persistence could not be completed.'); }
+    return true;
+  };
+  const handleStrategyResponse = (response: AIResponse, userText: string, turnId: string, intent: AIIntent, owner: string | null, requestProfile?: PersonalStrategyProfile) => {
+    if (!strategyReady || owner !== strategyOwner || workspaceOwnerRef.current !== owner || !response.strategy) return;
+    if (requestProfile && requestProfile !== personalProfileRef.current) return { notice: lang === 'uk' ? 'Профіль змінився під час відповіді. Пораду показано, автоматичних змін немає.' : 'Your profile changed while awaiting the reply. Advice is shown; no automatic changes applied.' };
+    const profile = applyStrategyResponse(personalProfileRef.current, response.strategy, userText, turnId, Date.now(), response.source);
+    if (intent === 'analysis' || !response.strategy.actions?.length) { updatePersonalProfile(profile); return; }
+    const result = applyStrategyActions({ tasks: latestTasksRef.current, profile, actions: response.strategy.actions,
+      ownerId: owner, currentOwnerId: workspaceOwnerRef.current, turnId, tabs: currentTabsRef.current });
+    if (!result.applied.length) {
+      updatePersonalProfile(result.profile);
+      return result.rejected.length ? { notice: lang === 'uk' ? 'Автоматичні зміни не застосовано: ціль або пов’язані завдання потребують узгодження, чи дані вже змінилися.' : 'Automatic changes were not applied: agree the goal and related tasks, or review newer changes.' } : undefined;
+    }
+    if (!commitStrategyState(result.tasks, result.profile)) return { notice: lang === 'uk' ? 'План не змінено: не вдалося зберегти дію.' : 'Plan unchanged: the action could not be persisted.' };
+    return { notice: `${lang === 'uk' ? 'План адаптовано' : 'Plan adapted'} (${result.applied.length}). ${result.applied.map(action => action.reason).join(' ')}`,
+      actionId: result.applied[result.applied.length - 1].id };
+  };
+  const handleUndoStrategy = (actionId: string) => {
+    if (!strategyReady) return false;
+    const result = undoStrategyAction({ tasks: latestTasksRef.current, profile: personalProfileRef.current, actionId,
+      ownerId: strategyOwner, currentOwnerId: workspaceOwnerRef.current });
+    if (!result.undone) { setTimerNotice(lang === 'uk' ? 'Завдання вже змінилося після цієї дії. Автоматичне скасування не перезапише ваші нові зміни.' : 'The task changed after this action. Undo will not overwrite your newer changes.'); return false; }
+    if (commitStrategyState(result.tasks, result.profile)) { setTimerNotice(lang === 'uk' ? 'Зміну плану скасовано.' : 'Plan change undone.'); return true; }
+    return false;
+  };
+  useEffect(() => {
+    if (!strategyReady) return;
+    const recovered = recoverStrategyTransaction(localStorage, strategyOwner, latestTasksRef.current);
+    if (recovered.status === 'recovered' && recovered.profile) {
+      latestTasksRef.current = recovered.tasks; currentTasksRef.current = recovered.tasks; setTasks(recovered.tasks);
+      personalProfileRef.current = recovered.profile; setPersonalProfile(recovered.profile);
+      try {
+        const owner = strategyOwner;
+        const generation = authGenerationRef.current;
+        const persistenceGeneration = ++strategyPersistenceGenerationRef.current;
+        const journal = localStorage.getItem(strategyTransactionKey(owner));
+        const workspaceSaved = persistWorkspace(); writeRecoverableJson(localStorage, STORAGE_KEY, JSON.stringify(recovered.tasks));
+        if (savePersonalStrategy(localStorage, owner, recovered.profile)) {
+          const isCurrent = () => generation === authGenerationRef.current
+            && persistenceGeneration === strategyPersistenceGenerationRef.current
+            && owner === workspaceOwnerRef.current && owner === (auth.currentUser?.uid ?? null);
+          void completeStrategyTransaction(localStorage, owner, journal, workspaceSaved, isCurrent);
+        }
+      } catch { /* Leave journal available for another recovery attempt. */ }
+    } else if (recovered.status === 'conflict' || recovered.status === 'invalid') {
+      if (recovered.status === 'conflict') markStrategyTransactionConflict(localStorage, strategyOwner, recovered.conflictTaskIds);
+      setTimerNotice(lang === 'uk' ? 'Незавершена зміна стратегії конфліктує з новішими даними. Поточні завдання збережено; журнал можна скинути очищенням пам’яті.' : 'A pending strategy change conflicts with newer data. Current tasks are preserved; clear memory to discard its journal.');
+    }
+  }, [strategyReady, strategyOwner]);
+  useEffect(() => {
+    if (timerWorkspaceReadyRef.current && tabs.some(tab => isSystemView(tab.id))) applyWorkspace(readWorkspace());
+  }, [tabs]);
+  useStrategyReminders(strategyOwner, strategyReady, personalProfile, tasks, lang, setTimerNotice);
+  useEffect(() => window.karkasDesktop?.system.onNotificationClick(target => {
+    if (target.view !== 'STRATEGY' || target.ownerId !== workspaceOwnerRef.current || target.ownerId !== (auth.currentUser?.uid ?? null) || !timerWorkspaceReadyRef.current) return;
+    setSelectedPhase('STRATEGY');
+    const task = target.taskId && latestTasksRef.current.find(item => item.id === target.taskId);
+    setAiPromptSeed(task ? (lang === 'uk' ? `Обговорімо запланований крок «${task.title}». Запитай, що зараз заважає почати.` : `Discuss the planned step “${task.title}”. Ask what makes starting difficult right now.`) : '');
+    setAiSeedAsDraft(true); setIsAIOpen(true);
+  }), [lang]);
   const workReminders = useWorkReminders(currentUser?.uid || null,
     timerWorkspaceReadyRef.current && workspaceOwnerRef.current === (currentUser?.uid || null),
     workInsights, tasks, lang, setTimerNotice);
@@ -1450,7 +1618,7 @@ export default function App() {
     const timedCompletedTasks = completedTasks.filter(task => Number.isFinite(task.timeSpentSeconds) && task.timeSpentSeconds! > 0);
     const averageCompletionMinutes = timedCompletedTasks.length > 0
       ? Math.round(timedCompletedTasks.reduce((total, task) => total + task.timeSpentSeconds!, 0) / timedCompletedTasks.length / 60)
-      : 0;
+      : null;
     const tasksWithSteps = tracked.filter((task) => task.steps > 0);
     const averageStepCount = tasksWithSteps.length > 0
       ? Math.round((tasksWithSteps.reduce((total, task) => total + task.steps, 0) / tasksWithSteps.length) * 10) / 10
@@ -1497,7 +1665,7 @@ export default function App() {
       .filter((t) => {
         if (activeFilter !== 'DONE' && t.done) return false;
         if (activeFilter === 'DONE' && !t.done) return false;
-        if (selectedPhase !== 'ALL' && selectedPhase !== 'DASHBOARD' && t.phase !== selectedPhase) return false;
+        if (!isSystemView(selectedPhase) && t.phase !== selectedPhase) return false;
         if (searchQuery.trim()) {
           const q = searchQuery.toLowerCase().trim();
           const titleMatch = t.title.toLowerCase().includes(q);
@@ -1589,10 +1757,7 @@ export default function App() {
       prev.map((t) => (validTabIds.has(t.phase) ? t : { ...t, phase: fallbackTabId }))
     );
     if (
-      selectedPhase !== 'ALL' &&
-      selectedPhase !== 'DASHBOARD' &&
-      selectedPhase !== 'NOTES' &&
-      selectedPhase !== 'HISTORY' &&
+      !isSystemView(selectedPhase) &&
       !validTabIds.has(selectedPhase)
     ) {
       setSelectedPhase('ALL');
@@ -1907,7 +2072,7 @@ export default function App() {
 
     const items: PSTask[] = (newTasks || []).map((t, i) => {
       let phase = t.phase;
-      if (phase === 'DASHBOARD' || phase === 'ALL' || !availableTabIds.has(phase)) {
+      if (isSystemView(phase) || !availableTabIds.has(phase)) {
         phase = tabs[0]?.id || 'focus';
       }
       const stepCount = t.stepList && t.stepList.length > 0 ? t.stepList.length : (Number.isInteger(t.steps) && t.steps >= 0 ? t.steps : 0);
@@ -2054,7 +2219,8 @@ export default function App() {
 
       {/* Quick Add Pull-Down Drawer with Dynamic Tabs */}
       <QuickAddDrawer
-        isOpen={isAddOpen}
+        ownerId={currentUser?.uid ?? null}
+        isOpen={isAddOpen && timerWorkspaceReadyRef.current && workspaceOwnerRef.current === (currentUser?.uid ?? null)}
         lang={lang}
         tabs={tabs}
         selectedPhase={selectedPhase}
@@ -2070,14 +2236,9 @@ export default function App() {
       <main className="flex-1 max-w-4xl w-full mx-auto px-5 sm:px-8 py-7 sm:py-8 pb-32 relative z-10">
         {timerNotice && <div role="status" className="mb-5 flex items-center gap-3 border border-amber-800 bg-amber-950/20 p-3 text-sm leading-relaxed text-amber-200">
           <span className="min-w-0 flex-1 break-words">{timerNotice}</span>
+          <button type="button" onClick={() => openStrategyChat(lang === 'uk' ? `Обговорімо це повідомлення: ${timerNotice}` : `Discuss this notice: ${timerNotice}`)} className="min-h-11 shrink-0 border border-amber-800 px-3 text-xs">{lang === 'uk' ? 'ШІ-чат' : 'AI chat'}</button>
           <button type="button" aria-label={lang === 'uk' ? 'Закрити сповіщення' : 'Dismiss notification'} onClick={() => setTimerNotice(null)} className="flex h-11 w-11 shrink-0 items-center justify-center hover:bg-white/10"><X className="h-5 w-5" /></button>
         </div>}
-        {timerWorkspaceReadyRef.current && workspaceOwnerRef.current === (currentUser?.uid || null) && (selectedPhase === 'DASHBOARD' || workInsights.prioritySuggestions.length > 0 && selectedPhase !== 'NOTES' && selectedPhase !== 'HISTORY') && <WorkInsightsPanel
-          key={`${currentUser?.uid || 'guest'}:${selectedPhase === 'DASHBOARD'}`} insights={workInsights} tasks={tasks} lang={lang}
-          expanded={selectedPhase === 'DASHBOARD'} remindersEnabled={workReminders.enabled} onRemindersChange={workReminders.setEnabled}
-          onApplyPriority={applySuggestedPriority} onEditPlan={setWorkPlanTaskId}
-          onReviewAI={prompt => { setAiPromptSeed(prompt); setAiSeedAsDraft(true); setIsAIOpen(true); }}
-        />}
         {selectedPhase === 'DASHBOARD' ? (
           <DashboardView
             tasks={operationalTasks}
@@ -2090,12 +2251,20 @@ export default function App() {
             onToggleDone={handleToggleDone}
             onOpenAI={(prompt) => {
               if (prompt) setAiPromptSeed(prompt);
+              setAiSeedAsDraft(true);
               setIsAIOpen(true);
             }}
             onOpenAdd={() => setIsAddOpen(true)}
             onOpenManageTabs={() => setIsManageTabsOpen(true)}
             onAddTask={handleAddTask}
           />
+        ) : selectedPhase === 'STRATEGY' ? (
+          strategyReady ? <StrategyView key={strategyOwner || 'guest'} ownerId={strategyOwner} profile={personalProfile}
+            tasks={tasks} deletedTasks={deletedTasks} tabs={tabs} lang={lang} insights={workInsights}
+            remindersEnabled={workReminders.enabled} onRemindersChange={workReminders.setEnabled}
+            onProfileChange={updatePersonalProfile} onResetMemory={resetPersonalMemory} onChat={openStrategyChat}
+            onStart={handleStartTask} onUndo={handleUndoStrategy} onApplyPriority={applySuggestedPriority} onEditPlan={setWorkPlanTaskId} />
+          : <p role="status" className="text-sm text-neutral-400">{lang === 'uk' ? 'Завантажуємо ваш простір…' : 'Loading your workspace…'}</p>
         ) : selectedPhase === 'NOTES' ? (
           <NotepadView
             lang={lang}
@@ -2404,9 +2573,10 @@ export default function App() {
               {selectedPhase === 'NOTES'
                 ? `${notes.length} ${lang === 'uk' ? (notes.length === 1 ? 'нотатка' : notes.length < 5 ? 'нотатки' : 'нотаток') : (notes.length === 1 ? 'note' : 'notes')}`
                 : selectedPhase === 'HISTORY' ? `${completedHistoryCount} ${lang === 'uk' ? 'ВИКОНАНО В ІСТОРІЇ' : 'COMPLETED IN HISTORY'}`
+                : selectedPhase === 'STRATEGY' ? (lang === 'uk' ? 'МОЯ СТРАТЕГІЯ' : 'MY STRATEGY')
                 : selectedPhase === 'DASHBOARD' ? `${tasks.length} ${lang === 'uk' ? 'ЗАВДАНЬ' : 'TASKS'}` : `${filteredTasks.length} ${t.shownCount}`}
             </span>
-            {selectedPhase !== 'NOTES' && tasks.some((t) => t.done) && (
+            {!['NOTES', 'STRATEGY'].includes(selectedPhase) && tasks.some((t) => t.done) && (
               <button
                 id="clear-completed-bottom-btn"
                 onClick={handleClearCompleted}
@@ -2454,7 +2624,7 @@ export default function App() {
 
       {/* AI Assistant HUD Sheet */}
       <AIAssistantSheet
-        isOpen={isAIOpen}
+        isOpen={isAIOpen && strategyReady}
         lang={lang}
         tabs={tabs}
         onClose={() => setIsAIOpen(false)}
@@ -2466,6 +2636,8 @@ export default function App() {
         initialPromptAsDraft={aiSeedAsDraft}
         aiIconVariant={aiIconVariant}
         accountId={currentUser?.uid ?? null}
+        strategyProfile={strategyReady ? personalProfile : undefined}
+        onChatWelcome={handleChatWelcome} onStrategyResponse={handleStrategyResponse} onUndoStrategy={handleUndoStrategy}
         onInjectTasks={handleInjectAITasks}
       />
 

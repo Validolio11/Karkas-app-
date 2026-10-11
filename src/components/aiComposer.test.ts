@@ -31,15 +31,14 @@ function renderWithDraft(prompt: string, recoverable = false, initialPrompt = ''
   }
 }
 
-test('opening chat does not put old persisted text into the composer', () => {
+test('opening chat restores an unfinished draft without sending it', () => {
   const html = renderWithDraft('Старий текст, який користувач вже закрив');
-  assert.match(html, /<textarea[^>]*id="ai-prompt-input"[^>]*><\/textarea>/);
-  assert.doesNotMatch(html, /Старий текст, який користувач вже закрив/);
+  assert.match(html, /Старий текст, який користувач вже закрив<\/textarea>/);
 });
 
-test('recoverable failed request remains available for retry without filling ordinary input', () => {
+test('recoverable failed request and the newer unfinished draft both remain available', () => {
   const html = renderWithDraft('Стара чернетка', true);
-  assert.match(html, /<textarea[^>]*id="ai-prompt-input"[^>]*><\/textarea>/);
+  assert.match(html, /Стара чернетка<\/textarea>/);
   assert.match(html, /Повторити запит/);
 });
 
@@ -47,7 +46,7 @@ test('an explicit task prompt remains editable as multiline text with a clear ac
   const html = renderWithDraft('Застарілий текст', false, 'Перший рядок\nДругий рядок');
   assert.match(html, /Перший рядок\nДругий рядок<\/textarea>/);
   assert.match(html, /aria-label="Очистити введений текст"/);
-  assert.match(html, /Shift \+ Enter/);
+  assert.doesNotMatch(html, /id="ai-composer-hint"/);
   assert.doesNotMatch(html, /Застарілий текст/);
 });
 
@@ -78,4 +77,9 @@ test('composer exposes a named emoji action and custom model combobox without na
   assert.match(html, /aria-label="Додати емодзі"/);
   assert.match(html, /role="combobox"/);
   assert.doesNotMatch(html, /<select/);
+  assert.match(html, /id="ai-command-menu-btn"/);
+  assert.match(html, /aria-haspopup="menu"/);
+  assert.doesNotMatch(html, /id="ai-mode-(chat|breakdown|analyze|generate)-btn"/);
+  assert.match(html, /max-w-\[1100px\]/);
+  assert.match(html, /h-\[95dvh\]/);
 });

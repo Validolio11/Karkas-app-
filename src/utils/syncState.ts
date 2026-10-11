@@ -1,5 +1,6 @@
 import type { UserCloudState } from '../services/firebase';
 import { applyWorkspaceMutation, diffWorkspaceMutation } from './syncOperations';
+import { migrateSystemCategories } from './systemViews';
 
 export type WorkspaceState = Pick<UserCloudState, 'tasks' | 'tabs' | 'deletedTasks' | 'settings'>;
 
@@ -33,7 +34,7 @@ export function normalizeWorkspaceForStorage(workspace: WorkspaceState): Workspa
     return value;
   };
 
-  return normalize(workspace) as WorkspaceState;
+  return migrateSystemCategories(normalize(workspace) as WorkspaceState);
 }
 
 export function cloudPayloadSizeBytes(value: unknown): number {

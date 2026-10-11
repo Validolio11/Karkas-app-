@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { TaskTab, FilterMode, WorkflowStats } from '../types';
 import { sound } from '../utils/audio';
 import { Language, TRANSLATIONS } from '../utils/i18n';
-import { Volume2, VolumeX, ChevronDown, Plus, Globe, Settings, Settings2, X, Check, LayoutDashboard, NotebookPen, History, Cloud, RefreshCw, Minus, Square, Copy } from 'lucide-react';
+import { Volume2, VolumeX, ChevronDown, Plus, Globe, Settings, Settings2, X, Check, LayoutDashboard, NotebookPen, History, Cloud, RefreshCw, Minus, Square, Copy, Compass } from 'lucide-react';
 import { AIIcon, AIIconId } from './AIIconTemplates';
 import { User } from 'firebase/auth';
 
@@ -381,6 +381,11 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
               <span className="font-bold">{t.dashboard || (lang === 'uk' ? 'ДАШБОРД' : 'DASHBOARD')}</span>
             </button>
 
+            <button id="phase-filter-strategy" type="button" aria-pressed={selectedPhase === 'STRATEGY'}
+              onClick={() => { sound.tick(600); onSelectPhase('STRATEGY'); }}
+              className={`flex min-h-11 shrink-0 items-center gap-1.5 whitespace-nowrap border px-3 py-2 text-xs font-bold tracking-wider transition-colors ${selectedPhase === 'STRATEGY' ? 'border-white bg-white text-black' : 'border-neutral-800 bg-[#09090b] text-neutral-300 hover:border-neutral-600 hover:text-white'}`}>
+              <Compass className="h-4 w-4" /><span>{lang === 'uk' ? 'МОЯ СТРАТЕГІЯ' : 'MY STRATEGY'}</span>
+            </button>
             {/* NOTEPAD / БЛОКНОТ Tab Button */}
             <button
               id="phase-filter-notepad"

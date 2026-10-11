@@ -75,13 +75,13 @@ test("empty prompts and non-string task titles are rejected", async () => {
   }
 });
 
-test("empty productivity history reports zero tasks and grade C", async () => {
+test("empty productivity history reports missing measurements without a quota or grade", async () => {
   const result = await post("recommendations", { lang: "en" });
   assert.equal(result.status, 200);
   assert.equal(result.data.source, "rule-engine");
-  assert.equal(result.data.productivityGrade, "C");
-  assert.match(result.data.periodRetrospective, /tracked 0 tasks/);
-  assert.match(result.data.periodRetrospective, /Delivered 0 \(0%/);
+  assert.equal(result.data.productivityGrade, undefined);
+  assert.match(result.data.periodRetrospective, /0 tasks were added and 0 completed/);
+  assert.doesNotMatch(result.data.periodRetrospective, /quota|target norm|below baseline/i);
 });
 
 test("period results come from task dates rather than contaminated client aggregates", async () => {
@@ -93,11 +93,11 @@ test("period results come from task dates rather than contaminated client aggreg
     periodMetrics: { totalCreated: 100, totalCompleted: 100, totalDeleted: 0, successRate: 100 },
   });
   assert.equal(result.status, 200);
-  assert.match(result.data.periodRetrospective, /tracked 0 tasks/);
-  assert.equal(result.data.productivityGrade, "C");
+  assert.match(result.data.periodRetrospective, /0 tasks were added/);
+  assert.equal(result.data.productivityGrade, undefined);
 });
 
-test("grade requires both enough delivered tasks and the matching success rate", async () => {
+test("recorded task volumes never assign universal productivity grades", async () => {
   const timestamp = Date.now();
   for (const [completed, cancelled, successRate, grade] of [[5, 0, 100, "C"], [6, 6, 50, "B"], [10, 5, 67, "A"],
     [15, 3, 83, "A+"], [20, 2, 91, "S"], [20, 3, 87, "A+"], [20, 21, 49, "C"]] as const) {
@@ -108,8 +108,9 @@ test("grade requires both enough delivered tasks and the matching success rate",
       periodMetrics: { totalCompleted: 1000, successRate: 100 },
     });
     assert.equal(result.status, 200);
-    assert.equal(result.data.productivityGrade, grade, `${completed}/${successRate}`);
-    assert.match(result.data.periodRetrospective, new RegExp(`Delivered ${completed} \\(${successRate}%`));
+    assert.equal(result.data.productivityGrade, undefined, `${completed}/${successRate}`);
+    assert.match(result.data.periodRetrospective, new RegExp(`${completed} completed`));
+    assert.doesNotMatch(result.data.periodRetrospective, /quota|target norm|below baseline/i);
   }
 });
 
@@ -143,10 +144,10 @@ test("period recommendations separate completed archives and cancellations while
     periodMetrics: { totalCreated: 500, totalCompleted: 400, totalDeleted: 100, totalActive: 300, successRate: 1 },
   });
   assert.equal(result.status, 200);
-  assert.match(result.data.periodRetrospective, /tracked 5 tasks/);
-  assert.match(result.data.periodRetrospective, /Delivered 4 \(80%/);
+  assert.match(result.data.periodRetrospective, /5 tasks were added/);
+  assert.match(result.data.periodRetrospective, /4 completed/);
   assert.match(result.data.dropoffAnalysis, /^1 unfinished tasks were deliberately cancelled/);
-  assert.equal(result.data.productivityGrade, "C");
+  assert.equal(result.data.productivityGrade, undefined);
   assert.doesNotMatch(JSON.stringify(result.data), /\bAccident|Unknown archive|Unclassified|Earlier cancellation/);
 });
 
@@ -251,5 +252,5 @@ test('offline scheduling never silently creates immediate tasks instead of tomor
 test('pending plans are excluded from offline productivity counts', async () => {
   const response = await post('recommendations', { lang: 'en', tasks: [{ id: 'future', title: 'Typing', done: false, scheduledPending: true, createdAt: Date.now() }] });
   assert.equal(response.status, 200);
-  assert.match(response.data.periodRetrospective, /tracked 0 tasks/);
+  assert.match(response.data.periodRetrospective, /0 tasks were added/);
 });

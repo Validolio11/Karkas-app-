@@ -1,6 +1,15 @@
+import type { AIResponse } from '../types';
+import { readAIResponse } from '../components/aiAssistantState';
+
 export interface PersistedAIChatMessage {
   role: 'user' | 'assistant';
   content: string;
+  id?: string;
+  response?: AIResponse;
+  proposalStatus?: 'pending' | 'stale' | 'applied';
+  actionId?: string;
+  notice?: string;
+  greeting?: boolean;
 }
 
 const STORAGE_PREFIX = 'karkas_ai_chat_history:';
@@ -23,9 +32,37 @@ export function loadAIChatHistory(accountId?: string | null): PersistedAIChatMes
         ((message as PersistedAIChatMessage).role === 'user' || (message as PersistedAIChatMessage).role === 'assistant') &&
         typeof (message as PersistedAIChatMessage).content === 'string'
       ))
+      .map(message => {
+        let response: AIResponse | undefined;
+        try { if (message.response && message.role === 'assistant') response = readAIResponse(message.response, 'chat'); } catch { /* Preserve the conversation even if an old card is malformed. */ }
+        return {
+          role: message.role, content: message.content,
+          ...(typeof message.id === 'string' ? { id: message.id } : {}),
+          ...(response ? { response, proposalStatus: message.proposalStatus === 'applied' ? 'applied' as const : 'stale' as const } : {}),
+          ...(typeof message.actionId === 'string' ? { actionId: message.actionId } : {}),
+          ...(typeof message.notice === 'string' ? { notice: message.notice } : {}),
+          ...(message.greeting === true ? { greeting: true } : {}),
+        };
+      })
       .slice(-MAX_MESSAGES);
   } catch {
     return [];
+  }
+}
+
+/** Account-scoped one-time welcome, independent from account age and chat history. */
+export function ensureAIChatWelcome(accountId: string | null | undefined, messages: PersistedAIChatMessage[], content: string, hasProfile: boolean): { messages: PersistedAIChatMessage[]; added: boolean } {
+  const key = `karkas_ai_chat_welcome:${accountId || 'guest'}`;
+  try {
+    if (hasProfile || localStorage.getItem(key) === '1') return { messages, added: false };
+    const next: PersistedAIChatMessage[] = [...messages, { id: `welcome-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, role: 'assistant', content, greeting: true }];
+    // Commit the message before the marker, so a full storage cannot lose the greeting.
+    localStorage.setItem(storageKey(accountId), JSON.stringify(next.slice(-MAX_MESSAGES)));
+    localStorage.setItem(key, '1');
+    return { messages: next, added: true };
+  } catch {
+    if (hasProfile || messages.some(message => message.greeting)) return { messages, added: false };
+    return { messages: [...messages, { id: `welcome-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, role: 'assistant', content, greeting: true }], added: true };
   }
 }
 
@@ -44,4 +81,18 @@ export function clearAIChatHistory(accountId?: string | null): void {
   } catch {
     // Ignore storage errors.
   }
+}
+
+/** A restarted introduction keeps old text visible but starts fresh provider context. */
+export function recentAIChatContext(messages: PersistedAIChatMessage[], limit = 10): { role: 'user' | 'assistant'; content: string }[] {
+  let start = 0;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].greeting) { start = index; break; }
+  }
+  return messages.slice(start).slice(-limit).map(({ role, content }) => ({ role, content }));
+}
+
+export function visibleAIChatMessages(messages: PersistedAIChatMessage[], introductionId: string | null): { messages: PersistedAIChatMessage[]; previousCount: number } {
+  const index = introductionId ? messages.findIndex(message => message.id === introductionId) : -1;
+  return index > 0 ? { messages: messages.slice(index), previousCount: index } : { messages, previousCount: 0 };
 }

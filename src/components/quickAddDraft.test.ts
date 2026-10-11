@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { QUICK_ADD_DRAFT_KEY, buildQuickAddSteps, mergeQuickAddSuggestions, readQuickAddDraft, saveQuickAddDraft, type QuickAddDraft } from './quickAddDraft';
+import { QUICK_ADD_DRAFT_KEY, quickAddDraftKey, buildQuickAddSteps, mergeQuickAddSuggestions, readQuickAddDraft, saveQuickAddDraft, type QuickAddDraft } from './quickAddDraft';
 
 const draft: QuickAddDraft = {
   title: ' Чернетка ', note: 'Не втратити нотатку', phase: 'home', priority: 1,
@@ -12,6 +12,8 @@ function memoryStorage() {
   const writes: string[] = [];
   return {
     values, writes,
+    get length() { return values.size; },
+    key: (index: number) => [...values.keys()][index] ?? null,
     getItem: (key: string) => values.get(key) ?? null,
     setItem: (key: string, value: string) => { values.set(key, value); writes.push(key); },
     removeItem: (key: string) => { values.delete(key); },
@@ -22,7 +24,7 @@ test('draft round trip preserves title, notes, custom steps, phase, count and pr
   const storage = memoryStorage();
   assert.equal(saveQuickAddDraft(storage, draft), true);
   assert.deepEqual(readQuickAddDraft(storage), draft);
-  assert.deepEqual(storage.writes, [QUICK_ADD_DRAFT_KEY]);
+  assert.deepEqual(storage.writes, [quickAddDraftKey(null)]);
 });
 
 test('invalid JSON and non-object drafts do not crash recovery', () => {
@@ -48,12 +50,12 @@ test('empty draft creates no key, and clearing a submitted draft leaves unrelate
   const storage = memoryStorage();
   const empty = { ...draft, title: '', note: '', customSteps: [], steps: 0 };
   saveQuickAddDraft(storage, empty);
-  assert.equal(storage.values.has(QUICK_ADD_DRAFT_KEY), false);
+  assert.equal(storage.values.has(quickAddDraftKey(null)), false);
   assert.equal(storage.writes.length, 0);
   storage.values.set('tasks', 'important');
   saveQuickAddDraft(storage, draft);
   saveQuickAddDraft(storage, empty);
-  assert.equal(storage.values.has(QUICK_ADD_DRAFT_KEY), false);
+  assert.equal(storage.values.has(quickAddDraftKey(null)), false);
   assert.equal(storage.values.get('tasks'), 'important');
 });
 
@@ -120,4 +122,59 @@ test('legacy names beyond the current slider limit remain recoverable in the dra
   const storage = memoryStorage();
   saveQuickAddDraft(storage, { ...draft, steps: 12, customSteps: legacyNames });
   assert.deepEqual(readQuickAddDraft(storage)?.customSteps, legacyNames);
+});
+
+test('drafts remain isolated across account A, account B, guest and an account named guest', () => {
+  const storage = memoryStorage();
+  saveQuickAddDraft(storage, { ...draft, title: 'Account A private task' }, 'A');
+  saveQuickAddDraft(storage, { ...draft, title: 'Account B private task' }, 'B');
+  saveQuickAddDraft(storage, { ...draft, title: 'Guest task' }, null);
+  saveQuickAddDraft(storage, { ...draft, title: 'Named guest account task' }, 'guest');
+  assert.equal(readQuickAddDraft(storage, 'A')?.title, 'Account A private task');
+  assert.equal(readQuickAddDraft(storage, 'B')?.title, 'Account B private task');
+  assert.equal(readQuickAddDraft(storage, null)?.title, 'Guest task');
+  assert.equal(readQuickAddDraft(storage, 'guest')?.title, 'Named guest account task');
+  assert.equal(readQuickAddDraft(storage, 'unknown'), null);
+  saveQuickAddDraft(storage, { ...draft, title: '', note: '', steps: 0, customSteps: [] }, 'A');
+  assert.equal(readQuickAddDraft(storage, 'A'), null);
+  assert.equal(readQuickAddDraft(storage, 'B')?.title, 'Account B private task');
+});
+
+test('known legacy guest draft migrates once and never appears in an account', () => {
+  const storage = memoryStorage();
+  storage.values.set(QUICK_ADD_DRAFT_KEY, JSON.stringify(draft));
+  assert.deepEqual(readQuickAddDraft(storage, null), draft);
+  assert.equal(storage.values.has(QUICK_ADD_DRAFT_KEY), false);
+  assert.deepEqual(readQuickAddDraft(storage, null), draft);
+  assert.equal(readQuickAddDraft(storage, 'A'), null);
+  saveQuickAddDraft(storage, { ...draft, title: '', note: '', steps: 0, customSteps: [] }, null);
+  assert.equal(readQuickAddDraft(storage, null), null);
+});
+
+test('ambiguous legacy account draft is preserved without leaking after A to B or logout', () => {
+  const storage = memoryStorage();
+  storage.values.set(QUICK_ADD_DRAFT_KEY, JSON.stringify({ ...draft, title: 'Legacy account-private draft' }));
+  storage.values.set('karkas_workspace_owner', 'A');
+  assert.equal(readQuickAddDraft(storage, null), null, 'startup guest render must not claim the saved account draft');
+  assert.equal(readQuickAddDraft(storage, 'A'), null, 'global data cannot prove which account authored it');
+  assert.equal(readQuickAddDraft(storage, 'B'), null);
+  storage.values.delete('karkas_workspace_owner');
+  assert.equal(readQuickAddDraft(storage, null), null, 'logout does not release quarantined content into guest');
+  assert.ok(storage.values.has(QUICK_ADD_DRAFT_KEY), 'ambiguous content is retained on disk');
+});
+
+test('an account read quarantines legacy data even without a saved workspace owner', () => {
+  const storage = memoryStorage();
+  storage.values.set(QUICK_ADD_DRAFT_KEY, JSON.stringify(draft));
+  assert.equal(readQuickAddDraft(storage, 'A'), null);
+  assert.equal(readQuickAddDraft(storage, null), null);
+  assert.ok(storage.values.has(QUICK_ADD_DRAFT_KEY));
+});
+
+test('previously signed-out account drafts remain quarantined when a cached account exists', () => {
+  const storage = memoryStorage();
+  storage.values.set(QUICK_ADD_DRAFT_KEY, JSON.stringify(draft));
+  storage.values.set('karkas_workspace:A', '{}');
+  assert.equal(readQuickAddDraft(storage, null), null);
+  assert.ok(storage.values.has(QUICK_ADD_DRAFT_KEY));
 });

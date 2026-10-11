@@ -1,11 +1,14 @@
 import type { AIResponse } from '../types';
 import { looksLikeGeminiApiKey } from '../utils/apiKey';
 import { normalizeTaskSchedule } from '../utils/taskScheduling';
+import type { AIIntent } from '../types';
 
 export type AIMode = 'chat' | 'breakdown' | 'analyze' | 'generate';
 export interface AIRequest {
   text: string;
   mode: AIMode;
+  intent?: AIIntent;
+  turnId?: string;
   purpose?: 'proposal';
   planningSource?: { text: string; mode: AIMode };
   internalAlternative?: true;
@@ -27,6 +30,8 @@ const safeRequest = (value: unknown): AIRequest | null => {
   return {
     text: request.text,
     mode: request.mode as AIMode,
+    ...(['auto', 'plan', 'analysis', 'steps'].includes(request.intent as string) ? { intent: request.intent as AIIntent } : {}),
+    ...(typeof request.turnId === 'string' && /^[a-zA-Z0-9_-]{1,100}$/.test(request.turnId) ? { turnId: request.turnId } : {}),
     ...(request.purpose === 'proposal' ? { purpose: 'proposal' as const } : {}),
     ...(planningSource ? { planningSource, ...(request.internalAlternative === true ? { internalAlternative: true as const } : {}) } : {}),
   };
@@ -106,6 +111,31 @@ export function readAIResponse(value: unknown, mode: AIMode): AIResponse & { use
     || hasInvalidText(record.workloadDiagnosis, ['status']) || ['bottlenecks', 'strengths'].some(field => record.workloadDiagnosis[field] !== undefined
       && (!Array.isArray(record.workloadDiagnosis[field]) || record.workloadDiagnosis[field].some((text: unknown) => typeof text !== 'string'))))) throw new AIRequestError('INVALID_RESPONSE');
   if (record.insights?.some((item: unknown) => typeof item !== 'string')) throw new AIRequestError('INVALID_RESPONSE');
+  if (record.strategy !== undefined) {
+    const strategy = record.strategy;
+    const isObject = (value: unknown): value is Record<string, any> => !!value && typeof value === 'object' && !Array.isArray(value);
+    const stringArray = (value: unknown) => Array.isArray(value) && value.every(item => typeof item === 'string');
+    if (!isObject(strategy) || hasInvalidText(strategy, ['question', 'narrative', 'nextAction', 'focusTaskId'])
+      || (strategy.status !== undefined && !['getting_to_know', 'clarifying', 'ready'].includes(strategy.status))) throw new AIRequestError('INVALID_RESPONSE');
+    if (strategy.actions !== undefined && (!Array.isArray(strategy.actions) || strategy.actions.some((action: unknown) => !isObject(action)
+      || typeof action.id !== 'string' || typeof action.goalId !== 'string' || typeof action.reason !== 'string'
+      || !['create', 'update'].includes(action.type) || !isObject(action.changes)
+      || (action.taskId !== undefined && typeof action.taskId !== 'string')
+      || hasInvalidText(action.changes, ['title', 'phase', 'note'])
+      || (action.changes.stepTitles !== undefined && !stringArray(action.changes.stepTitles))))) throw new AIRequestError('INVALID_RESPONSE');
+    if (strategy.memoryPatch !== undefined) {
+      const patch = strategy.memoryPatch;
+      if (!isObject(patch) || hasInvalidText(patch, ['phase'])
+        || (patch.onboardingStatus !== undefined && !['new', 'in_progress', 'complete'].includes(patch.onboardingStatus))) throw new AIRequestError('INVALID_RESPONSE');
+      for (const field of ['facts', 'barriers', 'preferences']) {
+        if (patch[field] !== undefined && (!Array.isArray(patch[field]) || patch[field].some((entry: unknown) => !isObject(entry)
+          || typeof entry.id !== 'string' || typeof entry.text !== 'string' || !['user', 'hypothesis'].includes(entry.source)))) throw new AIRequestError('INVALID_RESPONSE');
+      }
+      if (patch.goals !== undefined && (!Array.isArray(patch.goals) || patch.goals.some((goal: unknown) => !isObject(goal)
+        || typeof goal.id !== 'string' || typeof goal.title !== 'string' || typeof goal.motive !== 'string'
+        || typeof goal.agreed !== 'boolean' || !stringArray(goal.taskIds) || !stringArray(goal.categoryIds)))) throw new AIRequestError('INVALID_RESPONSE');
+    }
+  }
   if (record.source === 'local-chat-fallback' || record.source === 'local-timer-fallback') throw new AIRequestError('PROVIDER_ERROR');
   if (record.source === 'invalid-ai-proposal') throw new AIRequestError('INVALID_RESPONSE');
   return record as AIResponse;

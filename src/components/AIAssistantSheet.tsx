@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence, useDragControls } from 'motion/react';
 import {
   PSTask,
@@ -10,6 +10,8 @@ import {
   AIResponse,
   AITimerSettings,
   AIDeletedTaskRef,
+  PersonalStrategyProfile,
+  AIIntent,
 } from '../types';
 import { sound } from '../utils/audio';
 import { createVoiceDictation, type VoicePhase } from '../utils/voiceDictation';
@@ -17,24 +19,11 @@ import { createVoiceDraft } from '../utils/voiceDraft';
 import { AIModelSelect } from './AIModelSelect';
 import { AIEmojiPicker } from './AIEmojiPicker';
 import { AIChatText } from './AIChatText';
-import { Language, TRANSLATIONS, AI_PRESETS_UK, AI_PRESETS_EN } from '../utils/i18n';
+import { Language, TRANSLATIONS } from '../utils/i18n';
 import {
   X,
-  Plus,
-  CheckCircle2,
-  MessagesSquare,
-  Workflow,
-  ClipboardList,
-  Lightbulb,
-  Edit3,
-  Trash2,
-  CheckSquare,
-  Activity,
   AlertTriangle,
-  ChartNoAxesCombined,
-  FolderPlus,
   Mic,
-  MicOff,
   Loader2,
   Square,
   ArrowUp,
@@ -45,9 +34,12 @@ import { shouldVerifyAsApiKey } from '../utils/apiKey';
 import { verifyApiKey, keyVerificationMessage } from '../utils/verifyApiKey';
 import { desktopHasAiKey, karkasApiFetch } from '../utils/desktopApi';
 import { selectRelevantArchivedTasks } from '../utils/taskArchive';
-import { loadAIChatHistory, saveAIChatHistory } from '../services/chatHistory';
+import { loadAIChatHistory, saveAIChatHistory, ensureAIChatWelcome, recentAIChatContext, visibleAIChatMessages } from '../services/chatHistory';
 import type { PersistedAIChatMessage } from '../services/chatHistory';
-import { getPendingTaskIndexes } from './workflowViewModel';
+import { AICommandMenu } from './AICommandMenu';
+import { proposalTargetsUnchanged } from './aiProposalGuard';
+import { AI_COMMANDS, intentMode, migrateAIComposer, modeIntent, parseAICommand } from './aiCommands';
+import { strategyGreeting } from '../utils/personalStrategy';
 import { useDialogKeyboard } from './useDialogKeyboard';
 import { describeAIApplyResult, describeAITimer, getAITimerContext, prepareAITask, type AIApplyResult } from './aiTaskProposal';
 import { describeSchedule } from '../utils/schedulePresentation';
@@ -72,12 +64,13 @@ interface AIAssistantSheetProps {
     deletedTaskIds?: (string | AIDeletedTaskRef)[],
   ) => AIApplyResult;
   accountId?: string | null;
+  strategyProfile?: PersonalStrategyProfile;
+  onStrategyResponse?: (response: AIResponse, userText: string, turnId: string, intent: AIIntent, ownerId: string | null, requestProfile?: PersonalStrategyProfile) => void | { notice?: string; actionId?: string };
+  onChatWelcome?: (ownerId: string | null) => void;
+  onUndoStrategy?: (actionId: string) => boolean;
 }
 
-interface AIChatMessage {
-  role: 'user' | 'assistant';
-  content: string;
-}
+type AIChatMessage = PersistedAIChatMessage;
 
 interface AIChatOption {
   label: string;
@@ -171,6 +164,34 @@ const TaskUpdatePreview: React.FC<{ update: AITaskUpdate; existing?: PSTask; tab
   </div>;
 };
 
+const ChatResponseCards: React.FC<{ response: AIResponse; currentTasks: PSTask[]; tabs: TaskTab[]; lang: Language }> = ({ response, currentTasks, tabs, lang }) => {
+  const diagnosis = response.workloadDiagnosis;
+  const insights = [...new Set<string>(response.insights || [])].filter(text => normalizedProposalText(text) !== normalizedProposalText(response.reply || response.summary));
+  return <div className="mt-3 space-y-3">
+    {response.summary && normalizedProposalText(response.summary) !== normalizedProposalText(response.reply || response.summary) && <AIChatText text={response.summary} />}
+    {!!insights.length && <ul className="list-disc pl-5 space-y-2">{insights.map(text => <li key={text}><AIChatText text={text} /></li>)}</ul>}
+    {diagnosis && <div className="border border-neutral-700 p-3 space-y-2">
+      {diagnosis.status && <AIChatText text={diagnosis.status} />}
+      {!!diagnosis.bottlenecks?.length && <div><p className="text-sm text-amber-300">{lang === 'uk' ? 'Що заважає' : 'Bottlenecks'}</p>{diagnosis.bottlenecks.map(text => <p key={text}>{text}</p>)}</div>}
+      {!!diagnosis.strengths?.length && <div><p className="text-sm text-emerald-300">{lang === 'uk' ? 'Що допомагає' : 'Strengths'}</p>{diagnosis.strengths.map(text => <p key={text}>{text}</p>)}</div>}
+    </div>}
+    {!!response.categoryHealth?.length && <div className="space-y-2">{response.categoryHealth.map((item, index) => <div key={index} className="border border-neutral-700 p-3"><p className="font-semibold">{item.phaseName || tabs.find(tab => tab.id === item.phase)?.name || item.phase}</p><p>{item.status}</p><p>{item.recommendation}</p></div>)}</div>}
+    {!!response.tabs?.length && <div className="flex flex-wrap gap-2">{response.tabs.map(tab => <span key={tab.id} className="border border-sky-800 px-2 py-1 text-sm text-sky-300">{tab.name}</span>)}</div>}
+    {response.tasks?.map((task, index) => <div key={`task-${index}`} className="border border-neutral-700 bg-black/40 p-3 space-y-2">
+      <p className="text-sm text-emerald-300">{lang === 'uk' ? 'Нове завдання' : 'New task'} · P{task.priority}</p><p className="font-semibold">{task.title}</p>
+      {task.note && normalizedProposalText(task.note) !== normalizedProposalText(task.title) && <AIChatText text={task.note} />}
+      <TimerProposal settings={task} lang={lang} />
+      {!!task.stepList?.length && <ProposalSteps steps={task.stepList} lang={lang} />}
+      {!task.stepList?.length && task.steps > 0 && <p className="text-sm text-neutral-400">{lang === 'uk' ? 'Підзавдання' : 'Subtasks'}: {task.steps}</p>}
+    </div>)}
+    {response.taskUpdates?.map(update => <div key={update.id} className="border border-neutral-700 bg-black/40 p-3"><TaskUpdatePreview update={update} existing={currentTasks.find(task => task.id === update.id)} tabs={tabs} lang={lang} /></div>)}
+    {response.taskDeletions?.map(deletion => <div key={deletion.id} className="border border-red-900 p-3 text-red-300"><p>{lang === 'uk' ? 'Видалення' : 'Delete'}: {currentTasks.find(task => task.id === deletion.id)?.title || deletion.id}</p><p className="text-sm">{deletion.reason || deletionReasonLabel(deletion.deletionReason, lang)}</p></div>)}
+    {response.strategy?.narrative && normalizedProposalText(response.strategy.narrative) !== normalizedProposalText(response.reply || response.summary) && <AIChatText text={response.strategy.narrative} />}
+    {response.strategy?.nextAction && <p className="border-l-2 border-emerald-600 pl-3">{response.strategy.nextAction}</p>}
+    {response.strategy?.actions?.map(action => <div key={action.id} className="border border-emerald-900 p-3"><p className="font-semibold">{action.changes.title || currentTasks.find(task => task.id === action.taskId)?.title}</p><p className="text-sm text-neutral-300">{action.reason}</p></div>)}
+  </div>;
+};
+
 export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   isOpen,
   lang,
@@ -185,59 +206,18 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   aiIconVariant,
   onInjectTasks,
   accountId = null,
+  strategyProfile,
+  onStrategyResponse,
+  onChatWelcome,
+  onUndoStrategy,
 }) => {
   const t = TRANSLATIONS[lang];
   const dragControls = useDragControls();
   useDialogKeyboard(isOpen, onClose, 'ps-ai-sheet');
-  const presets = lang === 'uk' ? AI_PRESETS_UK : AI_PRESETS_EN;
-  const personalizedPresets = useMemo(() => {
-    if (!adaptiveProfile || adaptiveProfile.trackedTasks === 0) return presets;
-
-    const preferredPhase = adaptiveProfile.preferredPhases[0];
-    const preferredTab = tabs.find((tab) => tab.id === preferredPhase)?.name || preferredPhase;
-    const scenarioList: string[] = [];
-
-    if (lang === 'uk') {
-      if (adaptiveProfile.overloadedPhases.length > 0 || adaptiveProfile.activeLoad > adaptiveProfile.recommendedActiveLimit) {
-        scenarioList.push('Розвантажити чергу та залишити 3 головні задачі');
-      }
-      if (adaptiveProfile.urgentLoad > 0) {
-        scenarioList.push('Скласти план закриття термінових задач без перемикання контексту');
-      }
-      if (adaptiveProfile.averageCompletionMinutes > 0 && adaptiveProfile.averageCompletionMinutes <= 30) {
-        scenarioList.push('Сформувати план із коротких 25-хвилинних спринтів');
-      } else {
-        scenarioList.push('Розбити найбільшу задачу на реалістичні етапи');
-      }
-      if (preferredTab) {
-        scenarioList.push(`Скласти наступний робочий цикл для категорії «${preferredTab}»`);
-      }
-      scenarioList.push('Проаналізувати мій темп і скоригувати план на тиждень');
-    } else {
-      if (adaptiveProfile.overloadedPhases.length > 0 || adaptiveProfile.activeLoad > adaptiveProfile.recommendedActiveLimit) {
-        scenarioList.push('Reduce the queue to three essential tasks');
-      }
-      if (adaptiveProfile.urgentLoad > 0) {
-        scenarioList.push('Plan urgent tasks without context switching');
-      }
-      if (adaptiveProfile.averageCompletionMinutes > 0 && adaptiveProfile.averageCompletionMinutes <= 30) {
-        scenarioList.push('Build a plan from focused 25-minute sprints');
-      } else {
-        scenarioList.push('Break the largest task into realistic stages');
-      }
-      if (preferredTab) {
-        scenarioList.push(`Plan the next work cycle for ${preferredTab}`);
-      }
-      scenarioList.push('Analyze my pace and adjust the weekly plan');
-    }
-
-    return scenarioList.slice(0, 5);
-  }, [adaptiveProfile, lang, presets, tabs]);
-
   const [initialDraft] = useState(() => readAIAssistantDraft(localStorage, accountId));
-  const [prompt, setPrompt] = useState(initialPrompt);
+  const [prompt, setPrompt] = useState(() => initialPrompt || migrateAIComposer(initialDraft?.prompt || '', initialDraft?.mode || 'chat').prompt);
   const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
-  const [mode, setMode] = useState<AIMode>(initialDraft?.mode || 'chat');
+  const [mode, setMode] = useState<AIMode>(migrateAIComposer(initialDraft?.prompt || '', initialDraft?.mode || 'chat').mode);
   const [recoverableRequest, setRecoverableRequest] = useState<AIRequest | null>(initialDraft?.recoverableRequest || null);
   const [requestError, setRequestError] = useState<string | null>(restoredAIRequestNotice(initialDraft?.recoverableRequest, lang));
   const activeRequest = useRef<AIRequest | null>(null);
@@ -245,21 +225,12 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   const skipDraftPersistRef = useRef(false);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const [loading, setLoading] = useState(false);
-  const [response, setResponse] = useState<AIResponse | null>(null);
-  const [responseRequest, setResponseRequest] = useState<AIRequest | null>(null);
   const planningSourceRef = useRef<AIRequest | null>(null);
   const preservedRequestDraftRef = useRef<string | null>(null);
-  const [responseProposalReady, setResponseProposalReady] = useState(false);
-  const responseProposalReadyRef = useRef(false);
-  const readyResponseRef = useRef<AIResponse | null>(null);
-  const setResponseProposalReadiness = (ready: boolean) => {
-    responseProposalReadyRef.current = ready;
-    if (!ready) readyResponseRef.current = null;
-    setResponseProposalReady(ready);
-  };
   const [applyNotice, setApplyNotice] = useState<string | null>(null);
-  const [responsePartlyRejected, setResponsePartlyRejected] = useState(false);
   const [chatMessages, setChatMessages] = useState<AIChatMessage[]>(() => loadAIChatHistory(accountId));
+  const [introductionId, setIntroductionId] = useState<string | null>(null);
+  const visibleConversation = visibleAIChatMessages(chatMessages, introductionId);
   const hydratedAccountRef = useRef(accountId);
   const skipPersistRef = useRef(false);
 
@@ -284,16 +255,12 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   const awaitingKeyRef = useRef(false);
   const verificationController = useRef<AbortController | null>(null);
   const backgroundVerification = useRef<AbortController | null>(null);
-  const [injectedIds, setInjectedIds] = useState<number[]>([]);
-  const injectedIdsRef = useRef<number[]>([]);
-  const [appliedUpdateIds, setAppliedUpdateIds] = useState<string[]>([]);
-  const appliedUpdateIdsRef = useRef<string[]>([]);
-  const appliedTabIdsRef = useRef(new Set<string>());
-  const appliedDeletionIdsRef = useRef(new Set<string>());
   const assistController = useRef<AbortController | null>(null);
   const requestGeneration = useRef(0);
-  const closeAfterInject = useRef<ReturnType<typeof setTimeout> | null>(null);
-
+  const latestProposalMessageId = useRef<string | null>(null);
+  const welcomeScrollRef = useRef(false);
+  const welcomeAccountRef = useRef(accountId);
+  const pendingTaskSnapshotRef = useRef<PSTask[]>([]);
   useEffect(() => {
     if (!isOpen && verificationController.current) {
       setPrompt('');
@@ -303,12 +270,9 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       const interrupted = activeRequest.current;
       setRecoverableRequest(interrupted);
       setRequestError(aiRequestErrorMessage(new AIRequestError('CANCELLED'), lang));
-      setResponseProposalReadiness(false);
+      setChatProposalReadiness(false);
     }
-    if (!isOpen) {
-      setPrompt('');
-      preservedRequestDraftRef.current = null;
-    }
+    if (!isOpen) { preservedRequestDraftRef.current = null; setIntroductionId(null); }
     activeRequest.current = null;
     requestGeneration.current += 1;
     assistController.current?.abort();
@@ -322,7 +286,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       assistController.current = null;
       verificationController.current?.abort();
       requestInFlight.current = false;
-      if (closeAfterInject.current) clearTimeout(closeAfterInject.current);
+
     };
   }, [isOpen, accountId]);
 
@@ -424,6 +388,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     hydratedAccountRef.current = accountId;
     skipPersistRef.current = true;
     setChatMessages(loadAIChatHistory(accountId));
+    setIntroductionId(null);
     pendingRequest.current = null;
     pendingChatConfirmed.current = false;
     setChatProposalReadiness(false);
@@ -433,19 +398,10 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     setPendingChatDeletions([]);
     setChatPlanningRequest(null);
     setChatPlanningResponse(null);
-    setResponse(null);
-    setResponseRequest(null);
     planningSourceRef.current = null;
     preservedRequestDraftRef.current = null;
-    setResponseProposalReadiness(false);
+    latestProposalMessageId.current = null;
     setApplyNotice(null);
-    setResponsePartlyRejected(false);
-    injectedIdsRef.current = [];
-    appliedUpdateIdsRef.current = [];
-    appliedTabIdsRef.current.clear();
-    appliedDeletionIdsRef.current.clear();
-    setInjectedIds([]);
-    setAppliedUpdateIds([]);
   }, [accountId]);
 
   useEffect(() => {
@@ -461,8 +417,9 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     draftAccountRef.current = accountId;
     skipDraftPersistRef.current = true;
     const draft = readAIAssistantDraft(localStorage, accountId);
-    setPrompt('');
-    setMode(draft?.mode || 'chat');
+    const migrated = migrateAIComposer(draft?.prompt || '', draft?.mode || 'chat');
+    setPrompt(migrated.prompt);
+    setMode(migrated.mode);
     setRecoverableRequest(draft?.recoverableRequest || null);
     setRequestError(restoredAIRequestNotice(draft?.recoverableRequest, lang));
     setAwaitingApiKey(false);
@@ -473,8 +430,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   useEffect(() => {
     if (skipDraftPersistRef.current) { skipDraftPersistRef.current = false; return; }
     // A key is entered in the same field, but must never enter draft storage.
-    saveAIAssistantDraft(localStorage, { prompt: '', mode, recoverableRequest }, accountId);
-  }, [accountId, mode, recoverableRequest]);
+    saveAIAssistantDraft(localStorage, { prompt: awaitingKeyRef.current ? '' : prompt, mode, recoverableRequest }, accountId);
+  }, [accountId, prompt, mode, recoverableRequest]);
 
   useEffect(() => {
     const field = promptInputRef.current;
@@ -485,12 +442,31 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   }, [prompt, isOpen, awaitingApiKey]);
 
   useEffect(() => {
+    if (!isOpen || hydratedAccountRef.current !== accountId) return;
+    const previous = welcomeAccountRef.current === accountId ? chatMessages : loadAIChatHistory(accountId);
+    welcomeAccountRef.current = accountId;
+    const result = ensureAIChatWelcome(accountId, previous, strategyGreeting(lang), !!strategyProfile && strategyProfile.onboardingStatus !== 'new');
+    if (result.added) {
+      welcomeScrollRef.current = true;
+      setIntroductionId(result.messages.at(-1)?.id || null);
+      setChatMessages(result.messages);
+      onChatWelcome?.(accountId);
+    }
+  }, [isOpen, accountId, strategyProfile?.onboardingStatus]);
+
+  useEffect(() => {
     if (!isOpen) return;
     const frame = requestAnimationFrame(() => {
-      if (contentRef.current) contentRef.current.scrollTop = mode === 'chat' || loading || awaitingApiKey ? contentRef.current.scrollHeight : 0;
+      if (contentRef.current) {
+        if (welcomeScrollRef.current) {
+          const greetings = contentRef.current.querySelectorAll('[data-ai-greeting]');
+          greetings[greetings.length - 1]?.scrollIntoView({ block: 'start' });
+          welcomeScrollRef.current = false;
+        } else contentRef.current.scrollTop = contentRef.current.scrollHeight;
+      }
     });
     return () => cancelAnimationFrame(frame);
-  }, [isOpen, mode, chatMessages, loading, awaitingApiKey, keyStatus, requestError, response]);
+  }, [isOpen, chatMessages, loading, awaitingApiKey, keyStatus, requestError]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -554,6 +530,12 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
 
   const confirmChatChanges = () => {
     if (!chatProposalReadyRef.current || requestInFlight.current || requestError || pendingChangeCount === 0 || pendingChatConfirmed.current) return;
+    const targets = [...pendingChatUpdates.map(update => update.id), ...pendingChatDeletions.map(deletion => deletion.id)];
+    if (!proposalTargetsUnchanged(pendingTaskSnapshotRef.current, currentTasks, targets)) {
+      setChatProposalReadiness(false);
+      setRequestError(lang === 'uk' ? 'Завдання змінилися після цього запиту. Повторіть запит, щоб зберегти новіший прогрес і правки.' : 'Tasks changed after this request. Retry to preserve newer progress and edits.');
+      return;
+    }
     pendingChatConfirmed.current = true;
     setChatProposalReadiness(false);
 
@@ -561,6 +543,9 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       index => `s-chat-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`));
 
     const result = onInjectTasks(tasks, pendingChatTabs, pendingChatUpdates, pendingChatDeletions);
+    const appliedId = latestProposalMessageId.current;
+    setChatMessages(previous => previous.map(message => message.id === appliedId ? { ...message, proposalStatus: 'applied', notice: describeAIApplyResult(result, lang) } : message));
+
     setRecoverableRequest(null);
     setRequestError(null);
 
@@ -571,30 +556,20 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     setChatPlanningRequest(null);
     setChatPlanningResponse(null);
 
-    setChatMessages((previous) => [
-      ...previous,
-      {
-        role: 'assistant',
-        content: describeAIApplyResult(result, lang),
-      },
-    ]);
     sound.activate();
   };
 
   const activeCount = currentTasks.filter((t) => !t.done && !t.scheduledPending).length;
   const completedCount = currentTasks.filter((t) => t.done).length;
 
-  // Sync initialPrompt
+  // Opening from a task or strategy never sends a request automatically.
   useEffect(() => {
-    if (initialPrompt) {
-      const normalizedPrompt = initialPrompt.trim().toLowerCase().replace(/[!?.,]/g, '');
-      const isGreeting = /^(привіт|вітаю|добрий день|доброго ранку|добрий вечір|hello|hi|hey)$/.test(normalizedPrompt);
-      const initialMode: AIMode = initialPromptAsDraft || isGreeting ? 'chat' : 'breakdown';
-      setPrompt(initialPrompt);
-      setMode(initialMode);
-      if (!initialPromptAsDraft) handleGenerate(initialPrompt, initialMode);
+    if (isOpen && initialPrompt) {
+      const migrated = migrateAIComposer(initialPrompt, 'chat');
+      setPrompt(migrated.prompt);
+      setMode(migrated.mode);
     }
-  }, [initialPrompt, initialPromptAsDraft]);
+  }, [initialPrompt, isOpen]);
 
   const handleGenerate = async (queryText?: string, selectedMode?: AIMode, resuming = false, preserveInput = false, planningSource?: AIRequest, internalAlternative = false) => {
     voiceRef.current?.cancel();
@@ -602,11 +577,15 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     voiceDraftRef.current = null;
     setVoicePhase('idle');
     const textToQuery = queryText !== undefined ? queryText : prompt;
-    const currentMode = selectedMode || mode;
-    const requestText = textToQuery.trim() || (
+    const requestProfile = strategyProfile;
+    const requestOwner = accountId;
+    const parsedCommand = parseAICommand(textToQuery, modeIntent(selectedMode || mode));
+    const currentMode = intentMode(parsedCommand.intent);
+    const requestText = parsedCommand.text || (
       currentMode === 'analyze'
         ? (lang === 'uk' ? 'Повний аудит робочого процесу, вузьких місць і аналітика категорій' : 'Comprehensive workflow audit, bottleneck analysis, and category metrics')
-        : ''
+        : currentMode === 'generate' ? (lang === 'uk' ? 'Допоможи спланувати роботу над моєю узгодженою ціллю. Якщо ціль не визначена, спочатку уточни її.' : 'Help plan work toward my agreed goal. If no goal is clear, ask me first.')
+        : currentMode === 'breakdown' ? (lang === 'uk' ? 'Допоможи розбити конкретне завдання на підзавдання. Якщо завдання не визначене, спочатку запитай яке.' : 'Help break down a specific task into subtasks. If the task is unclear, ask which task first.') : ''
     );
     const retryRequest = recoverableRequest?.text === requestText && recoverableRequest.mode === currentMode ? recoverableRequest : null;
     const isAlternativeRequest = internalAlternative || retryRequest?.internalAlternative === true;
@@ -615,12 +594,14 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     const currentRequest: AIRequest = {
       text: requestText,
       mode: currentMode,
+      intent: parsedCommand.intent,
+      turnId: retryRequest?.turnId || `turn-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
       ...(isAlternativeRequest ? { internalAlternative: true, planningSource: { text: sourceRequest.text, mode: sourceRequest.mode } } : {}),
     };
 
     if (!requestText) return;
     if (requestInFlight.current) return;
-    if (currentMode === 'chat' && pendingChangeCount > 0 && /^(так|підтверджую|підтверджено|yes|confirm|ок|застосувати|зберегти)$/i.test(textToQuery.trim())) {
+    if (parsedCommand.intent === 'auto' && pendingChangeCount > 0 && /^(так|підтверджую|підтверджено|yes|confirm|ок|застосувати|зберегти)$/i.test(textToQuery.trim())) {
       if (!chatProposalReadyRef.current || requestError) {
         setRequestError(lang === 'uk'
           ? 'Спочатку повторіть останній запит, щоб підготувати актуальну пропозицію. Зміни до завдань не застосовано.'
@@ -633,9 +614,9 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       return;
     }
     setChatProposalReadiness(false);
-    setResponseProposalReadiness(false);
+    setChatMessages(previous => previous.map(message => message.proposalStatus === 'pending' ? { ...message, proposalStatus: 'stale' } : message));
     setApplyNotice(null);
-    if (closeAfterInject.current) { clearTimeout(closeAfterInject.current); closeAfterInject.current = null; }
+
     const generation = requestGeneration.current;
     const isKeyEntry = !resuming && shouldVerifyAsApiKey(requestText, awaitingKeyRef.current, queryText === undefined);
     if (!isKeyEntry) {
@@ -735,7 +716,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     }
 
     sound.activate();
-    if (!keepDraft) setPrompt('');
+    if (!keepDraft) { setPrompt(''); setMode('chat'); }
     setAwaitingApiKey(false);
     awaitingKeyRef.current = false;
     setKeyStatus(null);
@@ -745,8 +726,11 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     pendingRequest.current = null;
     requestInFlight.current = true;
     setLoading(true);
-    if (currentMode === 'chat') setChatMessages(previous => appendChatRequest(previous,
-      currentRequest.internalAlternative ? (lang === 'uk' ? 'Інший варіант планування' : 'Alternative plan') : requestText));
+    setChatMessages(previous => previous.some(message => message.id === currentRequest.turnId) ? previous : [...previous, {
+      id: currentRequest.turnId,
+      role: 'user',
+      content: currentRequest.internalAlternative ? (lang === 'uk' ? 'Інший варіант планування' : 'Alternative plan') : `${currentRequest.intent !== 'auto' ? `@${currentRequest.intent} ` : ''}${requestText}`,
+    }]);
 
     const isTabMutation = /(?:вкладк|категорі|напрямок|розділ|секці|tab|category|section)/iu.test(requestText);
     const activeList = currentTasks.filter((t) => !t.done && !t.scheduledPending);
@@ -769,17 +753,22 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
         body: JSON.stringify({
           prompt: requestText,
           clientClock: { now: new Date().toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' },
-          action: currentMode,
+          action: 'chat',
+          intent: currentRequest.intent || modeIntent(currentMode),
+          strategyContext: strategyProfile,
+          messageId: currentRequest.turnId,
+          requestId: currentRequest.turnId,
+          turnId: currentRequest.turnId,
           lang,
           tabs: tabs.map((tb) => tb.id),
           adaptiveProfile,
           currentTasks: currentTasks.map(task => ({ ...task, ...getAITimerContext(task) })),
-          conversation: currentMode === 'chat' ? chatMessages.slice(-10) : undefined,
-          pendingChanges: currentMode === 'chat' ? {
+          conversation: recentAIChatContext(chatMessages),
+          pendingChanges: {
             tasks: pendingChatTasks, tabs: pendingChatTabs,
             taskUpdates: pendingChatUpdates,
             taskDeletions: pendingChatDeletions,
-          } : undefined,
+          },
           allowNewTabs: isTabMutation,
           customApiKey: customEnabled ? customKey : undefined,
           selectedModel: customModelRef.current || undefined,
@@ -825,47 +814,37 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       if (assistController.current !== controller) return;
       if (controller.signal.aborted) throw new AIRequestError(timedOut ? 'TIMEOUT' : 'CANCELLED');
       if (!res.ok) throw responseRequestError(rawData, res.status);
-      const data = readAIResponse(rawData, currentMode);
+      const data = readAIResponse(rawData, 'chat');
       activeRequest.current = null;
       const hasPendingActions = [data.tasks, data.tabs, data.taskUpdates, data.taskDeletions].some(actions => (actions?.length || 0) > 0);
-      const hasPendingChatActions = currentMode === 'chat' && hasPendingActions;
+      const hasPendingChatActions = hasPendingActions;
       setRecoverableRequest(hasPendingActions ? { ...currentRequest, purpose: 'proposal' } : null);
       setRequestError(null);
       if (preservedRequestDraftRef.current !== null) setPrompt(preservedRequestDraftRef.current);
       if (data.fallbackUsed && data.usedModel) setKeyStatus(lang === 'uk' ? `Відповідь підготувала доступна модель ${data.usedModel}.` : `The response was generated by the available model ${data.usedModel}.`);
-      if (currentMode === 'chat') {
-        const isPlanningResponse = !!data.tasks?.length || !!data.taskUpdates?.length || /план|\bplan(?:ning)?\b/iu.test((planningSourceRef.current || currentRequest).text);
-        setChatPlanningRequest(isPlanningResponse ? planningSourceRef.current || currentRequest : null);
-        setChatPlanningResponse(isPlanningResponse ? data : null);
-        {
-          pendingChatConfirmed.current = false;
-          setChatProposalReadiness(hasPendingChatActions);
-          setPendingChatTasks(data.tasks || []);
-          setPendingChatTabs((data.tabs || []).map((tb) => ({ id: tb.id, name: tb.name, color: tb.color || '#6366f1' })));
-          setPendingChatUpdates(data.taskUpdates || []);
-          setPendingChatDeletions(data.taskDeletions || []);
-        }
-
-        setChatMessages((previous) => [
-          ...previous,
-          {
-            role: 'assistant',
-            content: data.reply || data.summary,
-          },
-        ]);
-      } else {
-        setResponsePartlyRejected(false);
-        injectedIdsRef.current = [];
-        appliedUpdateIdsRef.current = [];
-        appliedTabIdsRef.current.clear();
-        appliedDeletionIdsRef.current.clear();
-        setInjectedIds([]);
-        setAppliedUpdateIds([]);
-        setResponse(data);
-        setResponseRequest(planningSourceRef.current || currentRequest);
-        readyResponseRef.current = data;
-        setResponseProposalReadiness(true);
-      }
+      const isPlanningResponse = !!data.tasks?.length || !!data.taskUpdates?.length || currentRequest.intent === 'plan' || currentRequest.intent === 'steps' || /план|\bplan(?:ning)?\b/iu.test((planningSourceRef.current || currentRequest).text);
+      setChatPlanningRequest(isPlanningResponse ? planningSourceRef.current || currentRequest : null);
+      setChatPlanningResponse(isPlanningResponse ? data : null);
+      pendingChatConfirmed.current = false;
+      setChatProposalReadiness(hasPendingChatActions);
+      setPendingChatTasks(data.tasks || []);
+      setPendingChatTabs((data.tabs || []).map(tb => ({ id: tb.id, name: tb.name, color: tb.color || '#6366f1' })));
+      setPendingChatUpdates(data.taskUpdates || []);
+      setPendingChatDeletions(data.taskDeletions || []);
+      const messageId = `reply-${currentRequest.turnId}`;
+      latestProposalMessageId.current = messageId;
+      pendingTaskSnapshotRef.current = currentTasks;
+      const strategyResult = data.strategy ? onStrategyResponse?.(data, currentRequest.text, currentRequest.turnId!, currentRequest.intent || 'auto', requestOwner, requestProfile) : undefined;
+      const strategyNotice = strategyResult && typeof strategyResult === 'object' ? strategyResult : undefined;
+      setChatMessages(previous => [...previous, {
+        id: messageId,
+        role: 'assistant',
+        content: data.reply || data.summary,
+        response: data,
+        proposalStatus: hasPendingActions ? 'pending' : undefined,
+        notice: strategyNotice?.notice,
+        actionId: strategyNotice?.actionId,
+      }]);
       sound.activate();
     } catch (err) {
       if (assistController.current !== controller) return;
@@ -892,7 +871,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
 
   const cancelAIRequest = () => {
     setChatProposalReadiness(false);
-    setResponseProposalReadiness(false);
+    setChatMessages(previous => previous.map(message => message.proposalStatus === 'pending' ? { ...message, proposalStatus: 'stale' } : message));
     requestGeneration.current += 1;
     assistController.current?.abort();
     assistController.current = null;
@@ -921,90 +900,6 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     if (request) { setPrompt(preservedRequestDraftRef.current ?? (request.internalAlternative ? request.planningSource?.text || '' : request.text)); setMode(request.mode); }
   };
 
-  const handleInjectAll = () => {
-    if (!response || !responseProposalReadyRef.current || readyResponseRef.current !== response || requestInFlight.current || requestError || responseRequest?.mode !== mode) return;
-    const taskList = getPendingTaskIndexes(response.tasks?.length || 0, injectedIdsRef.current).map(index => response.tasks![index]);
-    const tabList: TaskTab[] = (response.tabs || []).filter(tab => !appliedTabIdsRef.current.has(tab.id)).map((t) => ({ id: t.id, name: t.name, color: t.color || '#6366f1' }));
-    const updateList = (response.taskUpdates || []).filter(update => !appliedUpdateIdsRef.current.includes(update.id));
-    const deleteList = (response.taskDeletions || []).filter(deletion => !appliedDeletionIdsRef.current.has(deletion.id));
-
-    if (!taskList.length && !tabList.length && !updateList.length && !deleteList.length) return;
-    sound.activate();
-
-    const formattedTasks = taskList.map(task => prepareAITask(task,
-      index => `s-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`));
-
-    injectedIdsRef.current = (response.tasks || []).map((_, i) => i);
-    appliedUpdateIdsRef.current = (response.taskUpdates || []).map((u) => u.id);
-    tabList.forEach(tab => appliedTabIdsRef.current.add(tab.id));
-    deleteList.forEach(deletion => appliedDeletionIdsRef.current.add(deletion.id));
-    const result = onInjectTasks(formattedTasks, tabList, updateList, deleteList);
-    if (!result.rejected) setRecoverableRequest(null);
-    setApplyNotice(describeAIApplyResult(result, lang));
-    setResponsePartlyRejected(result.rejected > 0);
-    setInjectedIds(injectedIdsRef.current);
-    setAppliedUpdateIds(appliedUpdateIdsRef.current);
-    if (!result.rejected) closeAfterInject.current = setTimeout(() => {
-      onClose();
-    }, 500);
-  };
-
-  const handleInjectSingle = (task: NonNullable<AIResponse['tasks']>[0], index: number) => {
-    if (!response || !responseProposalReadyRef.current || readyResponseRef.current !== response || requestInFlight.current || requestError || responseRequest?.mode !== mode || injectedIdsRef.current.includes(index)) return;
-    sound.tick(600);
-    const tabList: TaskTab[] = (response?.tabs || []).filter(tab => !appliedTabIdsRef.current.has(tab.id)).map((t) => ({ id: t.id, name: t.name, color: t.color || '#6366f1' }));
-    const result = onInjectTasks([
-      prepareAITask(task, stepIndex => `s-${Date.now()}-${stepIndex}-${Math.random().toString(36).slice(2, 6)}`),
-    ], tabList);
-    setApplyNotice(describeAIApplyResult(result, lang));
-    if (result.created) injectedIdsRef.current = [...injectedIdsRef.current, index];
-    if (result.tabs) tabList.forEach(tab => appliedTabIdsRef.current.add(tab.id));
-    setInjectedIds(injectedIdsRef.current);
-    if (!result.rejected && response && getPendingTaskIndexes(response.tasks?.length || 0, injectedIdsRef.current).length === 0
-      && !(response.taskUpdates || []).some(update => !appliedUpdateIdsRef.current.includes(update.id))
-      && !(response.tabs || []).some(tab => !appliedTabIdsRef.current.has(tab.id))
-      && !(response.taskDeletions || []).some(deletion => !appliedDeletionIdsRef.current.has(deletion.id))) setRecoverableRequest(null);
-  };
-
-  const handleApplySingleUpdate = (update: AITaskUpdate) => {
-    if (!response || !responseProposalReadyRef.current || readyResponseRef.current !== response || requestInFlight.current || requestError || responseRequest?.mode !== mode || appliedUpdateIdsRef.current.includes(update.id)) return;
-    sound.tick(650);
-    const result = onInjectTasks([], [], [update], []);
-    setApplyNotice(describeAIApplyResult(result, lang));
-    if (result.updated) appliedUpdateIdsRef.current = [...appliedUpdateIdsRef.current, update.id];
-    setAppliedUpdateIds(appliedUpdateIdsRef.current);
-    if (!result.rejected && response && getPendingTaskIndexes(response.tasks?.length || 0, injectedIdsRef.current).length === 0
-      && !(response.taskUpdates || []).some(item => !appliedUpdateIdsRef.current.includes(item.id))
-      && !(response.tabs || []).some(tab => !appliedTabIdsRef.current.has(tab.id))
-      && !(response.taskDeletions || []).some(deletion => !appliedDeletionIdsRef.current.has(deletion.id))) setRecoverableRequest(null);
-  };
-
-  const remainingResponseActions = response
-    ? getPendingTaskIndexes(response.tasks?.length || 0, injectedIds).length
-      + (response.taskUpdates || []).filter(update => !appliedUpdateIds.includes(update.id)).length
-      + (response.tabs || []).filter(tab => !appliedTabIdsRef.current.has(tab.id)).length
-      + (response.taskDeletions || []).filter(deletion => !appliedDeletionIdsRef.current.has(deletion.id)).length
-    : 0;
-
-  const responseActionCount = response
-    ? (response.tasks?.length || 0) + (response.tabs?.length || 0) + (response.taskUpdates?.length || 0) + (response.taskDeletions?.length || 0)
-    : 0;
-  const hasAppliedResponseActions = remainingResponseActions < responseActionCount;
-  const responseMode = responseRequest?.mode;
-  const showStructuredResponse = !!response && responseMode === mode;
-  const canApplyResponse = responseProposalReady && !loading && !requestError && !awaitingApiKey;
-  const hasPlanningProposal = !!response && (responseMode === 'breakdown' || responseMode === 'generate' || responseActionCount > 0);
-  const seenInsights = new Set<string>();
-  const displayedInsights = (response?.insights || []).filter(insight => {
-    const normalized = normalizedProposalText(insight);
-    if (!normalized || normalized === normalizedProposalText(response?.summary) || seenInsights.has(normalized)) return false;
-    seenInsights.add(normalized);
-    return true;
-  });
-  const displayedBottlenecks = (response?.workloadDiagnosis?.bottlenecks || []).filter(item => item.trim());
-  const showResponseSummary = !!response?.summary.trim() && !(response?.tasks?.length === 1
-    && [response.tasks[0].title, response.tasks[0].note].some(text => normalizedProposalText(text) === normalizedProposalText(response.summary)));
-
   const requestAlternativePlan = (source: AIRequest, previousResponse: AIResponse) => {
     if (requestInFlight.current || awaitingKeyRef.current) return;
     const previousPlan = JSON.stringify({
@@ -1020,12 +915,12 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     void handleGenerate(alternativePrompt, source.mode, false, true, source, true);
   };
 
-  const handleAlternativePlan = () => {
-    if (!response || !responseRequest || hasAppliedResponseActions) return;
-    requestAlternativePlan(responseRequest, response);
-  };
-
   const changePrompt = (value: string) => {
+    if (!awaitingKeyRef.current && /^\s*@(plan|analysis|steps)\s/i.test(value)) {
+      const parsed = parseAICommand(value);
+      setMode(intentMode(parsed.intent));
+      value = parsed.text;
+    }
     voiceDraftRef.current?.edit(value);
     if (!awaitingKeyRef.current && preservedRequestDraftRef.current !== null) preservedRequestDraftRef.current = value;
     setPrompt(value);
@@ -1033,7 +928,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   const composerKeyDown = (event: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) {
       event.preventDefault();
-      if (prompt.trim() && !requestInFlight.current && !isTranscribing) void handleGenerate();
+      if ((prompt.trim() || (!awaitingApiKey && mode !== 'chat')) && !requestInFlight.current && !isTranscribing) void handleGenerate();
     }
   };
   const insertEmoji = (emoji: string) => {
@@ -1067,7 +962,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
             id="ps-ai-sheet"
             role="dialog"
             aria-modal="true"
-            aria-label={t.aiSheet.header}
+            aria-label={lang === 'uk' ? 'ШІ-чат Karkas' : 'Karkas AI chat'}
             initial={{ y: '100%' }}
             animate={{ y: 0 }}
             exit={{ y: '100%' }}
@@ -1082,24 +977,24 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                 onClose();
               }
             }}
-            className="relative z-10 w-full max-w-2xl bg-[#0c0c0e] border-t border-x border-neutral-800 max-h-[88dvh] flex flex-col shadow-2xl font-sans"
+            className="relative z-10 w-full max-w-[1100px] h-[95dvh] max-sm:h-[100dvh] bg-[#0c0c0e] border-t border-x border-neutral-800 flex flex-col shadow-2xl font-sans"
           >
             {/* Drag Handle */}
             <div
               aria-hidden="true"
               onPointerDown={(event) => dragControls.start(event)}
               style={{ touchAction: 'none' }}
-              className="w-full shrink-0 flex items-center justify-center pt-2.5 pb-2 cursor-grab active:cursor-grabbing"
+              className="w-full shrink-0 flex items-center justify-center pt-1.5 pb-1 cursor-grab active:cursor-grabbing"
             >
               <div className="w-10 h-1 bg-neutral-700 rounded-full" />
             </div>
 
             {/* Header */}
-            <div className="flex shrink-0 items-center justify-between gap-2 px-4 sm:px-5 py-3 border-b border-neutral-800">
+            <div className="flex shrink-0 items-center justify-between gap-2 px-4 sm:px-5 py-1 border-b border-neutral-800">
               <div className="min-w-0 flex items-center gap-2">
                 <AIIcon id={aiIconVariant} className="w-4 h-4 shrink-0 text-white" />
                 <span className="min-w-0 break-words text-xs sm:text-sm font-bold uppercase tracking-wider font-sans text-white">
-                  {t.aiSheet.header}
+                  KARKAS AI
                 </span>
               </div>
               <button
@@ -1112,280 +1007,26 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
               </button>
             </div>
 
-            {/* Action Modes Selector */}
-            <div className="shrink-0 grid grid-cols-2 sm:grid-cols-4 gap-1 px-4 sm:px-5 pt-3 pb-2 border-b border-neutral-800">
-              <button
-                id="ai-mode-chat-btn"
-                aria-pressed={mode === 'chat'}
-                type="button"
-                disabled={loading}
-                onClick={() => {
-                  sound.tick(450);
-                  setMode('chat');
-                }}
-                className={`min-h-11 min-w-0 py-1.5 px-2 text-xs font-sans font-bold tracking-normal sm:tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-                  mode === 'chat'
-                    ? 'bg-white text-black border-white'
-                    : 'bg-[#08080a] text-neutral-400 border-neutral-800 hover:text-white hover:border-neutral-700'
-                }`}
-              >
-                <MessagesSquare aria-hidden="true" className="w-4 h-4 shrink-0" strokeWidth={1.75} />
-                <span className="min-w-0 whitespace-normal break-words leading-snug">{lang === 'uk' ? 'ЧАТ' : 'CHAT'}</span>
-              </button>
-
-              <button
-                id="ai-mode-breakdown-btn"
-                aria-label={t.aiSheet.modes.breakdown}
-                title={t.aiSheet.modes.breakdown}
-                aria-pressed={mode === 'breakdown'}
-                type="button"
-                disabled={loading}
-                onClick={() => {
-                  sound.tick(500);
-                  setMode('breakdown');
-                }}
-                className={`min-h-11 min-w-0 py-1.5 px-2 text-xs font-sans font-bold tracking-normal sm:tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-                  mode === 'breakdown'
-                    ? 'bg-white text-black border-white'
-                    : 'bg-[#08080a] text-neutral-400 border-neutral-800 hover:text-white hover:border-neutral-700'
-                }`}
-              >
-                <Workflow aria-hidden="true" className="w-4 h-4 shrink-0" strokeWidth={1.75} />
-                <span className="min-w-0 whitespace-normal break-words leading-snug">{lang === 'uk' ? 'Підзавдання' : 'Subtasks'}</span>
-              </button>
-
-              <button
-                id="ai-mode-analyze-btn"
-                aria-label={t.aiSheet.modes.analyze}
-                title={t.aiSheet.modes.analyze}
-                aria-pressed={mode === 'analyze'}
-                type="button"
-                disabled={loading}
-                onClick={() => {
-                  sound.tick(550);
-                  setMode('analyze');
-                  handleGenerate(prompt, 'analyze');
-                }}
-                className={`min-h-11 min-w-0 py-1.5 px-2 text-xs font-sans font-bold tracking-normal sm:tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-                  mode === 'analyze'
-                    ? 'bg-white text-black border-white'
-                    : 'bg-[#08080a] text-neutral-400 border-neutral-800 hover:text-white hover:border-neutral-700'
-                }`}
-              >
-                <ChartNoAxesCombined aria-hidden="true" className="w-4 h-4 shrink-0" strokeWidth={1.75} />
-                <span className="min-w-0 whitespace-normal break-words leading-snug">{lang === 'uk' ? 'Аналіз і підказки' : 'Analysis'}</span>
-              </button>
-
-              <button
-                id="ai-mode-generate-btn"
-                aria-label={t.aiSheet.modes.generate}
-                title={t.aiSheet.modes.generate}
-                aria-pressed={mode === 'generate'}
-                type="button"
-                disabled={loading}
-                onClick={() => {
-                  sound.tick(600);
-                  setMode('generate');
-                }}
-                className={`min-h-11 min-w-0 py-1.5 px-2 text-xs font-sans font-bold tracking-normal sm:tracking-wider uppercase border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-                  mode === 'generate'
-                    ? 'bg-white text-black border-white'
-                    : 'bg-[#08080a] text-neutral-400 border-neutral-800 hover:text-white hover:border-neutral-700'
-                }`}
-              >
-                <ClipboardList aria-hidden="true" className="w-4 h-4 shrink-0" strokeWidth={1.75} />
-                <span className="min-w-0 whitespace-normal break-words leading-snug">{lang === 'uk' ? 'План' : 'Plan'}</span>
-              </button>
-            </div>
-
             {/* Content Container (Scrollable) */}
             <div ref={contentRef} className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 sm:p-5 flex flex-col gap-4">
-              {/* Presets Chips */}
-              {mode !== 'chat' && !showStructuredResponse && !loading && <div>
-                {mode !== 'chat' && <p className="mb-3 text-base leading-[1.6] text-neutral-300">
-                  {mode === 'breakdown' ? (lang === 'uk' ? 'Вкажіть завдання — AI запропонує послідовність підзавдань.' : 'Describe a task and AI will suggest a sequence of subtasks.')
-                    : mode === 'analyze' ? (lang === 'uk' ? 'AI перегляне поточні завдання та підкаже, що допоможе рухатися далі.' : 'AI will review your current tasks and suggest ways to move forward.')
-                    : (lang === 'uk' ? 'Опишіть мету — AI запропонує завдання й порядок роботи.' : 'Describe your goal and AI will suggest tasks and a working order.')}
-                </p>}
-                {mode === 'generate' && <><div className="text-sm font-sans font-semibold text-neutral-400 mb-2">
-                  {lang === 'uk' ? 'Приклади запитів' : 'Example requests'}
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {personalizedPresets.map((preset, i) => (
-                    <button
-                      key={i}
-                      id={`ai-preset-chip-${i}`}
-                      disabled={loading || awaitingApiKey}
-                      onClick={() => {
-                        setPrompt(preset);
-                        handleGenerate(preset);
-                      }}
-                      className="min-h-11 text-sm leading-relaxed font-sans text-left px-3 py-2 bg-[#08080a] border border-neutral-800 text-neutral-300 hover:border-neutral-600 hover:text-white disabled:opacity-40 transition-colors cursor-pointer"
-                    >
-                      + {preset}
-                    </button>
-                  ))}
-                </div></>}
+              {/* All replies, analyses and proposals share one persisted conversation. */}
+              {visibleConversation.previousCount > 0 && <button id="ai-reveal-previous-history-btn" type="button" onClick={() => setIntroductionId(null)} className="self-start min-h-11 border border-neutral-700 px-3 py-2 text-sm text-neutral-300 hover:border-white">{lang === 'uk' ? 'Попередня історія' : 'Previous history'} ({visibleConversation.previousCount})</button>}
+              {visibleConversation.messages.length > 0 && <div role="log" aria-label={lang === 'uk' ? 'Розмова з AI' : 'AI conversation'} aria-live="polite" aria-relevant="additions text" className="karkas-ai-conversation">
+                {visibleConversation.messages.map((message, index) => {
+                  const parsed = message.role === 'assistant' ? parseChatOptions(message.content) : { body: message.content, options: [] };
+                  return <div key={message.id || `${message.role}-${index}`} data-ai-greeting={message.greeting || undefined} className={`karkas-ai-message ${message.role === 'user' ? 'is-user' : 'is-assistant'}`}>
+                    <div className="karkas-ai-message-author">{message.role === 'user' ? (lang === 'uk' ? 'ВИ' : 'YOU') : 'KARKAS AI'}</div>
+                    {message.role === 'assistant' ? <AIChatText text={parsed.body} /> : <div className="whitespace-pre-wrap">{parsed.body}</div>}
+                    {!!parsed.options.length && <div className="flex flex-col gap-2 mt-3">{parsed.options.map(option => <button key={option.text} type="button" disabled={loading} onClick={() => handleGenerate(option.text, 'chat')} className="min-h-11 w-full text-left border border-neutral-700 px-3 py-2 hover:border-white disabled:opacity-40">{option.label}. {option.text}</button>)}</div>}
+                    {message.response && <ChatResponseCards response={message.response} currentTasks={currentTasks} tabs={tabs} lang={lang} />}
+                    {message.proposalStatus === 'stale' && <p className="mt-3 text-sm text-neutral-400">{lang === 'uk' ? 'Попередня пропозиція. Повторіть запит, щоб підготувати актуальні зміни.' : 'Previous proposal. Repeat the request to prepare current changes.'}</p>}
+                    {message.proposalStatus === 'pending' && message.id === latestProposalMessageId.current && chatProposalReady && pendingChangeCount > 0 && !loading && !requestError && <button id="ai-chat-apply-changes-btn" type="button" onClick={confirmChatChanges} className="mt-3 min-h-11 bg-white text-black px-3 py-2 font-semibold hover:bg-neutral-200">{lang === 'uk' ? `Застосувати зміни (${pendingChangeCount})` : `Apply changes (${pendingChangeCount})`}</button>}
+                    {message.notice && <p role="status" className="mt-3 text-sm text-emerald-300">{message.notice}</p>}
+                    {message.actionId && onUndoStrategy && <button type="button" onClick={() => { if (onUndoStrategy(message.actionId!) === true) setChatMessages(previous => previous.map(item => item.id === message.id ? { ...item, actionId: undefined, notice: lang === 'uk' ? 'Зміну плану скасовано.' : 'Plan change undone.' } : item)); }} className="mt-2 min-h-11 border border-neutral-700 px-3 py-2 hover:border-white">{lang === 'uk' ? 'Скасувати зміни стратегії' : 'Undo strategy changes'}</button>}
+                    {message.id === latestProposalMessageId.current && chatPlanningRequest && chatPlanningResponse && !pendingChatConfirmed.current && !loading && !requestError && !awaitingApiKey && <button id="ai-chat-alternative-plan-btn" type="button" onClick={() => requestAlternativePlan(chatPlanningRequest, chatPlanningResponse)} className="mt-3 ml-2 min-h-11 inline-flex items-center gap-2 border border-neutral-700 px-3 py-2 hover:border-white"><RefreshCw size={16} />{lang === 'uk' ? 'Інший варіант планування' : 'Alternative plan'}</button>}
+                  </div>;
+                })}
               </div>}
-
-              {/* Chat View */}
-              {mode === 'chat' && chatMessages.length > 0 && (
-                <div role="log" aria-label={lang === 'uk' ? 'Розмова з AI' : 'AI conversation'} aria-live="polite" aria-relevant="additions text" className="karkas-ai-conversation">
-                  {chatMessages.map((message, index) => (
-                    <div
-                      key={`${message.role}-${index}`}
-                      className={`karkas-ai-message ${
-                        message.role === 'user'
-                          ? 'is-user'
-                          : 'is-assistant'
-                      }`}
-                    >
-                      <div className="karkas-ai-message-author">
-                        {message.role === 'user' ? (lang === 'uk' ? 'ВИ' : 'YOU') : 'KARKAS AI'}
-                      </div>
-                      {(() => {
-                        const isCurrentPlanningReply = message.role === 'assistant' && chatPlanningResponse
-                          && message.content === (chatPlanningResponse.reply || chatPlanningResponse.summary);
-                        if (isCurrentPlanningReply) return pendingChangeCount > 0
-                          ? <details><summary className="min-h-11 py-2 cursor-pointer text-neutral-300">{lang === 'uk' ? 'Пояснення AI' : 'AI explanation'}</summary><div className="pt-2"><AIChatText text={message.content} /></div></details>
-                          : <AIChatText text={message.content} />;
-                        const parsed = message.role === 'assistant' ? parseChatOptions(message.content) : { body: message.content, options: [] };
-                        return (
-                          <>
-                            {message.role === 'assistant' ? <AIChatText text={parsed.body} /> : <div className="whitespace-pre-wrap">{parsed.body}</div>}
-                            {parsed.options.length > 0 && (
-                              <div className="flex flex-col gap-1.5 mt-3">
-                                {parsed.options.map((option) => (
-                                  <button
-                                    key={`${index}-${option.label}-${option.text}`}
-                                    type="button"
-                                    disabled={loading}
-                                    onClick={() => handleGenerate(option.text)}
-                                    className="min-h-11 w-full text-left border border-neutral-700 bg-[#08080a] px-3 py-2 text-base leading-[1.6] text-neutral-200 hover:border-white hover:text-white disabled:opacity-40 transition-colors cursor-pointer"
-                                  >
-                                    <span className="inline-flex min-w-5 h-5 items-center justify-center mr-2 border border-neutral-600 text-[10px] font-bold text-neutral-400">
-                                      {option.label}
-                                    </span>
-                                    {option.text}
-                                  </button>
-                                ))}
-                              </div>
-                            )}
-                          </>
-                        );
-                      })()}
-                    </div>
-                  ))}
-
-                  {/* Proposed Workspace Actions in Chat */}
-                  {chatProposalReady && pendingChangeCount > 0 && !loading && !requestError && (
-                    <div className="border border-emerald-800/80 bg-[#0a120c] p-3 space-y-3">
-                      <div className="flex flex-wrap items-center gap-3">
-                        <span className="text-sm font-semibold text-neutral-200 flex items-center gap-2">
-                          <CheckCircle2 className="w-4 h-4" aria-hidden="true" />
-                          <span>{lang === 'uk' ? 'Запропоновані зміни' : 'Proposed changes'}</span>
-                        </span>
-                      </div>
-
-                      {/* Pending Tabs */}
-                      {pendingChatTabs.length > 0 && (
-                        <div className="space-y-1">
-                          <div className="text-sm font-semibold text-neutral-400 flex items-center gap-2">
-                            <FolderPlus className="w-4 h-4 text-sky-400" aria-hidden="true" />
-                            <span>{lang === 'uk' ? 'Нові категорії' : 'New categories'}</span>
-                          </div>
-                          <div className="flex flex-wrap gap-1.5">
-                            {pendingChatTabs.map((tb) => (
-                              <span key={tb.id} className="text-sm bg-sky-950/40 border border-sky-800 text-sky-300 px-2 py-1">
-                                {tb.name}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Pending Tasks */}
-                      {pendingChatTasks.length > 0 && (
-                        <div className="space-y-1.5">
-                          <div className="text-sm font-semibold text-neutral-400 flex items-center gap-2">
-                            <Plus className="w-4 h-4 text-emerald-400" aria-hidden="true" />
-                            <span>{lang === 'uk' ? 'Нові завдання' : 'New tasks'}</span>
-                          </div>
-                          <div className="space-y-1">
-                            {pendingChatTasks.map((task, idx) => (
-                              <div key={idx} className="bg-black/60 border border-neutral-800 p-3 space-y-2 text-base leading-[1.6]">
-                                <div className="flex items-center gap-2 flex-wrap text-sm text-neutral-400">
-                                  <span className="text-emerald-400 font-semibold">P{task.priority}</span>
-                                  <span>{(t.phases as any)[task.phase] || tabs.find(tab => tab.id === task.phase)?.name || task.phase}</span>
-                                </div>
-                                <p className="font-semibold text-neutral-100 break-words">{task.title}</p>
-                                {task.note && normalizedProposalText(task.note) !== normalizedProposalText(task.title) && <p className="text-neutral-300 whitespace-pre-wrap break-words">{task.note}</p>}
-                                <TimerProposal settings={task} lang={lang} />
-                                {!!task.stepList?.length && <div className="space-y-2">
-                                  <p className="text-sm font-semibold text-neutral-400">{lang === 'uk' ? 'Підзавдання' : 'Subtasks'} ({task.stepList.length})</p>
-                                  <ProposalSteps steps={task.stepList} lang={lang} />
-                                </div>}
-                                {!task.stepList?.length && task.steps > 0 && <p className="text-sm text-neutral-400">{lang === 'uk' ? 'Підзавдання' : 'Subtasks'}: {task.steps}</p>}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {pendingChatDeletions.length > 0 && (
-                        <div className="space-y-2 text-base leading-[1.6] text-red-300">
-                          <div className="text-sm font-semibold">{lang === 'uk' ? 'Видалення завдань' : 'Tasks to delete'}</div>
-                          {pendingChatDeletions.map(deletion => <div key={deletion.id}>
-                            {currentTasks.find(task => task.id === deletion.id)?.title || deletion.id}
-                            <div className="text-sm leading-relaxed text-neutral-400">{deletionReasonLabel(deletion.deletionReason, lang)}</div>
-                          </div>)}
-                        </div>
-                      )}
-
-                      {/* Pending Updates / Edits */}
-                      {pendingChatUpdates.length > 0 && (
-                        <div className="space-y-1.5">
-                          <div className="text-sm font-semibold text-neutral-400 flex items-center gap-2">
-                            <Edit3 className="w-4 h-4 text-amber-400" aria-hidden="true" />
-                            <span>{lang === 'uk' ? 'Оновлення завдань' : 'Task updates'}</span>
-                          </div>
-                          <div className="space-y-1">
-                            {pendingChatUpdates.map((u, idx) => {
-                              const existing = currentTasks.find((ct) => ct.id === u.id);
-                              return (
-                                <div key={idx} className="bg-black/60 border border-neutral-800 p-3">
-                                  <TaskUpdatePreview update={u} existing={existing} tabs={tabs} lang={lang} />
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-                      <button
-                        id="ai-chat-apply-changes-btn"
-                        type="button"
-                        onClick={confirmChatChanges}
-                        className="inline-flex min-h-11 items-center justify-center gap-2 border border-white bg-white hover:bg-neutral-200 text-black px-3 py-2 text-sm font-semibold transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
-                      >
-                        <CheckCircle2 className="w-4 h-4" aria-hidden="true" />
-                        {lang === 'uk' ? `Застосувати зміни (${pendingChangeCount})` : `Apply changes (${pendingChangeCount})`}
-                      </button>
-                    </div>
-                  )}
-                  {chatPlanningRequest && chatPlanningResponse && (pendingChangeCount === 0 || chatProposalReady) && !pendingChatConfirmed.current && !loading && !requestError && !awaitingApiKey && <button
-                    id="ai-chat-alternative-plan-btn"
-                    type="button"
-                    onClick={() => {
-                      if (pendingChangeCount > 0 && !chatProposalReadyRef.current) return;
-                      requestAlternativePlan(chatPlanningRequest, chatPlanningResponse);
-                    }}
-                    className="self-start inline-flex min-h-11 items-center justify-center gap-2 border border-neutral-700 bg-[#08080a] px-3 py-2 text-sm font-semibold text-neutral-200 hover:border-white hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
-                  >
-                    <RefreshCw className="w-4 h-4" aria-hidden="true" />
-                    {lang === 'uk' ? 'Інший варіант планування' : 'Alternative plan'}
-                  </button>}
-                </div>
-              )}
 
               {keyStatus && (
                 <div role="status" aria-live="polite" className="border border-neutral-800 bg-[#111116] p-3 text-[15px] leading-[1.6] text-neutral-200 whitespace-pre-wrap">
@@ -1409,15 +1050,12 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
               {applyNotice && <div role="status" aria-live="polite" className="border border-neutral-800 bg-[#111116] p-3 text-[15px] leading-[1.6] text-neutral-200">{applyNotice}</div>}
 
               {loading && (
-                <div role="status" aria-live="polite" className="p-8 border border-neutral-800 bg-black/40 flex flex-col items-center justify-center gap-3 text-center">
+                <div role="status" aria-live="polite" className="p-3 border border-neutral-800 bg-black/40 flex flex-col items-center justify-center gap-3 text-center">
                   <div className="w-6 h-6 border-2 border-white border-t-transparent animate-spin rounded-full" />
                   <span className="text-xs font-sans tracking-widest text-neutral-300 uppercase animate-pulse">
                     {mode === 'chat'
                       ? (lang === 'uk' ? 'KARKAS AI ФОРМУЄ ВІДПОВІДЬ...' : 'KARKAS AI IS RESPONDING...')
                       : t.aiSheet.thinking}
-                  </span>
-                  <span className="text-[10px] font-sans text-neutral-500">
-                    {t.aiSheet.fullContextDesc}
                   </span>
                   <button id="ai-request-cancel-btn" type="button" onClick={cancelAIRequest} className="min-h-11 border border-neutral-700 px-3 py-2 text-xs text-neutral-300 hover:border-white hover:text-white">
                     {lang === 'uk' ? 'Скасувати запит' : 'Cancel request'}
@@ -1425,290 +1063,10 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                 </div>
               )}
 
-              {/* Structured Response Section */}
-              {response && showStructuredResponse && !loading && (
-                <div className="border border-neutral-800 bg-[#0d0d10] p-4 flex flex-col gap-4">
-                  {/* Strategy Summary & Inject All */}
-                  <div className="flex flex-col gap-3 border-b border-neutral-800 pb-3">
-                    <div className="space-y-2 min-w-0">
-                      <div className="text-sm font-sans font-semibold text-neutral-100 flex items-center gap-2">
-                        <AIIcon className="w-4 h-4" />
-                        <span>{responseMode === 'analyze' ? (lang === 'uk' ? 'Аналіз роботи' : 'Workflow analysis')
-                          : responseMode === 'breakdown' ? (lang === 'uk' ? 'Підзавдання' : 'Subtasks') : (lang === 'uk' ? 'План дій' : 'Action plan')}</span>
-                      </div>
-                      {showResponseSummary && <p className="text-base text-neutral-300 leading-[1.6] break-words whitespace-pre-wrap">
-                        {response.summary}
-                      </p>}
-                      {response.source === 'local-fallback' && (
-                        <p role="status" className="text-xs text-amber-300">
-                          {lang === 'uk' ? 'Локальні рекомендації: ШІ-запит не завершився.' : 'Local recommendations: the AI request did not complete.'}
-                        </p>
-                      )}
-                    </div>
-
-                    {!canApplyResponse && remainingResponseActions > 0 && <p className="text-sm leading-relaxed text-neutral-400">
-                      {lang === 'uk' ? 'Попередня пропозиція доступна для перегляду. Щоб застосувати зміни, повторіть останній запит.' : 'The previous proposal is available for review. Retry the latest request before applying changes.'}
-                    </p>}
-                    {hasPlanningProposal && <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      id="ai-alternative-plan-btn"
-                      type="button"
-                      disabled={loading || awaitingApiKey || hasAppliedResponseActions}
-                      onClick={handleAlternativePlan}
-                      title={hasAppliedResponseActions ? (lang === 'uk' ? 'Частину пропозиції вже застосовано. Для нового плану напишіть новий запит.' : 'Part of this proposal has already been applied. Start a new request for another plan.') : undefined}
-                      className="inline-flex min-h-11 items-center justify-center gap-2 border border-neutral-600 px-3 py-2 text-sm font-semibold text-neutral-100 transition-colors hover:border-white hover:bg-neutral-900 disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
-                      <RefreshCw className="h-4 w-4" aria-hidden="true" />
-                      {lang === 'uk' ? 'Інший варіант планування' : 'Alternative plan'}
-                    </button>
-                    </div>}
-                  </div>
-
-                  {/* Workload Diagnosis (in Analyze mode or when provided) */}
-                  {response.workloadDiagnosis && (response.workloadDiagnosis.status || displayedBottlenecks.length > 0) && (
-                    <div className="bg-[#101015] border border-neutral-800 p-3.5 space-y-2.5">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="text-sm font-sans font-semibold text-neutral-300 flex items-center gap-2">
-                          <Activity className="w-3.5 h-3.5 text-indigo-400" />
-                          <span>{lang === 'uk' ? 'Навантаження' : 'Workload'}</span>
-                        </span>
-                        {response.workloadDiagnosis.status && (
-                          <span className="text-sm leading-relaxed font-semibold px-2 py-0.5 bg-indigo-950/60 border border-indigo-700 text-indigo-300 break-words">
-                            {response.workloadDiagnosis.status}
-                          </span>
-                        )}
-                      </div>
-
-                      {displayedBottlenecks.length > 0 && (
-                        <div className="space-y-1">
-                          <div className="text-sm text-amber-300 flex items-center gap-2 font-semibold">
-                            <AlertTriangle className="w-3 h-3" />
-                            <span>{lang === 'uk' ? 'Що заважає' : 'What gets in the way'}</span>
-                          </div>
-                          <ul className="space-y-1 pl-1">
-                            {displayedBottlenecks.map((b, idx) => (
-                              <li key={idx} className="text-base leading-[1.6] text-neutral-300 flex items-start gap-2">
-                                <span className="text-amber-400">›</span>
-                                <span>{b}</span>
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Category Health Matrix */}
-                  {response.categoryHealth && response.categoryHealth.length > 0 && (
-                    <div className="space-y-2">
-                      <div className="text-sm font-sans font-semibold text-neutral-300 flex items-center gap-2">
-                        <ClipboardList aria-hidden="true" className="w-4 h-4 text-neutral-300" strokeWidth={1.75} />
-                        <span>{lang === 'uk' ? 'Категорії' : 'Categories'}</span>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        {response.categoryHealth.map((ch, idx) => (
-                          <div key={idx} className="p-2.5 bg-black/60 border border-neutral-800 space-y-1">
-                            <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-                              <span className="font-bold text-neutral-200">{ch.phaseName}</span>
-                              <span className={`text-xs font-semibold px-1.5 py-0.5 border ${
-                                ch.status === 'overloaded'
-                                  ? 'border-red-800 text-red-400 bg-red-950/30'
-                                  : ch.status === 'stagnant'
-                                  ? 'border-amber-800 text-amber-400 bg-amber-950/30'
-                                  : 'border-emerald-800 text-emerald-400 bg-emerald-950/30'
-                              }`}>
-                                {lang === 'uk' ? ({ balanced: 'Баланс', overloaded: 'Перевантажено', empty: 'Порожньо', stagnant: 'Без прогресу' }[ch.status] || ch.status) : ch.status} ({ch.taskCount})
-                              </span>
-                            </div>
-                            {ch.recommendation && (
-                              <p className="text-base text-neutral-300 leading-[1.6] break-words">
-                                {ch.recommendation}
-                              </p>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Tactical Insights */}
-                  {displayedInsights.length > 0 && (
-                    <div className="bg-[#121216] border border-neutral-800 p-3 space-y-2">
-                      <div className="text-sm font-sans text-neutral-300 font-semibold flex items-center gap-2">
-                        <Lightbulb className="w-3.5 h-3.5 text-amber-400" />
-                        <span>{lang === 'uk' ? 'Підказки' : 'Suggestions'}</span>
-                      </div>
-                      <ul className="space-y-1.5">
-                        {displayedInsights.map((insight, idx) => (
-                          <li key={idx} className="text-base leading-[1.6] font-sans text-neutral-300 flex items-start gap-2">
-                            <span className="text-white font-bold shrink-0">›</span>
-                            <span>{insight}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-
-                  {/* Proposed Tabs */}
-                  {response.tabs && response.tabs.length > 0 && (
-                    <div className="border border-sky-900/70 bg-sky-950/20 p-3 text-sm font-sans text-sky-200 space-y-2">
-                      <span className="text-sm font-semibold text-sky-300 flex items-center gap-2">
-                        <FolderPlus className="w-3.5 h-3.5" />
-                        <span>{lang === 'uk' ? 'Нові категорії' : 'New categories'}</span>
-                      </span>
-                      <div className="flex flex-wrap gap-1.5">
-                        {response.tabs.map((tab) => (
-                          <span key={tab.id} className="border border-sky-800 bg-black/40 px-2 py-1 text-sky-300 font-bold">
-                            {tab.name}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {!!response.taskDeletions?.length && (
-                    <div className="space-y-2 text-base leading-[1.6] text-red-300">
-                      <div className="text-sm font-semibold">{lang === 'uk' ? 'Прибрати завдання' : 'Remove tasks'}</div>
-                      {response.taskDeletions.map(deletion => <div key={deletion.id}>
-                        {currentTasks.find(task => task.id === deletion.id)?.title || deletion.id}
-                        <div className="text-sm leading-relaxed text-neutral-400">{deletionReasonLabel(deletion.deletionReason, lang)}</div>
-                      </div>)}
-                    </div>
-                  )}
-
-                  {/* Proposed Task Edits / Updates */}
-                  {response.taskUpdates && response.taskUpdates.length > 0 && (
-                    <div className="space-y-2">
-                      <div className="text-sm font-sans font-semibold text-neutral-300 flex items-center gap-2">
-                        <Edit3 className="w-3.5 h-3.5" />
-                        <span>{lang === 'uk' ? 'Оновлення завдань' : 'Task updates'}</span>
-                      </div>
-                      <div className="flex flex-col gap-2">
-                        {response.taskUpdates.map((up) => {
-                          const existing = currentTasks.find((ct) => ct.id === up.id);
-                          const isApplied = appliedUpdateIds.includes(up.id);
-                          return (
-                            <div key={up.id} className="p-3 bg-black border border-neutral-800 flex flex-col items-start gap-3">
-                              <TaskUpdatePreview update={up} existing={existing} tabs={tabs} lang={lang} />
-                              <button
-                                type="button"
-                                onClick={() => handleApplySingleUpdate(up)}
-                                disabled={!canApplyResponse || isApplied}
-                                className={`min-h-11 px-3 py-2 text-sm font-semibold border shrink-0 transition-colors inline-flex items-center justify-center gap-2 disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white ${
-                                  isApplied
-                                    ? 'border-emerald-700 text-emerald-400 bg-emerald-950/40'
-                                    : 'border-amber-700 text-amber-300 hover:border-white hover:text-white bg-amber-950/30'
-                                }`}
-                              >
-                                <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
-                                {isApplied ? (lang === 'uk' ? 'Опрацьовано' : 'Processed') : (lang === 'uk' ? 'Оновити завдання' : 'Update task')}
-                              </button>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Generated Tasks List with Sub-Steps */}
-                  {response.tasks && response.tasks.length > 0 && (
-                    <div className="flex flex-col gap-2.5">
-                      <div className="text-sm font-sans font-semibold text-neutral-300">
-                        {lang === 'uk' ? 'Нові завдання' : 'New tasks'} ({response.tasks.length})
-                      </div>
-                      {response.tasks.map((task, i) => {
-                        const isInjected = injectedIds.includes(i);
-                        const matchedTab = tabs.find((tb) => tb.id === task.phase);
-                        const phaseLabel = (t.phases as any)[task.phase] || matchedTab?.name || task.phase;
-                        const subSteps = task.stepList || [];
-
-                        return (
-                          <div
-                            key={i}
-                            id={`ai-suggested-task-${i}`}
-                            className="flex flex-col gap-2 p-3 bg-black border border-neutral-800 hover:border-neutral-700 transition-colors"
-                          >
-                            <div className="flex flex-col gap-3">
-                              <div className="flex min-w-0 flex-col gap-2">
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <span className="text-sm font-sans text-neutral-400 font-semibold flex items-center gap-1">
-                                    {matchedTab?.color && (
-                                      <span
-                                        className="w-1.5 h-1.5 rounded-full shrink-0 shadow-sm"
-                                        style={{ backgroundColor: matchedTab.color }}
-                                      />
-                                    )}
-                                    [{phaseLabel}]
-                                  </span>
-                                  <span
-                                    className={`text-sm font-sans font-semibold px-1.5 py-0.5 border ${
-                                      task.priority === 1
-                                        ? 'border-red-900/70 text-red-400 bg-red-950/30'
-                                        : task.priority === 2
-                                        ? 'border-amber-900/70 text-amber-400 bg-amber-950/30'
-                                        : 'border-emerald-900/70 text-emerald-400 bg-emerald-950/30'
-                                    }`}
-                                  >
-                                    P{task.priority}
-                                  </span>
-                                  <span className="w-full text-base leading-[1.6] font-semibold text-neutral-100 break-words">
-                                    {task.title}
-                                  </span>
-                                </div>
-                                {task.note && normalizedProposalText(task.note) !== normalizedProposalText(task.title) && (
-                                  <span className="text-base leading-[1.6] font-sans text-neutral-300 whitespace-pre-wrap break-words">
-                                    {task.note}
-                                  </span>
-                                )}
-                                <TimerProposal settings={task} lang={lang} />
-                              </div>
-
-                            </div>
-
-                            {/* Sub-steps preview */}
-                            {subSteps.length > 0 && (
-                              <div className="pt-2 border-t border-neutral-900/80 space-y-2">
-                                <div className="text-sm font-sans text-neutral-400 font-semibold">
-                                  {lang === 'uk' ? 'Підзавдання' : 'Subtasks'} ({subSteps.length})
-                                </div>
-                                <ProposalSteps steps={subSteps} lang={lang} />
-                              </div>
-                            )}
-                            <button
-                              id={`ai-inject-single-btn-${i}`}
-                              onClick={() => handleInjectSingle(task, i)}
-                              type="button"
-                              disabled={!canApplyResponse || isInjected}
-                              className={`self-start inline-flex min-h-11 items-center justify-center gap-2 px-3 py-2 text-sm font-sans font-semibold border transition-colors shrink-0 disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white ${
-                                isInjected
-                                  ? 'border-emerald-700 text-emerald-400 bg-emerald-950/40'
-                                  : 'border-neutral-700 text-neutral-300 hover:border-white hover:text-white bg-neutral-900'
-                              }`}
-                            >
-                              <Plus className="h-4 w-4" aria-hidden="true" />
-                              {isInjected ? (responsePartlyRejected ? (lang === 'uk' ? 'Опрацьовано' : 'Processed') : t.aiSheet.added) : (lang === 'uk' ? 'Додати завдання' : 'Add task')}
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                  {(responseActionCount > 1 || !!response.tabs?.length || !!response.taskDeletions?.length) && <button
-                    id="ai-inject-all-btn"
-                    type="button"
-                    disabled={!canApplyResponse || remainingResponseActions === 0}
-                    onClick={handleInjectAll}
-                    className="self-start min-h-11 px-3 py-2 bg-white text-black font-semibold text-sm font-sans hover:bg-neutral-200 transition-colors inline-flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-default focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
-                  >
-                    <CheckCircle2 className="w-4 h-4" aria-hidden="true" />
-                    <span>{remainingResponseActions === 0 ? (lang === 'uk' ? 'Опрацьовано' : 'Processed')
-                      : `${lang === 'uk' ? 'Застосувати зміни' : 'Apply changes'} (${remainingResponseActions})`}</span>
-                  </button>}
-                </div>
-              )}
             </div>
 
             {/* Custom Prompt Input at the bottom of the sheet */}
-            <div className="shrink-0 px-4 sm:px-5 py-3 bg-[#08080a] border-t border-neutral-800 space-y-2">
+            <div className="shrink-0 px-3 sm:px-4 py-2 bg-[#08080a] border-t border-neutral-800 space-y-2">
               {/* Voice recording / transcription status indicator */}
               {voiceNotice && <div role="status" className="flex items-center gap-2 text-amber-400 text-xs">
                 <AlertTriangle className="w-4 h-4 shrink-0" />
@@ -1765,6 +1123,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                 <p className="whitespace-pre-wrap break-words max-h-32 overflow-auto py-2 select-text">{voiceReviewText}</p>
               </details>}
               <div className="karkas-ai-composer">
+                {!awaitingApiKey && mode !== 'chat' && <div className="karkas-ai-command-chip"><span>{AI_COMMANDS.find(action => action.intent === modeIntent(mode))?.command}</span><button type="button" aria-label={lang === 'uk' ? 'Прибрати дію' : 'Remove action'} onClick={() => { setMode('chat'); promptInputRef.current?.focus(); }}><X size={14} /></button></div>}
                 {awaitingApiKey ? <input
                   id="ai-prompt-input"
                   type="password"
@@ -1780,7 +1139,6 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   id="ai-prompt-input"
                   rows={1}
                   aria-label={t.aiSheet.inputPlaceholder}
-                  aria-describedby="ai-composer-hint"
                   value={prompt}
                   onChange={event => changePrompt(event.target.value)}
                   onKeyDown={composerKeyDown}
@@ -1788,6 +1146,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   className="karkas-ai-composer-field"
                 />}
                 <div className="karkas-ai-composer-toolbar">
+                <AICommandMenu key={accountId || 'guest'} lang={lang} disabled={loading || awaitingApiKey} onChoose={intent => { setMode(intentMode(intent)); promptInputRef.current?.focus(); }} />
                 <AIModelSelect
                   key={accountId || 'guest'}
                   models={availableModels}
@@ -1844,7 +1203,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   id="ai-generate-submit-btn"
                   type="button"
                   onClick={() => handleGenerate()}
-                  disabled={loading || isTranscribing || !prompt.trim()}
+                  disabled={loading || isTranscribing || (!prompt.trim() && (awaitingApiKey || mode === 'chat'))}
                   title={t.aiSheet.execute}
                   aria-label={t.aiSheet.execute}
                   className="w-11 h-11 bg-white text-black hover:bg-neutral-200 disabled:opacity-30 disabled:hover:bg-white transition-all flex items-center justify-center cursor-pointer shrink-0"
@@ -1857,13 +1216,6 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                 </button>
                 </div>
               </div>
-              {!awaitingApiKey && <p id="ai-composer-hint" className="mt-2 text-xs text-neutral-500">{lang === 'uk' ? 'Enter — надіслати · Shift + Enter — новий рядок. Голосовий текст можна редагувати під час запису.' : 'Enter to send · Shift + Enter for a new line. Edit dictated text while recording.'}</p>}
-            </div>
-
-            {/* Bottom Footer Hint */}
-            <div className="shrink-0 px-4 sm:px-5 py-2.5 bg-black border-t border-neutral-800 flex flex-wrap items-center justify-between gap-2 text-[10px] font-sans text-neutral-400">
-              <span>{t.aiSheet.dismissHint}</span>
-              <span>{t.aiSheet.footerTag}</span>
             </div>
           </motion.div>
         </div>

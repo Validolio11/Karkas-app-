@@ -1,0 +1,32 @@
+{
+  "passed": true,
+  "serverPort": "54832",
+  "desktop": "1440x1000",
+  "mobile": "375x812",
+  "scenarios": [
+    "Existing-account welcome is first visible message; old history preserved and revealable",
+    "No AI generation on open, menu selection or restored draft",
+    "Plus menu keyboard, Escape and outside click",
+    "Manual commands and one-turn reset",
+    "Structured response cards and manual apply stay in chat",
+    "Draft survives reload",
+    "Network failure preserves request; retry stable identity without duplicated user message",
+    "Autonomous task creation and Undo",
+    "Desktop/mobile strategy renders without errors",
+    "No mobile horizontal overflow",
+    "Final dist desktop/mobile smoke and isolated guest QuickAdd draft hydration"
+  ],
+  "screenshots": [
+    "chat-desktop-history.png",
+    "chat-desktop-menu.png",
+    "chat-mobile-menu.png",
+    "chat-strategy-undo.png",
+    "dashboard-desktop.png",
+    "dashboard-mobile.png",
+    "strategy-desktop.png",
+    "strategy-mobile.png"
+  ],
+  "production": true,
+  "version": "1.3.0",
+  "finalBundleSmoke": true
+}

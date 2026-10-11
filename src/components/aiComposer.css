@@ -4,6 +4,17 @@
   transition: border-color 120ms;
 }
 .karkas-ai-composer:focus-within { border-color: #ededed; }
+.karkas-ai-command-menu { position: relative; flex: 0 0 auto; }
+.karkas-ai-plus { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; border: 1px solid #404040; border-radius: 50%; color: #d4d4d4; background: #0a0a0a; cursor: pointer; transition: background-color 120ms, border-color 120ms, color 120ms; }
+.karkas-ai-plus:hover:not(:disabled), .karkas-ai-plus[aria-expanded="true"] { border-color: #ededed; background: #ededed; color: #030303; }
+.karkas-ai-plus:focus-visible { outline: 2px solid #ededed; outline-offset: 3px; }
+.karkas-ai-plus:disabled { opacity: .4; cursor: default; }
+.karkas-ai-command-list { position: absolute; bottom: calc(100% + 10px); left: 0; z-index: 70; width: min(280px, calc(100vw - 40px)); padding: 6px; background: #0c0c0e; border: 1px solid #404040; box-shadow: 0 8px 28px #0009; }
+.karkas-ai-command-list button { display: flex; align-items: center; justify-content: space-between; gap: 24px; width: 100%; min-height: 44px; padding: 10px 12px; color: #ededed; cursor: pointer; }
+.karkas-ai-command-list button:hover, .karkas-ai-command-list button:focus-visible { background: #262626; }
+.karkas-ai-command-chip { display: flex; align-items: center; gap: 6px; width: fit-content; margin: 8px 12px 0; padding: 2px 4px 2px 10px; border: 1px solid #404040; font-size: 13px; color: #ededed; background: #0a0a0a; }
+.karkas-ai-command-chip button { display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 50%; cursor: pointer; }
+.karkas-ai-command-chip button:hover { background: #404044; }
 .karkas-ai-composer .karkas-ai-composer-field {
   display: block;
   width: 100%;
@@ -86,7 +97,7 @@
 .karkas-ai-emoji-choice { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 23px; cursor: pointer; }
 .karkas-ai-emoji-choice:hover, .karkas-ai-emoji-choice:focus-visible { background: #29292e; }
 .karkas-ai-emoji-choice:focus-visible { outline-offset: -3px; }
-.karkas-ai-conversation { display: flex; flex-direction: column; gap: 20px; }
+.karkas-ai-conversation { display: flex; flex-direction: column; gap: 16px; }
 .karkas-ai-message { width: fit-content; max-width: min(92%, 62ch); padding: 16px 18px; border: 1px solid; font-size: 16px; line-height: 1.75; letter-spacing: .01em; overflow-wrap: anywhere; }
 .karkas-ai-message.is-user { align-self: flex-end; background: #fff; color: #111; border-color: #fff; }
 .karkas-ai-message.is-assistant { align-self: flex-start; background: #111116; color: #e5e5e5; border-color: #303034; }
@@ -95,7 +106,7 @@
 @media (max-width: 480px) {
   .karkas-ai-emoji-menu { left: 0; right: auto; }
   .karkas-ai-composer-toolbar { flex-wrap: wrap; }
-  .karkas-ai-composer-toolbar > .karkas-ai-model-select { flex: 1 1 calc(100% - 8px); max-width: 100%; }
+  .karkas-ai-composer-toolbar > .karkas-ai-model-select { flex: 1 1 60px; max-width: 140px; }
   .karkas-ai-composer-toolbar > .flex-1 { display: none; }
   .karkas-ai-message { max-width: 96%; padding: 14px; }
 }

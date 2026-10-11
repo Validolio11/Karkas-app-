@@ -1,0 +1,90 @@
+import type { AIStrategyResponse, PersonalStrategyProfile, StrategyGoal, StrategyMemoryEntry, StrategyMemoryPatch } from '../types';
+
+export type StrategyStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+export const strategyOwnerKey = (owner: string | null) => owner === null ? 'guest' : `account:${owner}`;
+export const personalStrategyKey = (owner: string | null) => `karkas.personal-strategy.v1:${encodeURIComponent(strategyOwnerKey(owner))}`;
+export function createPersonalStrategyProfile(): PersonalStrategyProfile {
+  return { version: 1, onboardingStatus: 'new', phase: 'goals', goals: [], facts: [], barriers: [], preferences: [],
+    feedback: [], actionHistory: [], processedTurnIds: [], reminders: { enabled: false, times: [], maxPerDay: 2 } };
+}
+const record = (value: unknown): value is Record<string, any> => !!value && typeof value === 'object' && !Array.isArray(value);
+const text = (value: unknown, max = 2000) => typeof value === 'string' ? value.trim().slice(0, max) : '';
+const ids = (value: unknown, limit = 200) => Array.isArray(value) ? [...new Set(value.filter(item => typeof item === 'string' && item.trim()).slice(0, limit))] as string[] : [];
+function goals(value: unknown): StrategyGoal[] {
+  return Array.isArray(value) ? value.filter(record).filter(item => text(item.id) && text(item.title)).slice(0, 50).map(item => ({
+    id: text(item.id, 120), title: text(item.title), motive: text(item.motive), agreed: item.agreed === true,
+    taskIds: ids(item.taskIds), categoryIds: ids(item.categoryIds),
+  })) : [];
+}
+function entries(value: unknown): StrategyMemoryEntry[] {
+  return Array.isArray(value) ? value.filter(record).filter(item => text(item.id) && text(item.text)).slice(0, 200).map(item => ({
+    id: text(item.id, 120), text: text(item.text), source: item.source === 'user' ? 'user' : 'hypothesis',
+    ...(text(item.messageId) ? { messageId: text(item.messageId, 200) } : {}),
+  })) : [];
+}
+export function readPersonalStrategy(storage: StrategyStorage, owner: string | null): PersonalStrategyProfile {
+  try {
+    const raw = JSON.parse(storage.getItem(personalStrategyKey(owner)) || 'null');
+    if (!record(raw) || raw.version !== 1) return createPersonalStrategyProfile();
+    const profile = createPersonalStrategyProfile();
+    return { ...profile, onboardingStatus: ['new', 'in_progress', 'complete'].includes(raw.onboardingStatus) ? raw.onboardingStatus : 'new',
+      phase: text(raw.phase, 100) || 'goals', goals: goals(raw.goals), facts: entries(raw.facts), barriers: entries(raw.barriers), preferences: entries(raw.preferences),
+      latestStrategy: record(raw.latestStrategy) && typeof raw.latestStrategy.updatedAt === 'number' ? raw.latestStrategy as PersonalStrategyProfile['latestStrategy'] : undefined,
+      feedback: Array.isArray(raw.feedback) ? raw.feedback.filter((item: any) => record(item) && text(item.id) && text(item.text) && Number.isFinite(item.createdAt)).slice(-200) : [],
+      actionHistory: Array.isArray(raw.actionHistory) ? raw.actionHistory.filter((item: any) => record(item) && text(item.id) && record(item.after) && (item.before === null || record(item.before))) : [],
+      processedTurnIds: ids(raw.processedTurnIds, 100000),
+      reminders: { enabled: raw.reminders?.enabled === true, times: ids(raw.reminders?.times).filter(time => /^([01]\d|2[0-3]):[0-5]\d$/.test(time)).slice(0, 2), maxPerDay: 2 } };
+  } catch { return createPersonalStrategyProfile(); }
+}
+export function savePersonalStrategy(storage: StrategyStorage, owner: string | null, profile: PersonalStrategyProfile): boolean {
+  try { storage.setItem(personalStrategyKey(owner), JSON.stringify(profile)); return true; } catch { return false; }
+}
+export function clearPersonalStrategy(storage: StrategyStorage, owner: string | null): boolean {
+  try { storage.removeItem(personalStrategyKey(owner)); return true; } catch { return false; }
+}
+export function strategyGreeting(lang: 'uk' | 'en'): string {
+  return lang === 'uk'
+    ? 'Вітаю! Я ШІ-помічник Karkas. Допоможу вам покращувати продуктивність і розбиратися з тим, що заважає рухатися до важливих цілей. Давайте спершу познайомимося. Що ви хотіли б змінити у своєму житті й чому це для вас важливо?'
+    : 'Hello! I am your Karkas AI assistant. I can help you improve productivity and understand what gets in the way of your important goals. Let us get to know each other first. What would you like to change in your life, and why does it matter to you?';
+}
+const mergeById = <T extends { id: string }>(before: T[], next: T[]) => {
+  const merged = new Map(before.map(item => [item.id, item]));
+  for (const item of next) merged.set(item.id, item);
+  return [...merged.values()];
+};
+/** AI proposals cannot independently authorize a goal or present a hypothesis as a user statement. */
+export function applyStrategyMemory(profile: PersonalStrategyProfile, patch: StrategyMemoryPatch | undefined, userText: string, messageId: string): PersonalStrategyProfile {
+  if (!patch || !record(patch)) return profile;
+  const confirms = /(?:^|\s)(?:так|погоджуюсь|погоджуюся|підтверджую|узгоджую|yes|agreed|confirm|i agree)(?:\s|[.!,:]|$)/iu.test(userText)
+    && !/(?:не\s+(?:погодж|підтвердж|узгодж)|не\s+так|not\s+agree|do\s+not|don't|не\s+хочу)/iu.test(userText);
+  const nextGoals: StrategyGoal[] = (Array.isArray(patch.goals) ? patch.goals : []).filter(record).filter(raw => text(raw.id)).flatMap(raw => {
+    const existing = profile.goals.find(item => item.id === text(raw.id, 120));
+    const candidate: StrategyGoal = {
+      id: text(raw.id, 120), title: raw.title === undefined ? existing?.title || '' : text(raw.title),
+      motive: raw.motive === undefined ? existing?.motive || '' : text(raw.motive),
+      taskIds: raw.taskIds === undefined ? existing?.taskIds || [] : ids(raw.taskIds),
+      categoryIds: raw.categoryIds === undefined ? existing?.categoryIds || [] : ids(raw.categoryIds), agreed: false,
+    };
+    if (!candidate.title) return [];
+    const sameIds = (left: string[], right: string[]) => JSON.stringify([...left].sort()) === JSON.stringify([...right].sort());
+    const scopeChanged = !!existing && (candidate.title !== existing.title || candidate.motive !== existing.motive
+      || !sameIds(candidate.categoryIds, existing.categoryIds) || !sameIds(candidate.taskIds, existing.taskIds));
+    // A confirmation applies to the goal the person already saw, never a silently rewritten goal.
+    candidate.agreed = !!existing && !scopeChanged && (existing.agreed || (confirms && raw.agreed === true));
+    return [candidate];
+  });
+  const grounded = (value: unknown) => entries(value).map(entry => ({ ...entry, messageId,
+    source: entry.source === 'user' && userText.toLocaleLowerCase().includes(entry.text.toLocaleLowerCase()) ? 'user' as const : 'hypothesis' as const }));
+  const mergedGoals = mergeById(profile.goals, nextGoals);
+  return { ...profile, goals: mergedGoals,
+    facts: mergeById(profile.facts, grounded(patch.facts)), barriers: mergeById(profile.barriers, grounded(patch.barriers)), preferences: mergeById(profile.preferences, grounded(patch.preferences)),
+    onboardingStatus: patch.onboardingStatus === 'complete' && mergedGoals.some(goal => goal.agreed) ? 'complete' : profile.onboardingStatus === 'complete' ? 'complete' : 'in_progress',
+    phase: text(patch.phase, 100) || profile.phase };
+}
+export function updateStrategyMemoryEntry(profile: PersonalStrategyProfile, group: 'facts' | 'barriers' | 'preferences', id: string, value: string): PersonalStrategyProfile {
+  return { ...profile, [group]: value.trim() ? profile[group].map(entry => entry.id === id ? { ...entry, text: value.trim(), source: 'user' as const } : entry) : profile[group].filter(entry => entry.id !== id) };
+}
+export function applyStrategyResponse(profile: PersonalStrategyProfile, response: AIStrategyResponse, userText: string, turnId: string, now = Date.now(), source?: string): PersonalStrategyProfile {
+  const updated = applyStrategyMemory(profile, response.memoryPatch, userText, turnId);
+  return { ...updated, latestStrategy: { ...response, updatedAt: now, source } };
+}

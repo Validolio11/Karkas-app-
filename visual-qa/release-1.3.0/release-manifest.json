@@ -1,0 +1,15 @@
+{
+  "version": "1.3.0",
+  "fileVersion": "1.3.0",
+  "installer": "Karkas-Setup-1.3.0.exe",
+  "bundle": "assets/app-Dcb79afr.js",
+  "sha512": "GwPcS+hLsO+Ts9e43M1dBIqFHzzraih1ZPHiDTUgT9+734spy0qykCaDrBsuX3b1gtzDFwVT6S3cvyxEJ2Mfbw==",
+  "size": 138881901,
+  "packagedRuntimeTests": 2,
+  "fullTests": 427,
+  "typescript": "passed",
+  "production": "passed",
+  "windows": "passed",
+  "isolatedUi": "passed",
+  "asarMatchesProduction": true
+}

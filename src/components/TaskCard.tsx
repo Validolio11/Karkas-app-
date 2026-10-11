@@ -249,8 +249,9 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
     <div id={`task-wrapper-${task.id}`} className="relative group select-none touch-pan-y">
       {/* Background Gesture Layer - Left: Slice to Complete */}
       <motion.div
+        aria-hidden="true"
         style={{ opacity: bgOpacityLeft }}
-        className="absolute inset-0 bg-neutral-900 border border-neutral-700 flex items-center justify-end px-5 rounded-none z-0"
+        className="pointer-events-none absolute inset-0 bg-neutral-900 border border-neutral-700 flex items-center justify-end px-5 rounded-none z-0"
       >
         <div className="flex items-center gap-2 text-xs uppercase font-bold tracking-widest text-neutral-200">
           <span>{task.done ? t.restoreOperation : t.slashToComplete}</span>
@@ -260,8 +261,9 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
 
       {/* Background Gesture Layer - Right: Pin / Boost */}
       <motion.div
+        aria-hidden="true"
         style={{ opacity: bgOpacityRight }}
-        className="absolute inset-0 bg-neutral-900 border border-neutral-700 flex items-center justify-start px-5 rounded-none z-0"
+        className="pointer-events-none absolute inset-0 bg-neutral-900 border border-neutral-700 flex items-center justify-start px-5 rounded-none z-0"
       >
         <div className="flex items-center gap-2 text-xs uppercase font-bold tracking-widest text-neutral-200">
           <Pin className={`w-4 h-4 ${task.pinned ? 'fill-white text-white' : 'text-neutral-400'}`} />
@@ -782,7 +784,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
             animate={{ opacity: 1, height: 'auto', y: 0 }}
             exit={{ opacity: 0, height: 0, y: -4 }}
             transition={{ duration: 0.2, ease: 'easeOut' }}
-            className="overflow-hidden"
+            className="relative z-10 overflow-hidden"
           >
             <div className="bg-[#08080a] border border-neutral-800 border-t-0 px-4 py-5 sm:px-5 sm:py-6 space-y-5">
               {/* Sub-Card Header */}

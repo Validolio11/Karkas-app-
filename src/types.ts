@@ -94,7 +94,7 @@ export interface AdaptiveProfile {
   trackedTasks: number;
   completedTasks: number;
   completionRate: number;
-  averageCompletionMinutes: number;
+  averageCompletionMinutes: number | null;
   averageStepCount: number;
   preferredPhases: string[];
   overloadedPhases: string[];
@@ -131,6 +131,7 @@ export interface AIDeletedTaskRef {
 }
 
 export interface AIResponse {
+  strategy?: AIStrategyResponse;
   summary: string;
   insights?: string[];
   reply?: string;
@@ -169,6 +170,76 @@ export interface AIResponse {
     completedCount: number;
     tabsCount: number;
   };
+}
+
+export type AIIntent = 'auto' | 'plan' | 'analysis' | 'steps';
+export interface StrategyMemoryEntry {
+  id: string;
+  text: string;
+  source: 'user' | 'hypothesis';
+  messageId?: string;
+}
+export interface StrategyGoal {
+  id: string;
+  title: string;
+  motive: string;
+  agreed: boolean;
+  taskIds: string[];
+  categoryIds: string[];
+}
+export interface StrategyAction {
+  id: string;
+  goalId: string;
+  reason: string;
+  type: 'create' | 'update';
+  taskId?: string;
+  expectedTask?: Partial<PSTask>;
+  changes: Partial<Pick<PSTask, 'title' | 'phase' | 'priority' | 'note' | 'schedule'>> & {
+    stepTitles?: string[];
+  };
+}
+export interface StrategyActionRecord {
+  id: string;
+  turnId: string;
+  ownerId: string;
+  goalId: string;
+  reason: string;
+  taskId: string;
+  before: PSTask | null;
+  after: PSTask;
+  appliedAt: number;
+  undoneAt?: number;
+}
+export interface StrategyMemoryPatch {
+  goals?: StrategyGoal[];
+  facts?: StrategyMemoryEntry[];
+  barriers?: StrategyMemoryEntry[];
+  preferences?: StrategyMemoryEntry[];
+  onboardingStatus?: 'new' | 'in_progress' | 'complete';
+  phase?: string;
+}
+export interface AIStrategyResponse {
+  status?: 'getting_to_know' | 'clarifying' | 'ready';
+  question?: string;
+  narrative?: string;
+  nextAction?: string;
+  focusTaskId?: string;
+  memoryPatch?: StrategyMemoryPatch;
+  actions?: StrategyAction[];
+}
+export interface PersonalStrategyProfile {
+  version: 1;
+  onboardingStatus: 'new' | 'in_progress' | 'complete';
+  phase: string;
+  goals: StrategyGoal[];
+  facts: StrategyMemoryEntry[];
+  barriers: StrategyMemoryEntry[];
+  preferences: StrategyMemoryEntry[];
+  latestStrategy?: AIStrategyResponse & { updatedAt: number; source?: string };
+  feedback: { id: string; text: string; createdAt: number }[];
+  actionHistory: StrategyActionRecord[];
+  processedTurnIds: string[];
+  reminders: { enabled: boolean; times: string[]; maxPerDay: 2 };
 }
 
 export type AnalyticsPeriod = 'ALL_TIME' | 'THIS_YEAR' | 'LAST_YEAR' | 'THIS_MONTH' | 'LAST_30_DAYS';
@@ -282,7 +353,8 @@ declare global {
       system: {
         getAppVersion: () => Promise<DesktopResult<string>>;
         openExternal: (url: string) => Promise<DesktopResult<void>>;
-        showNotification: (input: { title: string; body: string }) => Promise<DesktopResult<void>>;
+        showNotification: (input: { title: string; body: string; target?: { view: 'STRATEGY'; ownerId: string | null; taskId?: string } }) => Promise<DesktopResult<void>>;
+        onNotificationClick: (callback: (target: { view: 'STRATEGY'; ownerId: string | null; taskId?: string }) => void) => () => void;
         getStartupEnabled: () => Promise<DesktopResult<boolean>>;
         setStartupEnabled: (enabled: boolean) => Promise<DesktopResult<boolean>>;
       };

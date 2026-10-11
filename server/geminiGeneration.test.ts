@@ -47,6 +47,68 @@ const chat = (overrides: any = {}) => invokeDesktopApi('assist', {
   selectedModel: 'gemini-3.1-flash-lite', ...overrides,
 });
 
+test('unified chat transmits persistent memory and intent without private action journals', async () => {
+  mockProvider((_model, body) => {
+    const prompt = body.contents.flatMap((content: any) => content.parts.map((part: any) => part.text ?? '')).join('\n');
+    assert.match(prompt, /MESSAGE INTENT: plan/);
+    assert.match(prompt, /I want time for family/);
+    assert.doesNotMatch(prompt, /PRIVATE-JOURNAL-TASK/);
+    assert.match(prompt, /ask what happened and WAIT/);
+    assert.match(prompt, /"timeSpentSeconds": null/);
+    assert.ok(body.generationConfig.responseSchema.properties.strategy.properties.actions);
+    return success({ reply: 'What would reaching this goal change for you?', strategy: { status: 'getting_to_know', question: 'Why does it matter?' } });
+  });
+  const result = await chat({ intent: 'plan', strategyContext: { onboardingStatus: 'in_progress', goals: [], facts: [{ id: 'f', text: 'I want time for family', source: 'user' }], actionHistory: [{ task: 'PRIVATE-JOURNAL-TASK' }] }, currentTasks: [{ id: 't', title: 'Study', done: false }] });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.strategy.status, 'getting_to_know');
+  assert.equal(calls.length, 1);
+});
+test('strategy updates attach the original task snapshot and reject protected autonomous fields', async () => {
+  const existing = { id: 't', title: 'Study', done: false, timeSpentSeconds: 600 };
+  mockProvider(() => success({ reply: 'I reduced the next step.', strategy: { actions: [{ id: 'a', goalId: 'g', type: 'update', taskId: 't', reason: 'Reduce friction', changes: { title: 'Read one page' } }] } }));
+  const result = await chat({ intent: 'plan', currentTasks: [existing], strategyContext: { goals: [] } });
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.body.strategy.actions[0].expectedTask, existing);
+  mockProvider(() => success({ reply: 'Done.', strategy: { actions: [{ id: 'a', goalId: 'g', type: 'update', taskId: 't', reason: 'Done', changes: { done: true } }] } }));
+  const refused = await chat({ currentTasks: [existing], strategyContext: { goals: [] } });
+  assert.equal(refused.status, 502);
+  assert.equal(refused.body.code, 'INVALID_AI_RESPONSE');
+});
+test('analysis intent never delivers task mutations even if a provider proposes them', async () => {
+  mockProvider(() => success({ reply: 'Review the measurements.', tasks: [{ title: 'New', phase: 'work', priority: 2, steps: 0 }], strategy: {
+    actions: [{ id: 'a', goalId: 'g', type: 'create', reason: 'Next', changes: { title: 'New', phase: 'work' } }], narrative: 'Review the measurements.',
+  } }));
+  const result = await chat({ intent: 'analysis', strategyContext: { goals: [] } });
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.body.tasks, []);
+  assert.deepEqual(result.body.strategy.actions, []);
+});
+test('period audit incorporates personal goals and motives without transmitting action snapshots', async () => {
+  mockProvider((_model, body) => {
+    const prompt = body.contents.flatMap((content: any) => content.parts.map((part: any) => part.text ?? '')).join('\n');
+    assert.match(prompt, /More time with family/);
+    assert.match(prompt, /Build a stable income/);
+    assert.doesNotMatch(prompt, /PRIVATE-ACTION-SNAPSHOT/);
+    assert.match(body.systemInstruction.parts[0].text, /Keep hypotheses unconfirmed/);
+    return success({ focusAdvice: 'Choose the step toward stable income.', optimizationTip: 'Leave space for family.', workloadStatus: 'Personal focus', periodRetrospective: 'Review measured progress.', dropoffAnalysis: 'No cancellations.', futureStrategy: 'Discuss the next step.', suggestedTasks: [] });
+  });
+  const result = await invokeDesktopApi('recommendations', { customApiKey: 'test-only-fake-key', lang: 'en', strategyContext: {
+    goals: [{ id: 'g', title: 'Build a stable income', motive: 'More time with family', agreed: true, taskIds: [], categoryIds: ['work'] }],
+    actionHistory: [{ after: { title: 'PRIVATE-ACTION-SNAPSHOT' } }],
+  } });
+  assert.equal(result.status, 200);
+  assert.equal(calls.length, 1);
+});
+test('selected period uses the client calendar timezone across a New Year boundary', async () => {
+  const result = await invokeDesktopApi('recommendations', { period: 'THIS_YEAR', lang: 'en', clientClock: { now: '2027-01-01T00:30:00+02:00', timeZone: 'Europe/Kyiv' }, tasks: [
+    { id: 'new-year', title: 'New local year', done: true, createdAt: Date.parse('2026-12-31T22:05:00Z'), completedAt: Date.parse('2026-12-31T22:10:00Z') },
+    { id: 'last-year', title: 'Old local year', done: true, createdAt: Date.parse('2026-12-31T21:59:00Z'), completedAt: Date.parse('2026-12-31T21:59:00Z') },
+  ] });
+  assert.equal(result.status, 200);
+  assert.match(result.body.periodRetrospective, /This Year \(2027\)/);
+  assert.match(result.body.periodRetrospective, /1 tasks were added and 1 completed/);
+});
+
 test('retired selected model falls back through the real SDK and preserves serialized timer schema', async () => {
   mockProvider((model, body, options) => {
     assert.ok(options.signal);
@@ -292,7 +354,7 @@ test('recommendations send server-derived period metrics and distinct completion
     periodMetrics: { totalCreated: 999, totalCompleted: 999, totalActive: 999, totalDeleted: 999, successRate: 100 },
   });
   assert.equal(result.status, 200);
-  assert.equal(result.body.productivityGrade, 'C', 'the provider cannot override the server grade');
+  assert.equal(result.body.productivityGrade, undefined, 'provider grades are discarded');
   assert.equal(calls.length, 1);
 });
 

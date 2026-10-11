@@ -1,0 +1,10 @@
+{
+  "production": true,
+  "version": "1.3.0",
+  "passed": true,
+  "bundle": "./assets/app-Dcb79afr.js",
+  "viewport": {
+    "width": 375,
+    "height": 812
+  }
+}

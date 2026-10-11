@@ -451,7 +451,9 @@ function registerIpc() {
     await shell.openExternal(parsed.toString());
   });
   handle('karkas:system:get-version', () => app.getVersion());
-  handle('karkas:system:notify', async ({ title, body }) => {
+  handle('karkas:system:notify', async ({ title, body, target }) => {
+    const clickTarget = target && target.view === 'STRATEGY' && (target.ownerId === null || typeof target.ownerId === 'string')
+      ? { view: 'STRATEGY', ownerId: target.ownerId, ...(typeof target.taskId === 'string' ? { taskId: target.taskId.slice(0, 512) } : {}) } : null;
     if (!Notification.isSupported()) throw new Error('System notifications are unavailable');
     const notification = new Notification({ title: String(title).slice(0, 120), body: String(body).slice(0, 1000), icon: appIconPath() });
     notification.on('click', () => {
@@ -459,6 +461,7 @@ function registerIpc() {
         if (mainWindow.isMinimized()) mainWindow.restore();
         mainWindow.show();
         mainWindow.focus();
+        if (clickTarget) mainWindow.webContents.send('karkas:system:notification-click', clickTarget);
       }
     });
     await new Promise((resolve, reject) => {

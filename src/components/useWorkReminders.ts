@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PSTask } from '../types';
 import type { WorkInsights } from '../utils/workInsights';
+import { claimPlanningNotice } from '../utils/planningNotices';
 
 /** Per-account, bounded reminder state; no API requests or task changes. */
 export function useWorkReminders(owner: string | null, ready: boolean, insights: WorkInsights, tasks: PSTask[], lang: 'uk' | 'en', onNotice: (text: string) => void) {
@@ -50,6 +51,7 @@ export function useWorkReminders(owner: string | null, ready: boolean, insights:
     const task = candidate && tasks.find(item => item.id === candidate.taskId && !item.done && !item.startedAt && !item.scheduledPending);
     if (!task || !candidate || task.scheduledFor !== candidate.scheduledFor ||
       now - candidate.scheduledFor < 5 * 60000 || now - candidate.scheduledFor > 2 * 3600000) return;
+    if (!claimPlanningNotice(localStorage, owner, `missed:${task.id}:${candidate.scheduledFor}`, now)) return;
     // Mark before dispatch so rerenders/repeated clicks cannot notify twice.
     ledger.current.last = now;
     ledger.current.sent = Object.fromEntries([...Object.entries(ledger.current.sent as Record<string, number>).filter(([, stamp]) => now - stamp < 86400000), [task.id, now]].slice(-300)) as Record<string, number>;
@@ -57,7 +59,7 @@ export function useWorkReminders(owner: string | null, ready: boolean, insights:
     const body = lang === 'uk' ? `«${task.title}»: запланований початок минув. Зараз немає активного таймера — можна почати або переглянути план.` : `“${task.title}”: its scheduled start has passed. No timer is active — you can start or review the plan.`;
     onNotice(body);
     const currentGeneration = generation.current;
-    if (window.karkasDesktop) void window.karkasDesktop.system.showNotification({ title: lang === 'uk' ? 'Karkas · Нагадування про план' : 'Karkas · Plan reminder', body }).then(result => {
+    if (window.karkasDesktop) void window.karkasDesktop.system.showNotification({ title: lang === 'uk' ? 'Karkas · Нагадування про план' : 'Karkas · Plan reminder', body, target: { view: 'STRATEGY', ownerId: owner, taskId: task.id } }).then(result => {
       if (!result.ok && generation.current === currentGeneration) onNotice(`${body} ${lang === 'uk' ? 'Сповіщення Windows недоступне.' : 'Windows notification unavailable.'}`);
     }).catch(() => { if (generation.current === currentGeneration) onNotice(body); });
   }, [ready, enabled, loadedScope, scope, insights, tasks, lang]);

@@ -52,6 +52,9 @@ export interface PSTask {
   completedAt?: number;
   timerMode?: TimerMode; // Missing on legacy tasks: countdown if configured, otherwise stopwatch
   timeSpentSeconds?: number; // Total accumulated seconds spent on this task
+  timeResetAt?: number; // Epoch of the last explicit reset; older offline timer deltas do not restore reset time.
+  timerSessionId?: string; // Stable across devices observing the same running timer.
+  timeSessions?: Record<string, { seconds: number; stepId?: string }>; // Maximum banked duration of each session.
   plannedDurationSeconds?: number; // First explicit countdown estimate; extensions do not rewrite it.
   timerStepId?: string; // Step owning this measured session; legacy sessions have no attribution.
   timerRunning?: boolean; // Is stopwatch currently active
@@ -371,6 +374,7 @@ declare global {
         recommendations: (input: unknown) => Promise<DesktopResult<{ status: number; body: any }>>;
         voiceToken: (input: unknown) => Promise<DesktopResult<{ status: number; body: any }>>;
         transcribeAudio: (input: unknown) => Promise<DesktopResult<{ status: number; body: any }>>;
+        cancelRequest: (requestId: string) => Promise<DesktopResult<{ cancelled: boolean }>>;
       };
       updates: {
         checkLatest: () => Promise<DesktopResult<{ status: number; body: any }>>;

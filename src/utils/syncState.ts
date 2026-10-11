@@ -1,3 +1,4 @@
+import { canonical } from './canonical';
 import type { UserCloudState } from '../services/firebase';
 import { applyWorkspaceMutation, diffWorkspaceMutation } from './syncOperations';
 import { migrateSystemCategories } from './systemViews';
@@ -74,14 +75,6 @@ export function recordSyncMutation(
   return next;
 }
 
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
-  if (value && typeof value === 'object') {
-    return `{${Object.keys(value).sort().filter((key) => (value as any)[key] !== undefined)
-      .map((key) => `${JSON.stringify(key)}:${canonical((value as any)[key])}`).join(',')}}`;
-  }
-  return JSON.stringify(value) ?? 'undefined';
-}
 
 export function sameWorkspace(left: WorkspaceState, right: WorkspaceState): boolean {
   return (['tasks', 'tabs', 'deletedTasks', 'settings'] as const)

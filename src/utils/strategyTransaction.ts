@@ -1,5 +1,6 @@
 import type { PersonalStrategyProfile, PSTask } from '../types';
 import { strategyOwnerKey, type StrategyStorage } from './personalStrategy';
+import { canonical } from './canonical';
 
 export interface StrategyTransaction {
   version: 1;
@@ -87,12 +88,6 @@ export function readStrategyTransaction(storage: StrategyStorage, owner: string 
   } catch { return null; }
 }
 
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
-  if (record(value)) return `{${Object.keys(value).sort().filter(key => value[key] !== undefined)
-    .map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`;
-  return JSON.stringify(value) ?? 'undefined';
-}
 const sameTask = (a: PSTask | undefined, b: PSTask | undefined) => canonical(a) === canonical(b);
 
 /**

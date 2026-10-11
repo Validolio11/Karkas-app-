@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { sound } from '../utils/audio';
 import { isCompletedArchivedTask, selectArchivedTasks } from '../utils/taskArchive';
+import { formatRecordedDuration } from '../utils/taskTimeStats';
 
 interface HistoryViewProps {
   tasks: PSTask[];
@@ -404,11 +405,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
                       >
                         <Timer className="w-2.5 h-2.5 text-neutral-400" />
                         <span>
-                          {task.timeSpentSeconds >= 3600
-                            ? `${Math.floor(task.timeSpentSeconds / 3600)}h ${Math.floor((task.timeSpentSeconds % 3600) / 60)}m`
-                            : task.timeSpentSeconds >= 60
-                            ? `${Math.floor(task.timeSpentSeconds / 60)}m ${task.timeSpentSeconds % 60}s`
-                            : `${task.timeSpentSeconds}s`}
+                          {formatRecordedDuration(task.timeSpentSeconds, lang)}
                         </span>
                       </span>
                     ) : null}

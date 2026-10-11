@@ -2,14 +2,11 @@ import type { PersonalStrategyProfile, PSTask, StrategyAction, StrategyActionRec
 import { normalizeTaskSchedule } from './taskScheduling';
 import { strategyOwnerKey } from './personalStrategy';
 import { isPersonalStrategyReady, normalizeStrategyDiscovery } from './strategyDiscovery';
+import { canonical } from './canonical';
+import { MAX_AUTONOMOUS_STRATEGY_ACTIONS } from './strategyLimits';
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
-const stable = (value: unknown): string => {
-  if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
-  if (value && typeof value === 'object') return `{${Object.keys(value).sort().filter(key => (value as any)[key] !== undefined).map(key => `${JSON.stringify(key)}:${stable((value as any)[key])}`).join(',')}}`;
-  return JSON.stringify(value);
-};
-const same = (a: unknown, b: unknown) => stable(a) === stable(b);
+const same = (a: unknown, b: unknown) => canonical(a) === canonical(b);
 export interface ApplyStrategyOptions {
   tasks: PSTask[]; profile: PersonalStrategyProfile; actions: StrategyAction[];
   ownerId: string | null; currentOwnerId: string | null; turnId: string; tabs: TaskTab[]; now?: number;
@@ -23,8 +20,11 @@ export function applyStrategyActions(options: ApplyStrategyOptions) {
   if (ownerId !== currentOwnerId || !turnId) return { tasks, profile, applied, rejected: [{ id: turnId, reason: 'Account changed or turn is missing' }] };
   if (!isPersonalStrategyReady(profile)) return { tasks, profile, applied, rejected: [{ id: turnId, reason: 'Personal discovery is not confirmed' }] };
   if (profile.processedTurnIds.includes(turnId)) return { tasks, profile, applied, rejected };
+  if (!Array.isArray(options.actions) || options.actions.length > MAX_AUTONOMOUS_STRATEGY_ACTIONS) {
+    return { tasks, profile, applied, rejected: [{ id: turnId, reason: 'Autonomous action limit exceeded or invalid action list' }] };
+  }
   const now = options.now ?? Date.now();
-  for (const action of (Array.isArray(options.actions) ? options.actions : []).slice(0, 20)) {
+  for (const action of options.actions) {
     const fail = (reason: string) => rejected.push({ id: action?.id || '', reason });
     const id = `${turnId}:${action?.id}`;
     if (updated.actionHistory.some(entry => entry.id === id)) continue;

@@ -104,6 +104,30 @@ test('updatePreferences merges settings and persists the result', async (t) => {
   assert.deepEqual(await storage.loadPreferences(), updated);
 });
 
+test('malformed task fields reject a native save without replacing the last valid workspace', async (t) => {
+  const { storage } = await temporaryStorage(t);
+  await storage.saveWorkspace(workspace('Preserved'));
+  const malformed = workspace('Bad');
+  malformed.tasks[0].title = null;
+  await assert.rejects(storage.saveWorkspace(malformed), { code: 'INVALID_DATA' });
+  assert.equal((await storage.loadWorkspace()).tasks[0].title, 'Preserved');
+});
+
+test('valid JSON with invalid persisted entities is backed up exactly and cannot be silently overwritten', async (t) => {
+  const { directory, storage } = await temporaryStorage(t);
+  await storage.saveWorkspace(workspace());
+  const envelope = JSON.parse(await fs.readFile(storage.paths.workspace, 'utf8'));
+  envelope.data.accounts.$guest.workspace.tasks[0].title = null;
+  const raw = JSON.stringify(envelope);
+  await fs.writeFile(storage.paths.workspace, raw);
+  await assert.rejects(storage.loadWorkspace(), { code: 'INVALID_DATA' });
+  await assert.rejects(storage.saveWorkspace(workspace('Replacement')), { code: 'INVALID_DATA' });
+  assert.equal(await fs.readFile(storage.paths.workspace, 'utf8'), raw);
+  const backups = (await fs.readdir(directory)).filter(name => name.endsWith('.bak'));
+  assert.ok(backups.length >= 1);
+  assert.equal(await fs.readFile(path.join(directory, backups[0]), 'utf8'), raw);
+});
+
 test('accounts are isolated and compatibility methods follow the active owner', async (t) => {
   const { directory, storage } = await temporaryStorage(t);
   await storage.saveAccount('alice', { workspace: workspace('Alice'), base: null, lastSyncTime: 10 });

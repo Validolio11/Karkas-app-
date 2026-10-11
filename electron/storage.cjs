@@ -1,6 +1,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomBytes } = require('node:crypto');
+const { parseWorkspace } = require('./workspace-validation.mjs');
 
 const SCHEMA_VERSION = 2;
 const WORKSPACE_FILE = 'workspace.json';
@@ -72,6 +73,8 @@ function assertWorkspace(value) {
     throw new DesktopStorageError('INVALID_DATA', 'Workspace collection limit exceeded');
   }
   assertJsonSafe(value, 'Workspace');
+  try { parseWorkspace(value); }
+  catch (error) { throw new DesktopStorageError('INVALID_DATA', error.message, error); }
 }
 
 function assertOwner(owner) {
@@ -113,7 +116,39 @@ function assertSyncOperations(value, label) {
           field === 'id' || field === '__proto__' || field === 'prototype' || field === 'constructor'))) {
       throw new DesktopStorageError('INVALID_DATA', `${label} contains invalid unset fields`);
     }
-    if (operation.lifecycle === undefined && operation.patch === undefined && operation.unset === undefined) {
+    if (operation.timeDelta !== undefined && (!Number.isFinite(operation.timeDelta) || operation.timeDelta < 0)) {
+      throw new DesktopStorageError('INVALID_DATA', `${label} contains an invalid time delta`);
+    }
+    if (operation.kind !== 'task' && ['timeDelta', 'timeBaseResetAt', 'stepOrder', 'stepChanges', 'sessions'].some(field => operation[field] !== undefined)) {
+      throw new DesktopStorageError('INVALID_DATA', `${label} contains task metadata on another operation`);
+    }
+    if (operation.sessions !== undefined && (!isPlainObject(operation.sessions) || Object.entries(operation.sessions).some(([id, session]) =>
+      !id || id.length > 512 || !isPlainObject(session) || !Number.isFinite(session.seconds) || session.seconds < 0 ||
+      (session.stepId !== undefined && (typeof session.stepId !== 'string' || !session.stepId || session.stepId.length > 512))))) {
+      throw new DesktopStorageError('INVALID_DATA', `${label} contains invalid time sessions`);
+    }
+    if (operation.timeBaseResetAt !== undefined && (!Number.isFinite(operation.timeBaseResetAt) || operation.timeBaseResetAt < 0)) {
+      throw new DesktopStorageError('INVALID_DATA', `${label} contains an invalid time epoch`);
+    }
+    if (operation.stepOrder !== undefined && (!Array.isArray(operation.stepOrder) || operation.stepOrder.some(id => typeof id !== 'string' || !id))) {
+      throw new DesktopStorageError('INVALID_DATA', `${label} contains an invalid step order`);
+    }
+    if (operation.stepChanges !== undefined && (!Array.isArray(operation.stepChanges) || operation.stepChanges.some(change =>
+      !isPlainObject(change) || typeof change.id !== 'string' || !change.id || change.id.length > 512 ||
+      (change.patch !== undefined && (!isPlainObject(change.patch) || Object.keys(change.patch).some(key =>
+        !['title', 'done', 'timeSpentSeconds', 'estimatedDurationSeconds'].includes(key)) ||
+        (change.patch.title !== undefined && typeof change.patch.title !== 'string') ||
+        (change.patch.done !== undefined && typeof change.patch.done !== 'boolean') ||
+        ['timeSpentSeconds', 'estimatedDurationSeconds'].some(key => change.patch[key] !== undefined &&
+          (!Number.isFinite(change.patch[key]) || change.patch[key] < 0)))) ||
+      (change.timeDelta !== undefined && (!Number.isFinite(change.timeDelta) || change.timeDelta < 0)) ||
+      (change.create !== undefined && typeof change.create !== 'boolean') ||
+      (change.remove !== undefined && typeof change.remove !== 'boolean') ||
+      (change.unset !== undefined && (!Array.isArray(change.unset) || change.unset.some(key => !['title', 'done', 'timeSpentSeconds', 'estimatedDurationSeconds'].includes(key))))))) {
+      throw new DesktopStorageError('INVALID_DATA', `${label} contains invalid step changes`);
+    }
+    if (operation.lifecycle === undefined && operation.patch === undefined && operation.unset === undefined &&
+        operation.timeDelta === undefined && operation.stepChanges === undefined && operation.stepOrder === undefined && operation.sessions === undefined) {
       throw new DesktopStorageError('INVALID_DATA', `${label} contains an empty operation`);
     }
   }
@@ -349,6 +384,13 @@ function createDesktopStorage({ userDataPath }) {
       validate(parsed.data);
       return parsed.data;
     } catch (error) {
+      // Retain the exact original file before any repair/replacement is possible.
+      // A failed backup must also block writes; never silently reset account data.
+      try {
+        await fs.copyFile(filePath, `${filePath}.invalid-${Date.now()}-${randomBytes(4).toString('hex')}.bak`);
+      } catch (backupError) {
+        throw new DesktopStorageError('RECOVERY_FAILED', `Could not preserve invalid ${path.basename(filePath)}`, backupError);
+      }
       if (error instanceof DesktopStorageError) throw error;
       throw new DesktopStorageError('CORRUPT_DATA', `Could not read ${path.basename(filePath)}`, error);
     }

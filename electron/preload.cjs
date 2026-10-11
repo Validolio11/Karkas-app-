@@ -67,6 +67,7 @@ contextBridge.exposeInMainWorld('karkasDesktop', {
     recommendations: (input) => invoke('karkas:ai:recommendations', input),
     voiceToken: (input) => invoke('karkas:ai:voice-token', input),
     transcribeAudio: (input) => invoke('karkas:ai:transcribe-audio', input),
+    cancelRequest: (requestId) => invoke('karkas:ai:cancel-request', { requestId }),
   },
   updates: {
     checkLatest: () => invoke('karkas:updates:check'),

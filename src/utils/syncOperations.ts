@@ -1,4 +1,5 @@
-import type { DeletedTask, PSTask, TaskTab } from '../types';
+import { canonical } from './canonical';
+import type { DeletedTask, PSTask, TaskTab, TaskStepItem } from '../types';
 import type { SyncMutationIdentity, WorkspaceState } from './syncState';
 
 type Lifecycle = 'active' | 'deleted' | 'purged';
@@ -10,6 +11,12 @@ export interface TaskSyncOperation {
   lifecycle?: Lifecycle;
   patch?: Patch<DeletedTask>;
   unset?: string[];
+  /** Legacy absolute patches remain readable; new edits use independent operations. */
+  stepChanges?: { id: string; create?: boolean; remove?: boolean; patch?: Partial<TaskStepItem>; unset?: string[]; timeDelta?: number }[];
+  stepOrder?: string[];
+  timeDelta?: number;
+  timeBaseResetAt?: number;
+  sessions?: NonNullable<PSTask['timeSessions']>;
 }
 
 export interface TabSyncOperation {
@@ -33,14 +40,6 @@ export interface WorkspaceMutation extends SyncMutationIdentity {
   operations: WorkspaceSyncOperation[];
 }
 
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
-  if (value && typeof value === 'object') {
-    return `{${Object.keys(value).sort().filter((key) => (value as Record<string, unknown>)[key] !== undefined)
-      .map((key) => `${JSON.stringify(key)}:${canonical((value as Record<string, unknown>)[key])}`).join(',')}}`;
-  }
-  return JSON.stringify(value) ?? 'undefined';
-}
 
 function diffFields<T extends object>(before: T | undefined, after: T): { patch?: Partial<T>; unset?: string[] } {
   const patch: Partial<T> = {};
@@ -93,9 +92,63 @@ export function diffWorkspaceOperations(base: WorkspaceState, next: WorkspaceSta
       continue;
     }
     const fields = diffFields(before?.value, after.value);
+    let stepChanges: TaskSyncOperation['stepChanges'];
+    let stepOrder: string[] | undefined;
+    let timeDelta: number | undefined;
+    let sessions: TaskSyncOperation['sessions'];
+    let sessionDelta = 0;
+    const stepSessionDeltas = new Map<string, number>();
+    if (before) {
+      if (after.value.timeResetAt === before.value.timeResetAt && after.value.timeSessions) {
+        for (const [sessionId, session] of Object.entries(after.value.timeSessions)) {
+          const oldSeconds = before.value.timeSessions?.[sessionId]?.seconds ?? 0;
+          if (session.seconds <= oldSeconds) continue;
+          (sessions ??= {})[sessionId] = structuredClone(session);
+          sessionDelta += session.seconds - oldSeconds;
+          if (session.stepId) stepSessionDeltas.set(session.stepId, (stepSessionDeltas.get(session.stepId) ?? 0) + session.seconds - oldSeconds);
+        }
+        if (fields.patch) delete fields.patch.timeSessions;
+      }
+      const previousTime = before.value.timeSpentSeconds ?? 0;
+      const nextTime = after.value.timeSpentSeconds ?? 0;
+      if (nextTime > previousTime && after.value.timeResetAt === before.value.timeResetAt) {
+        timeDelta = Math.max(0, nextTime - previousTime - sessionDelta);
+        if (fields.patch) delete fields.patch.timeSpentSeconds;
+      }
+      if (Array.isArray(after.value.stepList)) {
+        const oldSteps = before.value.stepList ?? [];
+        const previous = new Map(oldSteps.map(step => [step.id, step]));
+        const current = new Map(after.value.stepList.map(step => [step.id, step]));
+        stepChanges = [];
+        for (const stepId of new Set([...previous.keys(), ...current.keys()])) {
+          const oldStep = previous.get(stepId);
+          const newStep = current.get(stepId);
+          if (!newStep) { stepChanges.push({ id: stepId, remove: true }); continue; }
+          const change = diffFields(oldStep, newStep);
+          if (!oldStep && change.patch?.timeSpentSeconds !== undefined && stepSessionDeltas.has(stepId)) {
+            change.patch.timeSpentSeconds = Math.max(0, change.patch.timeSpentSeconds - stepSessionDeltas.get(stepId)!);
+          }
+          const delta = oldStep && after.value.timeResetAt === before.value.timeResetAt &&
+            (newStep.timeSpentSeconds ?? 0) > (oldStep.timeSpentSeconds ?? 0)
+            ? Math.max(0, (newStep.timeSpentSeconds ?? 0) - (oldStep.timeSpentSeconds ?? 0) - (stepSessionDeltas.get(stepId) ?? 0)) : undefined;
+          if (delta !== undefined && change.patch) delete change.patch.timeSpentSeconds;
+          if (change.patch && !Object.keys(change.patch).length) delete change.patch;
+          if (change.patch || change.unset || delta !== undefined) stepChanges.push({ id: stepId, ...(!oldStep ? { create: true } : {}), ...change, ...(delta !== undefined ? { timeDelta: delta } : {}) });
+        }
+        if (canonical(oldSteps.map(step => step.id)) !== canonical(after.value.stepList.map(step => step.id))) {
+          stepOrder = after.value.stepList.map(step => step.id);
+        }
+        if (fields.patch) { delete fields.patch.stepList; delete fields.patch.steps; delete fields.patch.currentStep; }
+      }
+      if (fields.patch && !Object.keys(fields.patch).length) delete fields.patch;
+    }
     const lifecycle = before?.lifecycle === after.lifecycle ? undefined : after.lifecycle;
-    if (!before || lifecycle || fields.patch || fields.unset) {
-      operations.push({ kind: 'task', id, ...(lifecycle ? { lifecycle } : {}), ...fields });
+    if (!before || lifecycle || fields.patch || fields.unset || stepChanges?.length || stepOrder || timeDelta !== undefined || sessions) {
+      operations.push({ kind: 'task', id, ...(lifecycle ? { lifecycle } : {}), ...fields,
+        ...(stepChanges?.length ? { stepChanges } : {}), ...(stepOrder ? { stepOrder } : {}),
+        ...(timeDelta !== undefined ? { timeDelta } : {}),
+        ...(sessions ? { sessions } : {}),
+        ...(before ? { timeBaseResetAt: before.value.timeResetAt ?? 0 } : {}) });
     }
   }
 
@@ -157,10 +210,65 @@ export function applyWorkspaceMutation(remote: WorkspaceState, mutation: Workspa
     const lifecycle = operation.lifecycle ?? current?.lifecycle;
     if (!lifecycle) continue;
     const fallback = { id: operation.id } as DeletedTask;
-    const value = applyPatch(current?.value ?? fallback, operation.patch, operation.unset);
+    const patch = operation.patch ? { ...operation.patch } : undefined;
+    const staleReset = patch?.timeResetAt !== undefined && patch.timeResetAt < (current?.value.timeResetAt ?? 0);
+    if (staleReset) {
+      delete patch.timeResetAt;
+      delete patch.timeSpentSeconds;
+      delete patch.timeSessions;
+    }
+    const sameTimeEpoch = (current?.value.timeResetAt ?? 0) === (operation.timeBaseResetAt ?? current?.value.timeResetAt ?? 0);
+    const appliesNewReset = patch?.timeResetAt !== undefined && patch.timeResetAt >= (current?.value.timeResetAt ?? 0);
+    const obsoleteTime = staleReset || (!sameTimeEpoch && !appliesNewReset);
+    const timeFields = new Set(['timeSpentSeconds', 'timeSessions', 'timeResetAt', 'timerRunning', 'timerStartedAt', 'timerSessionId',
+      'timerStepId', 'countdownRemainingSeconds', 'countdownDurationSeconds', 'timerMode', 'autoPausedOverdue']);
+    if (obsoleteTime && patch) for (const field of timeFields) delete (patch as Record<string, unknown>)[field];
+    const unset = obsoleteTime ? operation.unset?.filter(field => !timeFields.has(field)) : operation.unset;
+    const value = applyPatch(current?.value ?? fallback, patch, unset);
+    if (operation.timeDelta !== undefined && sameTimeEpoch) value.timeSpentSeconds = (value.timeSpentSeconds ?? 0) + operation.timeDelta;
+    if (operation.stepChanges || operation.stepOrder) {
+      const steps = new Map((value.stepList ?? []).map(step => [step.id, step]));
+      for (const change of operation.stepChanges ?? []) {
+        if (change.remove) { steps.delete(change.id); continue; }
+        const oldStep = steps.get(change.id);
+        // A field-only change cannot resurrect a concurrently removed step.
+        if (!oldStep && (change.create !== true || typeof change.patch?.title !== 'string')) continue;
+        const stepPatch = change.patch ? { ...change.patch } : undefined;
+        if (obsoleteTime && stepPatch) delete stepPatch.timeSpentSeconds;
+        const stepUnset = obsoleteTime ? change.unset?.filter(field => field !== 'timeSpentSeconds') : change.unset;
+        const step = applyPatch(oldStep ?? { id: change.id, title: '', done: false }, stepPatch, stepUnset);
+        if (change.timeDelta !== undefined && sameTimeEpoch) step.timeSpentSeconds = (step.timeSpentSeconds ?? 0) + change.timeDelta;
+        steps.set(change.id, step);
+      }
+      const order = [...new Set([...(operation.stepOrder ?? []), ...steps.keys()])];
+      value.stepList = order.filter(id => steps.has(id)).map(id => steps.get(id)!);
+      value.steps = value.stepList.length;
+      value.currentStep = value.stepList.filter(step => step.done).length;
+    }
+    if (operation.sessions && sameTimeEpoch) {
+      value.timeSessions = { ...value.timeSessions };
+      for (const [sessionId, session] of Object.entries(operation.sessions)) {
+        const old = value.timeSessions[sessionId];
+        const added = Math.max(0, session.seconds - (old?.seconds ?? 0));
+        if (!added) continue;
+        value.timeSessions[sessionId] = structuredClone(session);
+        value.timeSpentSeconds = (value.timeSpentSeconds ?? 0) + added;
+        if (session.stepId && value.stepList) value.stepList = value.stepList.map(step => step.id === session.stepId
+          ? { ...step, timeSpentSeconds: (step.timeSpentSeconds ?? 0) + added } : step);
+      }
+    }
     tasks.set(operation.id, { lifecycle, value });
   }
 
+  const categoryIds = new Set(tabs.keys());
+  if ([...tasks.values()].some(({ value }) => !categoryIds.has(value.phase))) {
+    let fallbackId = 'recovered-tasks';
+    if (tabs.has(fallbackId)) fallbackId = tabs.get(fallbackId)!.id;
+    else tabs.set(fallbackId, { id: fallbackId, name: settings.lang === 'en' ? 'Recovered tasks' : 'Відновлені завдання' });
+    for (const record of tasks.values()) {
+      if (!categoryIds.has(record.value.phase)) record.value = { ...record.value, phase: fallbackId };
+    }
+  }
   return {
     tasks: [...tasks.values()].filter((item) => item.lifecycle === 'active').map((item) => item.value as PSTask),
     deletedTasks: [...tasks.values()].filter((item) => item.lifecycle === 'deleted').map((item) => item.value),

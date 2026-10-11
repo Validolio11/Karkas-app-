@@ -1,5 +1,22 @@
 type JsonStorage = Pick<Storage, 'getItem' | 'setItem'>;
 
+/** Preserve semantically invalid JSON as well as syntax errors before recovery. */
+export function preserveRawStorage(storage: JsonStorage, key: string, raw: string): void {
+  const prefix = `${key}:recovery-backup`;
+  let suffix = 0;
+  while (true) {
+    const backup = suffix ? `${prefix}:${suffix}` : prefix;
+    const previous = storage.getItem(backup);
+    if (previous === raw) return;
+    if (previous === null) {
+      storage.setItem(backup, raw);
+      if (storage.getItem(backup) !== raw) throw new Error('Cannot preserve damaged data');
+      return;
+    }
+    suffix++;
+  }
+}
+
 /** Preserve malformed source bytes before replacing them; failed backup blocks the write. */
 export function writeRecoverableJson(storage: JsonStorage, key: string, serialized: string): void {
   // Caller mistakes must not replace usable saved data with invalid JSON.

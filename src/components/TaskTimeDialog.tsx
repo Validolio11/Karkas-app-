@@ -4,6 +4,7 @@ import { Minus, Plus, X } from 'lucide-react';
 import type { PSTask } from '../types';
 import type { Language } from '../utils/i18n';
 import { getTaskRemainingSeconds, getTaskTimerMode, getTaskTotalSeconds } from '../utils/taskTimer';
+import { formatDigitalDuration } from '../utils/taskTimeStats';
 import { useDialogKeyboard } from './useDialogKeyboard';
 
 interface Props {
@@ -19,10 +20,6 @@ interface Props {
 }
 type Mode = 'add' | 'new' | 'work';
 const whole = (value: string) => /^\d+$/.test(value) && Number.isSafeInteger(Number(value));
-const formatTime = (value: number) => {
-  const seconds = Math.max(0, Math.floor(value));
-  return `${Math.floor(seconds / 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`;
-};
 
 export function TaskTimeDialog({ task, lang, triggerRef, correctionOpen, onClose, onExtend, onConfigure, onClear, onCorrect }: Props) {
   const uk = lang === 'uk';
@@ -87,7 +84,7 @@ export function TaskTimeDialog({ task, lang, triggerRef, correctionOpen, onClose
             {mode === 'work' && <div className="task-time-seconds-controls"><div className="task-time-range-header"><label htmlFor={`time-seconds-${task.id}`}>{uk ? 'Секунди' : 'Seconds'}</label><div className="task-time-steps"><button type="button" disabled={whole(seconds) && Number(seconds) <= 0} aria-label={uk ? 'Зменшити на секунду' : 'Decrease by one second'} onClick={() => setSeconds(String(Math.max(0, (whole(seconds) ? Number(seconds) : 0) - 1)))}><Minus /></button><input type="number" min="0" max="59" step="1" value={seconds} aria-label={uk ? 'Точне значення секунд' : 'Exact seconds'} onChange={event => setSeconds(event.target.value)} /><button type="button" disabled={whole(seconds) && Number(seconds) >= 59} aria-label={uk ? 'Збільшити на секунду' : 'Increase by one second'} onClick={() => setSeconds(String(Math.min(59, (whole(seconds) ? Number(seconds) : 0) + 1)))}><Plus /></button></div></div><input id={`time-seconds-${task.id}`} className="task-time-range" type="range" min="0" max="59" step="1" value={whole(seconds) ? Math.min(59, Number(seconds)) : 0} onChange={event => setSeconds(event.target.value)} /><div className="task-time-range-ends"><span>0 {uk ? 'с' : 's'}</span><span>59 {uk ? 'с' : 's'}</span></div></div>}
           </div>
         </div>
-        {mode !== 'work' && <div className="task-time-result"><span>{mode === 'add' ? uk ? 'Залишиться' : 'Remaining time' : uk ? 'Новий відлік' : 'New countdown'}</span><strong>{valid ? formatTime((mode === 'add' ? getTaskRemainingSeconds(task) || 0 : 0) + amount * 60) : '—'}</strong></div>}
+        {mode !== 'work' && <div className="task-time-result"><span>{mode === 'add' ? uk ? 'Залишиться' : 'Remaining time' : uk ? 'Новий відлік' : 'New countdown'}</span><strong>{valid ? formatDigitalDuration((mode === 'add' ? getTaskRemainingSeconds(task) || 0 : 0) + amount * 60, 'minutes') : '—'}</strong></div>}
         <p className="task-time-help">{help}</p>
         {!valid && <p role="alert" className="task-time-error">{max < min ? uk ? 'Досягнуто максимальний бюджет 24 години.' : 'The maximum 24-hour budget has been reached.' : uk ? `Вкажіть ціле число від ${min} до ${max} хвилин${mode === 'work' ? ' і секунди від 0 до 59' : ''}.` : `Enter whole minutes from ${min} to ${max}${mode === 'work' ? ' and seconds from 0 to 59' : ''}.`}</p>}
         {mode === 'new' && countdown && !task.done && onClear && <details className="task-time-stopwatch"><summary>{uk ? 'Перейти на секундомір' : 'Switch to stopwatch'}</summary><p className="task-time-help">{uk ? 'Таймер зупиниться, залишок відліку буде прибрано. Витрачений час збережеться.' : 'The timer pauses and the countdown budget is removed. Recorded work is preserved.'}</p><button type="button" onClick={() => { if (submitted.current) return; submitted.current = true; onClear(task.id); onClose(); }}>{uk ? 'Перейти на секундомір' : 'Switch to stopwatch'}</button></details>}

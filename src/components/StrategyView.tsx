@@ -6,7 +6,8 @@ import { WorkInsightsPanel } from './WorkInsightsPanel';
 import { karkasApiFetch } from '../utils/desktopApi';
 import { aiRequestErrorMessage } from './aiAssistantState';
 import { TRANSLATIONS } from '../utils/i18n';
-import { selectPeriodTasks } from './workflowViewModel';
+import { getPeriodBounds, selectPeriodTasks } from './workflowViewModel';
+import { parseAIRecommendation } from '../utils/aiRecommendations';
 import { updateStrategyMemoryEntry } from '../utils/personalStrategy';
 import { isPersonalStrategyReady, STRATEGY_DISCOVERY_TOPICS, updateDiscoveryEvidence } from '../utils/strategyDiscovery';
 
@@ -40,20 +41,38 @@ export const StrategyView: React.FC<StrategyViewProps> = (props: StrategyViewPro
   const [confirmReset, setConfirmReset] = useState(false);
   const [feedback, setFeedback] = useState('');
   const controller = useRef<AbortController | null>(null);
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => {
+    const update = () => setClock(Date.now());
+    const visible = () => { if (document.visibilityState === 'visible') update(); };
+    let boundaryTimer: ReturnType<typeof setTimeout>;
+    const scheduleBoundary = () => {
+      const nextDay = new Date(); nextDay.setHours(24, 0, 0, 0);
+      boundaryTimer = setTimeout(() => { update(); scheduleBoundary(); }, Math.max(1, nextDay.getTime() - Date.now()));
+    };
+    scheduleBoundary();
+    const timer = window.setInterval(update, 30_000);
+    window.addEventListener('focus', update);
+    document.addEventListener('visibilitychange', visible);
+    return () => { clearTimeout(boundaryTimer); window.clearInterval(timer); window.removeEventListener('focus', update); document.removeEventListener('visibilitychange', visible); };
+  }, []);
+  const day = new Date(clock); day.setHours(0, 0, 0, 0);
+  const dayBoundary = day.getTime();
+  const calendarBounds = getPeriodBounds(period, day);
   const model = localStorage.getItem('karkas_custom_model') || 'default';
   const cacheKey = `karkas_strategy_audit_v1:${encodeURIComponent(ownerId === null ? 'guest' : `account:${ownerId}`)}:${period}:${lang}:${model}`;
-  const context = useMemo(() => fingerprint([tasks, deletedTasks, tabs, profile.goals, profile.facts, profile.barriers, profile.preferences, profile.feedback, profile.discovery]),
-    [tasks, deletedTasks, tabs, profile.goals, profile.facts, profile.barriers, profile.preferences, profile.feedback, profile.discovery]);
-  const selected = useMemo(() => selectPeriodTasks(tasks, deletedTasks, period, new Date()), [tasks, deletedTasks, period]);
+  const context = useMemo(() => fingerprint([tasks, deletedTasks, tabs, profile.goals, profile.facts, profile.barriers, profile.preferences, profile.feedback, profile.discovery, calendarBounds.start, calendarBounds.end]),
+    [tasks, deletedTasks, tabs, profile.goals, profile.facts, profile.barriers, profile.preferences, profile.feedback, profile.discovery, calendarBounds.start, calendarBounds.end]);
+  const selected = useMemo(() => selectPeriodTasks(tasks, deletedTasks, period, new Date(clock)), [tasks, deletedTasks, period, clock]);
   const focus = tasks.find(task => (task.id === profile.latestStrategy?.focusTaskId || task.schedulePlanId === profile.latestStrategy?.focusTaskId) && !task.done && !task.scheduledPending);
   useEffect(() => {
     controller.current?.abort(); setLoading(false); setError(''); setAudit(null);
     try {
       const entry = JSON.parse(localStorage.getItem(cacheKey) || 'null');
-      if (entry?.value && Array.isArray(entry.value.suggestedTasks) && typeof entry.at === 'number' && typeof entry.context === 'string') setAudit(entry);
+      if (entry?.value && Number.isFinite(entry.at) && entry.at >= 0 && typeof entry.context === 'string') setAudit({ ...entry, value: parseAIRecommendation(entry.value) });
     } catch { /* Cache is optional and never initiates a provider request. */ }
     return () => controller.current?.abort();
-  }, [cacheKey]);
+  }, [cacheKey, dayBoundary]);
   const refreshAudit = async () => {
     controller.current?.abort(); const request = new AbortController(); controller.current = request;
     const snapshot = context; setLoading(true); setError('');
@@ -65,8 +84,9 @@ export const StrategyView: React.FC<StrategyViewProps> = (props: StrategyViewPro
           customApiKey: custom ? localStorage.getItem('karkas_custom_api_key') || undefined : undefined,
           selectedModel: custom ? model : undefined }) });
       if (!response.ok) throw new Error(uk ? 'Не вдалося оновити аналіз. Спробуйте ще раз.' : 'Could not refresh the analysis. Try again.');
-      const value = await response.json();
-      if (!value || !Array.isArray(value.suggestedTasks)) throw new Error(uk ? 'Некоректна відповідь аналізу.' : 'Invalid analysis response.');
+      let value: AIRecommendation;
+      try { value = parseAIRecommendation(await response.json()); }
+      catch { throw new Error(uk ? 'Некоректна відповідь аналізу.' : 'Invalid analysis response.'); }
       if (request.signal.aborted || controller.current !== request) return;
       const entry = { value, at: Date.now(), context: snapshot }; setAudit(entry);
       try { localStorage.setItem(cacheKey, JSON.stringify(entry)); } catch { setError(uk ? 'Аналіз доступний зараз, але його не вдалося зберегти.' : 'The analysis is available but could not be saved.'); }

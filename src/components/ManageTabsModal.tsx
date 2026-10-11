@@ -16,6 +16,7 @@ import { useDialogKeyboard } from './useDialogKeyboard';
 
 interface ManageTabsModalProps {
   isOpen: boolean;
+  keyboardEnabled?: boolean;
   tabs: TaskTab[];
   lang: Language;
   onClose: () => void;
@@ -27,6 +28,7 @@ interface ManageTabsModalProps {
 
 export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
   isOpen,
+  keyboardEnabled = true,
   tabs,
   lang,
   onClose,
@@ -38,7 +40,7 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
   const [newTabName, setNewTabName] = useState('');
   const [activeColor, setActiveColor] = useState<string>(() => getRandomTabColor());
   const t = TRANSLATIONS[lang];
-  useDialogKeyboard(isOpen, onClose, 'manage-tabs-dialog');
+  useDialogKeyboard(isOpen && keyboardEnabled, onClose, 'manage-tabs-dialog');
 
   useEffect(() => {
     if (isOpen) {

@@ -108,6 +108,7 @@ export function getDueScheduledOccurrences(plans: ScheduledTaskPlan[], now = Dat
       ...plan.task, stepList: plan.task.stepList?.map(step => { const fresh = { ...step, done: false }; delete fresh.timeSpentSeconds; return fresh; }), id, done: false, pinned: false, currentStep: 0, createdAt: now,
       timerRunning: false, timeSpentSeconds: 0,
       timerStartedAt: undefined, timerStepId: undefined,
+      timerSessionId: undefined, timeSessions: undefined, timeResetAt: undefined,
       ...(plan.task.timerMode === 'countdown' && plan.task.countdownDurationSeconds ? { plannedDurationSeconds: plan.task.plannedDurationSeconds ?? plan.task.countdownDurationSeconds } : {}),
       ...(plan.task.timerMode === 'countdown' && plan.task.countdownDurationSeconds ? { countdownRemainingSeconds: plan.task.countdownDurationSeconds } : {}),
       schedulePlanId: plan.id, scheduledFor: occurrence,

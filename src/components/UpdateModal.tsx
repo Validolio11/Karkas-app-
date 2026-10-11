@@ -16,7 +16,7 @@ interface UpdateModalProps {
 
 type UpdateAttempt = { requestId: string; phase: 'downloading' | 'installing'; cancelling: boolean; closeAfterCancellation: boolean };
 type InstallStep = 'downloading' | 'cancelling' | 'starting' | 'installer-started' | 'browser-download';
-type InstallFailure = 'unavailable' | 'cancel-failed' | 'download-timeout' | 'download-failed' | 'download-storage' | 'preparation-timeout' | 'install-failed';
+type InstallFailure = 'unavailable' | 'cancel-failed' | 'download-timeout' | 'download-failed' | 'download-storage' | 'untrusted-package' | 'preparation-timeout' | 'install-failed';
 
 export const UpdateModal: React.FC<UpdateModalProps> = ({
   isOpen,
@@ -233,6 +233,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
     'download-timeout': isUk ? 'Завантаження триває надто довго або зупинилося. Перевірте з’єднання та спробуйте ще раз.' : 'The download timed out or stopped responding. Check your connection and try again.',
     'download-failed': isUk ? 'Не вдалося завантажити пакет оновлення. Перевірте з’єднання та спробуйте ще раз.' : 'Unable to download the update package. Check your connection and try again.',
     'download-storage': isUk ? 'Не вдалося зберегти пакет оновлення. Перевірте вільне місце на диску й дозвіл на запис, потім повторіть спробу.' : 'Unable to save the update package. Check free disk space and write permissions, then try again.',
+    'untrusted-package': isUk ? 'Не вдалося підтвердити джерело або цілісність пакета. Встановлення заблоковано. Оновіть інформацію про випуск і спробуйте ще раз.' : 'The package source or integrity could not be verified. Installation was blocked. Refresh the release information and try again.',
     'preparation-timeout': isUk ? 'Не вдалося вчасно підготувати додаток до оновлення. Спробуйте ще раз.' : 'The app could not prepare for the update in time. Please try again.',
     'install-failed': isUk ? 'Не вдалося запустити оновлення. Спробуйте ще раз.' : 'Unable to start the update. Please try again.',
   };
@@ -311,6 +312,8 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
         setInstallError('download-failed');
       } else if (code === 'UPDATE_DOWNLOAD_STORAGE') {
         setInstallError('download-storage');
+      } else if (code === 'UPDATE_DOWNLOAD_UNTRUSTED') {
+        setInstallError('untrusted-package');
       } else if (code === 'UPDATE_PREPARATION_TIMEOUT') {
         setInstallError('preparation-timeout');
       } else {

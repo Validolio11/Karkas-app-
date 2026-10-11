@@ -8,6 +8,23 @@ import { confirmedProfile, discoveryGoal, understandingProfile } from '../src/ut
 const tasks = [{ id: 't1', title: 'English', phase: 'work', done: false }, { id: 't2', title: 'Study', phase: 'work', done: false }];
 const early = { reply: 'FORBIDDEN-PLAN: tomorrow 25 minutes', tasks: [{ title: 'FORBIDDEN-TASK' }], tabs: [{ id: 'bad' }], taskUpdates: [{ id: 't1', done: true }], taskDeletions: [{ id: 't2' }], strategy: { status: 'ready', narrative: 'FORBIDDEN-NARRATIVE', nextAction: 'FORBIDDEN-NEXT', focusTaskId: 't1', actions: [{ changes: { done: true } }] } };
 
+test('an unknown named target cannot mutate the sole other task', () => {
+  const sole = [tasks[0]];
+  for (const prompt of ['Видали завдання Biology', 'Запусти таймер Biology', 'Розбий завдання Biology на кроки', 'Delete task Biology']) {
+    const route = classifyPersonalChatRequest(prompt, 'auto', sole);
+    assert.deepEqual(route.scope?.taskIds, [], prompt);
+    const constrained = constrainOrdinaryChatResponse({ taskUpdates: [{ id: 't1', title: 'Wrong', timerAction: 'start', steps: 3 }], taskDeletions: [{ id: 't1' }] }, route.route, route.scope);
+    assert.deepEqual(constrained.taskUpdates, [], prompt);
+    assert.deepEqual(constrained.taskDeletions, [], prompt);
+  }
+  assert.deepEqual(classifyPersonalChatRequest('Видали це завдання', 'auto', sole).scope?.taskIds, ['t1']);
+  assert.deepEqual(classifyPersonalChatRequest('Видали це завдання', 'auto', tasks).scope?.taskIds, []);
+  for (const prompt of ['Додай таймер на 25 хвилин до завдання', 'Set task timer to 40 minutes']) {
+    assert.deepEqual(classifyPersonalChatRequest(prompt, 'auto', sole).scope?.taskIds, ['t1']);
+    assert.deepEqual(classifyPersonalChatRequest(prompt, 'auto', tasks).scope?.taskIds, []);
+  }
+});
+
 test('concrete Ukrainian commands and polite infinitives stay available during discovery', () => {
   for (const [prompt, operation] of [['Привіт, додай завдання English', 'create'], ['Можеш додати завдання English?', 'create'], ['Можеш будь ласка запустити таймер English?', 'timer'], ['Додай таймер на 25 хвилин до завдання English', 'timer'], ['Зміни назву завдання English', 'update'], ['Видали завдання English', 'delete'], ['Розбий завдання English на кроки', 'steps']] as const) {
     const result = classifyPersonalChatRequest(prompt, 'auto', tasks);

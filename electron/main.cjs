@@ -9,6 +9,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const { launchUpdateInstaller } = require('./update-installer.cjs');
 const { downloadUpdateFile, updateDownloadError } = require('./update-download.cjs');
+const { resolveTrustedUpdate, verifyUpdateFile } = require('./update-trust.cjs');
 const { beginBrowserGoogleLogin } = require('./browser-auth.cjs');
 const { createDesktopStorage } = require('./storage.cjs');
 const { createSecretStore } = require('./secrets.cjs');
@@ -311,7 +312,8 @@ async function confirmUpdateUnload(renderer, signal) {
   }
 }
 
-async function invokeService(operation, body = {}, useStoredKey = false) {
+async function invokeService(operation, body = {}, useStoredKey = false, options = {}) {
+  options.signal?.throwIfAborted();
   assertPayload(body);
   const requestBody = { ...body };
   if (useStoredKey && requestBody.customEnabled !== false) {
@@ -321,8 +323,11 @@ async function invokeService(operation, body = {}, useStoredKey = false) {
     }
   }
   const { invokeDesktopApi } = require('../dist/server.cjs');
-  return invokeDesktopApi(operation, requestBody);
+  options.signal?.throwIfAborted();
+  return invokeDesktopApi(operation, requestBody, options);
 }
+
+const aiRequests = new Map();
 
 function registerIpc() {
   on('karkas:window:minimize', () => mainWindow?.minimize());
@@ -385,7 +390,30 @@ function registerIpc() {
   handle('karkas:ai:breakdown', (input) => invokeService('breakdown', input || {}, true));
   handle('karkas:ai:recommendations', (input) => invokeService('recommendations', input || {}, true));
   handle('karkas:ai:voice-token', (input) => invokeService('voiceToken', input || {}, true));
-  handle('karkas:ai:transcribe-audio', (input) => invokeService('transcribeAudio', input || {}, true));
+  handle('karkas:ai:transcribe-audio', async (input, event) => {
+    const { desktopRequestId, ...body } = input || {};
+    // Older renderers remain compatible; new callers have a sender-scoped ID.
+    if (desktopRequestId === undefined) return invokeService('transcribeAudio', body, true);
+    if (typeof desktopRequestId !== 'string' || !/^[a-zA-Z0-9_-]{8,128}$/.test(desktopRequestId)) throw new Error('Invalid AI request identifier');
+    const key = `${event.sender.id}:${desktopRequestId}`;
+    if (aiRequests.has(key)) throw new Error('AI request identifier is already active');
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    aiRequests.set(key, { sender: event.sender, controller });
+    event.sender.once('destroyed', cancel);
+    try { return await invokeService('transcribeAudio', body, true, { signal: controller.signal }); }
+    finally {
+      aiRequests.delete(key);
+      event.sender.removeListener('destroyed', cancel);
+    }
+  });
+  handle('karkas:ai:cancel-request', ({ requestId }, event) => {
+    if (typeof requestId !== 'string' || !/^[a-zA-Z0-9_-]{8,128}$/.test(requestId)) return { cancelled: false };
+    const request = aiRequests.get(`${event.sender.id}:${requestId}`);
+    if (!request || request.sender !== event.sender) return { cancelled: false };
+    request.controller.abort();
+    return { cancelled: true };
+  });
   handle('karkas:updates:check', () => invokeService('checkUpdate'));
   handle('karkas:updates:install', async ({ url, fileName, requestId }, event) => {
     if (updateInProgress) throw new Error('An update is already in progress');
@@ -393,7 +421,7 @@ function registerIpc() {
     if (typeof url !== 'string') throw new Error('Missing download URL');
     if (typeof requestId !== 'string' || !requestId || requestId.length > 128) throw new Error('Missing update request identifier');
     const parsed = new URL(url);
-    if (!['https:', 'http:'].includes(parsed.protocol)) throw new Error('Unsupported download URL');
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password) throw updateDownloadError('UPDATE_DOWNLOAD_UNTRUSTED', 'Unsupported download URL');
     const safeName = path.basename(typeof fileName === 'string' && fileName ? fileName : `Karkas-Setup-${Date.now()}.exe`);
     if (!safeName.toLowerCase().endsWith('.exe') || !parsed.pathname.toLowerCase().endsWith('.exe')) throw new Error('Missing Windows installer asset');
     const destination = path.join(app.getPath('temp') || os.tmpdir(), `${Date.now()}-${randomUUID()}-${safeName}`);
@@ -413,12 +441,17 @@ function registerIpc() {
     let handedOff = false;
     try {
       publishPhase();
-      await downloadUpdateFile(url, destination, { signal: controller.signal });
+      // Renderer metadata is only a selection. The native process obtains trust independently.
+      const trusted = await resolveTrustedUpdate({ url, fileName: safeName, currentVersion: app.getVersion(), signal: controller.signal });
+      await downloadUpdateFile(trusted.url, destination, { signal: controller.signal, validateUrl: trusted.validateUrl });
       downloaded = true;
+      await verifyUpdateFile(destination, { ...trusted, signal: controller.signal });
       controller.signal.throwIfAborted();
       await awaitUpdatePreparation(persistWindowState, controller.signal);
       await confirmUpdateUnload(event.sender, controller.signal);
       controller.signal.throwIfAborted();
+      // Preparation can take time; reject a package modified while waiting for persistence.
+      await verifyUpdateFile(destination, { ...trusted, signal: controller.signal });
       // Lock cancellation synchronously before starting the installer process.
       operation.phase = 'installing';
       publishPhase();

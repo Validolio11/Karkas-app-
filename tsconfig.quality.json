@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "checkJs": true
+  },
+  "include": [
+    "src/utils/canonical.ts",
+    "src/utils/aiRecommendations.ts",
+    "src/utils/strategyLimits.ts",
+    "src/utils/localWorkspace.ts",
+    "src/utils/workspaceValidation.ts",
+    "src/utils/taskTimeStats.ts"
+  ],
+  "exclude": ["node_modules", "dist", "release", "visual-qa", "**/*.test.ts", "**/*.test.tsx", "**/*.test.cjs"]
+}

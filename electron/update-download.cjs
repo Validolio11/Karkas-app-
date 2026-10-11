@@ -1,4 +1,3 @@
-const http = require('node:http');
 const https = require('node:https');
 const fs = require('node:fs');
 const { pipeline } = require('node:stream/promises');
@@ -13,6 +12,7 @@ async function downloadUpdateFile(fileUrl, destination, {
   totalTimeoutMs = 10 * 60 * 1000,
   inactivityTimeoutMs = 30 * 1000,
   maxRedirects = 5,
+  validateUrl,
 } = {}) {
   const controller = new AbortController();
   let primaryFailure = null;
@@ -39,11 +39,11 @@ async function downloadUpdateFile(fileUrl, destination, {
     let currentUrl = new URL(fileUrl);
     for (let redirects = 0; ; redirects += 1) {
       controller.signal.throwIfAborted();
-      if (!['https:', 'http:'].includes(currentUrl.protocol)) throw updateDownloadError('UPDATE_DOWNLOAD_FAILED', 'Unsupported download protocol');
+      if (currentUrl.protocol !== 'https:' || currentUrl.username || currentUrl.password) throw updateDownloadError('UPDATE_DOWNLOAD_UNTRUSTED', 'Unsupported download URL');
+      validateUrl?.(currentUrl);
       touch();
       response = await new Promise((resolve, reject) => {
-        const transport = currentUrl.protocol === 'https:' ? https : http;
-        request = transport.get(currentUrl, {
+        request = https.get(currentUrl, {
           headers: { 'User-Agent': 'Karkas-App' }, signal: controller.signal,
         }, incoming => {
           // Keep an early response failure handled until pipeline takes ownership.

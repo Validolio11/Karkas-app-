@@ -20,7 +20,6 @@ export function classifyPersonalChatRequest(prompt: string, intent: AIIntent, ta
     return !!escaped && new RegExp(`(?:^|[^\\p{L}\\p{N}_-])${escaped}(?![\\p{L}\\p{N}_-])`, 'iu').test(input);
   };
   const matchingIds = live.filter(task => mentioned(task.title) || mentioned(task.id)).map(task => task.id);
-  const singleTarget = matchingIds.length ? matchingIds : live.length === 1 ? [live[0].id] : [];
   const requestPrefix = /^(?:(?:будь\s+ласка|please)[,:]?\s+|(?:можеш|можете|допоможи|допоможіть|can\s+you|could\s+you|help\s+me)\s+)/iu;
   let command = input;
   let requested = false;
@@ -33,6 +32,11 @@ export function classifyPersonalChatRequest(prompt: string, intent: AIIntent, ta
     const verbs: Record<string, string> = { створити: 'створи', додати: 'додай', змінити: 'зміни', оновити: 'онови', перейменувати: 'перейменуй', видалити: 'видали', прибрати: 'прибери', позначити: 'познач', завершити: 'заверши', відкрити: 'відкрий', повернути: 'поверни', розбити: 'розбий', розділити: 'розділи', запустити: 'запусти', увімкнути: 'увімкни', поставити: 'постав', призупинити: 'призупини', зупинити: 'зупини', вимкнути: 'вимкни' };
     command = command.replace(/^([^\s?!.,:;]+)/u, verb => verbs[verb] || verb);
   }
+  // Only a wholly unnamed command can use the sole task. An unmatched name
+  // (even when there is just one task) must leave scope empty for clarification.
+  const unnamedCommand = /^(?:видали|видаліть|прибери|заверши|завершіть|відкрий|поверни|розбий|розділи|запусти|увімкни|призупини|зупини|вимкни|delete|remove|complete|reopen|split|break\s+down|start|pause|stop)\s+(?:(?:це|цей|цю|поточне|поточний|поточну|єдине|the|this|current|only)\s+)*(?:завдання|задачу|таймер|task|timer)(?:\s+(?:для|for)\s+(?:(?:цього|поточного|the|this|current)\s+)?(?:завдання|task))?[.!?]?$/iu.test(command);
+  const unnamedTimerCommand = /^(?:(?:додай|додайте|постав|запусти|увімкни)\s+(?:таймер|відлік)(?:\s+на\s+\d+(?:[.,]\d+)?\s*(?:хвилин(?:и|у)?|хв\.?|годин(?:и|у)?|год\.?|секунд(?:и|у)?|сек\.?))?(?:\s+(?:до|для)\s+(?:(?:цього|поточного|єдиного)\s+)?завдання)?|(?:set|add|start|configure)\s+(?:(?:the|this|current|only)\s+)?(?:task\s+)?timer(?:\s+(?:to|for)\s+\d+(?:[.,]\d+)?\s*(?:minutes?|mins?|hours?|seconds?))?(?:\s+for\s+(?:(?:the|this|current|only)\s+)?task)?)[.!?]?$/iu.test(command);
+  const singleTarget = matchingIds.length ? matchingIds : live.length === 1 && (unnamedCommand || unnamedTimerCommand) ? [live[0].id] : [];
   const explicit = /^(?:створи|створіть|додай|додайте|зміни|змініть|онови|оновіть|перейменуй|перейменуйте|видали|видаліть|прибери|познач|заверши|завершіть|відкрий|поверни|розбий|розділи|запусти|увімкни|постав|призупини|зупини|вимкни|зменши|збільши|поміняй|перероби|скасуй|create|add|edit|update|rename|delete|remove|mark|complete|reopen|break\s+down|split|start|pause|stop|set|configure|reduce|increase|change|revise|cancel)(?![\p{L}\p{N}_])/iu.test(command);
   const hasPending = pendingProposal && ['tasks', 'tabs', 'taskUpdates', 'taskDeletions'].some(key => Array.isArray(pendingProposal[key]) && pendingProposal[key].length);
   if (hasPending && explicit && /(?:пропозиц|замість|\d+\s*(?:хв|год|min|hour)|proposal|instead|duration|priority|пріоритет)/iu.test(command)) {

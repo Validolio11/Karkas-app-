@@ -2,9 +2,9 @@ import express from "express";
 import { taskMutationProperties, taskTimerProperties, taskActionInstructions, validateTaskMutations, validatedTimerFields, normalizeAIOptionalFields, taskScheduleProperties, validatedScheduleFields, schedulingClockContext } from "./server/aiActions";
 import path from "path";
 import dotenv from "dotenv";
-import { GoogleGenAI, Modality, Type } from "@google/genai";
+import { type GoogleGenAI, Modality, Type } from "@google/genai";
 import { verifyGeminiKey } from "./server/geminiKeyVerification";
-import { AIRequestError, aiRequestFailure, classifyAIRequestError, generateGeminiWithFallback } from "./server/geminiGeneration";
+import { AIRequestError, aiRequestFailure, classifyAIRequestError, generateGeminiWithFallback, createGeminiClient } from "./server/geminiGeneration";
 import { isCompletedArchivedTask, isCancelledArchivedTask, selectRelevantArchivedTasks } from "./src/utils/taskArchive";
 import { recordedTaskSeconds, summarizeTaskTime } from "./src/utils/taskTimeStats";
 import { buildWorkInsights } from "./src/utils/workInsights";
@@ -12,6 +12,9 @@ import type { AIStrategyResponse } from './src/types';
 import { normalizeStrategyDiscovery, isPersonalStrategyReady, preparePersonalDiscoveryRequest, STRATEGY_DISCOVERY_TOPICS } from './src/utils/strategyDiscovery';
 import { classifyPersonalChatRequest, constrainOrdinaryChatResponse, constrainReadyPersonalResponse, personalGuidanceSystemPolicy, personalProfileForRequest, sanitizeDiscoveryResponse } from './server/strategyDiscovery';
 import { AI_CHAT_MODEL_TIMEOUT_MS, AI_CHAT_TOTAL_TIMEOUT_MS } from './src/utils/aiChatTiming';
+
+import { MAX_AUTONOMOUS_STRATEGY_ACTIONS } from './src/utils/strategyLimits';
+import { parseAIRecommendation } from './src/utils/aiRecommendations';
 
 dotenv.config();
 
@@ -167,7 +170,7 @@ function validateStrategyResponse(value: unknown, tasks: any[], taskSnapshots?: 
     output.memoryPatch = patch;
   }
   if (value.actions !== undefined) {
-    if (!Array.isArray(value.actions) || value.actions.length > 20) throw new Error('Invalid strategy actions');
+    if (!Array.isArray(value.actions) || value.actions.length > MAX_AUTONOMOUS_STRATEGY_ACTIONS) throw new Error('Invalid strategy actions');
     output.actions = value.actions.map((action: any) => {
       if (!isRecord(action) || !nonEmptyText(action.id) || !nonEmptyText(action.goalId) || !nonEmptyText(action.reason) || !['create', 'update'].includes(action.type) || !isRecord(action.changes)) throw new Error('Invalid strategy action');
       if (Object.keys(action.changes).some(key => !['title', 'phase', 'priority', 'note', 'schedule', 'stepTitles'].includes(key))) throw new Error('Forbidden autonomous task field');
@@ -244,14 +247,7 @@ ADAPTIVE WORK ANALYSIS:
 let geminiClient: GoogleGenAI | null = null;
 function getGeminiClient(): GoogleGenAI | null {
   if (!geminiClient && process.env.GEMINI_API_KEY) {
-    geminiClient = new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
-      httpOptions: {
-        headers: {
-          "User-Agent": "aistudio-build",
-        },
-      },
-    });
+    geminiClient = createGeminiClient(process.env.GEMINI_API_KEY);
   }
   return geminiClient;
 }
@@ -432,14 +428,7 @@ export async function assistHandler(req: any, res: any) {
     // Dynamic AI Client setup
     let ai = getGeminiClient();
     if (customApiKey && typeof customApiKey === "string") {
-      ai = new GoogleGenAI({
-        apiKey: customApiKey,
-        httpOptions: {
-          headers: {
-            "User-Agent": "aistudio-build",
-          },
-        },
-      });
+      ai = createGeminiClient(customApiKey);
     }
 
     // The client sends the complete state as fullAppContext. Accept both formats.
@@ -531,7 +520,7 @@ The app already selected this route. Ordinary requests remain available during o
 Populate strategy.memoryPatch using stable goal/entry ids reused from memory. New goals start agreed:false; never create your own consent. The app confirms selected goals using a scoped understanding summary. Facts source:user must quote the person's actual words; interpretations are source:hypothesis. Inferences require clarification.
 Omit memoryPatch.goals when goals are unchanged. Do not paraphrase or drop the fields of an agreed goal. Changing its title, motive, taskIds or categoryIds proposes a revised goal requiring a separate user confirmation before any autonomous action in that revised scope.
 When a user says they refused, did not start or got distracted and has not explained why, ask what happened and WAIT. Never infer laziness, lack of discipline or procrastination cause from an unfinished task. After their answer, adapt for fatigue, ambiguity, intimidating scope, external constraints, rest or a changed goal. Be direct and demanding about agreed commitments, without humiliation, blame or treating a human like a machine. If even a small step is difficult, explore why.
-Only for a READY personal request within goals ALREADY agreed in supplied memory may you autonomously create/update/schedule related tasks during conversation, using strategy.actions exclusively. Existing updates must be goal.taskIds, category must be goal.categoryIds. Max 3 useful changes; reuse existing tasks, avoid queue inflation after refusals. Give reason for each change. Never autonomously delete, complete, change recorded time/progress, start/configure timers, or invent new categories. New stepTitles preserve measured/completed steps. Return strategy status:ready and narrative/nextAction/focusTaskId only for an actual new agreed strategy, not for a clarification, reflection, analysis or ordinary task command. Do not put the same autonomous changes in legacy tasks/taskUpdates arrays. Outside agreed scope, legacy proposals require a UI application action.
+Only for a READY personal request within goals ALREADY agreed in supplied memory may you autonomously create/update/schedule related tasks during conversation, using strategy.actions exclusively. Existing updates must be goal.taskIds, category must be goal.categoryIds. Max ${MAX_AUTONOMOUS_STRATEGY_ACTIONS} useful changes; reuse existing tasks, avoid queue inflation after refusals. Give reason for each change. Never autonomously delete, complete, change recorded time/progress, start/configure timers, or invent new categories. New stepTitles preserve measured/completed steps. Return strategy status:ready and narrative/nextAction/focusTaskId only for an actual new agreed strategy, not for a clarification, reflection, analysis or ordinary task command. Do not put the same autonomous changes in legacy tasks/taskUpdates arrays. Outside agreed scope, legacy proposals require a UI application action.
 analysis never authorizes changes. All goal agreement must be based on current user confirmation, not your own strategy status.` : ''}
 When asking a personal clarification, populate strategy.memoryPatch.discovery.question with the question topic and exactly the same single question text. This keeps the active question available even beyond the recent conversation window; a question never replaces the saved strategy or permits task changes.
 RECENT CONVERSATION:
@@ -1148,14 +1137,7 @@ export async function breakdownTaskHandler(req: any, res: any) {
     // Dynamic AI Client setup
     let ai = getGeminiClient();
     if (customApiKey && typeof customApiKey === "string") {
-      ai = new GoogleGenAI({
-        apiKey: customApiKey,
-        httpOptions: {
-          headers: {
-            "User-Agent": "aistudio-build",
-          },
-        },
-      });
+      ai = createGeminiClient(customApiKey);
     }
 
     const effectiveAllTasks = (fullAppContext?.activeTasks || allTasks || []).filter((item: any) => !item.done && isLiveProductivityTask(item));
@@ -1298,14 +1280,7 @@ export async function recommendationsHandler(req: any, res: any) {
     // Dynamic AI Client setup
     let ai = getGeminiClient();
     if (customApiKey && typeof customApiKey === "string") {
-      ai = new GoogleGenAI({
-        apiKey: customApiKey,
-        httpOptions: {
-          headers: {
-            "User-Agent": "aistudio-build",
-          },
-        },
-      });
+      ai = createGeminiClient(customApiKey);
     }
 
     const activeTabIds: string[] = Array.isArray(tabs) && tabs.length > 0
@@ -1462,7 +1437,7 @@ Language: ${isUk ? "Ukrainian" : "English"}.`,
             reason: textOr(st.reason),
           }));
 
-          return res.json({
+          return res.json({ ...parseAIRecommendation({
             focusAdvice: textOr(parsed.focusAdvice, isUk ? "Закрийте пріоритетне завдання для імпульсу." : "Finish top priority task for momentum."),
             optimizationTip: textOr(parsed.optimizationTip, isUk ? "Групуйте дрібні задачі в 25-хвилинні спринти." : "Batch minor tasks in 25-min sprints."),
             workloadStatus: textOr(parsed.workloadStatus, isUk ? "🎯 ЧІТКИЙ ФОКУС" : "🎯 SHARP FOCUS"),
@@ -1470,8 +1445,9 @@ Language: ${isUk ? "Ukrainian" : "English"}.`,
             dropoffAnalysis: textOr(parsed.dropoffAnalysis),
             futureStrategy: textOr(parsed.futureStrategy),
             suggestedTasks: validatedSuggestedTasks,
-            workInsights,
             source: "gemini",
+          }),
+            workInsights,
             usedModel: response.usedModel,
             fallbackUsed: response.fallbackUsed,
           });
@@ -1623,10 +1599,7 @@ export async function voiceTokenHandler(req: any, res: any) {
     const { customApiKey } = req.body || {};
     let ai = getGeminiClient();
     if (customApiKey && typeof customApiKey === "string") {
-      ai = new GoogleGenAI({
-        apiKey: customApiKey,
-        httpOptions: { headers: { "User-Agent": "aistudio-build" } },
-      });
+      ai = createGeminiClient(customApiKey);
     }
 
     if (!ai) {
@@ -1643,7 +1616,15 @@ app.post("/api/ai/voice-token", voiceTokenHandler);
 
 // Audio transcription endpoint for voice dictation
 export async function transcribeAudioHandler(req: any, res: any) {
+  const controller = new AbortController();
+  const cancel = () => controller.abort(req.signal?.reason);
+  const closed = () => { if (!res.writableEnded) cancel(); };
+  req.signal?.addEventListener('abort', cancel, { once: true });
+  if (req.signal?.aborted || req.aborted) cancel();
+  req.on?.('aborted', cancel);
+  res.on?.('close', closed);
   try {
+    controller.signal.throwIfAborted();
     const { audioBase64, mimeType = "audio/webm", lang = "uk", customApiKey } = req.body || {};
     if (!audioBase64 || typeof audioBase64 !== "string") {
       return res.status(400).json({ error: "audioBase64 is required" });
@@ -1651,14 +1632,7 @@ export async function transcribeAudioHandler(req: any, res: any) {
 
     let ai = getGeminiClient();
     if (customApiKey && typeof customApiKey === "string") {
-      ai = new GoogleGenAI({
-        apiKey: customApiKey,
-        httpOptions: {
-          headers: {
-            "User-Agent": "aistudio-build",
-          },
-        },
-      });
+      ai = createGeminiClient(customApiKey);
     }
 
     if (!ai) {
@@ -1701,57 +1675,24 @@ export async function transcribeAudioHandler(req: any, res: any) {
 
     // Batch transcription deliberately uses fast, broadly available models and
     // does not inherit the chat model selected by the user.
-    const modelsToTry = ["gemini-2.5-flash", "gemini-flash-latest"];
-
-    let transcription = "";
-    let lastError: any = null;
-
-    for (const model of modelsToTry) {
-      try {
-        const response = await Promise.race([ai.models.generateContent({
-          model,
-          contents: [
-            {
-              role: "user",
-              parts: [
-                {
-                  inlineData: {
-                    mimeType: cleanMime,
-                    data: cleanBase64,
-                  },
-                },
-                {
-                  text: prompt,
-                },
-              ],
-            },
-          ],
-          config: {
-            temperature: 0.1,
-            thinkingConfig: {
-              thinkingBudget: 0,
-            },
-          },
-        }), new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`Gemini model ${model} timed out`)), 15000)
-        )]);
-        transcription = (response.text || "").trim();
-        break;
-      } catch (err: any) {
-        lastError = err;
-        console.warn(`Model ${model} transcription attempt failed:`, err?.message);
-      }
-    }
-
-    if (!transcription && lastError) {
-      throw lastError;
-    }
+    const response = await generateGeminiWithFallback({
+      ai, selectedModel: 'gemini-2.5-flash', fallbackModels: ['gemini-flash-latest'],
+      allowEmptyText: true, timeoutMs: 15_000, totalTimeoutMs: 30_000, signal: controller.signal,
+      contents: [{ role: 'user', parts: [
+        { inlineData: { mimeType: cleanMime, data: cleanBase64 } }, { text: prompt },
+      ] }],
+      config: { temperature: 0.1, thinkingConfig: { thinkingBudget: 0 } },
+    });
+    const transcription = response.text.trim();
 
     const cleanText = transcription.replace(/^["'«“]+|["'»”]+$/g, "").trim();
     return res.json({ text: cleanText });
   } catch (err: any) {
-    console.error("Transcribe audio error:", err);
-    return res.status(500).json({ error: err.message || "Failed to transcribe audio" });
+    return sendAIRequestFailure(res, err, req.body?.lang !== 'en');
+  } finally {
+    req.signal?.removeEventListener('abort', cancel);
+    req.removeListener?.('aborted', cancel);
+    res.removeListener?.('close', closed);
   }
 }
 app.post("/api/ai/transcribe-audio", transcribeAudioHandler);
@@ -1767,7 +1708,7 @@ const desktopHandlers: Record<string, (req: any, res: any) => Promise<any>> = {
 };
 
 /** Run an API service in-process for the Electron IPC bridge without opening a TCP listener. */
-export async function invokeDesktopApi(operation: string, body: any = {}) {
+export async function invokeDesktopApi(operation: string, body: any = {}, options: { signal?: AbortSignal } = {}) {
   const handler = desktopHandlers[operation];
   if (!handler) return { status: 404, body: { error: 'Unknown desktop API operation' } };
 
@@ -1784,7 +1725,8 @@ export async function invokeDesktopApi(operation: string, body: any = {}) {
     },
   };
 
-  await handler({ body }, response);
+  options.signal?.throwIfAborted();
+  await handler({ body, signal: options.signal }, response);
   return { status, body: responseBody };
 }
 

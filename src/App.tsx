@@ -8,7 +8,8 @@ import { isCompletedArchivedTask, selectRelevantArchivedTasks } from './utils/ta
 import { TaskCard } from './components/TaskCard';
 import { DashboardView } from './components/DashboardView';
 import { NotepadView } from './components/NotepadView';
-import { loadNotepadNotes, restoreNotepadNote } from './utils/notepadStorage';
+import { useAccountNotes } from './hooks/useAccountNotes';
+import { useDialogKeyboard } from './components/useDialogKeyboard';
 import { HistoryView } from './components/HistoryView';
 import { TopWorkflowMatrix } from './components/TopWorkflowMatrix';
 import { QuickAddDrawer } from './components/QuickAddDrawer';
@@ -69,10 +70,11 @@ import { stageStrategyTransaction, recoverStrategyTransaction, clearStrategyTran
 import type { PersonalStrategyProfile, AIResponse, AIIntent } from './types';
 import { isSystemView, migrateSystemCategories } from './utils/systemViews';
 import { writeRecoverableJson } from './utils/recoverableLocalStorage';
+import { readLocalWorkspace, parseAccountRecord } from './utils/localWorkspace';
+import { parseWorkspace } from './utils/workspaceValidation';
 
 const STORAGE_KEY = 'life_todo_tasks_v2';
 const DELETED_STORAGE_KEY = 'karkas_deleted_tasks_v2';
-const NOTEPAD_STORAGE_KEY = 'karkas_notepad_notes_v1';
 const TABS_KEY = 'life_todo_tabs_v2';
 
 const INITIAL_NOTES_UK: NotepadNote[] = [
@@ -124,6 +126,7 @@ const MAX_APP_ZOOM = 150;
 const DEFAULT_APP_ZOOM = 100;
 const APP_BUILD_VERSION = packageMetadata.version;
 const STARTUP_REQUEST_TIMEOUT_MS = 10000;
+const accountKeyForOwner = (uid: string | null) => 'karkas_workspace:' + (uid || 'guest');
 
 function requestStartupWithDeadline<T>(request: () => Promise<T>): Promise<T> {
   let timeout: number | undefined;
@@ -157,77 +160,32 @@ export default function App() {
     return 'uk';
   });
 
+  const [initialWorkspace] = useState(() => readLocalWorkspace(localStorage,
+    { tasks: STORAGE_KEY, tabs: TABS_KEY, deletedTasks: DELETED_STORAGE_KEY },
+    { soundEnabled: true, fireEnabled: true, lang, aiIconVariant: 'quantum' }));
+  const canPersistWorkspaceRef = React.useRef(initialWorkspace.canPersist);
   const t = TRANSLATIONS[lang];
-  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(initialWorkspace.recovered
+    ? (initialWorkspace.canPersist
+      ? (lang === 'uk' ? 'Локальні дані потребують відновлення. Початкові записи збережено в резервній копії; пошкоджені дані не застосовано.' : 'Local data needs recovery. Original records were backed up; invalid data was not applied.')
+      : (lang === 'uk' ? 'Не вдалося створити резервну копію пошкоджених даних. Збереження заблоковано. Звільніть місце на пристрої та перезапустіть застосунок; початкові записи не перезаписано.' : 'Could not back up damaged data. Saving is blocked. Free device storage and restart the app; original records were not overwritten.')) : null);
   const [completedNoticeId, setCompletedNoticeId] = useState<string | null>(null);
   const breakdownRequestRef = React.useRef<AbortController | null>(null);
   useEffect(() => { document.documentElement.lang = lang; }, [lang]);
   useEffect(() => () => breakdownRequestRef.current?.abort(), []);
 
   // Tabs state: supports adding, deleting, and renaming tabs
-  const [tabs, setTabs] = useState<TaskTab[]>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem(TABS_KEY);
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            // Ensure all tabs have a color
-            return parsed.map((tab: TaskTab, idx: number) => ({
-              ...tab,
-              color: tab.color || getRandomTabColor(parsed.slice(0, idx)),
-            }));
-          }
-        }
-      } catch (e) {
-        console.error('Failed to load tabs from localStorage', e);
-      }
-    }
-    return [];
-  });
-
-  // Load tasks from localStorage. A new installation starts with an empty workspace.
-  const [tasks, setTasks] = useState<PSTask[]>(() => {
-    let loaded: PSTask[] = [];
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem(STORAGE_KEY);
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            loaded = parsed.map((t: PSTask) => {
-              if (isSystemView(t.phase) && !tabs.some(tab => tab.id === t.phase)) {
-                return { ...t, phase: 'focus' };
-              }
-              return t;
-            });
-          }
-        } else {
-          // Check legacy key
-          const legacy = localStorage.getItem('ps_todo_tasks_v1');
-          if (legacy) {
-            const parsedLegacy = JSON.parse(legacy);
-            if (Array.isArray(parsedLegacy) && parsedLegacy.length > 0) {
-              loaded = parsedLegacy.map((t: PSTask) => {
-                if (isSystemView(t.phase) && !tabs.some(tab => tab.id === t.phase)) {
-                  return { ...t, phase: 'focus' };
-                }
-                return t;
-              });
-            }
-          }
-        }
-      } catch (e) {
-        console.error('Failed to load tasks from localStorage', e);
-      }
-    }
-    return sanitizeTasksTimerSafeguard(loaded);
-  });
+  const [tabs, setTabs] = useState<TaskTab[]>(() => initialWorkspace.workspace.tabs.map((tab, index, all) => ({
+    ...tab, color: tab.color || getRandomTabColor(all.slice(0, index)),
+  })));
+  const [tasks, setTasks] = useState<PSTask[]>(() => sanitizeTasksTimerSafeguard(initialWorkspace.workspace.tasks.map(task =>
+    isSystemView(task.phase) && !initialWorkspace.workspace.tabs.some(tab => tab.id === task.phase) ? { ...task, phase: 'focus' } : task)));
   const latestTasksRef = React.useRef(tasks);
   latestTasksRef.current = tasks;
   const notifiedTimersRef = React.useRef(new Set<string>());
   const timerNoticeScopeRef = React.useRef(0);
-  const timerWorkspaceReadyRef = React.useRef(true);
+  const timerWorkspaceReadyRef = React.useRef(false);
+  const [workspaceReady, setWorkspaceReady] = useState(false);
   const [timerNotice, setTimerNotice] = useState<string | null>(null);
   const notifiedSchedulesRef = React.useRef(new Set<string>());
   const archivedScheduleIdsRef = React.useRef<string[]>([]);
@@ -296,61 +254,10 @@ export default function App() {
     return 'ALL';
   });
 
-  const [initialNotes] = useState(() => loadNotepadNotes(
-    localStorage, NOTEPAD_STORAGE_KEY, lang === 'uk' ? INITIAL_NOTES_UK : INITIAL_NOTES_EN,
-  ));
-  const [notes, setNotes] = useState<NotepadNote[]>(initialNotes.notes);
-  const currentNotesRef = React.useRef(notes);
-  currentNotesRef.current = notes;
-  const [notesStorageError, setNotesStorageError] = useState(!initialNotes.canPersist);
-
-  useEffect(() => {
-    if (!initialNotes.canPersist) return;
-    try {
-      localStorage.setItem(NOTEPAD_STORAGE_KEY, JSON.stringify(currentNotesRef.current));
-      setNotesStorageError(false);
-    } catch (e) {
-      console.error('Failed to save notes to localStorage', e);
-      setNotesStorageError(true);
-    }
-  }, [notes, initialNotes.canPersist]);
-
-  const commitNoteEdit = (nextNotes: NotepadNote[]): boolean => {
-    if (!initialNotes.canPersist) {
-      setNotesStorageError(true);
-      return false;
-    }
-    try {
-      localStorage.setItem(NOTEPAD_STORAGE_KEY, JSON.stringify(nextNotes));
-    } catch (error) {
-      console.error('Failed to save note edit to localStorage', error);
-      setNotesStorageError(true);
-      return false;
-    }
-    currentNotesRef.current = nextNotes;
-    setNotes(nextNotes);
-    setNotesStorageError(false);
-    return true;
-  };
-
-  const handleAddNote = (newNote: Omit<NotepadNote, 'id' | 'createdAt'>): boolean => {
-    const created: NotepadNote = {
-      ...newNote,
-      id: `note-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      createdAt: Date.now(),
-    };
-    return commitNoteEdit([created, ...currentNotesRef.current]);
-  };
-
-  const handleUpdateNote = (id: string, updates: Partial<NotepadNote>): boolean => {
-    const currentNotes = currentNotesRef.current;
-    if (!currentNotes.some((note) => note.id === id)) return false;
-    return commitNoteEdit(currentNotes.map((note) => note.id === id ? { ...note, ...updates } : note));
-  };
-
-  const handleDeleteNote = (id: string) => {
-    setNotes((prev) => prev.filter((n) => n.id !== id));
-  };
+  const { notes, notesOwner, storageError: notesStorageError, switchOwner: switchNotesOwner,
+    addNote: handleAddNote, updateNote: handleUpdateNote, deleteNote: handleDeleteNote,
+    restoreNote: handleRestoreNote } = useAccountNotes(localStorage.getItem('karkas_workspace_owner'),
+      lang === 'uk' ? INITIAL_NOTES_UK : INITIAL_NOTES_EN);
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isAIOpen, setIsAIOpen] = useState(false);
   const [isManageTabsOpen, setIsManageTabsOpen] = useState(false);
@@ -522,6 +429,7 @@ export default function App() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [tabToDeleteConfirm, setTabToDeleteConfirm] = useState<TaskTab | null>(null);
+  useDialogKeyboard(!!tabToDeleteConfirm, () => setTabToDeleteConfirm(null), 'tab-delete-confirm-dialog');
   const searchInputRef = React.useRef<HTMLInputElement | null>(null);
 
   // Sync fullscreen state with browser fullscreen changes
@@ -806,17 +714,7 @@ export default function App() {
   }, [fireEnabled]);
 
   // Deleted tasks archive state
-  const [deletedTasks, setDeletedTasks] = useState<DeletedTask[]>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem(DELETED_STORAGE_KEY);
-        if (saved) return JSON.parse(saved);
-      } catch (e) {
-        console.error('Failed to load deleted tasks from localStorage', e);
-      }
-    }
-    return [];
-  });
+  const [deletedTasks, setDeletedTasks] = useState<DeletedTask[]>(initialWorkspace.workspace.deletedTasks);
 
   // Track state values inside refs to avoid re-subscribing Firestore listener unnecessarily
   const currentTasksRef = React.useRef(tasks);
@@ -838,6 +736,7 @@ export default function App() {
   // Persist each committed change before paint, with no pending timer on close.
   React.useLayoutEffect(() => {
     try {
+      if (!canPersistWorkspaceRef.current) return;
       writeRecoverableJson(localStorage, STORAGE_KEY, JSON.stringify(tasks));
     } catch (e) {
       console.error('Failed to save tasks to localStorage', e);
@@ -847,6 +746,7 @@ export default function App() {
   // Sync deletedTasks with localStorage
   useEffect(() => {
     try {
+      if (!canPersistWorkspaceRef.current) return;
       writeRecoverableJson(localStorage, DELETED_STORAGE_KEY, JSON.stringify(deletedTasks));
     } catch (e) {
       console.error('Failed to save deleted tasks to localStorage', e);
@@ -856,6 +756,7 @@ export default function App() {
   // Sync tabs with localStorage
   useEffect(() => {
     try {
+      if (!canPersistWorkspaceRef.current) return;
       writeRecoverableJson(localStorage, TABS_KEY, JSON.stringify(tabs));
     } catch (e) {
       console.error('Failed to save tabs to localStorage', e);
@@ -908,7 +809,7 @@ export default function App() {
   if (baseWorkspaceRef.current === undefined) {
     try {
       const cached = localStorage.getItem('karkas_workspace:' + (workspaceOwnerRef.current || 'guest'));
-      baseWorkspaceRef.current = cached ? JSON.parse(cached).base || null : null;
+      baseWorkspaceRef.current = cached ? parseAccountRecord(cached, localStorage, accountKeyForOwner(workspaceOwnerRef.current)).base || null : null;
     } catch { baseWorkspaceRef.current = null; }
   }
   const authGenerationRef = React.useRef(0);
@@ -917,7 +818,7 @@ export default function App() {
   const queuedRemoteRef = React.useRef<UserCloudState | null>(null);
   const autoSyncEnabledRef = React.useRef(autoSyncEnabled);
   autoSyncEnabledRef.current = autoSyncEnabled;
-  const accountKey = (uid: string | null) => 'karkas_workspace:' + (uid || 'guest');
+  const accountKey = accountKeyForOwner;
   const readWorkspace = (): WorkspaceState => normalizeWorkspaceForStorage({
     tasks: currentTasksRef.current,
     tabs: currentTabsRef.current,
@@ -930,6 +831,7 @@ export default function App() {
     },
   });
   const persistWorkspace = (): Promise<boolean> => {
+    if (!canPersistWorkspaceRef.current) return Promise.resolve(false);
     const ownerId = workspaceOwnerRef.current;
     const record = {
       workspace: readWorkspace(),
@@ -948,7 +850,8 @@ export default function App() {
     } catch { return Promise.resolve(false); }
   };
   const applyWorkspace = (input: WorkspaceState) => {
-    const value = migrateSystemCategories(input);
+    if (!canPersistWorkspaceRef.current) throw new Error('Recovery backup failed; workspace writes are blocked');
+    const value = migrateSystemCategories(parseWorkspace(input));
     ++timerNoticeScopeRef.current;
     setTimerNotice(null);
     latestTasksRef.current = value.tasks;
@@ -976,6 +879,7 @@ export default function App() {
   };
 
   React.useLayoutEffect(() => {
+    if (!timerWorkspaceReadyRef.current) return;
     try { persistWorkspace(); } catch (error) {
       console.error('Local account backup failed:', error);
     }
@@ -990,9 +894,16 @@ export default function App() {
       notifiedSchedulesRef.current.clear();
       latestTasksRef.current = [];
       timerWorkspaceReadyRef.current = false;
+      setWorkspaceReady(false);
+      setIsAIOpen(false);
+      setIsAddOpen(false);
+      setIsManageTabsOpen(false);
+      setTabToDeleteConfirm(null);
       savingRef.current = null;
       queuedRemoteRef.current = null;
       const uid = user?.uid || null;
+      let localAccountLoaded = false;
+      switchNotesOwner(uid);
       cloudSyncReadyRef.current = false;
       setIsCloudSyncReady(false);
       setCurrentUser(user);
@@ -1003,11 +914,14 @@ export default function App() {
       try {
         const previousOwner = workspaceOwnerRef.current;
         const cachedText = localStorage.getItem(accountKey(uid));
-        let cached = cachedText ? JSON.parse(cachedText) : null;
+        let cached = cachedText ? parseAccountRecord(cachedText, localStorage, accountKey(uid)) : null;
         if (window.karkasDesktop) {
           const desktopCached = await window.karkasDesktop.workspace.loadAccount(uid);
           if (generation !== authGenerationRef.current || (auth.currentUser?.uid ?? null) !== uid) return;
-          if (desktopCached.ok && desktopCached.value) {
+          if (!desktopCached.ok) throw new Error('Local account data could not be validated or loaded');
+          if (desktopCached.value) {
+            if (desktopCached.value.workspace) parseWorkspace(desktopCached.value.workspace);
+            if (desktopCached.value.base) parseWorkspace(desktopCached.value.base);
             // A pending paired commit makes its local snapshot authoritative until recovery finishes.
             const recoverLocal = cached?.workspace && readStrategyTransaction(localStorage, uid);
             cached = recoverLocal ? { ...desktopCached.value, ...cached } : desktopCached.value;
@@ -1047,7 +961,9 @@ export default function App() {
         } else {
           persistWorkspace();
         }
+        localAccountLoaded = true;
         timerWorkspaceReadyRef.current = true;
+        setWorkspaceReady(true);
         if (!user) return;
         setIsSyncing(true);
         const data = await fetchUserCloudData(user.uid);
@@ -1098,12 +1014,12 @@ export default function App() {
         setSyncStatus(navigator.onLine ? 'error' : 'offline');
       } finally {
         if (generation === authGenerationRef.current) {
-          if (workspaceOwnerRef.current === uid) {
+          if (localAccountLoaded && workspaceOwnerRef.current === uid) {
             latestTasksRef.current = currentTasksRef.current;
             timerWorkspaceReadyRef.current = true;
           }
-          cloudSyncReadyRef.current = Boolean(user);
-          setIsCloudSyncReady(Boolean(user));
+          cloudSyncReadyRef.current = Boolean(user) && localAccountLoaded;
+          setIsCloudSyncReady(Boolean(user) && localAccountLoaded);
           setIsSyncing(false);
         }
       }
@@ -1721,13 +1637,20 @@ export default function App() {
   }, [operationalTasks, activeFilter]);
 
   // Edit Task Title and Note
-  const handleEditTask = (id: string, updatedTitle: string, updatedNote?: string) => {
+  const handleEditTask = (id: string, updatedTitle: string, updatedNote: string, expected: { title: string; note: string }): boolean => {
+    if (!timerWorkspaceReadyRef.current || workspaceOwnerRef.current !== strategyOwner || (auth.currentUser?.uid ?? null) !== strategyOwner) return false;
+    const current = latestTasksRef.current.find(task => task.id === id);
+    const titleChanged = updatedTitle.trim() !== expected.title;
+    const noteChanged = updatedNote.trim() !== expected.note;
+    if (!current || !updatedTitle.trim() || titleChanged && current.title !== expected.title || noteChanged && (current.note || '') !== expected.note) return false;
     sound.activate();
+    const patch = { ...(titleChanged ? { title: updatedTitle.trim() } : {}), ...(noteChanged ? { note: updatedNote.trim() || undefined } : {}) };
     setTasks((prev) =>
       prev.map((t) =>
-        t.id === id ? { ...t, title: updatedTitle.trim(), note: updatedNote?.trim() || undefined } : t
+        t.id === id && (!titleChanged || t.title === expected.title) && (!noteChanged || (t.note || '') === expected.note) ? { ...t, ...patch } : t
       )
     );
+    return true;
   };
 
   // Tab management handlers
@@ -1848,6 +1771,7 @@ export default function App() {
           return {
             ...discardTaskStepAttribution(pauseTaskTimer(t)),
             timeSpentSeconds: 0,
+            timeResetAt: Math.max(Date.now(), (t.timeResetAt || 0) + 1),
             timerRunning: false,
             timerStartedAt: undefined,
           };
@@ -1860,7 +1784,7 @@ export default function App() {
   const handleUpdateTimeSpent = (id: string, seconds: number) => {
     sound.tick(500);
     const now = Date.now();
-    setTasks(prev => prev.map(task => task.id === id ? setTaskTimeSpent(task, seconds, now) : task));
+    setTasks(prev => prev.map(task => task.id === id ? { ...setTaskTimeSpent(task, seconds, now), timeResetAt: Math.max(now, (task.timeResetAt || 0) + 1) } : task));
   };
 
   const handleUpdateStep = (id: string, step: number) => {
@@ -2164,7 +2088,7 @@ export default function App() {
         lang={lang}
         aiIconVariant={aiIconVariant}
         historyCount={completedHistoryCount}
-        notesCount={notes.length}
+        notesCount={notesOwner === strategyOwner ? notes.length : 0}
         user={currentUser}
         isSyncing={isSyncing}
         autoSyncEnabled={autoSyncEnabled}
@@ -2261,7 +2185,9 @@ export default function App() {
           <button type="button" onClick={() => openStrategyChat(lang === 'uk' ? `Обговорімо це повідомлення: ${timerNotice}` : `Discuss this notice: ${timerNotice}`)} className="min-h-11 shrink-0 border border-amber-800 px-3 text-xs">{lang === 'uk' ? 'ШІ-чат' : 'AI chat'}</button>
           <button type="button" aria-label={lang === 'uk' ? 'Закрити сповіщення' : 'Dismiss notification'} onClick={() => setTimerNotice(null)} className="flex h-11 w-11 shrink-0 items-center justify-center hover:bg-white/10"><X className="h-5 w-5" /></button>
         </div>}
-        {selectedPhase === 'DASHBOARD' ? (
+        {!workspaceReady ? <p role="status" className="text-sm text-neutral-400">{syncError
+          ? (lang === 'uk' ? 'Не вдалося безпечно завантажити простір. Дані збережено для відновлення.' : 'Could not safely load the workspace. Data was retained for recovery.')
+          : (lang === 'uk' ? 'Завантажуємо ваш простір…' : 'Loading your workspace…')}</p> : selectedPhase === 'DASHBOARD' ? (
           <DashboardView
             tasks={operationalTasks}
             deletedTasks={deletedTasks}
@@ -2291,11 +2217,13 @@ export default function App() {
         ) : selectedPhase === 'NOTES' ? (
           <NotepadView
             lang={lang}
-            notes={notes}
+            key={notesOwner === null ? 'guest' : `account:${notesOwner}`}
+            ownerId={notesOwner}
+            notes={notesOwner === strategyOwner ? notes : []}
             onAddNote={handleAddNote}
             onUpdateNote={handleUpdateNote}
             onDeleteNote={handleDeleteNote}
-            onRestoreNote={(note) => setNotes((prev) => restoreNotepadNote(prev, note))}
+            onRestoreNote={handleRestoreNote}
             storageError={notesStorageError}
           />
         ) : selectedPhase === 'HISTORY' ? (
@@ -2668,6 +2596,7 @@ export default function App() {
       {/* Manage Tabs Modal */}
       <ManageTabsModal
         isOpen={isManageTabsOpen}
+        keyboardEnabled={!tabToDeleteConfirm}
         tabs={tabs}
         lang={lang}
         onClose={() => setIsManageTabsOpen(false)}
@@ -2782,12 +2711,13 @@ export default function App() {
               initial={{ opacity: 0, scale: 0.96 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.96 }}
+              id="tab-delete-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="tab-delete-confirm-title"
               className="w-full max-w-md bg-[#0c0c0e] border border-neutral-800 shadow-2xl p-5 sm:p-6 flex flex-col gap-4 text-neutral-100 font-sans"
             >
               <div className="flex items-center justify-between border-b border-neutral-800/80 pb-3">
                 <div className="flex items-center gap-2">
                   <Trash className="w-4 h-4 text-red-400 shrink-0" />
-                  <h3 className="text-xs font-bold tracking-wider uppercase text-neutral-200">
+                  <h3 id="tab-delete-confirm-title" className="text-xs font-bold tracking-wider uppercase text-neutral-200">
                     {(t as any).tabDeleteModal?.title || (lang === 'uk' ? 'ПІДТВЕРДЖЕННЯ ВИДАЛЕННЯ ВКЛАДКИ' : 'CONFIRM TAB DELETION')}
                   </h3>
                 </div>

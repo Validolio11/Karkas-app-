@@ -79,6 +79,18 @@ test('strategy updates attach the original task snapshot and reject protected au
   assert.equal(refused.status, 502);
   assert.equal(refused.body.code, 'INVALID_AI_RESPONSE');
 });
+
+test('server rejects an oversized autonomous change set rather than returning partial task mutations', async () => {
+  mockProvider(() => success({ reply: 'Four new actions', strategy: { status: 'ready', actions: Array.from({ length: 4 }, (_, index) => ({
+    id: `new-${index}`, goalId: 'g', type: 'create', reason: 'Next action', changes: { title: `Next ${index}`, phase: 'work' },
+  })) } }));
+  const result = await chat({ prompt: 'Підбери наступні дії для моєї цілі', strategyContext: confirmedProfile(), tabs: ['work'] });
+  assert.equal(result.status, 502);
+  assert.equal(result.body.code, 'INVALID_AI_RESPONSE');
+  assert.deepEqual(result.body.tasks, []);
+  assert.deepEqual(result.body.taskUpdates, []);
+  assert.equal(calls.length, 3);
+});
 test('analysis intent never delivers task mutations even if a provider proposes them', async () => {
   mockProvider(() => success({ reply: 'Review the measurements.', tasks: [{ title: 'New', phase: 'work', priority: 2, steps: 0 }], strategy: {
     actions: [{ id: 'a', goalId: 'g', type: 'create', reason: 'Next', changes: { title: 'New', phase: 'work' } }], narrative: 'Review the measurements.',
@@ -361,7 +373,7 @@ test('existing-task forty-minute timer with null optional text remains a valid c
     id: 't1', title: null, note: null, phase: null, priority: null, done: null, steps: null, stepList: null,
     timerMode: null, countdownDurationSeconds: 2400, timerAction: null,
   }], taskDeletions: null }));
-  const result = await chat({ prompt: 'Додай таймер на 40 хвилин до пошуку референсів', currentTasks: [{ id: 't1', title: lottieTask.title, note: 'Моя примітка' }] });
+  const result = await chat({ prompt: `Додай таймер на 40 хвилин до завдання ${lottieTask.title}`, currentTasks: [{ id: 't1', title: lottieTask.title, note: 'Моя примітка' }] });
   assert.equal(result.status, 200);
   assert.deepEqual(result.body.taskUpdates, [{ id: 't1', countdownDurationSeconds: 2400, timerMode: 'countdown' }]);
   assert.equal(calls.length, 1);
@@ -619,6 +631,20 @@ test('the generation deadline aborts every unfinished SDK transport and stays bo
   assert.ok(performance.now() - started < 500);
   assert.ok(calls.length >= 1 && calls.length <= 3);
   assert.ok(calls.every(call => call.signal?.aborted));
+});
+
+test('cancelling transcription transport aborts the provider without trying fallback models', async () => {
+  const controller = new AbortController();
+  mockProvider((_model, _body, options) => new Promise((_resolve, reject) => {
+    options.signal!.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+    controller.abort(new DOMException('User cancelled', 'AbortError'));
+  }));
+  await assert.rejects(generateGeminiWithFallback({
+    ai: new GoogleGenAI({ apiKey: 'test-only-fake-key' }), contents: [{ inlineData: { mimeType: 'audio/webm', data: 'dGVzdA==' } }], config: {},
+    signal: controller.signal, timeoutMs: 100, totalTimeoutMs: 300,
+  }), (error: unknown) => error instanceof Error && error.name === 'AbortError');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].signal?.aborted, true);
 });
 
 test('structured API key reasons and malformed request failures are categorized without disclosure', () => {

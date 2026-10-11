@@ -28,7 +28,10 @@ export function getTaskSessionSeconds(task: PSTask, now = Date.now()): number {
 }
 
 export function getTaskTotalSeconds(task: PSTask, now = Date.now()): number {
-  return seconds(task.timeSpentSeconds) + getTaskSessionSeconds(task, now);
+  const sessionId = task.timerRunning && Number.isFinite(task.timerStartedAt)
+    ? task.timerSessionId ?? `legacy:${task.timerStartedAt}:${task.timeResetAt ?? 0}` : undefined;
+  const alreadyBanked = sessionId ? task.timeSessions?.[sessionId]?.seconds ?? 0 : 0;
+  return seconds(task.timeSpentSeconds) + Math.max(0, getTaskSessionSeconds(task, now) - alreadyBanked);
 }
 
 /** Undefined means this task uses the stopwatch rather than a countdown. */
@@ -39,11 +42,20 @@ export function getTaskRemainingSeconds(task: PSTask, now = Date.now()): number 
 
 export function pauseTaskTimer(task: PSTask, now = Date.now()): PSTask {
   const remaining = getTaskRemainingSeconds(task, now);
+  const elapsed = getTaskSessionSeconds(task, now);
+  const sessionId = task.timerRunning && Number.isFinite(task.timerStartedAt)
+    ? task.timerSessionId ?? `legacy:${task.timerStartedAt}:${task.timeResetAt ?? 0}` : undefined;
+  const previousSeconds = sessionId ? task.timeSessions?.[sessionId]?.seconds ?? 0 : 0;
+  const bankedSeconds = Math.max(0, elapsed - previousSeconds);
   return {
-    ...bankTaskStepSession(task, getTaskSessionSeconds(task, now)),
-    timeSpentSeconds: getTaskTotalSeconds(task, now),
+    ...bankTaskStepSession(task, bankedSeconds),
+    timeSpentSeconds: seconds(task.timeSpentSeconds) + bankedSeconds,
+    ...(sessionId ? { timeSessions: { ...task.timeSessions, [sessionId]: {
+      seconds: Math.max(previousSeconds, elapsed), ...(task.timerStepId ? { stepId: task.timerStepId } : {}),
+    } } } : {}),
     timerRunning: false,
     timerStartedAt: undefined,
+    timerSessionId: undefined,
     timerStepId: undefined,
     ...(remaining === undefined ? {} : { countdownRemainingSeconds: remaining }),
   };
@@ -61,6 +73,7 @@ export function startTaskTimer(task: PSTask, now = Date.now()): PSTask {
     timerRunning: true,
     startedAt: Number.isFinite(task.startedAt) ? task.startedAt : now,
     timerStartedAt: now,
+    timerSessionId: crypto.randomUUID(),
     timerStepId: activeTaskStepId(paused),
     autoPausedOverdue: false,
     ...(remaining === undefined ? {} : {
@@ -82,6 +95,7 @@ export function configureTaskCountdown(task: PSTask, durationSeconds: number, no
     countdownRemainingSeconds: duration,
     timerRunning: true,
     timerStartedAt: now,
+    timerSessionId: crypto.randomUUID(),
     timerStepId: activeTaskStepId(task),
     startedAt: Number.isFinite(task.startedAt) ? task.startedAt : now,
     autoPausedOverdue: false,
@@ -109,6 +123,7 @@ export function extendTaskCountdown(task: PSTask, extraSeconds: number, now = Da
     countdownRemainingSeconds: remaining + extraSeconds,
     timerRunning: running,
     timerStartedAt: running ? now : undefined,
+    timerSessionId: running ? crypto.randomUUID() : undefined,
     timerStepId: running ? activeTaskStepId(paused) : undefined,
     autoPausedOverdue: false,
   };

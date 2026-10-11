@@ -3,6 +3,7 @@ import { motion, AnimatePresence, useMotionValue, useTransform, useDragControls 
 import { PSTask, TaskTab } from '../types';
 import { sound } from '../utils/audio';
 import { getTaskTotalSeconds, getTaskRemainingSeconds, getTaskTimerMode } from '../utils/taskTimer';
+import { formatDigitalDuration as formatTime, formatDurationFull } from '../utils/taskTimeStats';
 import { Language, TRANSLATIONS } from '../utils/i18n';
 import { AIIcon } from './AIIconTemplates';
 import { TaskTimeDialog } from './TaskTimeDialog';
@@ -36,7 +37,7 @@ interface TaskCardProps {
   onCyclePhase: (id: string) => void;
   onTogglePin: (id: string) => void;
   onDelete: (id: string) => void;
-  onEditTask?: (taskId: string, updatedTitle: string, updatedNote?: string) => void;
+  onEditTask?: (taskId: string, updatedTitle: string, updatedNote: string, expected: { title: string; note: string }) => boolean;
   onAskAIAboutTask: (taskTitle: string) => void;
   onToggleStepItem?: (taskId: string, stepIndex: number) => void;
   onAddStepItem?: (taskId: string, stepTitle: string) => void;
@@ -50,34 +51,6 @@ interface TaskCardProps {
   onConfigureCountdown?: (taskId: string, seconds: number) => void;
   onExtendCountdown?: (taskId: string, extraSeconds: number) => void;
   onClearCountdown?: (taskId: string) => void;
-}
-
-function formatTime(totalSeconds: number): string {
-  const s = Math.max(0, Math.floor(totalSeconds));
-  const hrs = Math.floor(s / 3600);
-  const mins = Math.floor((s % 3600) / 60);
-  const secs = s % 60;
-
-  if (hrs > 0) {
-    return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-  }
-  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-}
-
-function formatDurationFull(totalSeconds: number, lang: Language): string {
-  const s = Math.max(0, Math.floor(totalSeconds));
-  const hrs = Math.floor(s / 3600);
-  const mins = Math.floor((s % 3600) / 60);
-  const secs = s % 60;
-
-  if (lang === 'uk') {
-    if (hrs > 0) return `${hrs} год ${mins} хв ${secs} сек`;
-    if (mins > 0) return `${mins} хв ${secs} сек`;
-    return `${secs} сек`;
-  }
-  if (hrs > 0) return `${hrs}h ${mins}m ${secs}s`;
-  if (mins > 0) return `${mins}m ${secs}s`;
-  return `${secs}s`;
 }
 
 const KNOWN_PHASE_COLORS: Record<string, { bg: string; text: string; border: string }> = {
@@ -131,6 +104,8 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
   const [isEditingTask, setIsEditingTask] = useState(false);
   const [editTitleText, setEditTitleText] = useState(task.title);
   const [editNoteText, setEditNoteText] = useState(task.note || '');
+  const editBase = useRef({ title: task.title, note: task.note || '' });
+  const [editConflict, setEditConflict] = useState(false);
   const [isConfiguringTimer, setIsConfiguringTimer] = useState(false);
   const [correctionOpen, setCorrectionOpen] = useState(false);
   const [now, setNow] = useState(Date.now());
@@ -293,6 +268,8 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
           if (isEditingTask || (target instanceof Element && target.closest('button, input, textarea, select, a, [role="button"], [contenteditable="true"]'))) return;
           e.preventDefault();
           sound.tick(500);
+          editBase.current = { title: task.title, note: task.note || '' };
+          setEditConflict(false);
           setEditTitleText(task.title);
           setEditNoteText(task.note || '');
           setIsEditingTask(true);
@@ -453,6 +430,8 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                 onClick={(e) => {
                   e.stopPropagation();
                   sound.tick(500);
+                  editBase.current = { title: task.title, note: task.note || '' };
+                  setEditConflict(false);
                   setEditTitleText(task.title);
                   setEditNoteText(task.note || '');
                   setIsEditingTask((prev) => !prev);
@@ -545,7 +524,10 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   onSubmit={(e) => {
                     e.preventDefault();
                     if (!editTitleText.trim() || !onEditTask) return;
-                    onEditTask(task.id, editTitleText.trim(), editNoteText.trim());
+                    if (!onEditTask(task.id, editTitleText.trim(), editNoteText.trim(), editBase.current)) {
+                      setEditConflict(true);
+                      return;
+                    }
                     setIsEditingTask(false);
                   }}
                   onClick={(e) => e.stopPropagation()}
@@ -573,6 +555,9 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                     placeholder={lang === 'uk' ? 'Нотатка (необов\'язково)...' : 'Note (optional)...'}
                     className="w-full px-2.5 py-1.5 bg-[#0d0d12] border border-neutral-800 text-neutral-300 text-sm leading-relaxed font-sans focus:outline-none focus:border-neutral-600 transition-colors"
                   />
+                  {editConflict && <p role="alert" className="text-xs text-amber-300">{lang === 'uk'
+                    ? 'Це поле вже змінилося. Ваш текст збережено у формі. Скасуйте й відкрийте редагування знову, щоб побачити актуальні дані.'
+                    : 'This field changed while you were editing. Your draft remains here. Cancel and reopen editing to see the current data.'}</p>}
                   <div className="flex items-center justify-end gap-2 pt-1">
                     <button
                       type="button"

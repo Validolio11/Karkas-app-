@@ -6,7 +6,6 @@ import {
   signInWithCredential,
   signInWithRedirect,
   signOut,
-  onAuthStateChanged,
   User,
 } from 'firebase/auth';
 import {
@@ -19,6 +18,7 @@ import {
 import firebaseConfig from '../../firebase-applet-config.json';
 import { PSTask, TaskTab, DeletedTask } from '../types';
 import { serializeTaskForCloud } from '../utils/cloudTaskSerialization';
+import { parseWorkspace } from '../utils/workspaceValidation';
 import { assertCloudPayloadWithinLimit, isSyncMutationApplied, mergeWorkspace, recordSyncMutation, sameWorkspace, type SyncMutationIdentity, type WorkspaceState } from '../utils/syncState';
 import {
   buildCloudShadowPlan,
@@ -71,6 +71,31 @@ export interface UserCloudState {
   shadowSchemaVersion?: 2 | null;
   shadowRevision?: number | null;
   shadowStatus?: 'ready' | 'migrating' | 'deferred';
+}
+
+function parseCloudState(value: unknown, ownerId: string): UserCloudState {
+  try {
+    parseWorkspace(value);
+    const state = value as UserCloudState;
+    if (state.userId !== ownerId || !Number.isFinite(state.updatedAt) || state.updatedAt < 0 ||
+        (state.revision !== undefined && (!Number.isSafeInteger(state.revision) || state.revision < 0))) {
+      throw new Error('Cloud workspace owner or revision is invalid');
+    }
+    return state;
+  } catch (error) {
+    // Keep the original cloud document intact and retain an account-scoped local
+    // copy. No sanitized partial document can overwrite the source on next sync.
+    if (typeof localStorage !== 'undefined') {
+      const raw = JSON.stringify(value);
+      const prefix = `karkas_cloud_recovery:${encodeURIComponent(ownerId)}:`;
+      const previous = localStorage.getItem(`${prefix}latest`);
+      if (previous !== raw) {
+        localStorage.setItem(`${prefix}${Date.now()}`, raw);
+        localStorage.setItem(`${prefix}latest`, raw);
+      }
+    }
+    throw error;
+  }
 }
 
 function emptyWorkspace(settings: WorkspaceState['settings']): WorkspaceState & { revision: number } {
@@ -136,7 +161,7 @@ export async function advanceUserCloudShadowMigration(userId: string, maxBatches
       const checkpointRef = doc(db, 'users', userId, 'workspace', 'migration');
       const rootSnapshot = await transaction.get(rootRef);
       if (!rootSnapshot.exists()) return true;
-      const root = rootSnapshot.data() as UserCloudState;
+      const root = parseCloudState(rootSnapshot.data(), userId);
       const revision = Number(root.revision) || 0;
       if (revision < 1) throw new Error('Cloud workspace revision is invalid');
       const manifestSnapshot = await transaction.get(manifestRef);
@@ -204,12 +229,8 @@ export async function loginWithGoogle(): Promise<User> {
     const result = await signInWithPopup(auth, googleProvider);
     return result.user;
   } catch (error: any) {
-    if (
-      error?.code === 'auth/popup-blocked' ||
-      error?.code === 'auth/popup-closed-by-user' ||
-      error?.code === 'auth/cancelled-popup-request'
-    ) {
-      console.warn('Popup blocked or closed, attempting redirect fallback...');
+    if (error?.code === 'auth/popup-blocked') {
+      console.warn('Popup blocked, attempting redirect fallback...');
       try {
         await signInWithRedirect(auth, googleProvider);
       } catch (redirectErr) {
@@ -258,11 +279,13 @@ export async function saveUserCloudData(
   if (!currentUser || currentUser.uid !== userId) {
     throw new Error('User is not authorized to save this cloud data');
   }
+  parseWorkspace(data);
+  if (base) parseWorkspace(base);
 
   const userDocRef = doc(db, 'users', userId);
   const saved = await runTransaction(db, async (transaction) => {
   const snapshot = await transaction.get(userDocRef);
-  const existing = snapshot.exists() ? snapshot.data() as UserCloudState : null;
+  const existing = snapshot.exists() ? parseCloudState(snapshot.data(), userId) : null;
   let syncClientRef: ReturnType<typeof doc> | null = null;
   if (mutation) {
     if (!/^[a-zA-Z0-9_-]{8,80}$/.test(mutation.clientId) || !Number.isSafeInteger(mutation.sequence) || mutation.sequence < 1) {
@@ -377,7 +400,7 @@ export async function fetchUserCloudData(userId: string): Promise<UserCloudState
   const userDocRef = doc(db, 'users', userId);
   const snapshot = await getDocFromServer(userDocRef);
   if (snapshot.exists()) {
-    return snapshot.data() as UserCloudState;
+    return parseCloudState(snapshot.data(), userId);
   }
   return null;
 }
@@ -413,7 +436,7 @@ export async function fetchUserCloudShadowData(userId: string, expectedRevision:
     documentId: snapshot.id,
   })) as CloudShadowStoredTab[];
   const settingsDocument = settingsSnapshot.data() as CloudShadowStoredSettings;
-  return materializeCloudShadow(manifest, taskDocuments, tabDocuments, settingsDocument);
+  return parseWorkspace(materializeCloudShadow(manifest, taskDocuments, tabDocuments, settingsDocument));
 }
 
 export async function verifyUserCloudShadowData(userId: string, legacy: UserCloudState): Promise<boolean> {
@@ -457,7 +480,8 @@ export function subscribeToUserCloudData(
     { includeMetadataChanges: true },
     (snapshot) => {
       if (snapshot.exists() && !snapshot.metadata.fromCache && !snapshot.metadata.hasPendingWrites) {
-        onData(snapshot.data() as UserCloudState);
+        try { onData(parseCloudState(snapshot.data(), userId)); }
+        catch (error) { onError?.(error instanceof Error ? error : new Error('Invalid cloud workspace')); }
       }
     },
     (error) => {

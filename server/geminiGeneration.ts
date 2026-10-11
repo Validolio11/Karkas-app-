@@ -1,4 +1,8 @@
-import type { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI } from '@google/genai';
+
+export const createGeminiClient = (apiKey: string) => new GoogleGenAI({
+  apiKey, httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
+});
 
 export type AIRequestCode = 'MISSING_API_KEY' | 'INVALID_API_KEY' | 'ACCESS_DENIED'
   | 'QUOTA_EXCEEDED' | 'NETWORK_ERROR' | 'TIMEOUT' | 'MODEL_UNAVAILABLE'
@@ -64,20 +68,34 @@ export function aiRequestFailure(error: AIRequestError, isUk: boolean) {
 /** Bound the whole operation and cancel transport before trying a distinct fallback. */
 export async function generateGeminiWithFallback({
   ai, contents, config, selectedModel, validateResponse, timeoutMs = 15_000, totalTimeoutMs = 30_000,
+  fallbackModels, allowEmptyText = false, signal,
 }: {
-  ai: GoogleGenAI; contents: string; config: any; selectedModel?: string;
+  ai: GoogleGenAI; contents: Parameters<GoogleGenAI['models']['generateContent']>[0]['contents']; config: any; selectedModel?: string;
   validateResponse?: (text: string) => unknown;
   timeoutMs?: number; totalTimeoutMs?: number;
+  fallbackModels?: string[]; allowEmptyText?: boolean;
+  signal?: AbortSignal;
 }) {
+  signal?.throwIfAborted();
   const selected = typeof selectedModel === 'string' ? selectedModel.trim().replace(/^models\//, '') : '';
-  const models = [...new Set([selected, 'gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-flash-latest'].filter(Boolean))];
+  const models = [...new Set([selected, ...(fallbackModels ?? ['gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-flash-latest'])].filter(Boolean))];
   const deadline = Date.now() + totalTimeoutMs;
   let lastError = new AIRequestError('MODEL_UNAVAILABLE');
   for (const model of models) {
+    signal?.throwIfAborted();
     const remaining = deadline - Date.now();
     if (remaining <= 0) throw new AIRequestError('TIMEOUT');
     const attemptMs = Math.min(timeoutMs, remaining);
     const controller = new AbortController();
+    let cancelAttempt: (() => void) | undefined;
+    const cancelled = new Promise<never>((_, reject) => {
+      cancelAttempt = () => {
+        controller.abort(signal?.reason);
+        reject(signal?.reason ?? new DOMException('Request cancelled', 'AbortError'));
+      };
+      signal?.addEventListener('abort', cancelAttempt, { once: true });
+      if (signal?.aborted) cancelAttempt();
+    });
     let timer: ReturnType<typeof setTimeout>;
     const timedOut = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
@@ -95,15 +113,19 @@ export async function generateGeminiWithFallback({
           },
         }),
         timedOut,
+        cancelled,
       ]);
-      if (!response?.text?.trim()) throw new AIRequestError('INVALID_AI_RESPONSE');
+      const responseText = response?.text ?? '';
+      if (!responseText.trim() && !allowEmptyText) throw new AIRequestError('INVALID_AI_RESPONSE');
       let validatedResponse: unknown;
       if (validateResponse) {
-        try { validatedResponse = validateResponse(response.text); }
+        try { validatedResponse = validateResponse(responseText); }
         catch { throw new AIRequestError('INVALID_AI_RESPONSE'); }
       }
-      return { ...response, text: response.text, usedModel: model, fallbackUsed: model !== models[0], validatedResponse };
+      return { ...response, text: responseText, usedModel: model, fallbackUsed: model !== models[0], validatedResponse };
     } catch (error) {
+      // Cancelling the parent request must never start another provider attempt.
+      if (signal?.aborted) throw signal.reason ?? error;
       const failure = classifyAIRequestError(error);
       // This attempt was allotted the entire remaining operation budget. A transport
       // timeout can fire fractionally before Date.now reaches the deadline; do not
@@ -115,6 +137,7 @@ export async function generateGeminiWithFallback({
           failure.code === 'PROVIDER_ERROR' && Number((error as any)?.status) < 500) throw failure;
     } finally {
       clearTimeout(timer!);
+      if (cancelAttempt) signal?.removeEventListener('abort', cancelAttempt);
     }
   }
   throw lastError;

@@ -12,6 +12,14 @@ const profile = () => confirmedProfile([{ id: 'g', title: 'Learn', motive: 'Free
 const options = (actions: StrategyAction[]) => ({ tasks: [task], profile: profile(), actions, ownerId: 'a', currentOwnerId: 'a', turnId: 'turn', tabs: [{ id: 'work', name: 'Work' }], now: 100 });
 const action = (changes: StrategyAction['changes']): StrategyAction => ({ id: 'action', goalId: 'g', type: 'update', taskId: 't', expectedTask: task, reason: 'Reduce friction', changes });
 
+test('over-limit autonomous proposals are rejected atomically without partially creating tasks', () => {
+  const actions: StrategyAction[] = Array.from({ length: 4 }, (_, index) => ({ id: `create-${index}`, goalId: 'g', reason: 'Next action', type: 'create', changes: { title: `Next ${index}`, phase: 'work' } }));
+  const oversized = applyStrategyActions(options(actions));
+  assert.equal(oversized.applied.length, 0);
+  assert.deepEqual(oversized.tasks, [task]);
+  assert.equal(applyStrategyActions(options(actions.slice(0, 3))).applied.length, 3);
+});
+
 test('autonomous changes preserve work readings and measured/completed steps', () => {
   const result = applyStrategyActions(options([action({ title: 'A smaller beginning', stepTitles: ['A next small step'] })]));
   assert.equal(result.applied.length, 1);

@@ -1,0 +1,16 @@
+{
+  "version": "1.3.3",
+  "fileVersion": "1.3.3",
+  "installer": "Karkas-Setup-1.3.3.exe",
+  "bundle": "app-C3tNe9oi.js",
+  "sha512": "feJi03bNTjJOdX/JF2o3MZ1IlzlgVM0QmGv7I0Apqubr2VLoF9zZmEoo8ON4UjcoW3VXrVAzn8oRep5QE/58kg==",
+  "size": 138848927,
+  "fullTests": 499,
+  "packagedRuntimeTests": 2,
+  "typescript": "passed",
+  "production": "passed",
+  "windows": "passed",
+  "isolatedUi": "passed",
+  "asarMatchesProduction": true,
+  "matchedFiles": 37
+}

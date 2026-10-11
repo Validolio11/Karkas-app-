@@ -30,6 +30,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 
 interface NotepadViewProps {
+  ownerId?: string | null;
   lang: Language;
   notes: NotepadNote[];
   onAddNote: (note: Omit<NotepadNote, 'id' | 'createdAt'>) => boolean;
@@ -58,6 +59,7 @@ export const NOTE_COLOR_PRESETS = [
 ];
 
 export const NotepadView: React.FC<NotepadViewProps> = ({
+  ownerId = null,
   lang,
   notes,
   onAddNote,
@@ -69,8 +71,8 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
   const t = TRANSLATIONS[lang];
   const nv = t.notepadView;
   const [initialDrafts] = useState(() => {
-    try { return loadNotepadDrafts(localStorage); }
-    catch { return loadNotepadDrafts(); }
+    try { return loadNotepadDrafts(localStorage, ownerId); }
+    catch { return loadNotepadDrafts(undefined, ownerId); }
   });
   const [draftStorageError, setDraftStorageError] = useState(!initialDrafts.canPersist);
   const [draftCanPersist, setDraftCanPersist] = useState(initialDrafts.canPersist);
@@ -134,15 +136,15 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
       edit: hasEditDraft ? { title: editTitle, content: editContent, color: editColor, base: editBase } : null,
     };
     let saved = false;
-    try { saved = saveNotepadDrafts(localStorage, drafts, draftCanPersist); }
-    catch { saved = saveNotepadDrafts(undefined, drafts, false); }
+    try { saved = saveNotepadDrafts(localStorage, drafts, draftCanPersist, ownerId); }
+    catch { saved = saveNotepadDrafts(undefined, drafts, false, ownerId); }
     setDraftStorageError(!saved);
     setDraftCleanupError(draftCleanupPending.current && !saved);
     if (saved) draftCleanupPending.current = false;
     // saveNotepadDrafts installs the session unload guard on a failed write.
     // An older render must not release protection for newer accepted speech.
     if (pendingVoiceDraftWriteRef.current === committedVoiceDraftRevision) pendingVoiceDraftWriteRef.current = null;
-  }, [title, content, selectedColor, hasEditDraft, editTitle, editContent, editColor, editBase, draftCanPersist, draftSaveAttempt, committedVoiceDraftRevision]);
+  }, [ownerId, title, content, selectedColor, hasEditDraft, editTitle, editContent, editColor, editBase, draftCanPersist, draftSaveAttempt, committedVoiceDraftRevision]);
 
   useLayoutEffect(() => {
     if (title || content) newNoteSaveLock.current = false;
@@ -579,7 +581,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
     }
     sound.tick(700);
     setNoteSaveError(false);
-    markNotepadDraftCleanup();
+    markNotepadDraftCleanup(ownerId);
     draftCleanupPending.current = true;
     setTitle('');
     setContent('');
@@ -592,7 +594,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
   const handleDiscardNewDraft = () => {
     if ((title || content) && !window.confirm(lang === 'uk' ? 'Видалити чернетку нової нотатки? Незбережений текст буде втрачено.' : 'Discard the new note draft? Unsaved text will be lost.')) return;
     cancelVoiceInput();
-    markNotepadDraftCleanup();
+    markNotepadDraftCleanup(ownerId);
     draftCleanupPending.current = true;
     setTitle('');
     setContent('');
@@ -639,7 +641,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
   };
 
   const clearEditDraft = () => {
-    markNotepadDraftCleanup();
+    markNotepadDraftCleanup(ownerId);
     draftCleanupPending.current = true;
     setHasEditDraft(false);
     setEditBase(null);
@@ -653,7 +655,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
 
   const handleRetryDraftSave = () => {
     let canPersist = false;
-    try { canPersist = loadNotepadDrafts(localStorage).canPersist; }
+    try { canPersist = loadNotepadDrafts(localStorage, ownerId).canPersist; }
     catch { /* Never overwrite a draft store that cannot be read safely. */ }
     setDraftCanPersist(canPersist);
     setDraftSaveAttempt(attempt => attempt + 1);

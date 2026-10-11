@@ -15,11 +15,11 @@ function responseFromDesktop(status: number, body: unknown): Response {
   });
 }
 
-/** IPC cannot be cancelled, but a closed/timed-out caller must stop awaiting it. */
-function awaitDesktop<T>(operation: () => Promise<T>, signal?: AbortSignal | null): Promise<T> {
+/** Stop waiting immediately and notify a cancellable native operation when available. */
+function awaitDesktop<T>(operation: () => Promise<T>, signal?: AbortSignal | null, cancelOperation?: () => void): Promise<T> {
   if (signal?.aborted) return Promise.reject(new DOMException('Request cancelled', 'AbortError'));
   return new Promise<T>((resolve, reject) => {
-    const abort = () => { cleanup(); reject(new DOMException('Request cancelled', 'AbortError')); };
+    const abort = () => { cancelOperation?.(); cleanup(); reject(new DOMException('Request cancelled', 'AbortError')); };
     const cleanup = () => signal?.removeEventListener('abort', abort);
     signal?.addEventListener('abort', abort, { once: true });
     Promise.resolve().then(() => {
@@ -42,6 +42,14 @@ export async function karkasApiFetch(input: string, init?: RequestInit): Promise
     return verifyAndStoreDesktopApiKey(typeof body.apiKey === 'string' ? body.apiKey : '', init?.signal);
   }
 
+  if (operation === 'transcribeAudio') {
+    const requestId = crypto.randomUUID();
+    const result = await awaitDesktop(() => desktop.ai.transcribeAudio({ ...body, desktopRequestId: requestId }), init?.signal,
+      () => { if (typeof desktop.ai.cancelRequest === 'function') void desktop.ai.cancelRequest(requestId).catch(() => {}); });
+    if ('error' in result) return responseFromDesktop(503, { code: result.error.code, error: result.error.message });
+    return responseFromDesktop(result.value.status, result.value.body);
+  }
+
   const result = await awaitDesktop(() => operation === 'checkLatest'
     ? desktop.updates.checkLatest()
     : operation === 'assist'
@@ -50,9 +58,7 @@ export async function karkasApiFetch(input: string, init?: RequestInit): Promise
         ? desktop.ai.breakdown(body)
         : operation === 'voiceToken'
           ? desktop.ai.voiceToken(body)
-        : operation === 'transcribeAudio'
-          ? desktop.ai.transcribeAudio(body)
-          : desktop.ai.recommendations(body), init?.signal);
+        : desktop.ai.recommendations(body), init?.signal);
 
   if ('error' in result) return responseFromDesktop(503, { code: result.error.code, error: result.error.message });
   return responseFromDesktop(result.value.status, result.value.body);

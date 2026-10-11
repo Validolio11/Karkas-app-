@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { NotepadNote } from '../types';
-import { loadNotepadNotes, restoreNotepadNote } from './notepadStorage';
+import { loadNotepadNotes, loadOwnedNotepadNotes, ownedNotesKey, restoreNotepadNote } from './notepadStorage';
 
 const key = 'notes';
 const note: NotepadNote = {
@@ -88,4 +88,27 @@ test('undo restores identity, timestamps and fields without duplicating existing
   assert.deepEqual(original, [other]);
   assert.equal(restored[0], note);
   assert.equal(restoreNotepadNote(restored, { ...note, content: 'stale copy' }), restored);
+});
+
+test('legacy notes migrate only to the initial owner and keep the original recovery value', () => {
+  const storage = memoryStorage();
+  const raw = JSON.stringify([note]);
+  storage.setItem('karkas_notepad_notes_v1', raw);
+  assert.deepEqual(loadOwnedNotepadNotes(storage, 'initial-account', []).notes, [note]);
+  assert.deepEqual(loadOwnedNotepadNotes(storage, 'other-account', []).notes, []);
+  assert.deepEqual(loadOwnedNotepadNotes(storage, null, []).notes, []);
+  assert.equal(storage.getItem('karkas_notepad_notes_v1'), raw);
+  storage.setItem(ownedNotesKey('other-account'), JSON.stringify([{ ...note, content: 'Other' }]));
+  assert.equal(loadOwnedNotepadNotes(storage, 'other-account', []).notes[0].content, 'Other');
+  assert.equal(loadOwnedNotepadNotes(storage, 'initial-account', []).notes[0].content, note.content);
+  assert.notEqual(ownedNotesKey(null), ownedNotesKey('guest'));
+});
+
+test('failed legacy migration cannot overwrite source or permit saving', () => {
+  const storage = memoryStorage();
+  const raw = JSON.stringify([note]);
+  storage.setItem('karkas_notepad_notes_v1', raw);
+  storage.setItem = () => { throw new Error('Quota'); };
+  assert.equal(loadOwnedNotepadNotes(storage, 'account', []).canPersist, false);
+  assert.equal(storage.getItem('karkas_notepad_notes_v1'), raw);
 });

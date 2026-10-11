@@ -30,7 +30,9 @@ export function getUpdateAvailability({ currentVersion, release, isVersionKnown 
     if (!asset || asset.name !== expectedName || typeof asset.browser_download_url !== 'string') return false;
     try {
       const url = new URL(asset.browser_download_url);
-      return url.protocol === 'https:' && decodeURIComponent(url.pathname.split('/').pop() || '') === expectedName;
+      return url.protocol === 'https:' && !url.username && !url.password && !url.port && !url.search && !url.hash
+        && url.hostname === 'github.com'
+        && url.pathname === `/Validolio11/Karkas-app-/releases/download/${encodeURIComponent(release.tag_name)}/${encodeURIComponent(expectedName)}`;
     } catch { return false; }
   }) : undefined;
   return installer ? { status: 'available', installer } : { status: 'unavailable' };

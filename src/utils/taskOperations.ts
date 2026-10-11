@@ -1,7 +1,7 @@
 import type { NewTaskInput, PSTask, TaskStepItem } from '../types';
 import { normalizeTaskSchedule } from './taskScheduling';
-import { getTaskRemainingSeconds, getTaskTimerMode, getTaskTotalSeconds, pauseTaskTimer, startTaskTimer } from './taskTimer';
-import { activeTaskStepId, bankTaskStepSession, discardTaskStepAttribution, initialTaskPlanSeconds } from './taskWorkTelemetry';
+import { getTaskRemainingSeconds, getTaskTimerMode, pauseTaskTimer, startTaskTimer } from './taskTimer';
+import { activeTaskStepId, discardTaskStepAttribution, initialTaskPlanSeconds } from './taskWorkTelemetry';
 
 const MAX_RUNNING_SESSION_SECONDS = 2 * 60 * 60;
 
@@ -18,11 +18,7 @@ export function sanitizeTasksTimerSafeguard(taskList: PSTask[], now = Date.now()
     const elapsedSeconds = Math.floor((now - task.timerStartedAt) / 1000);
     if (elapsedSeconds <= MAX_RUNNING_SESSION_SECONDS) return task;
     return {
-      ...bankTaskStepSession(task, MAX_RUNNING_SESSION_SECONDS),
-      timeSpentSeconds: getTaskTotalSeconds({ ...task, timerRunning: false }, now) + MAX_RUNNING_SESSION_SECONDS,
-      timerRunning: false,
-      timerStartedAt: undefined,
-      timerStepId: undefined,
+      ...pauseTaskTimer(task, task.timerStartedAt! + MAX_RUNNING_SESSION_SECONDS * 1000),
       autoPausedOverdue: true,
     };
   });
@@ -159,6 +155,8 @@ export function setTaskTimeSpent(task: PSTask, value: number, now: number): PSTa
   const remaining = getTaskRemainingSeconds(task, now);
   return {
     ...discardTaskStepAttribution(task), timeSpentSeconds: nonnegativeInteger(value),
+    timeResetAt: Math.max(now, (task.timeResetAt ?? 0) + 1),
+    timerSessionId: task.timerRunning ? crypto.randomUUID() : undefined,
     timerStartedAt: task.timerRunning ? now : undefined, autoPausedOverdue: false,
     timerStepId: task.timerRunning ? activeTaskStepId(task) : undefined,
     ...(remaining === undefined ? {} : { countdownRemainingSeconds: remaining }),

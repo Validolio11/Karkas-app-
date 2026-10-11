@@ -2,6 +2,30 @@ import type { NotepadNote } from '../types';
 
 type NoteStorage = Pick<Storage, 'getItem' | 'setItem'>;
 
+const legacyNotesKey = 'karkas_notepad_notes_v1';
+const notesMigrationKey = `${legacyNotesKey}:migration-owner`;
+export const ownedNotesKey = (owner: string | null): string =>
+  `${legacyNotesKey}:${encodeURIComponent(owner === null ? 'guest' : `account:${owner}`)}`;
+
+export function loadOwnedNotepadNotes(storage: NoteStorage, owner: string | null, fallback: NotepadNote[]): NotepadLoadResult {
+  const key = ownedNotesKey(owner);
+  try {
+    if (storage.getItem(notesMigrationKey) === null) {
+      const legacy = storage.getItem(legacyNotesKey);
+      if (legacy !== null && storage.getItem(key) === null) {
+        storage.setItem(key, legacy);
+        if (storage.getItem(key) !== legacy) throw new Error('Notes migration could not be verified');
+      }
+      const scope = owner === null ? 'guest' : `account:${owner}`;
+      storage.setItem(notesMigrationKey, scope);
+      if (storage.getItem(notesMigrationKey) !== scope) throw new Error('Notes migration owner could not be verified');
+    }
+    return loadNotepadNotes(storage, key, fallback);
+  } catch {
+    return { notes: [], canPersist: false, recovered: false };
+  }
+}
+
 export interface NotepadLoadResult {
   notes: NotepadNote[];
   canPersist: boolean;
@@ -33,6 +57,7 @@ const backupRawNotes = (storage: NoteStorage, key: string, raw: string): void =>
     if (previous === raw) return;
     if (previous === null) {
       storage.setItem(backupKey, raw);
+      if (storage.getItem(backupKey) !== raw) throw new Error('Notes backup could not be verified');
       return;
     }
     suffix += 1;

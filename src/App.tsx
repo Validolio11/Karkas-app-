@@ -49,6 +49,7 @@ import { diffWorkspaceOperations } from './utils/syncOperations';
 import { karkasApiFetch } from './utils/desktopApi';
 import { sanitizeTasksTimerSafeguard, completeTask, reopenTask, startTaskWork, createTask, setTaskProgress, toggleTaskStep, addTaskStep, deleteTaskStep, setTaskTimeSpent, setTaskSteps, materializeStepList } from './utils/taskOperations';
 import packageMetadata from '../package.json';
+import { removeAccountStorage } from './utils/accountStorage';
 import { taskBreakdownContext } from './utils/taskBreakdownContext';
 import { materializeScheduledWorkspace, normalizeTaskSchedule } from './utils/taskScheduling';
 import { describeSchedule } from './utils/schedulePresentation';
@@ -61,6 +62,7 @@ import { useWorkReminders } from './components/useWorkReminders';
 import { StrategyView } from './components/StrategyView';
 import { useStrategyReminders } from './components/useStrategyReminders';
 import { createPersonalStrategyProfile, readPersonalStrategy, savePersonalStrategy, clearPersonalStrategy, applyStrategyResponse } from './utils/personalStrategy';
+import { continueStrategyDiscovery, normalizeStrategyDiscovery, preparePersonalDiscoveryRequest } from './utils/strategyDiscovery';
 import { applyStrategyActions, undoStrategyAction } from './utils/strategyActions';
 import { claimPlanningNotice } from './utils/planningNotices';
 import { stageStrategyTransaction, recoverStrategyTransaction, clearStrategyTransaction, completeStrategyTransaction, strategyTransactionKey, readStrategyTransaction, markStrategyTransactionConflict } from './utils/strategyTransaction';
@@ -1453,13 +1455,24 @@ export default function App() {
     if (readStrategyTransaction(localStorage, strategyOwner)) {
       setTimerNotice(lang === 'uk' ? 'Спершу потрібно завершити відновлення зміни плану. Нову пам’ять поки не збережено.' : 'Finish recovering the plan change first. New memory has not been saved.'); return false;
     }
-    const stored = savePersonalStrategy(localStorage, strategyOwner, next);
-    personalProfileRef.current = next; setPersonalProfile(next);
+    const discovery = normalizeStrategyDiscovery(next);
+    const normalized: PersonalStrategyProfile = { ...next, discovery, phase: discovery.phase,
+      onboardingStatus: discovery.phase === 'ready' ? 'complete' : next.onboardingStatus === 'new' ? 'new' : 'in_progress' };
+    const stored = savePersonalStrategy(localStorage, strategyOwner, normalized);
+    personalProfileRef.current = normalized; setPersonalProfile(normalized);
     if (!stored) setTimerNotice(lang === 'uk' ? 'Пам’ять діє в цьому сеансі, але її не вдалося зберегти на пристрої.' : 'Memory applies in this session but could not be saved on this device.');
     return stored;
   };
   const openStrategyChat = (text: string) => {
     setAiPromptSeed(text); setAiSeedAsDraft(true); setIsAIOpen(true);
+  };
+  const deepenPersonalDiscovery = (owner: string | null = strategyOwner): boolean => {
+    if (!strategyReady || owner !== strategyOwner || workspaceOwnerRef.current !== owner) return false;
+    const before = personalProfileRef.current;
+    updatePersonalProfile(continueStrategyDiscovery(personalProfileRef.current, lang));
+    if (before === personalProfileRef.current) return false;
+    setAiPromptSeed(''); setAiSeedAsDraft(true); setIsAIOpen(true);
+    return true;
   };
   const resetPersonalMemory = () => {
     if (!strategyReady) return;
@@ -1472,7 +1485,7 @@ export default function App() {
       setTimerNotice(lang === 'uk' ? 'Не вдалося очистити пам’ять. Спробуйте ще раз.' : 'Could not clear memory. Please try again.'); return;
     }
     try {
-      localStorage.removeItem(`karkas_ai_chat_welcome:${strategyOwner || 'guest'}`);
+      removeAccountStorage(localStorage, 'karkas_ai_chat_welcome', strategyOwner);
       const prefix = `karkas_strategy_audit_v1:${encodeURIComponent(strategyOwner === null ? 'guest' : `account:${strategyOwner}`)}:`;
       Object.keys(localStorage).filter(key => key.startsWith(prefix)).forEach(key => localStorage.removeItem(key));
     } catch { /* The new empty profile still replaces the current in-memory view. */ }
@@ -1510,11 +1523,20 @@ export default function App() {
     } catch { setTimerNotice(lang === 'uk' ? 'Зміну збережено в журналі відновлення. Не вдалося завершити локальний запис.' : 'The change is in the recovery journal. Local persistence could not be completed.'); }
     return true;
   };
-  const handleStrategyResponse = (response: AIResponse, userText: string, turnId: string, intent: AIIntent, owner: string | null, requestProfile?: PersonalStrategyProfile) => {
-    if (!strategyReady || owner !== strategyOwner || workspaceOwnerRef.current !== owner || !response.strategy) return;
+  const handleStrategyResponse = (response: AIResponse, userText: string, turnId: string, intent: AIIntent, owner: string | null, requestProfile?: PersonalStrategyProfile, discoveryConfirmationId?: string) => {
+    if (!strategyReady || owner !== strategyOwner || workspaceOwnerRef.current !== owner) return;
     if (requestProfile && requestProfile !== personalProfileRef.current) return { notice: lang === 'uk' ? 'Профіль змінився під час відповіді. Пораду показано, автоматичних змін немає.' : 'Your profile changed while awaiting the reply. Advice is shown; no automatic changes applied.' };
-    const profile = applyStrategyResponse(personalProfileRef.current, response.strategy, userText, turnId, Date.now(), response.source);
-    if (intent === 'analysis' || !response.strategy.actions?.length) { updatePersonalProfile(profile); return; }
+    const prepared = preparePersonalDiscoveryRequest(personalProfileRef.current, userText, discoveryConfirmationId);
+    if (!response.strategy) {
+      if (prepared.profile !== personalProfileRef.current) updatePersonalProfile(prepared.profile);
+      return;
+    }
+    const strategyResponse = intent === 'analysis'
+      ? { ...response.strategy, status: 'clarifying' as const, narrative: undefined, nextAction: undefined, focusTaskId: undefined, actions: [] }
+      : response.strategy;
+    const profile = applyStrategyResponse(prepared.profile, strategyResponse, userText, turnId, Date.now(), response.source);
+    if (intent === 'analysis' || response.strategy.status !== 'ready' || response.strategy.question?.trim()
+      || response.strategy.memoryPatch?.discovery?.question || !response.strategy.actions?.length) { updatePersonalProfile(profile); return; }
     const result = applyStrategyActions({ tasks: latestTasksRef.current, profile, actions: response.strategy.actions,
       ownerId: owner, currentOwnerId: workspaceOwnerRef.current, turnId, tabs: currentTabsRef.current });
     if (!result.applied.length) {
@@ -2263,6 +2285,7 @@ export default function App() {
             tasks={tasks} deletedTasks={deletedTasks} tabs={tabs} lang={lang} insights={workInsights}
             remindersEnabled={workReminders.enabled} onRemindersChange={workReminders.setEnabled}
             onProfileChange={updatePersonalProfile} onResetMemory={resetPersonalMemory} onChat={openStrategyChat}
+            onDeepenDiscovery={() => deepenPersonalDiscovery()}
             onStart={handleStartTask} onUndo={handleUndoStrategy} onApplyPriority={applySuggestedPriority} onEditPlan={setWorkPlanTaskId} />
           : <p role="status" className="text-sm text-neutral-400">{lang === 'uk' ? 'Завантажуємо ваш простір…' : 'Loading your workspace…'}</p>
         ) : selectedPhase === 'NOTES' ? (
@@ -2638,6 +2661,7 @@ export default function App() {
         accountId={currentUser?.uid ?? null}
         strategyProfile={strategyReady ? personalProfile : undefined}
         onChatWelcome={handleChatWelcome} onStrategyResponse={handleStrategyResponse} onUndoStrategy={handleUndoStrategy}
+        onDeepenDiscovery={deepenPersonalDiscovery}
         onInjectTasks={handleInjectAITasks}
       />
 

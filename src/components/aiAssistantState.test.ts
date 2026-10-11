@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { AIRequestError, aiRequestErrorMessage, appendChatRequest, readAIAssistantDraft, readAIResponse, responseRequestError, restoredAIRequestNotice, saveAIAssistantDraft, selectAIModel } from './aiAssistantState';
+import { accountStorageKey } from '../utils/accountStorage';
 
 function storage() {
   const values = new Map<string, string>();
@@ -105,7 +106,7 @@ test('draft storage preserves only supported typed request metadata', () => {
   memory.values.set('karkas_ai_draft:guest', JSON.stringify(draft));
   assert.deepEqual(readAIAssistantDraft(memory), expected);
   assert.equal(saveAIAssistantDraft(memory, draft), true);
-  assert.deepEqual(JSON.parse(memory.values.get('karkas_ai_draft:guest') || 'null'), expected);
+    assert.deepEqual(JSON.parse(memory.values.get(accountStorageKey('karkas_ai_draft')) || 'null'), expected);
   assert.equal([...memory.values.values()].join('').includes('rawProviderDetails'), false);
 });
 
@@ -242,4 +243,43 @@ test('an invalid model response never blames a valid user request or asks for di
   assert.doesNotMatch(uk, /Уточніть|змініть|перефразуйте/i);
   assert.doesNotMatch(en, /revise|clarify|rephrase/i);
   assert.match(uk, /не застосовано/);
+});
+
+test('guest drafts and an account literally named guest cannot read or clear each other', () => {
+  const memory = storage();
+  const guest = { prompt: 'Guest draft', mode: 'chat' as const, recoverableRequest: null };
+  const account = { prompt: 'Account draft', mode: 'chat' as const, recoverableRequest: null };
+  memory.values.set('karkas_ai_draft:guest', JSON.stringify(guest));
+  assert.deepEqual(readAIAssistantDraft(memory), guest);
+  assert.equal(readAIAssistantDraft(memory, 'guest'), null);
+  saveAIAssistantDraft(memory, account, 'guest');
+  assert.deepEqual(readAIAssistantDraft(memory), guest);
+  assert.deepEqual(readAIAssistantDraft(memory, 'guest'), account);
+  saveAIAssistantDraft(memory, { prompt: '', mode: 'chat', recoverableRequest: null }, 'guest');
+  assert.deepEqual(readAIAssistantDraft(memory), guest);
+  assert.equal(readAIAssistantDraft(memory, 'guest'), null);
+});
+test('legacy drafts migrate on save without executing recovered commands or losing summary IDs', () => {
+  const memory = storage();
+  const draft = { prompt: '@analysis всі завдання', mode: 'chat' as const, recoverableRequest: {
+    text: 'Так', mode: 'chat' as const, intent: 'auto' as const, turnId: 'stable-turn', discoveryConfirmationId: 'summary:original-turn',
+  } };
+  memory.values.set('karkas_ai_draft:existing-account', JSON.stringify(draft));
+  assert.deepEqual(readAIAssistantDraft(memory, 'existing-account'), draft);
+  assert.match(restoredAIRequestNotice(draft.recoverableRequest, 'uk') || '', /перервано/);
+  saveAIAssistantDraft(memory, draft, 'existing-account');
+  assert.equal(memory.values.has('karkas_ai_draft:existing-account'), false);
+  assert.deepEqual(readAIAssistantDraft(memory, 'existing-account'), draft);
+  assert.equal(readAIAssistantDraft(memory, 'other-account'), null);
+});
+test('response reader preserves scoped discovery answers and rejects malformed coverage metadata', () => {
+  const discovery = { answers: [{ topic: 'barriers', quote: 'Коли сідаю до роботи, боюсь першого кроку', status: 'answered' }], selectedGoalIds: ['g'], question: { topic: 'capacity', text: 'Скільки часу реально доступно?' } };
+  const response = { reply: 'Дякую за пояснення', strategy: { status: 'clarifying', memoryPatch: { discovery } } };
+  assert.equal(readAIResponse(response, 'chat'), response);
+  for (const malformed of [
+    { answers: [{ topic: 'profession', quote: 'Quote', status: 'answered' }] },
+    { answers: [{ topic: 'capacity', quote: '', status: 'answered' }] },
+    { answers: [{ topic: 'capacity', quote: 'Quote', status: 'ready' }] },
+    { answers: [{}] }, { selectedGoalIds: [1] }, { question: { topic: 'capacity', text: '' } }, { summary: [] },
+  ]) assert.throws(() => readAIResponse({ reply: 'Bad', strategy: { memoryPatch: { discovery: malformed } } }, 'chat'), AIRequestError);
 });

@@ -40,6 +40,7 @@ import { AICommandMenu } from './AICommandMenu';
 import { proposalTargetsUnchanged } from './aiProposalGuard';
 import { AI_COMMANDS, intentMode, migrateAIComposer, modeIntent, parseAICommand } from './aiCommands';
 import { strategyGreeting } from '../utils/personalStrategy';
+import { discoveryQuestionForState } from '../utils/strategyDiscovery';
 import { useDialogKeyboard } from './useDialogKeyboard';
 import { describeAIApplyResult, describeAITimer, getAITimerContext, prepareAITask, type AIApplyResult } from './aiTaskProposal';
 import { describeSchedule } from '../utils/schedulePresentation';
@@ -65,8 +66,9 @@ interface AIAssistantSheetProps {
   ) => AIApplyResult;
   accountId?: string | null;
   strategyProfile?: PersonalStrategyProfile;
-  onStrategyResponse?: (response: AIResponse, userText: string, turnId: string, intent: AIIntent, ownerId: string | null, requestProfile?: PersonalStrategyProfile) => void | { notice?: string; actionId?: string };
+  onStrategyResponse?: (response: AIResponse, userText: string, turnId: string, intent: AIIntent, ownerId: string | null, requestProfile?: PersonalStrategyProfile, discoveryConfirmationId?: string) => void | { notice?: string; actionId?: string };
   onChatWelcome?: (ownerId: string | null) => void;
+  onDeepenDiscovery?: (ownerId: string | null) => boolean;
   onUndoStrategy?: (actionId: string) => boolean;
 }
 
@@ -187,6 +189,7 @@ const ChatResponseCards: React.FC<{ response: AIResponse; currentTasks: PSTask[]
     {response.taskUpdates?.map(update => <div key={update.id} className="border border-neutral-700 bg-black/40 p-3"><TaskUpdatePreview update={update} existing={currentTasks.find(task => task.id === update.id)} tabs={tabs} lang={lang} /></div>)}
     {response.taskDeletions?.map(deletion => <div key={deletion.id} className="border border-red-900 p-3 text-red-300"><p>{lang === 'uk' ? 'Видалення' : 'Delete'}: {currentTasks.find(task => task.id === deletion.id)?.title || deletion.id}</p><p className="text-sm">{deletion.reason || deletionReasonLabel(deletion.deletionReason, lang)}</p></div>)}
     {response.strategy?.narrative && normalizedProposalText(response.strategy.narrative) !== normalizedProposalText(response.reply || response.summary) && <AIChatText text={response.strategy.narrative} />}
+    {response.strategy?.question && !normalizedProposalText(response.reply || response.summary).includes(normalizedProposalText(response.strategy.question)) && <AIChatText text={response.strategy.question} />}
     {response.strategy?.nextAction && <p className="border-l-2 border-emerald-600 pl-3">{response.strategy.nextAction}</p>}
     {response.strategy?.actions?.map(action => <div key={action.id} className="border border-emerald-900 p-3"><p className="font-semibold">{action.changes.title || currentTasks.find(task => task.id === action.taskId)?.title}</p><p className="text-sm text-neutral-300">{action.reason}</p></div>)}
   </div>;
@@ -208,6 +211,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   accountId = null,
   strategyProfile,
   onStrategyResponse,
+  onDeepenDiscovery,
   onChatWelcome,
   onUndoStrategy,
 }) => {
@@ -455,6 +459,27 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   }, [isOpen, accountId, strategyProfile?.onboardingStatus]);
 
   useEffect(() => {
+    const discovery = strategyProfile?.discovery;
+    const storedQuestion = discovery?.pendingQuestion;
+    const question = storedQuestion && discovery && storedQuestion.id.startsWith('discovery:')
+      ? { ...storedQuestion, text: discoveryQuestionForState(discovery, storedQuestion.topic, lang) }
+      : storedQuestion || (discovery?.pendingSummary && !discovery.pendingSummary.confirmed ? discovery.pendingSummary : undefined);
+    if (!isOpen || hydratedAccountRef.current !== accountId || !question?.text) return;
+    setChatMessages(previous => {
+      const resumeId = `discovery-resume-${question.id}`;
+      const latest = [...previous].reverse().find(message => message.role === 'assistant');
+      const turnId = discovery?.pendingQuestion?.turnId || (question.id.startsWith('summary:') ? question.id.slice('summary:'.length) : undefined);
+      const alreadyVisible = latest && [latest.content, latest.response?.strategy?.question, latest.response?.strategy?.memoryPatch?.discovery?.summary]
+        .some(text => normalizedProposalText(text).includes(normalizedProposalText(question.text)));
+      if (alreadyVisible && (latest.id === resumeId || latest.id?.startsWith(`${resumeId}:after:`)
+        || (turnId ? latest.id === `reply-${turnId}` : !question.id.startsWith('continue:')))) return previous;
+      const id = latest ? `${resumeId}:after:${latest.id || previous.length}` : resumeId;
+      if (previous.some(message => message.id === id)) return previous;
+      return [...previous, { id, role: 'assistant', content: question.text }];
+    });
+  }, [isOpen, accountId, lang, strategyProfile?.discovery?.pendingQuestion?.id, strategyProfile?.discovery?.pendingSummary?.id, strategyProfile?.discovery?.pendingSummary?.confirmed]);
+
+  useEffect(() => {
     if (!isOpen) return;
     const frame = requestAnimationFrame(() => {
       if (contentRef.current) {
@@ -601,7 +626,29 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
 
     if (!requestText) return;
     if (requestInFlight.current) return;
-    if (parsedCommand.intent === 'auto' && pendingChangeCount > 0 && /^(так|підтверджую|підтверджено|yes|confirm|ок|застосувати|зберегти)$/i.test(textToQuery.trim())) {
+    const latestAssistantMessage = [...chatMessages].reverse().find(message => message.role === 'assistant');
+    const currentQuestion = strategyProfile?.discovery?.pendingQuestion;
+    const questionResumeId = currentQuestion ? `discovery-resume-${currentQuestion.id}` : '';
+    const discoveryHasQuestion = !!currentQuestion && !!latestAssistantMessage && (
+      (currentQuestion.turnId && latestAssistantMessage.id === `reply-${currentQuestion.turnId}`)
+      || latestAssistantMessage.id === questionResumeId || latestAssistantMessage.id?.startsWith(`${questionResumeId}:after:`)
+      || (!currentQuestion.turnId && !latestAssistantMessage.proposalStatus
+        && normalizedProposalText(latestAssistantMessage.content).includes(normalizedProposalText(currentQuestion.text))));
+    const discoveryNeedsConfirmation = !!strategyProfile?.discovery?.pendingSummary && !strategyProfile.discovery.pendingSummary.confirmed;
+    const currentSummary = strategyProfile?.discovery?.pendingSummary;
+    const summaryResumeId = currentSummary ? `discovery-resume-${currentSummary.id}` : '';
+    const summaryTurnId = currentSummary?.id.startsWith('summary:') ? currentSummary.id.slice('summary:'.length) : undefined;
+    const summaryIsCurrent = currentSummary && latestAssistantMessage && (
+      (latestAssistantMessage.id === `reply-${summaryTurnId}`
+        && latestAssistantMessage.response?.strategy?.memoryPatch?.discovery?.summary === currentSummary.text)
+      || ((latestAssistantMessage.id === summaryResumeId || latestAssistantMessage.id?.startsWith(`${summaryResumeId}:after:`))
+        && latestAssistantMessage.content === currentSummary.text));
+    if (currentSummary?.text && !currentSummary.confirmed && summaryIsCurrent) {
+      currentRequest.discoveryConfirmationId = currentSummary.id;
+    }
+    if (parsedCommand.intent === 'auto' && pendingChangeCount > 0 && !discoveryHasQuestion && !discoveryNeedsConfirmation
+      && latestAssistantMessage?.id === latestProposalMessageId.current
+      && /^(так|підтверджую|підтверджено|yes|confirm|ок|застосувати|зберегти)$/i.test(textToQuery.trim())) {
       if (!chatProposalReadyRef.current || requestError) {
         setRequestError(lang === 'uk'
           ? 'Спочатку повторіть останній запит, щоб підготувати актуальну пропозицію. Зміни до завдань не застосовано.'
@@ -758,11 +805,13 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
           strategyContext: strategyProfile,
           messageId: currentRequest.turnId,
           requestId: currentRequest.turnId,
+          discoveryConfirmationId: currentRequest.discoveryConfirmationId,
           turnId: currentRequest.turnId,
           lang,
           tabs: tabs.map((tb) => tb.id),
           adaptiveProfile,
           currentTasks: currentTasks.map(task => ({ ...task, ...getAITimerContext(task) })),
+          taskSnapshots: currentTasks,
           conversation: recentAIChatContext(chatMessages),
           pendingChanges: {
             tasks: pendingChatTasks, tabs: pendingChatTabs,
@@ -822,7 +871,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       setRequestError(null);
       if (preservedRequestDraftRef.current !== null) setPrompt(preservedRequestDraftRef.current);
       if (data.fallbackUsed && data.usedModel) setKeyStatus(lang === 'uk' ? `Відповідь підготувала доступна модель ${data.usedModel}.` : `The response was generated by the available model ${data.usedModel}.`);
-      const isPlanningResponse = !!data.tasks?.length || !!data.taskUpdates?.length || currentRequest.intent === 'plan' || currentRequest.intent === 'steps' || /план|\bplan(?:ning)?\b/iu.test((planningSourceRef.current || currentRequest).text);
+      const isDiscoveryResponse = !hasPendingActions && (data.strategy?.status === 'getting_to_know' || data.strategy?.status === 'clarifying');
+      const isPlanningResponse = !isDiscoveryResponse && (!!data.tasks?.length || !!data.taskUpdates?.length || currentRequest.intent === 'plan' || currentRequest.intent === 'steps' || /план|\bplan(?:ning)?\b/iu.test((planningSourceRef.current || currentRequest).text));
       setChatPlanningRequest(isPlanningResponse ? planningSourceRef.current || currentRequest : null);
       setChatPlanningResponse(isPlanningResponse ? data : null);
       pendingChatConfirmed.current = false;
@@ -834,7 +884,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       const messageId = `reply-${currentRequest.turnId}`;
       latestProposalMessageId.current = messageId;
       pendingTaskSnapshotRef.current = currentTasks;
-      const strategyResult = data.strategy ? onStrategyResponse?.(data, currentRequest.text, currentRequest.turnId!, currentRequest.intent || 'auto', requestOwner, requestProfile) : undefined;
+      const strategyResult = onStrategyResponse?.(data, currentRequest.text, currentRequest.turnId!, currentRequest.intent || 'auto', requestOwner, requestProfile, currentRequest.discoveryConfirmationId);
       const strategyNotice = strategyResult && typeof strategyResult === 'object' ? strategyResult : undefined;
       setChatMessages(previous => [...previous, {
         id: messageId,
@@ -997,6 +1047,12 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   KARKAS AI
                 </span>
               </div>
+              <div className="flex shrink-0 items-center gap-2">
+              {onDeepenDiscovery && <button type="button" disabled={loading || isListening || isTranscribing}
+                onClick={() => { if (onDeepenDiscovery(accountId)) { setChatProposalReadiness(false); setChatPlanningRequest(null); setChatPlanningResponse(null); } }}
+                className="min-h-11 sm:min-h-8 max-w-32 sm:max-w-none border border-neutral-800 px-2 py-1.5 text-[11px] leading-tight text-neutral-400 hover:border-neutral-600 hover:text-white disabled:opacity-40">
+                {lang === 'uk' ? 'Поглибити знайомство' : 'Get to know me better'}
+              </button>}
               <button
                 id="close-ai-sheet-btn"
                 aria-label={lang === 'uk' ? 'Закрити ШІ-помічника' : 'Close AI assistant'}
@@ -1005,6 +1061,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
               >
                 <X className="w-4 h-4" />
               </button>
+              </div>
             </div>
 
             {/* Content Container (Scrollable) */}
@@ -1146,9 +1203,9 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   className="karkas-ai-composer-field"
                 />}
                 <div className="karkas-ai-composer-toolbar">
-                <AICommandMenu key={accountId || 'guest'} lang={lang} disabled={loading || awaitingApiKey} onChoose={intent => { setMode(intentMode(intent)); promptInputRef.current?.focus(); }} />
+                <AICommandMenu key={accountId == null ? 'guest' : `account:${accountId}`} lang={lang} disabled={loading || awaitingApiKey} onChoose={intent => { setMode(intentMode(intent)); promptInputRef.current?.focus(); }} />
                 <AIModelSelect
-                  key={accountId || 'guest'}
+                  key={accountId == null ? 'guest' : `account:${accountId}`}
                   models={availableModels}
                   label={lang === 'uk' ? 'Модель AI' : 'AI model'}
                   emptyLabel={lang === 'uk' ? 'Модель не налаштована' : 'Model not configured'}
@@ -1168,7 +1225,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                 />
 
                 <div className="flex-1" />
-                  <AIEmojiPicker key={accountId || 'guest'} lang={lang} disabled={awaitingApiKey} onChoose={insertEmoji} />
+                  <AIEmojiPicker key={accountId == null ? 'guest' : `account:${accountId}`} lang={lang} disabled={awaitingApiKey} onChoose={insertEmoji} />
                   {prompt && <button
                     type="button"
                     onClick={() => { changePrompt(''); document.getElementById('ai-prompt-input')?.focus(); }}

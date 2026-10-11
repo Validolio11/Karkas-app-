@@ -3,10 +3,12 @@ import { test } from 'node:test';
 import type { PSTask, StrategyAction } from '../types';
 import { applyStrategyActions, undoStrategyAction } from './strategyActions';
 import { createPersonalStrategyProfile } from './personalStrategy';
+import { confirmedProfile } from './strategyDiscovery.testHelpers';
+import { isPersonalStrategyReady } from './strategyDiscovery';
 
 const task: PSTask = { id: 't', title: 'Study', phase: 'work', priority: 2, steps: 2, currentStep: 1, done: false, pinned: false,
   createdAt: 1, timeSpentSeconds: 700, startedAt: 2, stepList: [{ id: 's1', title: 'Completed', done: true, timeSpentSeconds: 300 }, { id: 's2', title: 'Current', done: false, timeSpentSeconds: 400 }], timerStepId: 's2' };
-const profile = () => ({ ...createPersonalStrategyProfile(), goals: [{ id: 'g', title: 'Learn', motive: 'Freedom', agreed: true, taskIds: ['t'], categoryIds: ['work'] }] });
+const profile = () => confirmedProfile([{ id: 'g', title: 'Learn', motive: 'Freedom', agreed: false, taskIds: ['t'], categoryIds: ['work'] }]);
 const options = (actions: StrategyAction[]) => ({ tasks: [task], profile: profile(), actions, ownerId: 'a', currentOwnerId: 'a', turnId: 'turn', tabs: [{ id: 'work', name: 'Work' }], now: 100 });
 const action = (changes: StrategyAction['changes']): StrategyAction => ({ id: 'action', goalId: 'g', type: 'update', taskId: 't', expectedTask: task, reason: 'Reduce friction', changes });
 
@@ -40,6 +42,7 @@ test('durable turn and action IDs prevent duplicates and retries after undo do n
   const create: StrategyAction = { id: 'new', goalId: 'g', reason: 'Prepare next action', type: 'create', changes: { title: 'Prepare', phase: 'work' } };
   const original = options([create]);
   const first = applyStrategyActions(original);
+  assert.equal(isPersonalStrategyReady(first.profile), true);
   const repeated = applyStrategyActions({ ...original, tasks: first.tasks, profile: first.profile });
   assert.equal(repeated.tasks.length, 2);
   assert.equal(repeated.applied.length, 0);
@@ -47,6 +50,13 @@ test('durable turn and action IDs prevent duplicates and retries after undo do n
   assert.equal(undone.undone, true);
   assert.equal(undone.tasks.length, 1);
   assert.equal(applyStrategyActions({ ...original, tasks: undone.tasks, profile: undone.profile }).tasks.length, 1);
+});
+test('early autonomy cannot bypass discovery with an agreed goal or provider ready status', () => {
+  const early = { ...createPersonalStrategyProfile(), onboardingStatus: 'complete' as const, goals: profile().goals };
+  const result = applyStrategyActions({ ...options([action({ priority: 1 })]), profile: early });
+  assert.equal(result.applied.length, 0);
+  assert.equal(result.tasks[0], task);
+  assert.match(result.rejected[0].reason, /discovery/);
 });
 test('undo refuses newer task edits, timer progress and another account', () => {
   const changed = applyStrategyActions(options([action({ priority: 1 })]));

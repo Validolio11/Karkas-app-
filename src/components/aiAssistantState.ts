@@ -2,12 +2,14 @@ import type { AIResponse } from '../types';
 import { looksLikeGeminiApiKey } from '../utils/apiKey';
 import { normalizeTaskSchedule } from '../utils/taskScheduling';
 import type { AIIntent } from '../types';
+import { readAccountStorage, writeAccountStorage, removeAccountStorage } from '../utils/accountStorage';
 
 export type AIMode = 'chat' | 'breakdown' | 'analyze' | 'generate';
 export interface AIRequest {
   text: string;
   mode: AIMode;
   intent?: AIIntent;
+  discoveryConfirmationId?: string;
   turnId?: string;
   purpose?: 'proposal';
   planningSource?: { text: string; mode: AIMode };
@@ -16,7 +18,7 @@ export interface AIRequest {
 export interface AIAssistantDraft { prompt: string; mode: AIMode; recoverableRequest: AIRequest | null }
 type DraftStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 const modes: AIMode[] = ['chat', 'breakdown', 'analyze', 'generate'];
-const draftKey = (accountId?: string | null) => `karkas_ai_draft:${accountId || 'guest'}`;
+const draftPrefix = 'karkas_ai_draft';
 const safeText = (value: unknown): value is string => typeof value === 'string' && !looksLikeGeminiApiKey(value);
 const safeRequest = (value: unknown): AIRequest | null => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -32,6 +34,7 @@ const safeRequest = (value: unknown): AIRequest | null => {
     mode: request.mode as AIMode,
     ...(['auto', 'plan', 'analysis', 'steps'].includes(request.intent as string) ? { intent: request.intent as AIIntent } : {}),
     ...(typeof request.turnId === 'string' && /^[a-zA-Z0-9_-]{1,100}$/.test(request.turnId) ? { turnId: request.turnId } : {}),
+    ...(safeText(request.discoveryConfirmationId) && request.discoveryConfirmationId.length <= 200 ? { discoveryConfirmationId: request.discoveryConfirmationId } : {}),
     ...(request.purpose === 'proposal' ? { purpose: 'proposal' as const } : {}),
     ...(planningSource ? { planningSource, ...(request.internalAlternative === true ? { internalAlternative: true as const } : {}) } : {}),
   };
@@ -39,7 +42,7 @@ const safeRequest = (value: unknown): AIRequest | null => {
 
 export function readAIAssistantDraft(storage: DraftStorage, accountId?: string | null): AIAssistantDraft | null {
   try {
-    const value = JSON.parse(storage.getItem(draftKey(accountId)) || 'null');
+    const value = JSON.parse(readAccountStorage(storage, draftPrefix, accountId) || 'null');
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
     return {
       prompt: safeText(value.prompt) ? value.prompt : '',
@@ -56,8 +59,8 @@ export function saveAIAssistantDraft(storage: DraftStorage, draft: AIAssistantDr
       mode: modes.includes(draft.mode) ? draft.mode : 'chat',
       recoverableRequest: safeRequest(draft.recoverableRequest),
     };
-    if (safeDraft.prompt || safeDraft.recoverableRequest) storage.setItem(draftKey(accountId), JSON.stringify(safeDraft));
-    else storage.removeItem(draftKey(accountId));
+    if (safeDraft.prompt || safeDraft.recoverableRequest) writeAccountStorage(storage, draftPrefix, accountId, JSON.stringify(safeDraft));
+    else removeAccountStorage(storage, draftPrefix, accountId);
     return true;
   } catch { return false; }
 }
@@ -134,6 +137,18 @@ export function readAIResponse(value: unknown, mode: AIMode): AIResponse & { use
       if (patch.goals !== undefined && (!Array.isArray(patch.goals) || patch.goals.some((goal: unknown) => !isObject(goal)
         || typeof goal.id !== 'string' || typeof goal.title !== 'string' || typeof goal.motive !== 'string'
         || typeof goal.agreed !== 'boolean' || !stringArray(goal.taskIds) || !stringArray(goal.categoryIds)))) throw new AIRequestError('INVALID_RESPONSE');
+      if (patch.discovery !== undefined) {
+        const discovery = patch.discovery;
+        const topics = ['direction', 'motivation', 'circumstances', 'barriers', 'capacity', 'attempts'];
+        if (!isObject(discovery)
+          || (discovery.answers !== undefined && (!Array.isArray(discovery.answers) || discovery.answers.length > 12
+            || discovery.answers.some((answer: unknown) => !isObject(answer) || !topics.includes(answer.topic)
+              || typeof answer.quote !== 'string' || !answer.quote.trim() || !['answered', 'deferred'].includes(answer.status))))
+          || (discovery.selectedGoalIds !== undefined && (!stringArray(discovery.selectedGoalIds) || discovery.selectedGoalIds.length > 50))
+          || (discovery.question !== undefined && (!isObject(discovery.question) || !topics.includes(discovery.question.topic)
+            || typeof discovery.question.text !== 'string' || !discovery.question.text.trim()))
+          || (discovery.summary !== undefined && (typeof discovery.summary !== 'string' || !discovery.summary.trim()))) throw new AIRequestError('INVALID_RESPONSE');
+      }
     }
   }
   if (record.source === 'local-chat-fallback' || record.source === 'local-timer-fallback') throw new AIRequestError('PROVIDER_ERROR');

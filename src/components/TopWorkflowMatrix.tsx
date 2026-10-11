@@ -383,8 +383,8 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
 
             <button id="phase-filter-strategy" type="button" aria-pressed={selectedPhase === 'STRATEGY'}
               onClick={() => { sound.tick(600); onSelectPhase('STRATEGY'); }}
-              className={`flex min-h-11 shrink-0 items-center gap-1.5 whitespace-nowrap border px-3 py-2 text-xs font-bold tracking-wider transition-colors ${selectedPhase === 'STRATEGY' ? 'border-white bg-white text-black' : 'border-neutral-800 bg-[#09090b] text-neutral-300 hover:border-neutral-600 hover:text-white'}`}>
-              <Compass className="h-4 w-4" /><span>{lang === 'uk' ? 'МОЯ СТРАТЕГІЯ' : 'MY STRATEGY'}</span>
+              className={`flex items-center gap-1.5 text-xs font-sans tracking-wider px-3 py-2 border whitespace-nowrap transition-all shrink-0 cursor-pointer ${selectedPhase === 'STRATEGY' ? 'border-white bg-white text-black font-extrabold' : 'border-neutral-800 bg-[#09090b] text-neutral-300 hover:text-white hover:border-neutral-600'}`}>
+              <Compass className={`w-3 h-3 ${selectedPhase === 'STRATEGY' ? 'text-black' : 'text-neutral-400'}`} /><span className="font-bold">{lang === 'uk' ? 'МОЯ СТРАТЕГІЯ' : 'MY STRATEGY'}</span>
             </button>
             {/* NOTEPAD / БЛОКНОТ Tab Button */}
             <button

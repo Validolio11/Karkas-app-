@@ -23,6 +23,10 @@ before(async () => {
       models = { generateContent: async ({ config, contents }) => {
         const properties = config.responseSchema.properties;
         let result;
+        if (properties.memoryPatch && contents.includes('discovery-http-case')) {
+          if (!properties.memoryPatch.properties.discovery || !config.systemInstruction.includes('PERSONAL GUIDANCE POLICY')) throw new Error('Missing discovery contract');
+          return { text: JSON.stringify({ reply: 'FORBIDDEN-PLAN tomorrow 20 minutes', tasks: [{ title: 'FORBIDDEN-TASK' }], taskUpdates: [{ id: 'unknown', done: true }], strategy: { status: 'ready', narrative: 'FORBIDDEN-NARRATIVE', actions: [{ changes: { done: true } }] } }) };
+        }
         if (properties.tasks) {
           if (contents.includes('timer-case-')) {
             if (!properties.tasks.items.properties.timerMode || !properties.taskUpdates.items.properties.timerAction) throw new Error('Missing timer schema');
@@ -83,9 +87,22 @@ before(async () => {
   });
 });
 
+test('HTTP personal discovery contains malicious provider planning before returning to the chat', async () => {
+  for (const intent of ['auto', 'plan']) {
+    const data = await post('assist', { prompt: 'Хочу більше вільного часу discovery-http-case', action: 'chat', intent, strategyContext: { onboardingStatus: 'complete', goals: [] }, turnId: `http-${intent}` });
+    assert.equal(data.source, 'gemini-chat');
+    assert.equal(data.fallbackUsed, false);
+    assert.doesNotMatch(JSON.stringify(data), /FORBIDDEN/);
+    assert.deepEqual(data.tasks, []);
+    assert.deepEqual(data.taskUpdates, []);
+    assert.deepEqual(data.strategy.actions, []);
+    assert.equal((data.reply.match(/\?/g) || []).length, 1);
+  }
+});
+
 test('chat and planning preserve configured countdown on newly generated tasks', async () => {
   for (const action of ['chat', 'generate']) {
-    const data = await post('assist', { prompt: 'timer-case-create timer 25 minutes', action, tabs: ['focus'], lang: 'en' });
+    const data = await post('assist', { prompt: 'Create task timer-case-create with timer 25 minutes', action, tabs: ['focus'], lang: 'en' });
     assert.equal(data.source, action === 'chat' ? 'gemini-chat' : 'gemini');
     assert.equal(data.tasks[0].timerMode, 'countdown');
     assert.equal(data.tasks[0].countdownDurationSeconds, 1500);
@@ -96,7 +113,7 @@ test('chat and planning preserve configured countdown on newly generated tasks',
 
 test('AI receives current timer context and returns an explicit existing-task stop', async () => {
   for (const action of ['chat', 'generate']) {
-    const data = await post('assist', { prompt: 'timer-case-stop timer', action, tabs: ['focus'], fullAppContext: { activeTasks: [{ id: 'parent', title: 'References', timerMode: 'countdown', countdownDurationSeconds: 1500, countdownRemainingSeconds: 900, timerRunning: true }] } });
+    const data = await post('assist', { prompt: 'Stop timer for References timer-case-stop', action, tabs: ['focus'], fullAppContext: { activeTasks: [{ id: 'parent', title: 'References', timerMode: 'countdown', countdownDurationSeconds: 1500, countdownRemainingSeconds: 900, timerRunning: true }] } });
     assert.equal(data.source, action === 'chat' ? 'gemini-chat' : 'gemini');
     assert.deepEqual(data.tasks, []);
     assert.deepEqual(data.taskUpdates, [{ id: 'parent', timerAction: 'stop' }]);
@@ -107,7 +124,7 @@ test('invalid model timer configuration gives an honest empty proposal', async (
   for (const action of ['chat', 'generate']) {
     const response = await fetch(`${baseUrl}/api/ai/assist`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: 'timer-case-invalid timer', action, tabs: ['focus'], currentTasks: [{ id: 'parent', title: 'References' }], lang: 'en' }),
+      body: JSON.stringify({ prompt: 'Set timer for References timer-case-invalid', action, tabs: ['focus'], currentTasks: [{ id: 'parent', title: 'References' }], lang: 'en' }),
     });
     assert.equal(response.status, 502);
     const data = await response.json();

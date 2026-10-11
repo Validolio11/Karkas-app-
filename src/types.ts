@@ -178,6 +178,32 @@ export interface StrategyMemoryEntry {
   text: string;
   source: 'user' | 'hypothesis';
   messageId?: string;
+  /** Full user statement, retained so an extracted phrase cannot lose its negation. */
+  quote?: string;
+}
+export type StrategyDiscoveryTopic = 'direction' | 'motivation' | 'circumstances' | 'barriers' | 'capacity' | 'attempts';
+export interface StrategyDiscoveryEvidence { quote: string; messageId: string; }
+export interface StrategyDiscoveryTopicState {
+  status: 'unknown' | 'answered' | 'deferred';
+  evidence: StrategyDiscoveryEvidence[];
+}
+export interface StrategyDiscoveryQuestion { id: string; topic: StrategyDiscoveryTopic; text: string; turnId?: string; }
+export interface StrategyDiscoverySummary { id: string; goalIds: string[]; fingerprint: string; text: string; confirmed: boolean; }
+export interface StrategyDiscoveryState {
+  version: 1;
+  topics: Record<StrategyDiscoveryTopic, StrategyDiscoveryTopicState>;
+  selectedGoalIds: string[];
+  pendingQuestion?: StrategyDiscoveryQuestion;
+  pendingSummary?: StrategyDiscoverySummary;
+  processedTurnIds: string[];
+  /** Derived locally; never trusted from an AI response. */
+  phase: 'exploring' | 'confirming' | 'ready';
+}
+export interface StrategyDiscoveryPatch {
+  answers?: { topic: StrategyDiscoveryTopic; status: 'answered' | 'deferred'; quote: string }[];
+  selectedGoalIds?: string[];
+  question?: { topic: StrategyDiscoveryTopic; text: string };
+  summary?: string;
 }
 export interface StrategyGoal {
   id: string;
@@ -217,6 +243,7 @@ export interface StrategyMemoryPatch {
   preferences?: StrategyMemoryEntry[];
   onboardingStatus?: 'new' | 'in_progress' | 'complete';
   phase?: string;
+  discovery?: StrategyDiscoveryPatch;
 }
 export interface AIStrategyResponse {
   status?: 'getting_to_know' | 'clarifying' | 'ready';
@@ -239,6 +266,7 @@ export interface PersonalStrategyProfile {
   feedback: { id: string; text: string; createdAt: number }[];
   actionHistory: StrategyActionRecord[];
   processedTurnIds: string[];
+  discovery?: StrategyDiscoveryState;
   reminders: { enabled: boolean; times: string[]; maxPerDay: 2 };
 }
 

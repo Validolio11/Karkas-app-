@@ -1,6 +1,7 @@
 import type { PersonalStrategyProfile, PSTask, StrategyAction, StrategyActionRecord, TaskTab } from '../types';
 import { normalizeTaskSchedule } from './taskScheduling';
 import { strategyOwnerKey } from './personalStrategy';
+import { isPersonalStrategyReady, normalizeStrategyDiscovery } from './strategyDiscovery';
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 const stable = (value: unknown): string => {
@@ -20,6 +21,7 @@ export function applyStrategyActions(options: ApplyStrategyOptions) {
   const applied: StrategyActionRecord[] = [];
   const rejected: { id: string; reason: string }[] = [];
   if (ownerId !== currentOwnerId || !turnId) return { tasks, profile, applied, rejected: [{ id: turnId, reason: 'Account changed or turn is missing' }] };
+  if (!isPersonalStrategyReady(profile)) return { tasks, profile, applied, rejected: [{ id: turnId, reason: 'Personal discovery is not confirmed' }] };
   if (profile.processedTurnIds.includes(turnId)) return { tasks, profile, applied, rejected };
   const now = options.now ?? Date.now();
   for (const action of (Array.isArray(options.actions) ? options.actions : []).slice(0, 20)) {
@@ -27,7 +29,7 @@ export function applyStrategyActions(options: ApplyStrategyOptions) {
     const id = `${turnId}:${action?.id}`;
     if (updated.actionHistory.some(entry => entry.id === id)) continue;
     if (!action || typeof action.id !== 'string' || !action.id.trim() || typeof action.reason !== 'string' || !action.reason.trim() || !['create', 'update'].includes(action.type)) { fail('Invalid action'); continue; }
-    const goal = updated.goals.find(item => item.id === action.goalId && item.agreed);
+    const goal = updated.goals.find(item => item.id === action.goalId && item.agreed && normalizeStrategyDiscovery(updated).selectedGoalIds.includes(item.id));
     if (!goal) { fail('Goal is not agreed'); continue; }
     const changes = action.changes;
     if (!changes || typeof changes !== 'object' || Object.keys(changes).some(key => !['title', 'phase', 'priority', 'note', 'schedule', 'stepTitles'].includes(key))) { fail('Forbidden task field'); continue; }

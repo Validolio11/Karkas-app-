@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { GoogleGenAI } from '@google/genai';
 import { AIRequestError, aiRequestFailure, classifyAIRequestError, generateGeminiWithFallback } from './geminiGeneration.ts';
+import { confirmedProfile, discoveryGoal, understandingProfile } from '../src/utils/strategyDiscovery.testHelpers';
+import { continueStrategyDiscovery, normalizeStrategyDiscovery } from '../src/utils/strategyDiscovery';
+import { applyStrategyActions } from '../src/utils/strategyActions';
 
 const originalFetch = globalThis.fetch;
 const originalAutostart = process.env.KARKAS_SERVER_AUTOSTART;
@@ -43,34 +46,36 @@ const json = (data: any, status = 200) => new Response(JSON.stringify(data), { s
 const success = (proposal: any) => json({ candidates: [{ content: { role: 'model', parts: [{ text: JSON.stringify(proposal) }] }, finishReason: 'STOP' }] });
 const rejected = (status: number, providerStatus: string, message = 'private-test-key provider-internal-data') => json({ error: { code: status, status: providerStatus, message } }, status);
 const chat = (overrides: any = {}) => invokeDesktopApi('assist', {
-  prompt: 'Допоможи скласти план на день', action: 'chat', lang: 'uk', customApiKey: 'test-only-fake-key',
+  prompt: 'Додай таймер на 25 хвилин до завдання', action: 'chat', lang: 'uk', customApiKey: 'test-only-fake-key',
   selectedModel: 'gemini-3.1-flash-lite', ...overrides,
 });
 
 test('unified chat transmits persistent memory and intent without private action journals', async () => {
   mockProvider((_model, body) => {
     const prompt = body.contents.flatMap((content: any) => content.parts.map((part: any) => part.text ?? '')).join('\n');
-    assert.match(prompt, /MESSAGE INTENT: plan/);
+    assert.match(prompt, /PERSONAL_DISCOVERY/);
     assert.match(prompt, /I want time for family/);
     assert.doesNotMatch(prompt, /PRIVATE-JOURNAL-TASK/);
-    assert.match(prompt, /ask what happened and WAIT/);
-    assert.match(prompt, /"timeSpentSeconds": null/);
-    assert.ok(body.generationConfig.responseSchema.properties.strategy.properties.actions);
+    assert.match(prompt, /pendingQuestion/);
+    assert.match(body.systemInstruction.parts[0].text, /ask what happened before suggesting fixes/);
+    assert.equal(body.generationConfig.responseSchema.properties.tasks, undefined);
+    assert.ok(body.generationConfig.responseSchema.properties.memoryPatch.properties.discovery);
     return success({ reply: 'What would reaching this goal change for you?', strategy: { status: 'getting_to_know', question: 'Why does it matter?' } });
   });
-  const result = await chat({ intent: 'plan', strategyContext: { onboardingStatus: 'in_progress', goals: [], facts: [{ id: 'f', text: 'I want time for family', source: 'user' }], actionHistory: [{ task: 'PRIVATE-JOURNAL-TASK' }] }, currentTasks: [{ id: 't', title: 'Study', done: false }] });
+  const result = await chat({ prompt: 'Хочу більше часу для сім’ї', intent: 'plan', strategyContext: { onboardingStatus: 'in_progress', goals: [], facts: [{ id: 'f', text: 'I want time for family', source: 'user' }], actionHistory: [{ task: 'PRIVATE-JOURNAL-TASK' }] }, currentTasks: [{ id: 't', title: 'Study', done: false }] });
   assert.equal(result.status, 200);
   assert.equal(result.body.strategy.status, 'getting_to_know');
   assert.equal(calls.length, 1);
 });
 test('strategy updates attach the original task snapshot and reject protected autonomous fields', async () => {
   const existing = { id: 't', title: 'Study', done: false, timeSpentSeconds: 600 };
-  mockProvider(() => success({ reply: 'I reduced the next step.', strategy: { actions: [{ id: 'a', goalId: 'g', type: 'update', taskId: 't', reason: 'Reduce friction', changes: { title: 'Read one page' } }] } }));
-  const result = await chat({ intent: 'plan', currentTasks: [existing], strategyContext: { goals: [] } });
+  const ready = confirmedProfile([{ ...discoveryGoal, taskIds: ['t'] }]);
+  mockProvider(() => success({ reply: 'I reduced the next step.', strategy: { status: 'ready', actions: [{ id: 'a', goalId: 'g', type: 'update', taskId: 't', reason: 'Reduce friction', changes: { title: 'Read one page' } }] } }));
+  const result = await chat({ prompt: 'Підготуй наступний крок', intent: 'plan', currentTasks: [existing], strategyContext: ready });
   assert.equal(result.status, 200);
   assert.deepEqual(result.body.strategy.actions[0].expectedTask, existing);
   mockProvider(() => success({ reply: 'Done.', strategy: { actions: [{ id: 'a', goalId: 'g', type: 'update', taskId: 't', reason: 'Done', changes: { done: true } }] } }));
-  const refused = await chat({ currentTasks: [existing], strategyContext: { goals: [] } });
+  const refused = await chat({ prompt: 'Підготуй наступний крок', intent: 'plan', currentTasks: [existing], strategyContext: ready });
   assert.equal(refused.status, 502);
   assert.equal(refused.body.code, 'INVALID_AI_RESPONSE');
 });
@@ -78,10 +83,152 @@ test('analysis intent never delivers task mutations even if a provider proposes 
   mockProvider(() => success({ reply: 'Review the measurements.', tasks: [{ title: 'New', phase: 'work', priority: 2, steps: 0 }], strategy: {
     actions: [{ id: 'a', goalId: 'g', type: 'create', reason: 'Next', changes: { title: 'New', phase: 'work' } }], narrative: 'Review the measurements.',
   } }));
-  const result = await chat({ intent: 'analysis', strategyContext: { goals: [] } });
+  const result = await chat({ prompt: 'Проаналізуй поточні завдання', intent: 'analysis', strategyContext: { goals: [] } });
   assert.equal(result.status, 200);
   assert.deepEqual(result.body.tasks, []);
+  assert.equal(result.body.strategy, undefined);
+});
+
+test('wishlists and early @plan discard provider prose, legacy arrays and autonomous actions in one call', async () => {
+  for (const [prompt, intent] of [['Хочу портфоліо, фриланс, англійську та швидкий друк', 'auto'], ['@plan Зроби план для мого життя', 'plan']] as const) {
+    mockProvider((_model, body) => {
+      assert.equal(body.generationConfig.responseSchema.properties.tasks, undefined);
+      assert.match(body.systemInstruction.parts[0].text, /priority over generic task instructions/);
+      return success({ reply: 'FORBIDDEN-PLAN tomorrow 20 minutes', tasks: [{ title: 'FORBIDDEN-TASK' }], taskUpdates: [{ id: 'unknown', timerAction: 'start' }], taskDeletions: [{ id: 't' }], strategy: { status: 'ready', narrative: 'FORBIDDEN-NARRATIVE', nextAction: 'FORBIDDEN-NEXT', actions: [{ changes: { done: true } }], memoryPatch: { onboardingStatus: 'complete', discovery: { question: { topic: 'capacity', text: 'Чи готовий ти завтра почати 20-хвилинний блок?' } } } } });
+    });
+    const result = await chat({ prompt, intent, turnId: `early-${intent}`, strategyContext: { onboardingStatus: 'complete', goals: [{ ...discoveryGoal, agreed: true }] } });
+    assert.equal(result.status, 200);
+    assert.equal(calls.length, 1);
+    assert.doesNotMatch(JSON.stringify(result.body), /FORBIDDEN/);
+    assert.deepEqual(result.body.tasks, []);
+    assert.deepEqual(result.body.taskUpdates, []);
+    assert.deepEqual(result.body.taskDeletions, []);
+    assert.deepEqual(result.body.strategy.actions, []);
+    assert.equal(result.body.strategy.memoryPatch.onboardingStatus, undefined);
+    assert.equal((result.body.reply.match(/\?/g) || []).length, 1);
+  }
+});
+
+test('exact visible summary ID and standalone consent are required before a personal plan can act', async () => {
+  const profile = understandingProfile([{ ...discoveryGoal, taskIds: ['t'] }]);
+  const summaryId = profile.discovery!.pendingSummary!.id;
+  for (const [prompt, id, allowed] of [['Так', undefined, false], ['Так', 'stale-summary', false], ['Так, але мета інша', summaryId, false], ['Так.', summaryId, true]] as const) {
+    mockProvider(() => success({ reply: 'FORBIDDEN-UNTIL-CONSENT', strategy: { status: 'ready', nextAction: 'Read one page', actions: [{ id: 'a', goalId: 'g', type: 'update', taskId: 't', reason: 'A manageable scope', changes: { title: 'Read one page' } }] } }));
+    const result = await chat({ prompt, discoveryConfirmationId: id, turnId: `consent-${prompt}-${id}`, currentTasks: [{ id: 't', title: 'Study', phase: 'work', done: false }], strategyContext: profile });
+    assert.equal(result.status, 200);
+    assert.equal(calls.length, 1);
+    assert.equal(result.body.strategy.actions.length, allowed ? 1 : 0);
+    if (!allowed) assert.doesNotMatch(result.body.reply, /FORBIDDEN/);
+  }
+  mockProvider(() => { throw new Error('Validation must happen before transport'); });
+  const invalid = await chat({ discoveryConfirmationId: 10 });
+  assert.equal(invalid.status, 400);
+  assert.equal(calls.length, 0);
+});
+
+test('discovery prompts retain the pending question beyond ten messages and never send journals', async () => {
+  const profile = continueStrategyDiscovery(confirmedProfile());
+  profile.discovery!.pendingQuestion!.text = 'Що відбулося перед останнім відволіканням UNIQUE-PENDING-QUESTION?';
+  profile.actionHistory = [{ after: { title: 'PRIVATE-JOURNAL' } }] as any;
+  mockProvider((_model, body) => {
+    const prompt = body.contents.flatMap((content: any) => content.parts.map((part: any) => part.text || '')).join('\n');
+    assert.match(prompt, /UNIQUE-PENDING-QUESTION/);
+    assert.doesNotMatch(prompt, /PRIVATE-JOURNAL|OLD-RECENT-MESSAGE/);
+    return success({ memoryPatch: { discovery: {} } });
+  });
+  const result = await chat({ prompt: 'Не знаю', strategyContext: profile, turnId: 'resume', conversation: [{ role: 'assistant', content: 'OLD-RECENT-MESSAGE' }, ...Array.from({ length: 10 }, () => ({ role: 'user', content: 'ordinary' }))] });
+  assert.equal(result.status, 200);
+  assert.match(result.body.strategy.question, /в ту мить/);
+  assert.equal(calls.length, 1);
+});
+
+test('concrete steps and polite timer requests preserve their operation without starting an interview', async () => {
+  for (const [prompt, intent, update] of [['Study', 'steps', { id: 't', stepList: [{ title: 'Read' }] }], ['Можеш запустити таймер Study?', 'auto', { id: 't', timerAction: 'start' }]] as const) {
+    mockProvider(() => success({ reply: 'Proposal', tasks: [{ title: 'Unrequested duplicate', phase: 'work', priority: 2, steps: 0 }], taskUpdates: [update], strategy: { status: 'ready', narrative: 'Unrequested strategy' } }));
+    const result = await chat({ prompt, intent, currentTasks: [{ id: 't', title: 'Study', phase: 'work', done: false, timerMode: 'stopwatch' }], strategyContext: { goals: [] } });
+    assert.equal(result.status, 200);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(result.body.tasks, []);
+    assert.equal(result.body.taskUpdates.length, 1);
+    assert.equal(result.body.strategy, undefined);
+  }
+});
+
+test('a refused start asks for its reason before provider changes can adapt a ready plan', async () => {
+  const profile = confirmedProfile([{ ...discoveryGoal, taskIds: ['t'] }]);
+  mockProvider(() => success({ reply: 'FORBIDDEN-ADVICE', strategy: { status: 'ready', nextAction: 'FORBIDDEN-NEXT', actions: [{ id: 'a', goalId: 'g', taskId: 't', type: 'update', reason: 'Unjustified guess', changes: { title: 'Smaller task' } }] } }));
+  const result = await chat({ prompt: 'Я не почав працювати', turnId: 'refused', strategyContext: profile, currentTasks: [{ id: 't', title: 'Study', phase: 'work' }] });
+  assert.equal(result.status, 200);
+  assert.equal(calls.length, 1);
+  assert.match(result.body.reply, /Що відбувалося/);
+  assert.doesNotMatch(JSON.stringify(result.body), /FORBIDDEN/);
   assert.deepEqual(result.body.strategy.actions, []);
+});
+
+test('an ordinary pending proposal can be revised and cancelled during discovery', async () => {
+  const pending = { tasks: [{ title: 'References', phase: 'focus', priority: 2, steps: 0, countdownDurationSeconds: 1500 }] };
+  mockProvider(() => success({ reply: 'Updated proposal', tasks: [{ ...pending.tasks[0], countdownDurationSeconds: 600 }] }));
+  const revision = await chat({ prompt: 'Зменши час у пропозиції до 10 хвилин', pendingChanges: pending, strategyContext: { goals: [] }, tabs: ['focus'] });
+  assert.equal(revision.status, 200);
+  assert.equal(revision.body.tasks[0].countdownDurationSeconds, 600);
+  assert.equal(calls.length, 1);
+  mockProvider(() => success({ reply: 'Proposal cancelled', tasks: pending.tasks }));
+  const cancel = await chat({ prompt: 'Скасуй пропозицію', pendingChanges: pending, strategyContext: { goals: [] } });
+  assert.equal(cancel.status, 200);
+  assert.deepEqual(cancel.body.tasks, []);
+  assert.equal(cancel.body.strategy, undefined);
+});
+
+test('ready personal analysis keeps its reply and observations without replacing the saved plan', async () => {
+  const profile = confirmedProfile();
+  const prompt = 'Проаналізуй мої перешкоди з продуктивністю';
+  mockProvider(() => success({ reply: 'Analysis of your reported obstacles', strategy: { status: 'ready', narrative: 'Forbidden replacement narrative', nextAction: 'Forbidden replacement action', focusTaskId: 't', memoryPatch: { facts: [{ id: 'f', text: prompt, source: 'user' }], discovery: { question: { topic: 'barriers', text: 'Що відбулося?' } } }, actions: [{ id: 'a', goalId: 'g', type: 'create', reason: 'Analysis is not permission', changes: { title: 'Unrequested task', phase: 'work' } }] } }));
+  const result = await chat({ prompt, intent: 'analysis', strategyContext: profile, turnId: 'personal-analysis' });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.reply, 'Analysis of your reported obstacles');
+  assert.equal(result.body.strategy.status, 'clarifying');
+  assert.equal(result.body.strategy.nextAction, undefined);
+  assert.equal(result.body.strategy.narrative, undefined);
+  assert.equal(result.body.strategy.focusTaskId, undefined);
+  assert.equal(result.body.strategy.memoryPatch.discovery, undefined);
+  assert.equal(result.body.strategy.memoryPatch.facts[0].text, prompt);
+  assert.deepEqual(result.body.strategy.actions, []);
+  assert.equal(calls.length, 1);
+});
+
+test('autonomous updates use exact raw dispatch snapshots rather than derived analytics context', async () => {
+  const task = { id: 't', title: 'Study', phase: 'work', done: false, steps: 0, currentStep: 0, pinned: false, priority: 2, createdAt: 100, timeSpentSeconds: 600, timerMode: 'stopwatch', timerRunning: false, note: 'A real persisted note' } as const;
+  const profile = confirmedProfile([{ ...discoveryGoal, taskIds: ['t'] }]);
+  const tabs = [{ id: 'work', name: 'Work', color: '#123456' }];
+  mockProvider((_model, body) => {
+    const prompt = body.contents.flatMap((content: any) => content.parts.map((part: any) => part.text || '')).join('\n');
+    assert.doesNotMatch(prompt, /taskSnapshots/);
+    return success({ reply: 'A smaller next step', strategy: { status: 'ready', nextAction: 'Read one page', actions: [{ id: 'update', type: 'update', goalId: 'g', taskId: 't', reason: 'Clarify the scope', changes: { title: 'Read one page' }, expectedTask: { id: 't', title: 'Provider forgery' } }] } });
+  });
+  const result = await chat({ prompt: 'Підготуй наступний крок', intent: 'plan', turnId: 'snapshot-turn', strategyContext: profile,
+    taskSnapshots: [task], currentTasks: [{ ...task, timeSpentSeconds: 999, countdownDurationSeconds: 0 }], fullAppContext: { activeTasks: [{ id: 't', title: 'Study', phase: 'work', priority: 2, done: false, timeSpentSeconds: 999 }] } });
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.body.strategy.actions[0].expectedTask, task);
+  const options = { tasks: [task], profile, actions: result.body.strategy.actions, ownerId: 'account', currentOwnerId: 'account', turnId: 'snapshot-turn', tabs };
+  const applied = applyStrategyActions(options);
+  assert.equal(applied.applied.length, 1);
+  assert.equal(applied.tasks[0].title, 'Read one page');
+  assert.equal(applied.tasks[0].timeSpentSeconds, 600);
+  for (const changed of [{ ...task, title: 'Newer title' }, { ...task, timeSpentSeconds: 601 }, { ...task, timerRunning: true }]) {
+    const stale = applyStrategyActions({ ...options, tasks: [changed] });
+    assert.equal(stale.applied.length, 0);
+    assert.match(stale.rejected[0].reason, /changed since analysis/);
+  }
+  assert.equal(calls.length, 1);
+});
+
+test('raw snapshots are optional for compatibility but malformed or duplicate IDs are rejected before transport', async () => {
+  mockProvider(() => { throw new Error('Invalid snapshots must not reach the provider'); });
+  for (const taskSnapshots of [{}, [null], [{ title: 'Missing id' }], [{ id: 't', title: 'One' }, { id: 't', title: 'Duplicate' }]]) {
+    const result = await chat({ taskSnapshots });
+    assert.equal(result.status, 400);
+  }
+  assert.equal(calls.length, 0);
 });
 test('period audit incorporates personal goals and motives without transmitting action snapshots', async () => {
   mockProvider((_model, body) => {
@@ -381,7 +528,7 @@ test('breakdown excludes completed, accidental and archived tasks from other act
 test('classified deletion proposals round-trip through the SDK and unknown enum values fail without mutations', async () => {
   for (const deletionReason of ['accidental', 'cancelled', undefined, 'unknown']) {
     mockProvider(() => success({ reply: 'Deletion proposal prepared.', tasks: [], taskDeletions: [{ id: 't1', deletionReason }] }));
-    const result = await chat({ currentTasks: [{ id: 't1', title: 'Current task' }] });
+    const result = await chat({ prompt: 'Видали завдання Current task', currentTasks: [{ id: 't1', title: 'Current task' }] });
     if (deletionReason === 'unknown') {
       assert.equal(result.status, 502);
       assert.equal(result.body.code, 'INVALID_AI_RESPONSE');

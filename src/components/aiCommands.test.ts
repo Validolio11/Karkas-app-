@@ -5,6 +5,7 @@ import { readAIResponse, readAIAssistantDraft, saveAIAssistantDraft } from './ai
 import { ensureAIChatWelcome, loadAIChatHistory, saveAIChatHistory, recentAIChatContext, visibleAIChatMessages } from '../services/chatHistory';
 import { proposalTargetsUnchanged } from './aiProposalGuard';
 import type { PSTask } from '../types';
+import { removeAccountStorage } from '../utils/accountStorage';
 
 test('leading commands select one turn; natural mentions and similarly named words stay chat text', () => {
   assert.deepEqual(parseAICommand('  @PLAN Build a house'), { intent: 'plan', text: 'Build a house' });
@@ -49,7 +50,7 @@ test('welcome preserves old history for an existing account and repeats only aft
     assert.equal(ensureAIChatWelcome('old-account', first.messages, 'Welcome', false).added, false);
     assert.equal(ensureAIChatWelcome('other-account', [], 'Welcome', false).added, true);
     assert.equal(ensureAIChatWelcome('known-account', old, 'Welcome', true).added, false);
-    storage.removeItem('karkas_ai_chat_welcome:old-account');
+    removeAccountStorage(storage, 'karkas_ai_chat_welcome', 'old-account');
     const restarted = ensureAIChatWelcome('old-account', first.messages, 'Welcome again', false);
     assert.equal(restarted.added, true);
     assert.deepEqual(recentAIChatContext(restarted.messages), [{ role: 'assistant', content: 'Welcome again' }]);

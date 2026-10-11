@@ -1,5 +1,6 @@
 import type { AIResponse } from '../types';
 import { readAIResponse } from '../components/aiAssistantState';
+import { readAccountStorage, writeAccountStorage, removeAccountStorage } from '../utils/accountStorage';
 
 export interface PersistedAIChatMessage {
   role: 'user' | 'assistant';
@@ -12,16 +13,13 @@ export interface PersistedAIChatMessage {
   greeting?: boolean;
 }
 
-const STORAGE_PREFIX = 'karkas_ai_chat_history:';
+const STORAGE_PREFIX = 'karkas_ai_chat_history';
 const MAX_MESSAGES = 200;
-
-const storageKey = (accountId?: string | null) =>
-  `${STORAGE_PREFIX}${accountId || 'guest'}`;
 
 /** Load the last AI conversation for an account. */
 export function loadAIChatHistory(accountId?: string | null): PersistedAIChatMessage[] {
   try {
-    const raw = localStorage.getItem(storageKey(accountId));
+    const raw = readAccountStorage(localStorage, STORAGE_PREFIX, accountId);
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -52,13 +50,13 @@ export function loadAIChatHistory(accountId?: string | null): PersistedAIChatMes
 
 /** Account-scoped one-time welcome, independent from account age and chat history. */
 export function ensureAIChatWelcome(accountId: string | null | undefined, messages: PersistedAIChatMessage[], content: string, hasProfile: boolean): { messages: PersistedAIChatMessage[]; added: boolean } {
-  const key = `karkas_ai_chat_welcome:${accountId || 'guest'}`;
+  const prefix = 'karkas_ai_chat_welcome';
   try {
-    if (hasProfile || localStorage.getItem(key) === '1') return { messages, added: false };
+    if (hasProfile || readAccountStorage(localStorage, prefix, accountId) === '1') return { messages, added: false };
     const next: PersistedAIChatMessage[] = [...messages, { id: `welcome-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, role: 'assistant', content, greeting: true }];
     // Commit the message before the marker, so a full storage cannot lose the greeting.
-    localStorage.setItem(storageKey(accountId), JSON.stringify(next.slice(-MAX_MESSAGES)));
-    localStorage.setItem(key, '1');
+    writeAccountStorage(localStorage, STORAGE_PREFIX, accountId, JSON.stringify(next.slice(-MAX_MESSAGES)));
+    writeAccountStorage(localStorage, prefix, accountId, '1');
     return { messages: next, added: true };
   } catch {
     if (hasProfile || messages.some(message => message.greeting)) return { messages, added: false };
@@ -69,7 +67,7 @@ export function ensureAIChatWelcome(accountId: string | null | undefined, messag
 /** Save the current AI conversation locally so it survives reloads and restarts. */
 export function saveAIChatHistory(accountId: string | null | undefined, messages: PersistedAIChatMessage[]): void {
   try {
-    localStorage.setItem(storageKey(accountId), JSON.stringify(messages.slice(-MAX_MESSAGES)));
+    writeAccountStorage(localStorage, STORAGE_PREFIX, accountId, JSON.stringify(messages.slice(-MAX_MESSAGES)));
   } catch {
     // Storage can be unavailable or full; the in-memory conversation still works.
   }
@@ -77,7 +75,7 @@ export function saveAIChatHistory(accountId: string | null | undefined, messages
 
 export function clearAIChatHistory(accountId?: string | null): void {
   try {
-    localStorage.removeItem(storageKey(accountId));
+    removeAccountStorage(localStorage, STORAGE_PREFIX, accountId);
   } catch {
     // Ignore storage errors.
   }

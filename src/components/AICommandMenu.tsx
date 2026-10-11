@@ -27,7 +27,7 @@ export const AICommandMenu: React.FC<{ lang: 'uk' | 'en'; disabled: boolean; onC
   }}>
     <button id="ai-command-menu-btn" ref={trigger} type="button" disabled={disabled} aria-label={lang === 'uk' ? 'Додати дію' : 'Add action'} aria-haspopup="menu" aria-expanded={open} aria-controls="ai-command-menu" className="karkas-ai-plus" onClick={() => { setActive(0); setOpen(value => !value); }} onKeyDown={event => {
       if (!open && ['ArrowDown', 'ArrowUp'].includes(event.key)) { event.preventDefault(); setActive(event.key === 'ArrowUp' ? AI_COMMANDS.length - 1 : 0); setOpen(true); }
-    }}><Plus size={22} aria-hidden="true" /></button>
+    }}><Plus className="w-4 h-4 stroke-[2.5]" aria-hidden="true" /></button>
     {open && <div id="ai-command-menu" role="menu" aria-label={lang === 'uk' ? 'Дії ШІ' : 'AI actions'} className="karkas-ai-command-list">
       {AI_COMMANDS.map((action, index) => <button key={action.intent} ref={node => { items.current[index] = node; }} role="menuitem" type="button" tabIndex={active === index ? 0 : -1} onClick={() => { close(); onChoose(action.intent); }}>
         <span>{action[lang]}</span><span className="text-neutral-400">{action.command}</span>

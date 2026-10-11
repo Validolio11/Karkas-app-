@@ -32,6 +32,25 @@ test('stable turn identity and intent survive request recovery without persistin
   assert.equal(readAIAssistantDraft(storage, 'other-account'), null);
 });
 
+test('retry context excludes only the current turn and preserves earlier identical answers', () => {
+  const messages = [
+    { id: 'old', role: 'user' as const, content: 'Old introduction' },
+    { id: 'welcome', role: 'assistant' as const, content: 'Let us get to know each other', greeting: true },
+    { id: 'earlier-answer', role: 'user' as const, content: 'I get distracted' },
+    { id: 'question', role: 'assistant' as const, content: 'What happened last time?' },
+    { id: 'failed-turn', role: 'user' as const, content: 'I get distracted' },
+  ];
+  assert.deepEqual(recentAIChatContext(messages, 2, 'failed-turn'), [
+    { role: 'user', content: 'I get distracted' },
+    { role: 'assistant', content: 'What happened last time?' },
+  ]);
+  assert.equal(messages.at(-1)?.id, 'failed-turn');
+  assert.deepEqual(recentAIChatContext(messages, 2, 'new-turn'), [
+    { role: 'assistant', content: 'What happened last time?' },
+    { role: 'user', content: 'I get distracted' },
+  ]);
+});
+
 test('welcome preserves old history for an existing account and repeats only after explicit reset', () => {
   const values = new Map<string, string>();
   const storage = { getItem: (key: string) => values.get(key) || null, setItem: (key: string, value: string) => { values.set(key, value); }, removeItem: (key: string) => { values.delete(key); } };

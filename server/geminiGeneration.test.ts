@@ -55,14 +55,14 @@ test('unified chat transmits persistent memory and intent without private action
     const prompt = body.contents.flatMap((content: any) => content.parts.map((part: any) => part.text ?? '')).join('\n');
     assert.match(prompt, /PERSONAL_DISCOVERY/);
     assert.match(prompt, /I want time for family/);
-    assert.doesNotMatch(prompt, /PRIVATE-JOURNAL-TASK/);
+    assert.doesNotMatch(prompt, /PRIVATE-JOURNAL-TASK|PRIVATE-DEDUP-ID|processedTurnIds|"fingerprint"/);
     assert.match(prompt, /pendingQuestion/);
     assert.match(body.systemInstruction.parts[0].text, /ask what happened before suggesting fixes/);
     assert.equal(body.generationConfig.responseSchema.properties.tasks, undefined);
     assert.ok(body.generationConfig.responseSchema.properties.memoryPatch.properties.discovery);
     return success({ reply: 'What would reaching this goal change for you?', strategy: { status: 'getting_to_know', question: 'Why does it matter?' } });
   });
-  const result = await chat({ prompt: 'Хочу більше часу для сім’ї', intent: 'plan', strategyContext: { onboardingStatus: 'in_progress', goals: [], facts: [{ id: 'f', text: 'I want time for family', source: 'user' }], actionHistory: [{ task: 'PRIVATE-JOURNAL-TASK' }] }, currentTasks: [{ id: 't', title: 'Study', done: false }] });
+  const result = await chat({ prompt: 'Хочу більше часу для сім’ї', intent: 'plan', strategyContext: { onboardingStatus: 'in_progress', goals: [], facts: [{ id: 'f', text: 'I want time for family', source: 'user' }], discovery: { version: 1, processedTurnIds: ['PRIVATE-DEDUP-ID'] }, actionHistory: [{ task: 'PRIVATE-JOURNAL-TASK' }] }, currentTasks: [{ id: 't', title: 'Study', done: false }] });
   assert.equal(result.status, 200);
   assert.equal(result.body.strategy.status, 'getting_to_know');
   assert.equal(calls.length, 1);

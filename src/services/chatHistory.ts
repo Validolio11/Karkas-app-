@@ -82,12 +82,15 @@ export function clearAIChatHistory(accountId?: string | null): void {
 }
 
 /** A restarted introduction keeps old text visible but starts fresh provider context. */
-export function recentAIChatContext(messages: PersistedAIChatMessage[], limit = 10): { role: 'user' | 'assistant'; content: string }[] {
+export function recentAIChatContext(messages: PersistedAIChatMessage[], limit = 10, currentTurnId?: string): { role: 'user' | 'assistant'; content: string }[] {
   let start = 0;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     if (messages[index].greeting) { start = index; break; }
   }
-  return messages.slice(start).slice(-limit).map(({ role, content }) => ({ role, content }));
+  // A retried message is already sent as the current prompt, not a second
+  // answer to the preceding question. Keep earlier identical text by its ID.
+  return messages.slice(start).filter(message => !currentTurnId || message.id !== currentTurnId)
+    .slice(-limit).map(({ role, content }) => ({ role, content }));
 }
 
 export function visibleAIChatMessages(messages: PersistedAIChatMessage[], introductionId: string | null): { messages: PersistedAIChatMessage[]; previousCount: number } {

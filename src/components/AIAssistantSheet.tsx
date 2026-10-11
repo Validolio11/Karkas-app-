@@ -33,6 +33,7 @@ import { AIIcon, AIIconId } from './AIIconTemplates';
 import { shouldVerifyAsApiKey } from '../utils/apiKey';
 import { verifyApiKey, keyVerificationMessage } from '../utils/verifyApiKey';
 import { desktopHasAiKey, karkasApiFetch } from '../utils/desktopApi';
+import { AI_CHAT_CLIENT_TIMEOUT_MS } from '../utils/aiChatTiming';
 import { selectRelevantArchivedTasks } from '../utils/taskArchive';
 import { loadAIChatHistory, saveAIChatHistory, ensureAIChatWelcome, recentAIChatContext, visibleAIChatMessages } from '../services/chatHistory';
 import type { PersistedAIChatMessage } from '../services/chatHistory';
@@ -613,6 +614,9 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
         : currentMode === 'breakdown' ? (lang === 'uk' ? 'Допоможи розбити конкретне завдання на підзавдання. Якщо завдання не визначене, спочатку запитай яке.' : 'Help break down a specific task into subtasks. If the task is unclear, ask which task first.') : ''
     );
     const retryRequest = recoverableRequest?.text === requestText && recoverableRequest.mode === currentMode ? recoverableRequest : null;
+    const retryTurnId = retryRequest?.purpose !== 'proposal' && retryRequest?.turnId
+      && !chatMessages.some(message => message.role === 'assistant' && message.id === `reply-${retryRequest.turnId}`)
+      ? retryRequest.turnId : undefined;
     const isAlternativeRequest = internalAlternative || retryRequest?.internalAlternative === true;
     const keepDraft = preserveInput || isAlternativeRequest;
     const sourceRequest = planningSource || retryRequest?.planningSource || { text: requestText, mode: currentMode };
@@ -620,7 +624,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       text: requestText,
       mode: currentMode,
       intent: parsedCommand.intent,
-      turnId: retryRequest?.turnId || `turn-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      turnId: retryTurnId || `turn-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
       ...(isAlternativeRequest ? { internalAlternative: true, planningSource: { text: sourceRequest.text, mode: sourceRequest.mode } } : {}),
     };
 
@@ -792,7 +796,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       const customKey = localStorage.getItem('karkas_custom_api_key') || '';
       const customEnabled = localStorage.getItem('karkas_custom_ai_enabled') === 'true';
 
-      requestTimeout = window.setTimeout(() => { timedOut = true; controller.abort(); }, 35000);
+      requestTimeout = window.setTimeout(() => { timedOut = true; controller.abort(); }, AI_CHAT_CLIENT_TIMEOUT_MS);
       const res = await karkasApiFetch('/api/ai/assist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -812,7 +816,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
           adaptiveProfile,
           currentTasks: currentTasks.map(task => ({ ...task, ...getAITimerContext(task) })),
           taskSnapshots: currentTasks,
-          conversation: recentAIChatContext(chatMessages),
+          conversation: recentAIChatContext(chatMessages, 10, currentRequest.turnId),
           pendingChanges: {
             tasks: pendingChatTasks, tabs: pendingChatTabs,
             taskUpdates: pendingChatUpdates,
@@ -901,7 +905,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       const error = controller.signal.aborted ? new AIRequestError(timedOut ? 'TIMEOUT' : 'CANCELLED') : err;
       setRequestError(aiRequestErrorMessage(error, lang));
       setRecoverableRequest(currentRequest);
-      setPrompt(previous => preservedRequestDraftRef.current ?? (previous || requestText));
+      setPrompt(previous => preservedRequestDraftRef.current ?? previous);
       activeRequest.current = null;
       if (error instanceof AIRequestError && (error.code === 'INVALID_API_KEY' || error.code === 'MISSING_API_KEY')) {
         pendingRequest.current = currentRequest;
@@ -931,7 +935,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     setLoading(false);
     if (activeRequest.current) {
       const interrupted = activeRequest.current;
-      setPrompt(previous => preservedRequestDraftRef.current ?? (previous || interrupted.text));
+      setPrompt(previous => preservedRequestDraftRef.current ?? previous);
       setRecoverableRequest(interrupted);
       setRequestError(aiRequestErrorMessage(new AIRequestError('CANCELLED'), lang));
       activeRequest.current = null;

@@ -11,6 +11,7 @@ import { buildWorkInsights } from "./src/utils/workInsights";
 import type { AIStrategyResponse } from './src/types';
 import { normalizeStrategyDiscovery, isPersonalStrategyReady, preparePersonalDiscoveryRequest, STRATEGY_DISCOVERY_TOPICS } from './src/utils/strategyDiscovery';
 import { classifyPersonalChatRequest, constrainOrdinaryChatResponse, constrainReadyPersonalResponse, personalGuidanceSystemPolicy, personalProfileForRequest, sanitizeDiscoveryResponse } from './server/strategyDiscovery';
+import { AI_CHAT_MODEL_TIMEOUT_MS, AI_CHAT_TOTAL_TIMEOUT_MS } from './src/utils/aiChatTiming';
 
 dotenv.config();
 
@@ -262,6 +263,8 @@ async function generateGeminiContentWithFallback(params: {
   customAi?: GoogleGenAI | null;
   selectedModel?: string;
   validateResponse?: (text: string) => unknown;
+  timeoutMs?: number;
+  totalTimeoutMs?: number;
 }): Promise<any> {
   const ai = params.customAi || getGeminiClient();
   if (!ai) throw new AIRequestError('MISSING_API_KEY');
@@ -341,9 +344,16 @@ export function slugifyTabId(rawName: string, requestedId?: string): string {
 
 function strategyPromptContext(input: any) {
   if (!isRecord(input)) return null;
+  const discovery = normalizeStrategyDiscovery(personalProfileForRequest(input));
+  const { processedTurnIds: _processedTurnIds, pendingSummary, ...discoveryContext } = discovery;
+  const summaryContext = pendingSummary ? {
+    id: pendingSummary.id, text: pendingSummary.text, goalIds: pendingSummary.goalIds, confirmed: pendingSummary.confirmed,
+  } : undefined;
   return { onboardingStatus: input.onboardingStatus, phase: input.phase, goals: input.goals,
     facts: input.facts, barriers: input.barriers, preferences: input.preferences,
-    discovery: normalizeStrategyDiscovery(personalProfileForRequest(input)),
+    // Deduplication IDs and the confirmation fingerprint stay in app memory;
+    // they can grow indefinitely and contain no additional personal context.
+    discovery: { ...discoveryContext, pendingSummary: summaryContext },
     feedback: Array.isArray(input.feedback) ? input.feedback.slice(-20) : [],
     latestStrategy: input.latestStrategy ? { narrative: input.latestStrategy.narrative, nextAction: input.latestStrategy.nextAction } : undefined };
 }
@@ -478,6 +488,8 @@ export async function assistHandler(req: any, res: any) {
       try {
         if (isPersonalDiscovery) {
           const response = await generateGeminiContentWithFallback({
+            timeoutMs: AI_CHAT_MODEL_TIMEOUT_MS,
+            totalTimeoutMs: AI_CHAT_TOTAL_TIMEOUT_MS,
             contents: `PERSONAL_DISCOVERY. LANGUAGE: ${isUk ? 'Ukrainian' : 'English'}.
 The person is getting to know their assistant. Understand rather than prescribe. No plan, time blocks, next action, commitments or task operations, including when this message asks for @plan.
 PERSISTENT PERSONAL CONTEXT (includes the pending question and grounded evidence even beyond recent chat):
@@ -578,6 +590,8 @@ For time analysis, timeStatistics counts only completed tasks with positive reco
 7. Return strictly valid JSON adhering to schema.`;
 
         const chatResponse = await generateGeminiContentWithFallback({
+          timeoutMs: AI_CHAT_MODEL_TIMEOUT_MS,
+          totalTimeoutMs: AI_CHAT_TOTAL_TIMEOUT_MS,
           contents: chatPrompt,
           config: {
             systemInstruction: `${personalGuidanceSystemPolicy}\nREQUEST ROUTE: ${chatRoute.route}. PERSONAL READY: ${personalReady}. CONCRETE COMMAND SCOPE: ${JSON.stringify(chatRoute.scope || null)}.\n${taskActionInstructions}`,

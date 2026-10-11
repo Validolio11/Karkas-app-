@@ -17,3 +17,5 @@
 Незалежний огляд і усунені дефекти: [DISCOVERY-REVIEW-2026-10-12.md](../../DISCOVERY-REVIEW-2026-10-12.md).
 
 Windows x64/NSIS: успішно. `FileVersion` і package version — 1.3.1; інсталятор 138917987 байт. SHA512 збігається з `latest.yml`, blockmap наявний. 34 файлові записи renderer/server/electron та іконки байтово відповідають перевіреним джерелам; технічні файли `.gitignore` у пакет не включаються. [Маніфест пакета](release-manifest.json).
+
+Опубліковано stable 1.3.1: 2026-10-11T21:34:13Z. [Випуск](https://github.com/Validolio11/Karkas-app-/releases/tag/1.3.1), commit `8f01247`, bare tag `1.3.1`. Інсталятор, blockmap і latest.yml перевірено в чернетці перед публікацією. [Підтвердження відповіді API публікації](publication.json). Після публікації GitHub не моніторили.

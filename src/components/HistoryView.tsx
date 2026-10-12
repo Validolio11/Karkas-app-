@@ -11,8 +11,6 @@ import {
   Calendar,
   AlertTriangle,
   X,
-  Layers,
-  ChevronRight,
   Timer,
 } from 'lucide-react';
 import { sound } from '../utils/audio';

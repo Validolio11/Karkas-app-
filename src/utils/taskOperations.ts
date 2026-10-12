@@ -1,5 +1,6 @@
 import type { NewTaskInput, PSTask, TaskStepItem } from '../types';
 import { normalizeTaskSchedule } from './taskScheduling';
+import { isTaskDate } from './taskDates';
 import { getTaskRemainingSeconds, getTaskTimerMode, pauseTaskTimer, startTaskTimer } from './taskTimer';
 import { activeTaskStepId, discardTaskStepAttribution, initialTaskPlanSeconds } from './taskWorkTelemetry';
 
@@ -37,6 +38,8 @@ export function createTask(input: NewTaskInput, id: string, now = Date.now()): P
   const mode = input.timerMode ?? 'none';
   const schedule = input.schedule === undefined ? undefined : normalizeTaskSchedule(input.schedule);
   if (input.schedule !== undefined && !schedule) return null;
+  if (input.plannedDate !== undefined && !isTaskDate(input.plannedDate) || input.deadlineDate !== undefined && !isTaskDate(input.deadlineDate)) return null;
+  if (input.plannedDate && input.deadlineDate && input.plannedDate > input.deadlineDate) return null;
   if (!['none', 'stopwatch', 'countdown'].includes(mode)) return null;
   if (mode === 'countdown' && (!Number.isInteger(input.countdownDurationSeconds) ||
     input.countdownDurationSeconds! < 60 || input.countdownDurationSeconds! > 86400)) return null;
@@ -58,6 +61,8 @@ export function createTask(input: NewTaskInput, id: string, now = Date.now()): P
     steps: list?.length ? list.length : input.steps, currentStep: 0,
     ...(list ? { stepList: list } : {}),
     ...(input.note !== undefined ? { note: input.note.trim() } : {}),
+    ...(input.plannedDate !== undefined ? { plannedDate: input.plannedDate } : {}),
+    ...(input.deadlineDate !== undefined ? { deadlineDate: input.deadlineDate } : {}),
     done: false, pinned: false, createdAt: now, timerMode: mode, timerRunning: false, timeSpentSeconds: 0,
     ...(schedule ? { schedule, scheduledPending: true, scheduleNextStartAt: schedule.startAt } : {}),
     ...(mode === 'countdown' ? {

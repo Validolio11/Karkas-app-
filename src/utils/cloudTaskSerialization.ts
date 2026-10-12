@@ -5,13 +5,15 @@ export function serializeTaskForCloud<T extends PSTask | DeletedTask>(task: T, n
   const result: Record<string, unknown> = {
     id: task.id, title: task.title, phase: task.phase, priority: task.priority,
     steps: task.steps, currentStep: task.currentStep, done: Boolean(task.done),
-    pinned: Boolean(task.pinned), createdAt: task.createdAt || now,
+    pinned: Boolean(task.pinned), createdAt: task.createdAt ?? now,
   };
   if ('deletedAt' in task) {
-    result.deletedAt = task.deletedAt || now;
+    result.deletedAt = task.deletedAt ?? now;
     if ('deletionReason' in task && (task.deletionReason === 'accidental' || task.deletionReason === 'cancelled')) result.deletionReason = task.deletionReason;
   }
   if (task.note != null) result.note = task.note;
+  if (task.plannedDate !== undefined) result.plannedDate = task.plannedDate;
+  if (task.deadlineDate !== undefined) result.deadlineDate = task.deadlineDate;
   if (task.schedule) result.schedule = { ...task.schedule };
   if (task.scheduledPending !== undefined) result.scheduledPending = Boolean(task.scheduledPending);
   if (task.scheduleNextStartAt) result.scheduleNextStartAt = task.scheduleNextStartAt;

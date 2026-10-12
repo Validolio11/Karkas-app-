@@ -1,5 +1,5 @@
 import express from "express";
-import { taskMutationProperties, taskTimerProperties, taskActionInstructions, validateTaskMutations, validatedTimerFields, normalizeAIOptionalFields, taskScheduleProperties, validatedScheduleFields, schedulingClockContext } from "./server/aiActions";
+import { taskMutationProperties, taskTimerProperties, taskActionInstructions, validateTaskMutations, validatedTimerFields, normalizeAIOptionalFields, taskScheduleProperties, taskDateProperties, validatedDateFields, validatedScheduleFields, schedulingClockContext } from "./server/aiActions";
 import path from "path";
 import dotenv from "dotenv";
 import { type GoogleGenAI, Modality, Type } from "@google/genai";
@@ -94,6 +94,10 @@ function validateAssistProposal(rawText: string, action: string, tasks: any[], t
     if (!isRecord(task) || !nonEmptyText(task.title)) throw new Error('Invalid new task title');
     validatedTimerFields(task);
     validatedScheduleFields(task);
+    validatedDateFields(task);
+    // A newly created task has no existing date to clear.
+    if (task.plannedDate === null) delete task.plannedDate;
+    if (task.deadlineDate === null) delete task.deadlineDate;
   }
   Object.assign(parsed, validateTaskMutations(parsed, tasks));
   if (parsed.strategy !== undefined) parsed.strategy = validateStrategyResponse(parsed.strategy, tasks, taskSnapshots);
@@ -136,7 +140,7 @@ const strategySchema = { type: Type.OBJECT, properties: {
   actions: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: {
     id: { type: Type.STRING }, goalId: { type: Type.STRING }, reason: { type: Type.STRING }, type: { type: Type.STRING, enum: ['create', 'update'] }, taskId: { type: Type.STRING },
     changes: { type: Type.OBJECT, properties: { title: { type: Type.STRING }, phase: { type: Type.STRING }, priority: { type: Type.INTEGER }, note: { type: Type.STRING },
-      ...taskScheduleProperties, stepTitles: { type: Type.ARRAY, items: { type: Type.STRING } } } },
+      ...taskScheduleProperties, ...taskDateProperties, stepTitles: { type: Type.ARRAY, items: { type: Type.STRING } } } },
   }, required: ['id', 'goalId', 'reason', 'type', 'changes'] } },
 } };
 
@@ -173,12 +177,14 @@ function validateStrategyResponse(value: unknown, tasks: any[], taskSnapshots?: 
     if (!Array.isArray(value.actions) || value.actions.length > MAX_AUTONOMOUS_STRATEGY_ACTIONS) throw new Error('Invalid strategy actions');
     output.actions = value.actions.map((action: any) => {
       if (!isRecord(action) || !nonEmptyText(action.id) || !nonEmptyText(action.goalId) || !nonEmptyText(action.reason) || !['create', 'update'].includes(action.type) || !isRecord(action.changes)) throw new Error('Invalid strategy action');
-      if (Object.keys(action.changes).some(key => !['title', 'phase', 'priority', 'note', 'schedule', 'stepTitles'].includes(key))) throw new Error('Forbidden autonomous task field');
+      if (Object.keys(action.changes).some(key => !['title', 'phase', 'priority', 'note', 'schedule', 'plannedDate', 'deadlineDate', 'stepTitles'].includes(key))) throw new Error('Forbidden autonomous task field');
       const changes = action.changes;
       if (changes.title !== undefined && !nonEmptyText(changes.title) || changes.phase !== undefined && !nonEmptyText(changes.phase) || changes.priority !== undefined && ![1, 2, 3].includes(changes.priority) || changes.note !== undefined && typeof changes.note !== 'string' || changes.stepTitles !== undefined && (!Array.isArray(changes.stepTitles) || !changes.stepTitles.every(nonEmptyText))) throw new Error('Invalid strategy changes');
       validatedScheduleFields(changes);
+      validatedDateFields(changes);
       const target = tasks.find(task => task.id === action.taskId);
       if (action.type === 'update' && !target) throw new Error('Unknown autonomous target');
+      validatedDateFields({ plannedDate: changes.plannedDate === undefined ? target?.plannedDate : changes.plannedDate, deadlineDate: changes.deadlineDate === undefined ? target?.deadlineDate : changes.deadlineDate });
       // Model/analytics projections are not the persisted task: compare the exact dispatch snapshot on the client.
       const expectedTask = target && (taskSnapshots?.find(snapshot => snapshot.id === target.id) || target);
       return { id: action.id, goalId: action.goalId, reason: action.reason, type: action.type, taskId: action.taskId, changes,
@@ -210,10 +216,8 @@ function workspaceProductivityContext(activeTasks: any[], completedTasks: any[],
   const tracked = [...activeTasks, ...completedTasks, ...relevantArchive];
   const phaseCounts: Record<string, number> = {};
   const completedByPhase = new Map<string, number>();
-  const activeByPhase = new Map<string, number>();
   for (const task of tracked) phaseCounts[task.phase] = (phaseCounts[task.phase] || 0) + 1;
   for (const task of completed) completedByPhase.set(task.phase, (completedByPhase.get(task.phase) || 0) + 1);
-  for (const task of activeTasks) activeByPhase.set(task.phase, (activeByPhase.get(task.phase) || 0) + 1);
   const tasksWithSteps = tracked.filter(task => Number.isInteger(task.steps) && task.steps > 0);
   const urgentLoad = activeTasks.filter(task => task.priority === 1).length;
   const completionRate = tracked.length ? Math.round(completed.length / tracked.length * 100) : 0;
@@ -225,9 +229,7 @@ function workspaceProductivityContext(activeTasks: any[], completedTasks: any[],
       averageCompletionMinutes: timeStatistics.averageSeconds === null ? null : Math.round(timeStatistics.averageSeconds / 60),
       averageStepCount: tasksWithSteps.length ? Math.round(tasksWithSteps.reduce((sum, task) => sum + task.steps, 0) / tasksWithSteps.length * 10) / 10 : 0,
       preferredPhases: [...completedByPhase].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([phase]) => phase),
-      overloadedPhases: [...activeByPhase].filter(([, count]) => count >= 4).sort((a, b) => b[1] - a[1]).map(([phase]) => phase),
       activeLoad: activeTasks.length, urgentLoad,
-      recommendedActiveLimit: urgentLoad >= 3 || activeTasks.length >= 8 ? 3 : 5,
     },
   };
 }
@@ -465,7 +467,7 @@ export async function assistHandler(req: any, res: any) {
     const primaryTab = activeTabIds[0] || "focus";
 
     const isTabCreationRequested = allowNewTabs || /(?:вкладк|категорі|розділ|напрямок|проєкт|проект|секці|tab|category|section|project)/iu.test(prompt);
-    const isScheduleRequest = /(?:tomorrow|today|daily|every day|every evening|schedule|\d{1,2}:\d{2}|\d{4}-\d{2}-\d{2}|завтра|щодн|кожн|сьогодні|на\s+\d{1,2}\s*(?:год|веч))/iu.test(prompt);
+    const isScheduleRequest = /(?:tomorrow|today|daily|every day|every evening|schedule|deadline|due\s+date|planned\s+date|\d{1,2}:\d{2}|\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}\.\d{2,4}|завтра|щодн|кожн|сьогодні|дедлайн|термін|дат[ауи]|на\s+\d{1,2}\s*(?:год|веч))/iu.test(prompt);
     const isTimerRequest = /(?:таймер|секундомір|відлік|timer|stopwatch|countdown)/iu.test(prompt);
     const personalRequest = preparePersonalDiscoveryRequest(personalProfileForRequest(strategyContext), prompt, discoveryConfirmationId);
     const personalProfile = personalRequest.profile;
@@ -540,6 +542,8 @@ ${JSON.stringify({
             stepList: t.stepList || [],
             note: t.note || '',
             schedule: t.schedule,
+            plannedDate: t.plannedDate,
+            deadlineDate: t.deadlineDate,
             scheduledPending: t.scheduledPending,
             timerRunning: !!t.timerRunning,
             timerMode: t.timerMode ?? (t.countdownDurationSeconds > 0 ? 'countdown' : 'stopwatch'),
@@ -605,6 +609,7 @@ For time analysis, timeStatistics counts only completed tasks with positive reco
                       note: { type: Type.STRING },
                       ...taskTimerProperties,
                       ...taskScheduleProperties,
+                      ...taskDateProperties,
                       stepList: {
                         type: Type.ARRAY,
                         items: {
@@ -697,6 +702,7 @@ For time analysis, timeStatistics counts only completed tasks with positive reco
               note: textOr(t.note),
               ...validatedTimerFields(t),
               ...validatedScheduleFields(t),
+              ...validatedDateFields(t),
             };
           });
 
@@ -775,6 +781,8 @@ Return valid JSON adhering to schema.`;
             subSteps: t.stepList || [],
             note: t.note || "",
             schedule: t.schedule,
+            plannedDate: t.plannedDate,
+            deadlineDate: t.deadlineDate,
             scheduledPending: t.scheduledPending,
             timerRunning: !!t.timerRunning,
             timeSpentSeconds: recordedTaskSeconds(t),
@@ -819,6 +827,7 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
                       note: { type: Type.STRING },
                       ...taskTimerProperties,
                       ...taskScheduleProperties,
+                      ...taskDateProperties,
                       stepList: {
                         type: Type.ARRAY,
                         items: {
@@ -911,6 +920,7 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
               note: textOr(t.note),
               ...validatedTimerFields(t),
               ...validatedScheduleFields(t),
+              ...validatedDateFields(t),
             };
           });
 

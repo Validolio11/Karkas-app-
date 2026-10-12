@@ -7,11 +7,11 @@ import { formatDigitalDuration as formatTime, formatDurationFull } from '../util
 import { Language, TRANSLATIONS } from '../utils/i18n';
 import { AIIcon } from './AIIconTemplates';
 import { TaskTimeDialog } from './TaskTimeDialog';
+import { formatTaskDate, getDeadlineProgress, isTaskDate, taskDateEnd } from '../utils/taskDates';
 import {
   Pin,
   Trash2,
   Check,
-  ArrowRight,
   ChevronDown,
   ChevronUp,
   Plus,
@@ -37,7 +37,7 @@ interface TaskCardProps {
   onCyclePhase: (id: string) => void;
   onTogglePin: (id: string) => void;
   onDelete: (id: string) => void;
-  onEditTask?: (taskId: string, updatedTitle: string, updatedNote: string, expected: { title: string; note: string }) => boolean;
+  onEditTask?: (taskId: string, updatedTitle: string, updatedNote: string, expected: { title: string; note: string; plannedDate?: string; deadlineDate?: string }, dates?: { plannedDate?: string; deadlineDate?: string }) => boolean;
   onAskAIAboutTask: (taskTitle: string) => void;
   onToggleStepItem?: (taskId: string, stepIndex: number) => void;
   onAddStepItem?: (taskId: string, stepTitle: string) => void;
@@ -98,14 +98,28 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
 }) => {
   const t = TRANSLATIONS[lang];
   const [isSlashing, setIsSlashing] = useState(false);
+  const completionTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
   const [isAddingStep, setIsAddingStep] = useState(false);
   const [newStepText, setNewStepText] = useState('');
   const [isEditingTask, setIsEditingTask] = useState(false);
   const [editTitleText, setEditTitleText] = useState(task.title);
   const [editNoteText, setEditNoteText] = useState(task.note || '');
-  const editBase = useRef({ title: task.title, note: task.note || '' });
+  const [editPlannedDate, setEditPlannedDate] = useState(task.plannedDate || '');
+  const [editDeadlineDate, setEditDeadlineDate] = useState(task.deadlineDate || '');
+  const editDatesInvalid = !!((editPlannedDate && !isTaskDate(editPlannedDate)) || (editDeadlineDate && !isTaskDate(editDeadlineDate)));
+  const editDatesReversed = !!(editPlannedDate && editDeadlineDate && editPlannedDate > editDeadlineDate);
+  const editBase = useRef({ title: task.title, note: task.note || '', plannedDate: task.plannedDate, deadlineDate: task.deadlineDate });
   const [editConflict, setEditConflict] = useState(false);
+  const beginEditingTask = () => {
+    editBase.current = { title: task.title, note: task.note || '', plannedDate: task.plannedDate, deadlineDate: task.deadlineDate };
+    setEditConflict(false);
+    setEditTitleText(task.title);
+    setEditNoteText(task.note || '');
+    setEditPlannedDate(task.plannedDate || '');
+    setEditDeadlineDate(task.deadlineDate || '');
+    setIsEditingTask(true);
+  };
   const [isConfiguringTimer, setIsConfiguringTimer] = useState(false);
   const [correctionOpen, setCorrectionOpen] = useState(false);
   const [now, setNow] = useState(Date.now());
@@ -118,15 +132,15 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
   const x = useMotionValue(0);
   const dragControls = useDragControls();
 
-  // Live stopwatch interval (only ticks when timer is running)
+  // One clock per card: second precision for running timers, minute precision for dates.
   useEffect(() => {
-    setNow(Date.now());
-    if (!task.timerRunning) return;
-    const interval = setInterval(() => {
-      setNow(Date.now());
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [task.timerRunning, task.timerStartedAt]);
+    const refresh = () => setNow(Date.now());
+    refresh();
+    if (!task.timerRunning && !task.plannedDate && !task.deadlineDate) return;
+    const interval = setInterval(refresh, task.timerRunning ? 1000 : 60000);
+    window.addEventListener('focus', refresh);
+    return () => { clearInterval(interval); window.removeEventListener('focus', refresh); };
+  }, [task.timerRunning, task.timerStartedAt, task.plannedDate, task.deadlineDate]);
 
   // Compute live seconds spent on task
   const currentElapsedSeconds = getTaskTotalSeconds(task, now);
@@ -170,12 +184,18 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
   const rotateLeft = useTransform(x, [-100, 0], [-1.5, 0]);
   const rotateRight = useTransform(x, [0, 100], [0, 1.5]);
 
+  useEffect(() => () => {
+    if (completionTimeout.current !== null) clearTimeout(completionTimeout.current);
+  }, []);
+
   const handleDragEnd = (_: any, info: { offset: { x: number } }) => {
     if (info.offset.x < -75) {
+      if (completionTimeout.current !== null) return;
       // Swiped Left -> Slice / Toggle Complete
       sound.slice();
       setIsSlashing(true);
-      setTimeout(() => {
+      completionTimeout.current = setTimeout(() => {
+        completionTimeout.current = null;
         onToggleDone(task.id);
         setIsSlashing(false);
       }, 160);
@@ -268,11 +288,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
           if (isEditingTask || (target instanceof Element && target.closest('button, input, textarea, select, a, [role="button"], [contenteditable="true"]'))) return;
           e.preventDefault();
           sound.tick(500);
-          editBase.current = { title: task.title, note: task.note || '' };
-          setEditConflict(false);
-          setEditTitleText(task.title);
-          setEditNoteText(task.note || '');
-          setIsEditingTask(true);
+          beginEditingTask();
         }}
         style={{ x, rotate: x.get() < 0 ? rotateLeft : rotateRight }}
         whileTap={{ cursor: 'grabbing' }}
@@ -413,6 +429,27 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                 </span>
               </button>
 
+              {(task.plannedDate || task.deadlineDate) && (
+                <div className="flex flex-wrap items-center gap-2">
+                  {task.plannedDate && <span className="inline-flex items-center gap-1.5 border border-neutral-700 bg-[#0a0a0c] px-2 py-1 text-xs font-mono font-bold text-neutral-300">
+                    {lang === 'uk' ? 'НА' : 'ON'} {formatTaskDate(task.plannedDate, lang, now)}
+                  </span>}
+                  {task.deadlineDate && (() => {
+                    const progress = Math.round(getDeadlineProgress(task, now));
+                    const end = taskDateEnd(task.deadlineDate);
+                    const overdue = !task.done && end !== null && now > end;
+                    const color = task.done ? 'text-neutral-400 border-neutral-700' : overdue || progress >= 85 ? 'text-red-400 border-red-900/70' : progress >= 60 ? 'text-amber-400 border-amber-900/70' : 'text-emerald-400 border-emerald-900/70';
+                    return <span title={lang === 'uk' ? `${overdue ? 'Термін минув. ' : ''}Минуло ${progress}% часу від створення до кінця дедлайну` : `${overdue ? 'Overdue. ' : ''}${progress}% of time from creation to deadline elapsed`} className={`inline-flex flex-wrap items-center gap-2 border bg-[#0a0a0c] px-2 py-1 text-xs font-mono font-bold ${color}`}>
+                      <span>{lang === 'uk' ? 'ДО' : 'BY'} {formatTaskDate(task.deadlineDate, lang, now)}{overdue && ' !'}</span>
+                      <span role="progressbar" aria-label={lang === 'uk' ? 'Час до дедлайну, що минув' : 'Elapsed deadline time'} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress} className="h-2.5 w-16 bg-neutral-800">
+                        <span className="block h-full bg-current shadow-[0_0_5px_currentColor]" style={{ width: `${progress}%` }} />
+                      </span>
+                      <span>{progress}%</span>
+                    </span>;
+                  })()}
+                </div>
+              )}
+
               {task.pinned && (
                 <span className="flex items-center text-xs font-sans text-neutral-400">
                   <Pin className="w-2.5 h-2.5 fill-neutral-400 mr-1" />
@@ -430,11 +467,8 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                 onClick={(e) => {
                   e.stopPropagation();
                   sound.tick(500);
-                  editBase.current = { title: task.title, note: task.note || '' };
-                  setEditConflict(false);
-                  setEditTitleText(task.title);
-                  setEditNoteText(task.note || '');
-                  setIsEditingTask((prev) => !prev);
+                  if (isEditingTask) setIsEditingTask(false);
+                  else beginEditingTask();
                 }}
                 title={lang === 'uk' ? 'Редагувати текст завдання (або ПКМ)' : 'Edit task text (or right-click)'}
                 aria-label={lang === 'uk' ? 'Редагувати текст завдання' : 'Edit task text'}
@@ -523,8 +557,8 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                 <form
                   onSubmit={(e) => {
                     e.preventDefault();
-                    if (!editTitleText.trim() || !onEditTask) return;
-                    if (!onEditTask(task.id, editTitleText.trim(), editNoteText.trim(), editBase.current)) {
+                    if (!editTitleText.trim() || !onEditTask || editDatesInvalid || editDatesReversed) return;
+                    if (!onEditTask(task.id, editTitleText.trim(), editNoteText.trim(), editBase.current, { plannedDate: editPlannedDate || undefined, deadlineDate: editDeadlineDate || undefined })) {
                       setEditConflict(true);
                       return;
                     }
@@ -555,6 +589,14 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                     placeholder={lang === 'uk' ? 'Нотатка (необов\'язково)...' : 'Note (optional)...'}
                     className="w-full px-2.5 py-1.5 bg-[#0d0d12] border border-neutral-800 text-neutral-300 text-sm leading-relaxed font-sans focus:outline-none focus:border-neutral-600 transition-colors"
                   />
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    {([{ key: 'planned', label: lang === 'uk' ? 'Заплановано на' : 'Planned for', value: editPlannedDate, set: setEditPlannedDate }, { key: 'deadline', label: lang === 'uk' ? 'Завершити до' : 'Complete by', value: editDeadlineDate, set: setEditDeadlineDate }]).map(field => <label key={field.key} className="flex flex-col gap-1 text-xs text-neutral-400">
+                      {field.label}
+                      <input type="date" min="0001-01-01" max="9999-12-31" value={field.value} aria-invalid={!!field.value && !isTaskDate(field.value) || editDatesReversed || undefined} onChange={e => field.set(e.target.value)} className="min-w-0 w-full border border-neutral-700 bg-[#0d0d12] px-2.5 py-1.5 text-sm text-white [color-scheme:dark] focus:outline-none focus:border-white" />
+                    </label>)}
+                  </div>
+                  {editDatesInvalid && <p role="alert" className="text-xs text-amber-300">{lang === 'uk' ? 'Вкажіть коректну дату.' : 'Enter a valid date.'}</p>}
+                  {editDatesReversed && <p role="alert" className="text-xs text-amber-300">{lang === 'uk' ? 'Дата роботи має бути не пізніше дедлайну.' : 'Planned date must not be after the deadline.'}</p>}
                   {editConflict && <p role="alert" className="text-xs text-amber-300">{lang === 'uk'
                     ? 'Це поле вже змінилося. Ваш текст збережено у формі. Скасуйте й відкрийте редагування знову, щоб побачити актуальні дані.'
                     : 'This field changed while you were editing. Your draft remains here. Cancel and reopen editing to see the current data.'}</p>}
@@ -569,7 +611,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                     </button>
                     <button
                       type="submit"
-                      disabled={!editTitleText.trim() || !onEditTask}
+                      disabled={!editTitleText.trim() || !onEditTask || editDatesInvalid || editDatesReversed}
                       className="px-2.5 py-1 bg-emerald-500 text-black text-xs font-sans font-extrabold hover:bg-emerald-400 transition-colors flex items-center gap-1 cursor-pointer"
                     >
                       <Check className="w-3 h-3" />

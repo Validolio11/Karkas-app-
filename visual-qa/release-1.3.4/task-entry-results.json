@@ -1,0 +1,9 @@
+{
+  "passed": true,
+  "syntheticOnly": true,
+  "realAiCalls": 0,
+  "results": [
+    "Six-stage creation, blank title, categories, priority, reversed dates, calendar navigation, retained draft, paused countdown and named substeps",
+    "Mobile calendar and creation without dates/time/substeps; no overflow or React errors"
+  ]
+}

@@ -12,6 +12,23 @@ const profile = () => confirmedProfile([{ id: 'g', title: 'Learn', motive: 'Free
 const options = (actions: StrategyAction[]) => ({ tasks: [task], profile: profile(), actions, ownerId: 'a', currentOwnerId: 'a', turnId: 'turn', tabs: [{ id: 'work', name: 'Work' }], now: 100 });
 const action = (changes: StrategyAction['changes']): StrategyAction => ({ id: 'action', goalId: 'g', type: 'update', taskId: 't', expectedTask: task, reason: 'Reduce friction', changes });
 
+test('autonomous dates preserve recorded progress and can be undone; invalid ranges cannot apply', () => {
+  const result = applyStrategyActions(options([action({ plannedDate: '2026-10-12', deadlineDate: '2026-10-15' })]));
+  assert.equal(result.applied.length, 1);
+  assert.equal(result.tasks[0].plannedDate, '2026-10-12');
+  assert.equal(result.tasks[0].deadlineDate, '2026-10-15');
+  assert.equal(result.tasks[0].timeSpentSeconds, task.timeSpentSeconds);
+  assert.deepEqual(result.tasks[0].stepList, task.stepList);
+  const undone = undoStrategyAction({ ...result, actionId: result.applied[0].id, ownerId: 'a', currentOwnerId: 'a' });
+  assert.equal(undone.undone, true);
+  assert.deepEqual(undone.tasks, [task]);
+  for (const dates of [{ plannedDate: '2026-02-30' }, { plannedDate: '2026-10-15', deadlineDate: '2026-10-12' }]) {
+    const rejected = applyStrategyActions(options([action(dates)]));
+    assert.equal(rejected.applied.length, 0);
+    assert.deepEqual(rejected.tasks, [task]);
+  }
+});
+
 test('over-limit autonomous proposals are rejected atomically without partially creating tasks', () => {
   const actions: StrategyAction[] = Array.from({ length: 4 }, (_, index) => ({ id: `create-${index}`, goalId: 'g', reason: 'Next action', type: 'create', changes: { title: `Next ${index}`, phase: 'work' } }));
   const oversized = applyStrategyActions(options(actions));

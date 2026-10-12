@@ -1,7 +1,7 @@
 {
   "name": "karkas-app",
   "private": true,
-  "version": "1.3.3",
+  "version": "1.3.4",
   "description": "Karkas Application",
   "author": "Melychyn",
   "type": "module",
@@ -84,5 +84,8 @@
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.3"
+  },
+  "overrides": {
+    "@grpc/grpc-js": "^1.13.6"
   }
 }

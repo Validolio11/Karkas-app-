@@ -3,7 +3,7 @@ import { after, before, test } from 'node:test';
 import { GoogleGenAI } from '@google/genai';
 import { AIRequestError, aiRequestFailure, classifyAIRequestError, generateGeminiWithFallback } from './geminiGeneration.ts';
 import { confirmedProfile, discoveryGoal, understandingProfile } from '../src/utils/strategyDiscovery.testHelpers';
-import { continueStrategyDiscovery, normalizeStrategyDiscovery } from '../src/utils/strategyDiscovery';
+import { continueStrategyDiscovery } from '../src/utils/strategyDiscovery';
 import { applyStrategyActions } from '../src/utils/strategyActions';
 
 const originalFetch = globalThis.fetch;

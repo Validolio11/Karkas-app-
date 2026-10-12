@@ -1,0 +1,4 @@
+
+> karkas-app@1.3.4 typecheck:strict
+> tsc --noEmit -p tsconfig.quality.json
+

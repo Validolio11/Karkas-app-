@@ -1,5 +1,6 @@
 import type { PersonalStrategyProfile, PSTask, StrategyAction, StrategyActionRecord, TaskTab } from '../types';
 import { normalizeTaskSchedule } from './taskScheduling';
+import { isTaskDate } from './taskDates';
 import { strategyOwnerKey } from './personalStrategy';
 import { isPersonalStrategyReady, normalizeStrategyDiscovery } from './strategyDiscovery';
 import { canonical } from './canonical';
@@ -32,7 +33,8 @@ export function applyStrategyActions(options: ApplyStrategyOptions) {
     const goal = updated.goals.find(item => item.id === action.goalId && item.agreed && normalizeStrategyDiscovery(updated).selectedGoalIds.includes(item.id));
     if (!goal) { fail('Goal is not agreed'); continue; }
     const changes = action.changes;
-    if (!changes || typeof changes !== 'object' || Object.keys(changes).some(key => !['title', 'phase', 'priority', 'note', 'schedule', 'stepTitles'].includes(key))) { fail('Forbidden task field'); continue; }
+    if (!changes || typeof changes !== 'object' || Object.keys(changes).some(key => !['title', 'phase', 'priority', 'note', 'schedule', 'stepTitles', 'plannedDate', 'deadlineDate'].includes(key))) { fail('Forbidden task field'); continue; }
+    if (['plannedDate', 'deadlineDate'].some(key => { const value = changes[key as 'plannedDate' | 'deadlineDate']; return value !== undefined && value !== null && !isTaskDate(value); })) { fail('Invalid task date'); continue; }
     if (changes.title !== undefined && (typeof changes.title !== 'string' || !changes.title.trim()) || changes.note !== undefined && typeof changes.note !== 'string' || changes.priority !== undefined && ![1, 2, 3].includes(changes.priority)) { fail('Invalid task fields'); continue; }
     if (changes.phase !== undefined && (!tabs.some(tab => tab.id === changes.phase) || !goal.categoryIds.includes(changes.phase))) { fail('Category is outside agreed goal'); continue; }
     if (changes.stepTitles !== undefined && (!Array.isArray(changes.stepTitles) || changes.stepTitles.length > 50 || changes.stepTitles.some(title => typeof title !== 'string' || !title.trim()))) { fail('Invalid steps'); continue; }
@@ -56,8 +58,13 @@ export function applyStrategyActions(options: ApplyStrategyOptions) {
       before = clone(existing);
       after = { ...existing };
     }
-    const { stepTitles, schedule: ignoredSchedule, ...fields } = changes;
+    const { stepTitles, schedule: ignoredSchedule, plannedDate, deadlineDate, ...fields } = changes;
     after = { ...after, ...fields };
+    for (const [key, value] of [['plannedDate', plannedDate], ['deadlineDate', deadlineDate]] as const) {
+      if (value === null) delete after[key];
+      else if (value !== undefined) after[key] = value;
+    }
+    if (after.plannedDate && after.deadlineDate && after.plannedDate > after.deadlineDate) { fail('Planned date is after deadline'); continue; }
     if (stepTitles) {
       const completed = after.stepList?.filter(step => step.done || (step.timeSpentSeconds ?? 0) > 0 || step.id === after.timerStepId) || [];
       if (after.currentStep > 0 && !after.stepList?.length) { fail('Legacy step progress must be preserved'); continue; }

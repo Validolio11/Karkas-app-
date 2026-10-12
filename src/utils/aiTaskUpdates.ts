@@ -2,6 +2,7 @@ import { completeTask, materializeStepList, reopenTask, setTaskSteps } from './t
 import type { AITaskUpdate, PSTask, TaskStepItem } from '../types';
 import { applyAITimerSettings } from './aiTaskTimer';
 import { normalizeTaskSchedule } from './taskScheduling';
+import { isTaskDate } from './taskDates';
 
 /** Apply only supported AI fields; stepList is the complete replacement checklist. */
 export function applyAITaskUpdate(
@@ -11,8 +12,14 @@ export function applyAITaskUpdate(
   now = Date.now(),
 ): PSTask {
   if (!update || update.id !== task.id) return task;
+  if (update.plannedDate !== undefined && update.plannedDate !== null && !isTaskDate(update.plannedDate) || update.deadlineDate !== undefined && update.deadlineDate !== null && !isTaskDate(update.deadlineDate)) return task;
   if (task.scheduledPending && (update.done === true || update.timerAction === 'start')) return task;
   const next = { ...task };
+  for (const key of ['plannedDate', 'deadlineDate'] as const) {
+    if (update[key] === null) delete next[key];
+    else if (update[key] !== undefined) next[key] = update[key];
+  }
+  if (next.plannedDate && next.deadlineDate && next.plannedDate > next.deadlineDate) return task;
   if (update.schedule !== undefined) {
     const schedule = normalizeTaskSchedule(update.schedule);
     if (!schedule) return task;

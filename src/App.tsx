@@ -4,6 +4,7 @@ import { applyAITimerSettings, isAITimerSettingsValid } from './utils/aiTaskTime
 import { isNewerAppVersion, isValidAppVersion } from './utils/appVersion';
 import React, { useState, useEffect, useMemo } from 'react';
 import { PSTask, DeletedTask, TaskTab, FilterMode, WorkflowStats, TaskStepItem, AdaptiveProfile, AITaskUpdate, AITimerSettings, AIDeletedTaskRef, NotepadNote, NewTaskInput } from './types';
+import { isTaskDate } from './utils/taskDates';
 import { isCompletedArchivedTask, selectRelevantArchivedTasks } from './utils/taskArchive';
 import { TaskCard } from './components/TaskCard';
 import { DashboardView } from './components/DashboardView';
@@ -20,13 +21,9 @@ import { sound } from './utils/audio';
 import {
   Language,
   TRANSLATIONS,
-  DEFAULT_TABS_UK,
-  DEFAULT_TABS_EN,
-  INITIAL_LIFE_TASKS_UK,
-  INITIAL_LIFE_TASKS_EN,
   getRandomTabColor,
 } from './utils/i18n';
-import { SquareCode, Trash, Plus, RotateCcw, CheckCircle, Flame, RefreshCw, Search, X, AlertTriangle, Sparkles } from 'lucide-react';
+import { Trash, Plus, CheckCircle, Flame, RefreshCw, Search, X, AlertTriangle, Sparkles } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AIIcon, AIIconId, getSavedAIIconId } from './components/AIIconTemplates';
 import { 
@@ -56,7 +53,6 @@ import { materializeScheduledWorkspace, normalizeTaskSchedule } from './utils/ta
 import { describeSchedule } from './utils/schedulePresentation';
 import { buildWorkInsights } from './utils/workInsights';
 import { discardTaskStepAttribution } from './utils/taskWorkTelemetry';
-import { WorkInsightsPanel } from './components/WorkInsightsPanel';
 import { TaskWorkPlanDialog } from './components/TaskWorkPlanDialog';
 import { applyTaskWorkPlan, type WorkPlanEdit } from './utils/taskWorkPlan';
 import { useWorkReminders } from './components/useWorkReminders';
@@ -69,8 +65,8 @@ import { claimPlanningNotice } from './utils/planningNotices';
 import { stageStrategyTransaction, recoverStrategyTransaction, clearStrategyTransaction, completeStrategyTransaction, strategyTransactionKey, readStrategyTransaction, markStrategyTransactionConflict } from './utils/strategyTransaction';
 import type { PersonalStrategyProfile, AIResponse, AIIntent } from './types';
 import { isSystemView, migrateSystemCategories } from './utils/systemViews';
-import { writeRecoverableJson } from './utils/recoverableLocalStorage';
-import { readLocalWorkspace, parseAccountRecord } from './utils/localWorkspace';
+import { writeRecoverableJson, preserveRawStorage } from './utils/recoverableLocalStorage';
+import { readLocalWorkspace, parseAccountRecord, readAccountRecovery } from './utils/localWorkspace';
 import { parseWorkspace } from './utils/workspaceValidation';
 
 const STORAGE_KEY = 'life_todo_tasks_v2';
@@ -166,7 +162,7 @@ export default function App() {
   const canPersistWorkspaceRef = React.useRef(initialWorkspace.canPersist);
   const t = TRANSLATIONS[lang];
   const [actionNotice, setActionNotice] = useState<string | null>(initialWorkspace.recovered
-    ? (initialWorkspace.canPersist
+    ? (initialWorkspace.backupPreserved
       ? (lang === 'uk' ? 'Локальні дані потребують відновлення. Початкові записи збережено в резервній копії; пошкоджені дані не застосовано.' : 'Local data needs recovery. Original records were backed up; invalid data was not applied.')
       : (lang === 'uk' ? 'Не вдалося створити резервну копію пошкоджених даних. Збереження заблоковано. Звільніть місце на пристрої та перезапустіть застосунок; початкові записи не перезаписано.' : 'Could not back up damaged data. Saving is blocked. Free device storage and restart the app; original records were not overwritten.')) : null);
   const [completedNoticeId, setCompletedNoticeId] = useState<string | null>(null);
@@ -810,7 +806,7 @@ export default function App() {
     try {
       const cached = localStorage.getItem('karkas_workspace:' + (workspaceOwnerRef.current || 'guest'));
       baseWorkspaceRef.current = cached ? parseAccountRecord(cached, localStorage, accountKeyForOwner(workspaceOwnerRef.current)).base || null : null;
-    } catch { baseWorkspaceRef.current = null; }
+    } catch { baseWorkspaceRef.current = null; canPersistWorkspaceRef.current = false; }
   }
   const authGenerationRef = React.useRef(0);
   const strategyPersistenceGenerationRef = React.useRef(0);
@@ -878,6 +874,33 @@ export default function App() {
     persistWorkspace();
   };
 
+  const recoveryCandidate = useMemo(() => {
+    if (tasks.length || tabs.length || deletedTasks.length) return null;
+    try { return readAccountRecovery(localStorage, accountKey(strategyOwner)); } catch { return null; }
+  }, [strategyOwner, workspaceReady, tasks.length, tabs.length, deletedTasks.length]);
+  const restoreRetainedWorkspace = () => {
+    if (!recoveryCandidate || workspaceOwnerRef.current !== strategyOwner || (auth.currentUser?.uid ?? null) !== strategyOwner
+      || currentTasksRef.current.length || currentTabsRef.current.length || currentDeletedTasksRef.current.length || !initialWorkspace.backupPreserved) return;
+    try {
+      // Restore only the validated workspace; obsolete sync journals are not replayed.
+      const recoveredWorkspace = parseWorkspace(recoveryCandidate.workspace);
+      const existing = localStorage.getItem(accountKey(strategyOwner));
+      if (existing !== null) preserveRawStorage(localStorage, accountKey(strategyOwner), existing);
+      canPersistWorkspaceRef.current = true;
+      // Restore the workspace only; old requests and sync retries must not replay.
+      baseWorkspaceRef.current = null;
+      lastSyncTimeRef.current = 0;
+      applyWorkspace(recoveredWorkspace);
+      timerWorkspaceReadyRef.current = true;
+      setWorkspaceReady(true);
+      setSyncError(null);
+      setActionNotice(lang === 'uk' ? 'Простір відновлено. Початкові резервні копії збережено.' : 'Workspace restored. Original backups retained.');
+    } catch {
+      canPersistWorkspaceRef.current = false;
+      setActionNotice(lang === 'uk' ? 'Не вдалося відновити простір. Резервні копії збережено.' : 'Could not restore the workspace. Backups retained.');
+    }
+  };
+
   React.useLayoutEffect(() => {
     if (!timerWorkspaceReadyRef.current) return;
     try { persistWorkspace(); } catch (error) {
@@ -920,8 +943,13 @@ export default function App() {
           if (generation !== authGenerationRef.current || (auth.currentUser?.uid ?? null) !== uid) return;
           if (!desktopCached.ok) throw new Error('Local account data could not be validated or loaded');
           if (desktopCached.value) {
-            if (desktopCached.value.workspace) parseWorkspace(desktopCached.value.workspace);
-            if (desktopCached.value.base) parseWorkspace(desktopCached.value.base);
+            const original = JSON.stringify(desktopCached.value);
+            for (const field of ['workspace', 'base'] as const) {
+              if (!desktopCached.value[field]) continue;
+              const parsed = parseWorkspace(desktopCached.value[field]);
+              if (parsed !== desktopCached.value[field]) preserveRawStorage(localStorage, accountKey(uid), original);
+              desktopCached.value[field] = parsed;
+            }
             // A pending paired commit makes its local snapshot authoritative until recovery finishes.
             const recoverLocal = cached?.workspace && readStrategyTransaction(localStorage, uid);
             cached = recoverLocal ? { ...desktopCached.value, ...cached } : desktopCached.value;
@@ -952,6 +980,9 @@ export default function App() {
           setSyncStatus(navigator.onLine ? 'pending' : 'offline');
         }
         if (cached?.workspace) {
+          // A validated account snapshot may recover the failed initial cache,
+          // but only after every original raw record has a verified backup.
+          if (initialWorkspace.backupPreserved) canPersistWorkspaceRef.current = true;
           applyWorkspace(cached.workspace);
         } else if (previousOwner !== uid && previousOwner !== null) {
           applyWorkspace({
@@ -961,9 +992,9 @@ export default function App() {
         } else {
           persistWorkspace();
         }
-        localAccountLoaded = true;
-        timerWorkspaceReadyRef.current = true;
-        setWorkspaceReady(true);
+        localAccountLoaded = canPersistWorkspaceRef.current;
+        timerWorkspaceReadyRef.current = localAccountLoaded;
+        setWorkspaceReady(localAccountLoaded);
         if (!user) return;
         setIsSyncing(true);
         const data = await fetchUserCloudData(user.uid);
@@ -1562,16 +1593,10 @@ export default function App() {
       ? Math.round((tasksWithSteps.reduce((total, task) => total + task.steps, 0) / tasksWithSteps.length) * 10) / 10
       : 0;
     const completedByPhase = new Map<string, number>();
-    const activeByPhase = new Map<string, number>();
     completedTasks.forEach(task => completedByPhase.set(task.phase, (completedByPhase.get(task.phase) || 0) + 1));
-    operationalTasks.filter(task => !task.done).forEach(task => activeByPhase.set(task.phase, (activeByPhase.get(task.phase) || 0) + 1));
     const preferredPhases = [...completedByPhase.entries()]
       .sort((a, b) => b[1] - a[1])
       .slice(0, 3)
-      .map(([phase]) => phase);
-    const overloadedPhases = [...activeByPhase.entries()]
-      .filter(([, count]) => count >= 4)
-      .sort((a, b) => b[1] - a[1])
       .map(([phase]) => phase);
     const activeLoad = operationalTasks.filter((task) => !task.done).length;
     const urgentLoad = operationalTasks.filter((task) => !task.done && task.priority === 1).length;
@@ -1583,10 +1608,8 @@ export default function App() {
       averageCompletionMinutes,
       averageStepCount,
       preferredPhases,
-      overloadedPhases,
       activeLoad,
       urgentLoad,
-      recommendedActiveLimit: urgentLoad >= 3 || activeLoad >= 8 ? 3 : 5,
     };
   }, [operationalTasks, deletedTasks]);
 
@@ -1637,17 +1660,24 @@ export default function App() {
   }, [operationalTasks, activeFilter]);
 
   // Edit Task Title and Note
-  const handleEditTask = (id: string, updatedTitle: string, updatedNote: string, expected: { title: string; note: string }): boolean => {
+  const handleEditTask = (id: string, updatedTitle: string, updatedNote: string, expected: { title: string; note: string; plannedDate?: string; deadlineDate?: string }, dates?: { plannedDate?: string; deadlineDate?: string }): boolean => {
     if (!timerWorkspaceReadyRef.current || workspaceOwnerRef.current !== strategyOwner || (auth.currentUser?.uid ?? null) !== strategyOwner) return false;
     const current = latestTasksRef.current.find(task => task.id === id);
     const titleChanged = updatedTitle.trim() !== expected.title;
     const noteChanged = updatedNote.trim() !== expected.note;
+    if (dates && (dates.plannedDate !== undefined && !isTaskDate(dates.plannedDate) || dates.deadlineDate !== undefined && !isTaskDate(dates.deadlineDate))) return false;
+    const plannedChanged = dates !== undefined && dates.plannedDate !== expected.plannedDate;
+    const deadlineChanged = dates !== undefined && dates.deadlineDate !== expected.deadlineDate;
+    const datesMatch = (task: PSTask) => (!plannedChanged || task.plannedDate === expected.plannedDate) && (!deadlineChanged || task.deadlineDate === expected.deadlineDate);
     if (!current || !updatedTitle.trim() || titleChanged && current.title !== expected.title || noteChanged && (current.note || '') !== expected.note) return false;
+    if (!datesMatch(current)) return false;
+    const patch = { ...(titleChanged ? { title: updatedTitle.trim() } : {}), ...(noteChanged ? { note: updatedNote.trim() || undefined } : {}), ...(plannedChanged ? { plannedDate: dates?.plannedDate } : {}), ...(deadlineChanged ? { deadlineDate: dates?.deadlineDate } : {}) };
+    const datesInOrder = (task: PSTask) => { const candidate = { ...task, ...patch }; return !candidate.plannedDate || !candidate.deadlineDate || candidate.plannedDate <= candidate.deadlineDate; };
+    if (!datesInOrder(current)) return false;
     sound.activate();
-    const patch = { ...(titleChanged ? { title: updatedTitle.trim() } : {}), ...(noteChanged ? { note: updatedNote.trim() || undefined } : {}) };
     setTasks((prev) =>
       prev.map((t) =>
-        t.id === id && (!titleChanged || t.title === expected.title) && (!noteChanged || (t.note || '') === expected.note) ? { ...t, ...patch } : t
+        t.id === id && (!titleChanged || t.title === expected.title) && (!noteChanged || (t.note || '') === expected.note) && datesMatch(t) && datesInOrder(t) ? { ...t, ...patch } : t
       )
     );
     return true;
@@ -1976,6 +2006,10 @@ export default function App() {
     let rejectedUpdates = 0;
     for (const up of taskUpdates) {
       const current = latestTasksRef.current.find(task => task.id === up?.id);
+      if (up && (up.plannedDate !== undefined && up.plannedDate !== null && !isTaskDate(up.plannedDate) || up.deadlineDate !== undefined && up.deadlineDate !== null && !isTaskDate(up.deadlineDate))) { rejectedUpdates++; continue; }
+      const candidatePlanned = up?.plannedDate === null ? undefined : up?.plannedDate ?? current?.plannedDate;
+      const candidateDeadline = up?.deadlineDate === null ? undefined : up?.deadlineDate ?? current?.deadlineDate;
+      if (candidatePlanned && candidateDeadline && candidatePlanned > candidateDeadline) { rejectedUpdates++; continue; }
       if (!current || (up.schedule !== undefined && (!normalizeTaskSchedule(up.schedule) || current.done || current.timerRunning || current.startedAt || (current.timeSpentSeconds ?? 0) > 0)) || ((current.scheduledPending || up.schedule) && (up.timerAction === 'start' || up.done === true)) || !isAITimerSettingsValid({ ...current, done: typeof up.done === 'boolean' ? up.done : current.done }, up)) {
         rejectedUpdates++;
         continue;
@@ -2051,17 +2085,6 @@ export default function App() {
       setDeletedTasks((prev) => [...completedToArchive, ...prev.filter(task => !archivedIds.has(task.id))]);
     }
     setTasks((prev) => prev.filter((t) => !t.done));
-  };
-
-  const handleResetDefaults = () => {
-    if (tasks.length && !window.confirm(lang === 'uk' ? 'Замінити поточні завдання початковим набором? Ваші завдання буде збережено в історії видалених.' : 'Replace current tasks with the initial set? Your tasks will be saved in deleted history.')) return;
-    const now = Date.now();
-    const archived = tasks.map(task => ({ ...pauseTaskTimer(task, now), deletedAt: now }));
-    setDeletedTasks(prev => [...archived, ...prev.filter(task => !archived.some(item => item.id === task.id))]);
-    sound.activate();
-    setTabs(lang === 'uk' ? DEFAULT_TABS_UK : DEFAULT_TABS_EN);
-    setTasks(lang === 'uk' ? INITIAL_LIFE_TASKS_UK : INITIAL_LIFE_TASKS_EN);
-    setSelectedPhase('ALL');
   };
 
   const handleToggleSound = () => {
@@ -2172,14 +2195,14 @@ export default function App() {
         selectedPhase={selectedPhase}
         onClose={() => setIsAddOpen(false)}
         onAddTask={handleAddTask}
-        onOpenAIWithPrompt={(prompt) => {
-          setAiPromptSeed(prompt);
-          setIsAIOpen(true);
-        }}
       />
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-4xl w-full mx-auto px-5 sm:px-8 py-7 sm:py-8 pb-32 relative z-10">
+        {recoveryCandidate && <div role="status" className="mb-5 border border-amber-800 bg-amber-950/20 p-3 text-sm text-amber-200">
+          <p>{lang === 'uk' ? `Знайдено збережений простір: ${recoveryCandidate.workspace.tasks.length} завдань, ${recoveryCandidate.workspace.tabs.length} категорій, ${recoveryCandidate.workspace.deletedTasks.length} в архіві.` : `Retained workspace found: ${recoveryCandidate.workspace.tasks.length} tasks, ${recoveryCandidate.workspace.tabs.length} categories, ${recoveryCandidate.workspace.deletedTasks.length} archived.`}</p>
+          <button type="button" onClick={restoreRetainedWorkspace} className="mt-3 min-h-11 border border-amber-800 px-3">{lang === 'uk' ? 'Відновити збережений простір' : 'Restore retained workspace'}</button>
+        </div>}
         {timerNotice && <div role="status" className="mb-5 flex items-center gap-3 border border-amber-800 bg-amber-950/20 p-3 text-sm leading-relaxed text-amber-200">
           <span className="min-w-0 flex-1 break-words">{timerNotice}</span>
           <button type="button" onClick={() => openStrategyChat(lang === 'uk' ? `Обговорімо це повідомлення: ${timerNotice}` : `Discuss this notice: ${timerNotice}`)} className="min-h-11 shrink-0 border border-amber-800 px-3 text-xs">{lang === 'uk' ? 'ШІ-чат' : 'AI chat'}</button>
@@ -2555,10 +2578,9 @@ export default function App() {
           </button>
 
           {/* Right: Quick Add Button */}
-          <button
+          {!isAddOpen && <button
             id="bottom-quick-add-btn"
-            type={isAddOpen ? 'submit' : 'button'}
-            form={isAddOpen ? 'quick-add-task-form' : undefined}
+            type="button"
             onClick={() => {
               if (!isAddOpen) {
                 sound.tick(600);
@@ -2568,8 +2590,8 @@ export default function App() {
             className="order-3 min-h-11 shrink-0 flex items-center gap-1 px-3 py-1.5 bg-white text-black font-extrabold font-sans text-xs tracking-wider hover:bg-neutral-200 transition-all active:scale-95 app-no-drag"
           >
             <Plus className="w-3.5 h-3.5" />
-            <span>{isAddOpen ? (lang === 'uk' ? 'Зберегти' : 'Save task') : t.addOp}</span>
-          </button>
+            <span>{t.addOp}</span>
+          </button>}
         </div>
       </footer>
 

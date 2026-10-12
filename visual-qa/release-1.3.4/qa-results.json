@@ -1,0 +1,35 @@
+{
+  "passed": true,
+  "url": "http://127.0.0.1:54837",
+  "syntheticOnly": true,
+  "realAiCalls": 0,
+  "scenarios": [
+    "Legacy notes migrate once into guest scope, preserving original and synthetic account data; native delete dialog traps Tab and cancels with Escape without deleting",
+    "Damaged cached strategy payload cannot crash the strategy view or generate a provider request on opening",
+    "Desktop dimensions; white square 44px plus / black 16px icon matches Send; keyboard, Escape and outside menu; menu does not send",
+    "Wishlist does not fill barriers/capacity or leak a prose plan; random yes and malicious autonomous response cannot authorize; ordinary task proposal yes applies during interview without completing it",
+    "Pending question restored after 11 ordinary turns without request; six grounded topics persist; summary precedes planning; exact current summary ID permits standalone consent",
+    "Manual command and one-turn reset; retry retains turn ID without duplicate user message; cancelled late autonomous response ignored; restored draft not sent; synthetic account sentinel keys preserved",
+    "Concurrent AI task update preserves the open edit draft and rejects stale save while retaining newer task data",
+    "Confirmed autonomous update uses raw dispatch snapshot, retains measured/completed steps, current progress and 75 seconds; Undo preserves time; malicious ready @analysis cannot replace strategy/create tasks; delayed stale update cannot overwrite a concurrent synthetic priority edit",
+    "Mobile 375x812 uses full screen; chat/strategy no horizontal overflow; separate browser contexts share no tasks/profile; no uncaught React errors",
+    "Malformed task entries recovered with a backup without crashing; English history uses English recorded-time labels"
+  ],
+  "limitations": [
+    "Actual authenticated A-to-B Firebase login transitions were source-reviewed, not exercised in the browser; account-key sentinels and independent browser contexts checked.",
+    "Provider responses were mocked using actual sanitizer and core fixtures, so this verifies client integration rather than live model quality."
+  ],
+  "screenshots": [
+    "desktop-autonomous-undo.png",
+    "desktop-menu.png",
+    "desktop-pending-resume.png",
+    "desktop-scoped-summary.png",
+    "mobile-menu.png",
+    "strategy-desktop.png",
+    "strategy-mobile.png",
+    "task-dates-desktop.png",
+    "task-dates-mobile.png",
+    "task-steps-desktop.png",
+    "workspace-recovered.png"
+  ]
+}

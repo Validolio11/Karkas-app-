@@ -34,6 +34,22 @@ test('concrete Ukrainian commands and polite infinitives stay available during d
   }
 });
 
+test('calendar edits remain concrete during discovery and date removal never deletes the task', () => {
+  for (const prompt of ['Перенеси завдання English на завтра', 'Прибери дедлайн завдання English', 'Видали дату завдання English']) {
+    const route = classifyPersonalChatRequest(prompt, 'auto', tasks);
+    assert.equal(route.route, 'task_command', prompt);
+    assert.equal(route.scope?.operation, 'update', prompt);
+    assert.deepEqual(route.scope?.taskIds, ['t1'], prompt);
+    const response = constrainOrdinaryChatResponse({ taskUpdates: [{ id: 't1', deadlineDate: null }], taskDeletions: [{ id: 't1' }] }, route.route, route.scope);
+    assert.deepEqual(response.taskDeletions, [], prompt);
+    assert.deepEqual(response.taskUpdates, [{ id: 't1', deadlineDate: null }], prompt);
+  }
+  assert.deepEqual(classifyPersonalChatRequest('Перенеси завдання на завтра', 'auto', [tasks[0]]).scope?.taskIds, ['t1']);
+  assert.deepEqual(classifyPersonalChatRequest('Перенеси завдання на завтра', 'auto', tasks).scope?.taskIds, []);
+  assert.deepEqual(classifyPersonalChatRequest('Перенеси завдання Biology на завтра', 'auto', [tasks[0]]).scope?.taskIds, []);
+  assert.equal(classifyPersonalChatRequest('Додай English на завтра', 'auto', []).scope?.operation, 'create');
+});
+
 test('wishlists, explicit personal plan and personal analysis remain personal; workspace analysis/help remain ordinary', () => {
   for (const prompt of ['Хочу портфоліо, фриланс, англійську та швидкий друк', 'Хочу стати архітектором', 'Хочу додати більше часу для ігор', 'Зроби мені план', 'Чому я не можу почати працювати?']) assert.equal(classifyPersonalChatRequest(prompt, 'auto', tasks).route, 'personal', prompt);
   assert.equal(classifyPersonalChatRequest('Мої проблеми з продуктивністю', 'analysis', tasks).route, 'personal');

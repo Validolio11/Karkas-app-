@@ -29,15 +29,16 @@ export function classifyPersonalChatRequest(prompt: string, intent: AIIntent, ta
   }
   // Infinitives are commands only after a direct request, never after a wish such as “хочу”.
   if (requested) {
-    const verbs: Record<string, string> = { створити: 'створи', додати: 'додай', змінити: 'зміни', оновити: 'онови', перейменувати: 'перейменуй', видалити: 'видали', прибрати: 'прибери', позначити: 'познач', завершити: 'заверши', відкрити: 'відкрий', повернути: 'поверни', розбити: 'розбий', розділити: 'розділи', запустити: 'запусти', увімкнути: 'увімкни', поставити: 'постав', призупинити: 'призупини', зупинити: 'зупини', вимкнути: 'вимкни' };
+    const verbs: Record<string, string> = { створити: 'створи', додати: 'додай', змінити: 'зміни', оновити: 'онови', перейменувати: 'перейменуй', видалити: 'видали', прибрати: 'прибери', позначити: 'познач', завершити: 'заверши', відкрити: 'відкрий', повернути: 'поверни', розбити: 'розбий', розділити: 'розділи', запустити: 'запусти', увімкнути: 'увімкни', поставити: 'постав', призупинити: 'призупини', зупинити: 'зупини', вимкнути: 'вимкни', перенести: 'перенеси', запланувати: 'заплануй' };
     command = command.replace(/^([^\s?!.,:;]+)/u, verb => verbs[verb] || verb);
   }
   // Only a wholly unnamed command can use the sole task. An unmatched name
   // (even when there is just one task) must leave scope empty for clarification.
   const unnamedCommand = /^(?:видали|видаліть|прибери|заверши|завершіть|відкрий|поверни|розбий|розділи|запусти|увімкни|призупини|зупини|вимкни|delete|remove|complete|reopen|split|break\s+down|start|pause|stop)\s+(?:(?:це|цей|цю|поточне|поточний|поточну|єдине|the|this|current|only)\s+)*(?:завдання|задачу|таймер|task|timer)(?:\s+(?:для|for)\s+(?:(?:цього|поточного|the|this|current)\s+)?(?:завдання|task))?[.!?]?$/iu.test(command);
   const unnamedTimerCommand = /^(?:(?:додай|додайте|постав|запусти|увімкни)\s+(?:таймер|відлік)(?:\s+на\s+\d+(?:[.,]\d+)?\s*(?:хвилин(?:и|у)?|хв\.?|годин(?:и|у)?|год\.?|секунд(?:и|у)?|сек\.?))?(?:\s+(?:до|для)\s+(?:(?:цього|поточного|єдиного)\s+)?завдання)?|(?:set|add|start|configure)\s+(?:(?:the|this|current|only)\s+)?(?:task\s+)?timer(?:\s+(?:to|for)\s+\d+(?:[.,]\d+)?\s*(?:minutes?|mins?|hours?|seconds?))?(?:\s+for\s+(?:(?:the|this|current|only)\s+)?task)?)[.!?]?$/iu.test(command);
-  const singleTarget = matchingIds.length ? matchingIds : live.length === 1 && (unnamedCommand || unnamedTimerCommand) ? [live[0].id] : [];
-  const explicit = /^(?:створи|створіть|додай|додайте|зміни|змініть|онови|оновіть|перейменуй|перейменуйте|видали|видаліть|прибери|познач|заверши|завершіть|відкрий|поверни|розбий|розділи|запусти|увімкни|постав|призупини|зупини|вимкни|зменши|збільши|поміняй|перероби|скасуй|create|add|edit|update|rename|delete|remove|mark|complete|reopen|break\s+down|split|start|pause|stop|set|configure|reduce|increase|change|revise|cancel)(?![\p{L}\p{N}_])/iu.test(command);
+  const unnamedDateCommand = /^(?:(?:перенеси|заплануй|reschedule|schedule|move)\s+(?:(?:це|поточне|єдине|the|this|current|only)\s+)?(?:завдання|task)\s+(?:на|до|on|to|by)\s+(?:завтра|сьогодні|післязавтра|tomorrow|today|\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}\.\d{2,4})|(?:прибери|видали|remove|clear)\s+(?:дату|дедлайн|термін|date|deadline)\s+(?:(?:для|з|for|from)\s+)?(?:(?:цього|поточного|єдиного|the|this|current|only)\s+)?(?:завдання|task))[.!?]?$/iu.test(command);
+  const singleTarget = matchingIds.length ? matchingIds : live.length === 1 && (unnamedCommand || unnamedTimerCommand || unnamedDateCommand) ? [live[0].id] : [];
+  const explicit = /^(?:створи|створіть|додай|додайте|зміни|змініть|онови|оновіть|перейменуй|перейменуйте|видали|видаліть|прибери|познач|заверши|завершіть|відкрий|поверни|розбий|розділи|запусти|увімкни|постав|призупини|зупини|вимкни|зменши|збільши|поміняй|перероби|скасуй|перенеси|перенесіть|заплануй|заплануйте|create|add|edit|update|rename|delete|remove|mark|complete|reopen|break\s+down|split|start|pause|stop|set|configure|reduce|increase|change|revise|cancel|reschedule|schedule|move)(?![\p{L}\p{N}_])/iu.test(command);
   const hasPending = pendingProposal && ['tasks', 'tabs', 'taskUpdates', 'taskDeletions'].some(key => Array.isArray(pendingProposal[key]) && pendingProposal[key].length);
   if (hasPending && explicit && /(?:пропозиц|замість|\d+\s*(?:хв|год|min|hour)|proposal|instead|duration|priority|пріоритет)/iu.test(command)) {
     const targetIds = [...(Array.isArray(pendingProposal.taskUpdates) ? pendingProposal.taskUpdates : []), ...(Array.isArray(pendingProposal.taskDeletions) ? pendingProposal.taskDeletions : [])].map((item: any) => item?.id).filter((id: any) => live.some(task => task.id === id));
@@ -46,11 +47,16 @@ export function classifyPersonalChatRequest(prompt: string, intent: AIIntent, ta
   let scope: ConcreteTaskScope | undefined;
   const taskWord = /(?:завдан|задач|task|subtask|підзавдан|підзадач|крок|step)/iu.test(command);
   const timerWord = /(?:таймер|секундомір|відлік|timer|stopwatch|countdown)/iu.test(command);
+  const dateField = /(?:дат[ауи]|дедлайн|термін|deadline|due\s+date|planned\s+date)/iu.test(command);
+  const calendarHint = /(?:завтра|сьогодні|післязавтра|tomorrow|today|\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}\.\d{2,4})(?![\p{L}\p{N}_])/iu.test(command);
   if (intent === 'steps' && matchingIds.length === 1) scope = { operation: 'steps', taskIds: matchingIds };
   else if (explicit) {
     if (/^(?:створи|створіть|додай|додайте|create|add)(?![\p{L}\p{N}_])/iu.test(command) && /(?:вкладк|категор|tab|category)/iu.test(command) && !taskWord) scope = { operation: 'tabs', taskIds: [] };
     else if (/^(?:створи|створіть|додай|додайте|create|add)\s+(?:(?:нов[еуії]|новий|a|an|new|the)\s+)*(?:завдання|завдань|задачу|задачі|задач|tasks?)(?![\p{L}\p{N}_])/iu.test(command) && !/(?:підзавдан|підзадач|subtask|крок|step)/iu.test(command)) scope = { operation: 'create', taskIds: [] };
     else if (timerWord) scope = { operation: 'timer', taskIds: singleTarget };
+    // Removing a date must never archive the parent task, even if its title is mentioned.
+    else if (dateField) scope = { operation: 'update', taskIds: singleTarget };
+    else if (/^(?:створи|створіть|додай|додайте|create|add)(?![\p{L}\p{N}_])/iu.test(command) && calendarHint && !matchingIds.length && !/(?:підзавдан|підзадач|subtask|крок|step)/iu.test(command)) scope = { operation: 'create', taskIds: [] };
     else if (/^(?:видали|видаліть|прибери|delete|remove)(?![\p{L}\p{N}_])/iu.test(command) && taskWord && !/(?:підзавдан|підзадач|subtask|крок|step)/iu.test(command)) scope = { operation: 'delete', taskIds: singleTarget };
     else if (taskWord || matchingIds.length) scope = { operation: /(?:розбий|розділи|break\s+down|split|підзавдан|підзадач|subtask|крок|step)/iu.test(command) ? 'steps' : 'update', taskIds: singleTarget };
   }

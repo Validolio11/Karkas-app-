@@ -30,7 +30,8 @@ test('invalid local and account data preserve exact raw source before fallback o
   store.setItem(keys.tasks, raw);
   const result = readLocalWorkspace(store, keys, workspace().settings);
   assert.equal(result.recovered, true);
-  assert.equal(result.canPersist, true);
+  assert.equal(result.canPersist, false);
+  assert.equal(result.backupPreserved, true);
   assert.equal(store.getItem('tasks:recovery-backup'), raw);
   assert.equal(store.getItem('tasks'), raw);
   const accountRaw = JSON.stringify({ workspace: workspace(), base: { ...workspace(), tasks: [null] } });
@@ -44,4 +45,24 @@ test('backup failure blocks persistence instead of destroying malformed local ta
   store.setItem = () => { throw new Error('Quota'); };
   assert.equal(readLocalWorkspace(store, keys, workspace().settings).canPersist, false);
   assert.equal(store.getItem('tasks'), '[null]');
+});
+
+test('legacy category labels migrate without altering the original workspace and raw storage is backed up', () => {
+  const original = { ...workspace(), tabs: [{ id: 'work', label: 'Work', color: '#fff' }] };
+  const migrated = parseWorkspace(original);
+  assert.deepEqual(migrated.tabs, [{ id: 'work', label: 'Work', name: 'Work', color: '#fff' }]);
+  assert.equal('name' in original.tabs[0], false);
+  const store = storage();
+  store.setItem(keys.tasks, JSON.stringify(original.tasks));
+  store.setItem(keys.tabs, JSON.stringify(original.tabs));
+  const result = readLocalWorkspace(store, keys, original.settings);
+  assert.equal(result.canPersist, true);
+  assert.equal(result.workspace.tabs[0].name, 'Work');
+  assert.equal(store.getItem('tabs:recovery-backup'), JSON.stringify(original.tabs));
+  assert.equal(store.getItem(keys.tabs), JSON.stringify(original.tabs));
+  const accountRaw = JSON.stringify({ workspace: original, base: original });
+  const account = parseAccountRecord(accountRaw, store, 'account');
+  assert.equal(account.workspace.tabs[0].name, 'Work');
+  assert.equal(account.base.tabs[0].name, 'Work');
+  assert.equal(store.getItem('account:recovery-backup'), accountRaw);
 });

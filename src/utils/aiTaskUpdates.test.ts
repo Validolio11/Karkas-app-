@@ -12,6 +12,18 @@ const task = (overrides: Partial<PSTask> = {}): PSTask => ({
   ...overrides,
 });
 
+test('AI date changes validate the full range atomically and null clears only its specified date', () => {
+  const original = task({ plannedDate: '2026-10-12', deadlineDate: '2026-10-15', timeSpentSeconds: 120 });
+  for (const change of [{ plannedDate: '2026-02-30' }, { deadlineDate: '2026-10-11' }]) {
+    assert.equal(applyAITaskUpdate(original, { id: original.id, title: 'Must not apply', ...change }, tabs), original);
+  }
+  const cleared = applyAITaskUpdate(original, { id: original.id, plannedDate: null }, tabs);
+  assert.equal('plannedDate' in cleared, false);
+  assert.equal(cleared.deadlineDate, original.deadlineDate);
+  assert.equal(cleared.timeSpentSeconds, 120);
+  assert.equal(original.plannedDate, '2026-10-12');
+});
+
 test('AI completion preserves countdown remainder and caps credited time at expiry', () => {
   const running = task({ timerRunning: true, timerStartedAt: 1000, timeSpentSeconds: 50,
     countdownDurationSeconds: 3600, countdownRemainingSeconds: 30 });

@@ -9,6 +9,17 @@ const task = (overrides: Partial<PSTask> = {}): PSTask => ({
   currentStep: 0, done: false, pinned: false, createdAt: 1, ...overrides,
 });
 
+test('creating a dated task preserves calendar values and atomically rejects invalid dates or ordering', () => {
+  const input = { title: 'Task', phase: 'focus', priority: 2 as const, steps: 0,
+    plannedDate: '2026-10-12', deadlineDate: '2026-10-15' };
+  const result = createTask(input, 'dated', 100)!;
+  assert.equal(result.plannedDate, input.plannedDate);
+  assert.equal(result.deadlineDate, input.deadlineDate);
+  for (const change of [{ plannedDate: '2026-02-30' }, { deadlineDate: '2026-10-11' }, { plannedDate: '' }]) {
+    assert.equal(createTask({ ...input, ...change }, 'dated', 100), null);
+  }
+});
+
 test('stale running timers are capped and paused after desktop restart', () => {
   const now = 10_000_000;
   const [repaired] = sanitizeTasksTimerSafeguard([

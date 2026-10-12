@@ -27,6 +27,10 @@ function wallTime(at: number, zone: string): WallTime {
   return Object.fromEntries(parts.filter(p => ['year', 'month', 'day', 'hour', 'minute', 'second'].includes(p.type)).map(p => [p.type, Number(p.value)])) as WallTime;
 }
 function wallStamp(w: WallTime): number { return Date.UTC(w.year, w.month - 1, w.day, w.hour, w.minute, w.second); }
+function calendarDateInZone(at: number, zone: string): string {
+  const date = wallTime(at, zone);
+  return `${String(date.year).padStart(4, '0')}-${String(date.month).padStart(2, '0')}-${String(date.day).padStart(2, '0')}`;
+}
 function moveDay(w: WallTime, amount: number): WallTime {
   const d = new Date(Date.UTC(w.year, w.month - 1, w.day + amount));
   return { ...w, year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate() };
@@ -112,6 +116,7 @@ export function getDueScheduledOccurrences(plans: ScheduledTaskPlan[], now = Dat
       ...(plan.task.timerMode === 'countdown' && plan.task.countdownDurationSeconds ? { plannedDurationSeconds: plan.task.plannedDurationSeconds ?? plan.task.countdownDurationSeconds } : {}),
       ...(plan.task.timerMode === 'countdown' && plan.task.countdownDurationSeconds ? { countdownRemainingSeconds: plan.task.countdownDurationSeconds } : {}),
       schedulePlanId: plan.id, scheduledFor: occurrence,
+      ...(schedule.recurrence === 'daily' ? { plannedDate: calendarDateInZone(occurrence, schedule.timeZone), deadlineDate: undefined } : {}),
     } as PSTask;
     tasks.push(task);
     notifications.push({ taskId: id, title: task.title, scheduledFor: occurrence, planId: plan.id });
@@ -132,6 +137,8 @@ export function materializeScheduledWorkspace(records: PSTask[], deletedIds: Ite
       title: record.title, phase: record.phase, priority: record.priority, steps: record.steps,
       ...(record.stepList ? { stepList: record.stepList.map(step => ({ ...step, done: false })) } : {}),
       ...(record.note !== undefined ? { note: record.note } : {}),
+      ...(record.plannedDate !== undefined ? { plannedDate: record.plannedDate } : {}),
+      ...(record.deadlineDate !== undefined ? { deadlineDate: record.deadlineDate } : {}),
       ...(record.timerMode !== undefined ? { timerMode: record.timerMode } : {}),
       ...(record.countdownDurationSeconds !== undefined ? { countdownDurationSeconds: record.countdownDurationSeconds } : {}),
       ...(record.plannedDurationSeconds !== undefined ? { plannedDurationSeconds: record.plannedDurationSeconds } : {}),

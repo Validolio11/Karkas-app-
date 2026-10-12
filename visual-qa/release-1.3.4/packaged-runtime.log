@@ -1,0 +1,11 @@
+◇ injected env (0) from .env // tip: ◈ secrets for agents [www.dotenvx.com]
+✔ production bundle exposes AI services in-process without a TCP server (119.8794ms)
+✔ packaged legacy migration does not open the former production TCP port (0.587ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 177.2461

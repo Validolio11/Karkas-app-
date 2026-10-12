@@ -23,6 +23,21 @@ test('deleted task retains countdown state and deletion timestamp', () => {
   assert.equal(value.countdownRemainingSeconds, 900);
 });
 
+test('zero creation and archive timestamps remain stable through cloud round trips', () => {
+  const value = serializeTaskForCloud({ ...task, createdAt: 0, deletedAt: 0 } as DeletedTask, 999);
+  assert.equal(value.createdAt, 0);
+  assert.equal(value.deletedAt, 0);
+});
+
+test('both calendar dates survive active and archived cloud round trips independently', () => {
+  const dated = { ...task, plannedDate: '2026-10-12', deadlineDate: '2026-10-15' };
+  for (const input of [dated, { ...dated, deletedAt: 0 }]) {
+    const value = JSON.parse(JSON.stringify(serializeTaskForCloud(input)));
+    assert.equal(value.plannedDate, dated.plannedDate);
+    assert.equal(value.deadlineDate, dated.deadlineDate);
+  }
+});
+
 test('archive intent survives cloud serialization without omitting recoverable accidental tasks', () => {
   for (const deletionReason of ['accidental', 'cancelled'] as const) {
     for (const done of [false, true]) {

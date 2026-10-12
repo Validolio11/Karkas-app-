@@ -45,6 +45,7 @@ import { discoveryQuestionForState } from '../utils/strategyDiscovery';
 import { useDialogKeyboard } from './useDialogKeyboard';
 import { describeAIApplyResult, describeAITimer, getAITimerContext, prepareAITask, type AIApplyResult } from './aiTaskProposal';
 import { describeSchedule } from '../utils/schedulePresentation';
+import { formatTaskDate } from '../utils/taskDates';
 import { AIRequestError, aiRequestErrorMessage, appendChatRequest, readAIAssistantDraft, readAIResponse, responseRequestError, restoredAIRequestNotice, saveAIAssistantDraft, selectAIModel, type AIMode, type AIRequest } from './aiAssistantState';
 
 interface AIAssistantSheetProps {
@@ -124,7 +125,12 @@ const isChatModel = (model: string) => {
   return name.includes('gemini') && !/(embedding|image|tts|transcrib|robotics|computer-use)/.test(name);
 };
 
-const TimerProposal: React.FC<{ settings: AITimerSettings & { schedule?: import('../types').TaskSchedule }; lang: Language }> = ({ settings, lang }) => {
+const DateProposal: React.FC<{ settings: { plannedDate?: string | null; deadlineDate?: string | null }; lang: Language }> = ({ settings, lang }) => <>
+  {settings.plannedDate !== undefined && <p className="text-sm text-neutral-300">{lang === 'uk' ? 'Заплановано на' : 'Planned for'}: {settings.plannedDate ? formatTaskDate(settings.plannedDate, lang) : (lang === 'uk' ? 'прибрати дату' : 'clear date')}</p>}
+  {settings.deadlineDate !== undefined && <p className="text-sm text-neutral-300">{lang === 'uk' ? 'Завершити до' : 'Complete by'}: {settings.deadlineDate ? formatTaskDate(settings.deadlineDate, lang) : (lang === 'uk' ? 'прибрати дедлайн' : 'clear deadline')}</p>}
+</>;
+
+const TimerProposal: React.FC<{ settings: AITimerSettings & { schedule?: import('../types').TaskSchedule; plannedDate?: string | null; deadlineDate?: string | null }; lang: Language }> = ({ settings, lang }) => {
   const description = describeAITimer(settings, lang);
   return <>{description && <div className="mt-1 text-base leading-[1.6] text-sky-300 whitespace-normal">{description}</div>}{settings.schedule && <div className="mt-2 text-base leading-relaxed text-emerald-300">{describeSchedule(settings.schedule, lang)}<p className="mt-1 text-sm text-neutral-400">{lang === 'uk' ? 'Сповіщення надходять, поки Karkas працює, зокрема в треї. Після повного закриття пропущене завдання з’явиться при відкритті.' : 'Notifications require Karkas running, including in the tray. Missed tasks appear when you reopen it.'}</p></div>}</>;
 };
@@ -155,6 +161,7 @@ const TaskUpdatePreview: React.FC<{ update: AITaskUpdate; existing?: PSTask; tab
     {update.title && existing?.title && update.title !== existing.title && <p className="text-sm text-neutral-400 line-through break-words">{existing.title}</p>}
     <p className="font-semibold text-neutral-100 break-words">{update.title || existing?.title || update.id}</p>
     <TimerProposal settings={update} lang={lang} />
+    <DateProposal settings={update} lang={lang} />
     {update.stepList !== undefined && <div className="space-y-2">
       <p className="text-sm font-semibold text-neutral-400">{lang === 'uk' ? 'Підзавдання' : 'Subtasks'} ({update.stepList.length})</p>
       {update.stepList.length ? <ProposalSteps steps={update.stepList} lang={lang} /> : <p className="text-neutral-300">{lang === 'uk' ? 'Підзавдання буде прибрано.' : 'The subtasks will be removed.'}</p>}
@@ -184,6 +191,7 @@ const ChatResponseCards: React.FC<{ response: AIResponse; currentTasks: PSTask[]
       <p className="text-sm text-emerald-300">{lang === 'uk' ? 'Нове завдання' : 'New task'} · P{task.priority}</p><p className="font-semibold">{task.title}</p>
       {task.note && normalizedProposalText(task.note) !== normalizedProposalText(task.title) && <AIChatText text={task.note} />}
       <TimerProposal settings={task} lang={lang} />
+      <DateProposal settings={task} lang={lang} />
       {!!task.stepList?.length && <ProposalSteps steps={task.stepList} lang={lang} />}
       {!task.stepList?.length && task.steps > 0 && <p className="text-sm text-neutral-400">{lang === 'uk' ? 'Підзавдання' : 'Subtasks'}: {task.steps}</p>}
     </div>)}
@@ -192,7 +200,7 @@ const ChatResponseCards: React.FC<{ response: AIResponse; currentTasks: PSTask[]
     {response.strategy?.narrative && normalizedProposalText(response.strategy.narrative) !== normalizedProposalText(response.reply || response.summary) && <AIChatText text={response.strategy.narrative} />}
     {response.strategy?.question && !normalizedProposalText(response.reply || response.summary).includes(normalizedProposalText(response.strategy.question)) && <AIChatText text={response.strategy.question} />}
     {response.strategy?.nextAction && <p className="border-l-2 border-emerald-600 pl-3">{response.strategy.nextAction}</p>}
-    {response.strategy?.actions?.map(action => <div key={action.id} className="border border-emerald-900 p-3"><p className="font-semibold">{action.changes.title || currentTasks.find(task => task.id === action.taskId)?.title}</p><p className="text-sm text-neutral-300">{action.reason}</p></div>)}
+    {response.strategy?.actions?.map(action => <div key={action.id} className="border border-emerald-900 p-3"><p className="font-semibold">{action.changes.title || currentTasks.find(task => task.id === action.taskId)?.title}</p><DateProposal settings={action.changes} lang={lang} /><p className="text-sm text-neutral-300">{action.reason}</p></div>)}
   </div>;
 };
 
@@ -206,7 +214,6 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   stats,
   adaptiveProfile,
   initialPrompt = '',
-  initialPromptAsDraft = false,
   aiIconVariant,
   onInjectTasks,
   accountId = null,
@@ -835,6 +842,9 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
               currentStep: t.currentStep,
               steps: t.steps,
               createdAt: t.createdAt,
+              plannedDate: t.plannedDate,
+              deadlineDate: t.deadlineDate,
+              schedule: t.schedule,
               ...getAITimerContext(t),
               stepList: t.stepList || [],
               note: t.note,

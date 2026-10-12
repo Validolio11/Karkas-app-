@@ -44,6 +44,19 @@ test('offline daily catchup creates latest due only, with next evening retained'
   assert.equal(result.plans[0].nextStartAt, '2026-10-15T17:00:00.000Z');
 });
 
+test('daily occurrence calendar dates follow the schedule zone rather than the device zone', () => {
+  for (const [timeZone, startAt, plannedDate] of [
+    ['Pacific/Kiritimati', '2026-10-10T00:10:00+14:00', '2026-10-10'],
+    ['Pacific/Honolulu', '2026-10-09T23:50:00-10:00', '2026-10-09'],
+  ]) {
+    const p = createScheduledTaskPlan('remote-zone', { ...task, deadlineDate: '2026-10-11' },
+      { startAt, recurrence: 'daily', timeZone, leadMinutes: 0 });
+    const due = getDueScheduledOccurrences([p], at(startAt));
+    assert.equal(due.tasks[0].plannedDate, plannedDate);
+    assert.equal(due.tasks[0].deadlineDate, undefined, 'a previous day deadline must not repeat');
+  }
+});
+
 test('daily wall time survives autumn and spring DST changes', () => {
   const fall = getDueScheduledOccurrences([plan('2026-10-23T20:00:00+03:00', 'daily')], at('2026-10-25T19:55:00+02:00'));
   assert.equal(fall.notifications[0].scheduledFor, at('2026-10-25T20:00:00+02:00'));

@@ -23,6 +23,16 @@ const id = value => text(value) && value.trim().length > 0 && value.length <= 51
 const optional = (value, key, check) => value[key] === undefined || check(value[key]);
 
 /** @param {unknown} value */
+function validDate(value) {
+  if (!text(value) || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split('-').map(Number);
+  if (year < 1 || month < 1 || month > 12 || day < 1) return false;
+  const date = new Date(0);
+  date.setUTCFullYear(year, month, 0);
+  return day <= date.getUTCDate();
+}
+
+/** @param {unknown} value */
 function validSchedule(value) {
   if (!object(value) || !text(value.startAt) || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(value.startAt) ||
       !Number.isFinite(Date.parse(value.startAt)) || !text(value.recurrence) || !['once', 'daily'].includes(value.recurrence) ||
@@ -38,6 +48,7 @@ function validTask(value, deleted) {
       !integer(value.currentStep) || value.currentStep > value.steps ||
       typeof value.done !== 'boolean' || typeof value.pinned !== 'boolean' || !number(value.createdAt)) return false;
   if (deleted && !number(value.deletedAt)) return false;
+  if (!optional(value, 'plannedDate', validDate) || !optional(value, 'deadlineDate', validDate)) return false;
   for (const key of ['note', 'timerStepId', 'timerSessionId', 'schedulePlanId', 'scheduleNextStartAt']) if (!optional(value, key, text)) return false;
   if (value.timeSessions !== undefined && (!object(value.timeSessions) || Object.entries(value.timeSessions).some(([key, session]) =>
     !id(key) || ['__proto__', 'constructor', 'prototype'].includes(key) || !object(session) || !number(session.seconds) || !optional(session, 'stepId', id)))) return false;
@@ -64,12 +75,21 @@ export function parseWorkspace(value) {
   /** @param {string} message @returns {never} */
   const fail = message => { throw new InvalidWorkspaceError(message, value); };
   if (!object(value)) fail('Workspace must be an object');
+  // Older category records used `label`; preserve their IDs and content.
+  if (Array.isArray(value.tabs) && value.tabs.some(tab => object(tab) && tab.name === undefined && text(tab.label))) {
+    return parseWorkspace({ ...value, tabs: value.tabs.map(tab => object(tab) && tab.name === undefined && text(tab.label) ? { ...tab, name: tab.label } : tab) });
+  }
   for (const key of ['tasks', 'deletedTasks', 'tabs']) {
     if (!Array.isArray(value[key])) fail(`Workspace.${key} must be an array`);
     if (value[key].length > (key === 'tabs' ? 500 : 50000)) fail(`Workspace.${key} exceeds its limit`);
     const seen = new Set();
-    for (const entry of value[key]) {
+    for (const [index, entry] of value[key].entries()) {
       if (!(key === 'tabs' ? object(entry) && id(entry.id) && text(entry.name) && optional(entry, 'color', text) : validTask(entry, key === 'deletedTasks')) || seen.has(entry.id)) {
+        if (key === 'tabs') {
+          /** @param {string} field */
+          const fieldType = field => !object(entry) ? 'unavailable' : entry[field] === null ? 'null' : Array.isArray(entry[field]) ? 'array' : typeof entry[field];
+          fail(`Workspace.tabs contains an invalid or duplicate record (index=${index}, record=${entry === null ? 'null' : Array.isArray(entry) ? 'array' : typeof entry}, idType=${fieldType('id')}, idValid=${object(entry) && id(entry.id)}, nameType=${fieldType('name')}, labelType=${fieldType('label')}, titleType=${fieldType('title')}, colorType=${fieldType('color')}, duplicate=${object(entry) && seen.has(entry.id)})`);
+        }
         fail(`Workspace.${key} contains an invalid or duplicate record`);
       }
       seen.add(entry.id);

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { taskMutationProperties, taskTimerProperties, taskActionInstructions, validateTaskMutations, validatedTimerFields, normalizeAIOptionalFields, taskScheduleProperties, validatedScheduleFields, schedulingClockContext } from './aiActions';
+import { taskMutationProperties, taskTimerProperties, taskActionInstructions, validateTaskMutations, validatedTimerFields, normalizeAIOptionalFields, taskScheduleProperties, validatedScheduleFields, schedulingClockContext, validatedDateFields } from './aiActions';
 import { applyAITaskUpdate } from '../src/utils/aiTaskUpdates';
 import type { PSTask } from '../src/types';
 
@@ -9,6 +9,30 @@ const parent: PSTask = {
   steps: 2, currentStep: 1, done: false, pinned: false, createdAt: 1,
   stepList: [{ id: 'a', title: 'Research', done: true }, { id: 'b', title: 'Draft', done: false }],
 };
+
+test('date-only updates validate against the unchanged counterpart and preserve explicit clears', () => {
+  const dated = { ...parent, plannedDate: '2026-10-12', deadlineDate: '2026-10-15' };
+  assert.throws(() => validateTaskMutations({ taskUpdates: [{ id: parent.id, plannedDate: '2026-10-16' }] }, [dated]), /after deadline/);
+  assert.throws(() => validateTaskMutations({ taskUpdates: [{ id: parent.id, deadlineDate: '2026-10-11' }] }, [dated]), /after deadline/);
+  const proposal = { taskUpdates: [{ id: parent.id, plannedDate: '2026-10-16', deadlineDate: null }] };
+  const validated = validateTaskMutations(proposal, [dated]);
+  const updated = applyAITaskUpdate(dated, validated.taskUpdates[0], new Set(['focus']), 100);
+  assert.equal(updated.plannedDate, '2026-10-16');
+  assert.equal(updated.deadlineDate, undefined);
+  assert.equal(updated.currentStep, dated.currentStep);
+  assert.equal(dated.deadlineDate, '2026-10-15');
+});
+
+test('AI calendar dates reject rollover, timestamps and reversed ranges without changing caller data', () => {
+  for (const plannedDate of ['2026-02-30', '2026-13-01', '2026-10-12T10:00:00Z', '12.10.26', '']) {
+    assert.throws(() => validatedDateFields({ plannedDate }), /calendar date/);
+  }
+  assert.deepEqual(validatedDateFields({ plannedDate: '2024-02-29', deadlineDate: null }), { plannedDate: '2024-02-29', deadlineDate: null });
+  assert.throws(() => validatedDateFields({ plannedDate: '2026-10-16', deadlineDate: '2026-10-15' }), /after deadline/);
+  const proposal = { taskUpdates: [{ id: parent.id, plannedDate: null, deadlineDate: null, note: null }] };
+  assert.deepEqual(validateTaskMutations(proposal, [parent]).taskUpdates[0], { id: parent.id, plannedDate: null, deadlineDate: null });
+  assert.equal(proposal.taskUpdates[0].note, null);
+});
 
 test('structured output exposes subtask replacement and entire-task deletion separately', () => {
   const fields = taskMutationProperties.taskUpdates.items.properties;

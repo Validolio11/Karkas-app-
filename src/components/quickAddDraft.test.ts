@@ -178,3 +178,29 @@ test('previously signed-out account drafts remain quarantined when a cached acco
   assert.equal(readQuickAddDraft(storage, null), null);
   assert.ok(storage.values.has(QUICK_ADD_DRAFT_KEY));
 });
+
+test('calendar dates and guided stage survive an account-scoped draft reload', () => {
+  const storage = memoryStorage();
+  const dated = { ...draft, timerMode: 'none' as const, plannedDate: '2028-02-29', deadlineDate: '2028-03-01', wizardStep: 3 };
+  saveQuickAddDraft(storage, dated, 'A');
+  assert.deepEqual(readQuickAddDraft(storage, 'A'), dated);
+  assert.equal(readQuickAddDraft(storage, 'B'), null);
+  assert.equal(readQuickAddDraft(storage, null), null);
+});
+
+test('date-only draft remains recoverable and clearing it removes both dates', () => {
+  const storage = memoryStorage();
+  const dated = { ...draft, title: '', note: '', steps: 0, customSteps: [], plannedDate: '2026-10-12' };
+  saveQuickAddDraft(storage, dated);
+  assert.deepEqual(readQuickAddDraft(storage), dated);
+  saveQuickAddDraft(storage, { ...dated, plannedDate: undefined });
+  assert.equal(readQuickAddDraft(storage), null);
+});
+
+test('invalid calendar dates and wizard stages do not corrupt usable draft content', () => {
+  const storage = memoryStorage();
+  for (const wizardStep of [-1, 6, 2.5, '3']) {
+    storage.values.set(quickAddDraftKey('A'), JSON.stringify({ ...draft, plannedDate: '2026-02-29', deadlineDate: '2026-10-12T00:00:00Z', wizardStep }));
+    assert.deepEqual(readQuickAddDraft(storage, 'A'), draft);
+  }
+});

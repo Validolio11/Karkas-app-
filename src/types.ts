@@ -43,6 +43,8 @@ export interface PSTask {
   pinned: boolean;
   note?: string;
   createdAt: number;
+  plannedDate?: string; // Local calendar day (YYYY-MM-DD), independent of timed scheduling.
+  deadlineDate?: string; // Inclusive local calendar day (YYYY-MM-DD).
   schedule?: TaskSchedule;
   scheduledPending?: boolean; // Future plan template, excluded from work statistics
   scheduledFor?: number; // Planned start of materialized occurrence
@@ -65,7 +67,7 @@ export interface PSTask {
 }
 
 export type NewTaskInput = Pick<PSTask, 'title' | 'phase' | 'priority' | 'steps'> &
-  Partial<Pick<PSTask, 'stepList' | 'note' | 'timerMode' | 'countdownDurationSeconds' | 'plannedDurationSeconds' | 'schedule'>>;
+  Partial<Pick<PSTask, 'stepList' | 'note' | 'timerMode' | 'countdownDurationSeconds' | 'plannedDurationSeconds' | 'schedule' | 'plannedDate' | 'deadlineDate'>>;
 
 export interface DeletedTask extends PSTask {
   deletedAt: number;
@@ -100,10 +102,8 @@ export interface AdaptiveProfile {
   averageCompletionMinutes: number | null;
   averageStepCount: number;
   preferredPhases: string[];
-  overloadedPhases: string[];
   activeLoad: number;
   urgentLoad: number;
-  recommendedActiveLimit: number;
 }
 
 export interface SuggestedTask {
@@ -116,6 +116,8 @@ export interface SuggestedTask {
 }
 
 export interface AITaskUpdate extends AITimerSettings {
+  plannedDate?: string | null;
+  deadlineDate?: string | null;
   schedule?: TaskSchedule;
   id: string;
   title?: string;
@@ -139,6 +141,8 @@ export interface AIResponse {
   insights?: string[];
   reply?: string;
   tasks?: (AITimerSettings & {
+    plannedDate?: string;
+    deadlineDate?: string;
     schedule?: TaskSchedule;
     title: string;
     phase: string;
@@ -224,6 +228,8 @@ export interface StrategyAction {
   taskId?: string;
   expectedTask?: Partial<PSTask>;
   changes: Partial<Pick<PSTask, 'title' | 'phase' | 'priority' | 'note' | 'schedule'>> & {
+    plannedDate?: string | null;
+    deadlineDate?: string | null;
     stepTitles?: string[];
   };
 }

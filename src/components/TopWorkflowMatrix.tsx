@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { TaskTab, FilterMode, WorkflowStats } from '../types';
 import { sound } from '../utils/audio';
 import { Language, TRANSLATIONS } from '../utils/i18n';
@@ -54,7 +54,6 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
   user = null,
   isSyncing = false,
   autoSyncEnabled = true,
-  isMinimized = false,
   isFullscreen = false,
   onMinimize,
   onToggleFullscreen,
@@ -66,7 +65,6 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
   onToggleAdd,
   onOpenAI,
   onAddTab,
-  onDeleteTab,
   onOpenManageTabs,
   onOpenAccount,
   onOpenSettings,

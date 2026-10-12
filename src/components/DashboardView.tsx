@@ -1,10 +1,8 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   PSTask,
   TaskTab,
   WorkflowStats,
-  AIRecommendation,
-  SuggestedTask,
   DeletedTask,
   AnalyticsPeriod,
 } from '../types';
@@ -14,27 +12,18 @@ import { sound } from '../utils/audio';
 import {
   CheckCircle2,
   Clock,
-  Flame,
   Layers,
   ArrowRight,
   Plus,
   Sliders,
   Check,
-  RefreshCw,
-  Zap,
-  Compass,
-  Lightbulb,
-  CheckCheck,
   Calendar,
   BarChart3,
   Trash2,
-  Award,
-  AlertTriangle,
   Target,
 } from 'lucide-react';
 import { AIIcon, AIIconId } from './AIIconTemplates';
 import { ActivityChart } from './ActivityChart';
-import { karkasApiFetch } from '../utils/desktopApi';
 import { selectRelevantArchivedTasks } from '../utils/taskArchive';
 import { formatRecordedDuration, recordedTaskSeconds, summarizeTaskTime } from '../utils/taskTimeStats';
 
@@ -72,7 +61,6 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
   tasks,
   deletedTasks = [],
   tabs,
-  stats,
   lang,
   aiIconVariant,
   onSelectTab,
@@ -80,7 +68,6 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
   onOpenAI,
   onOpenAdd,
   onOpenManageTabs,
-  onAddTask,
 }) => {
   const t = TRANSLATIONS[lang];
   const tAnalytics = t.dashboardAnalytics || (TRANSLATIONS.uk.dashboardAnalytics as any);

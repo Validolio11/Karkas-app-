@@ -99,8 +99,8 @@ test("period results come from task dates rather than contaminated client aggreg
 
 test("recorded task volumes never assign universal productivity grades", async () => {
   const timestamp = Date.now();
-  for (const [completed, cancelled, successRate, grade] of [[5, 0, 100, "C"], [6, 6, 50, "B"], [10, 5, 67, "A"],
-    [15, 3, 83, "A+"], [20, 2, 91, "S"], [20, 3, 87, "A+"], [20, 21, 49, "C"]] as const) {
+  for (const [completed, cancelled, successRate] of [[5, 0, 100], [6, 6, 50], [10, 5, 67],
+    [15, 3, 83], [20, 2, 91], [20, 3, 87], [20, 21, 49]] as const) {
     const result = await post("recommendations", {
       period: "THIS_MONTH", lang: "en",
       tasks: Array.from({ length: completed }, (_, index) => ({ title: `Delivered ${index}`, done: true, createdAt: timestamp, completedAt: timestamp })),

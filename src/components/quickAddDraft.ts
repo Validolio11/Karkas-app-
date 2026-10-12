@@ -1,4 +1,5 @@
 import { isSystemView } from '../utils/systemViews';
+import { isTaskDate } from '../utils/taskDates';
 export const QUICK_ADD_DRAFT_KEY = 'karkas_quick_add_draft_v1';
 const LEGACY_MIGRATION_KEY = 'karkas_quick_add_draft_migration_v2';
 export const quickAddDraftKey = (ownerId: string | null = null) =>
@@ -14,12 +15,15 @@ export interface QuickAddDraft {
   timerMode?: 'none' | 'stopwatch' | 'countdown';
   countdownMinutes?: number;
   countdownInput?: string;
+  plannedDate?: string;
+  deadlineDate?: string;
+  wizardStep?: number;
 }
 
 type DraftStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> & Partial<Pick<Storage, 'length' | 'key'>>;
 
 export function hasQuickAddDraftContent(draft: Pick<QuickAddDraft, 'title' | 'note' | 'customSteps'> & Partial<QuickAddDraft>) {
-  return !!(draft.title.trim() || draft.note.trim() || draft.customSteps.some(step => step.trim()) || (draft.steps ?? 0) > 0 || (draft.timerMode && draft.timerMode !== 'none'));
+  return !!(draft.title.trim() || draft.note.trim() || draft.customSteps.some(step => step.trim()) || (draft.steps ?? 0) > 0 || (draft.timerMode && draft.timerMode !== 'none') || draft.plannedDate || draft.deadlineDate);
 }
 
 export function buildQuickAddSteps(count: number, names: string[], lang: 'uk' | 'en', idPrefix = 's') {
@@ -60,6 +64,9 @@ function parseQuickAddDraft(raw: string | null): QuickAddDraft | null {
       ...(input.timerMode !== undefined ? { timerMode: input.timerMode === 'stopwatch' || input.timerMode === 'countdown' ? input.timerMode : 'none' as const } : {}),
       ...(input.countdownMinutes !== undefined ? { countdownMinutes: typeof input.countdownMinutes === 'number' && Number.isFinite(input.countdownMinutes) ? Math.max(1, Math.min(1440, Math.round(input.countdownMinutes))) : 25 } : {}),
       ...(typeof input.countdownInput === 'string' ? { countdownInput: input.countdownInput } : {}),
+      ...(isTaskDate(input.plannedDate) ? { plannedDate: input.plannedDate } : {}),
+      ...(isTaskDate(input.deadlineDate) ? { deadlineDate: input.deadlineDate } : {}),
+      ...(typeof input.wizardStep === 'number' && Number.isInteger(input.wizardStep) && input.wizardStep >= 0 && input.wizardStep <= 5 ? { wizardStep: input.wizardStep } : {}),
     };
     return hasQuickAddDraftContent(draft) ? draft : null;
   } catch {

@@ -75,8 +75,7 @@ export interface UserCloudState {
 
 function parseCloudState(value: unknown, ownerId: string): UserCloudState {
   try {
-    parseWorkspace(value);
-    const state = value as UserCloudState;
+    const state = parseWorkspace(value) as UserCloudState;
     if (state.userId !== ownerId || !Number.isFinite(state.updatedAt) || state.updatedAt < 0 ||
         (state.revision !== undefined && (!Number.isSafeInteger(state.revision) || state.revision < 0))) {
       throw new Error('Cloud workspace owner or revision is invalid');

@@ -1,0 +1,24 @@
+{
+  "publishedAt": "2026-10-12T11:27:34Z",
+  "url": "https://github.com/Validolio11/Karkas-app-/releases/tag/1.3.4",
+  "commit": "2e6d6188dc6ae3ef6b45ba397319e53cd26ab175",
+  "releaseId": 410530735,
+  "assets": [
+    {
+      "size": 139102261,
+      "name": "Karkas-Setup-1.3.4.exe",
+      "url": "https://github.com/Validolio11/Karkas-app-/releases/download/1.3.4/Karkas-Setup-1.3.4.exe"
+    },
+    {
+      "size": 146365,
+      "name": "Karkas-Setup-1.3.4.exe.blockmap",
+      "url": "https://github.com/Validolio11/Karkas-app-/releases/download/1.3.4/Karkas-Setup-1.3.4.exe.blockmap"
+    },
+    {
+      "size": 341,
+      "name": "latest.yml",
+      "url": "https://github.com/Validolio11/Karkas-app-/releases/download/1.3.4/latest.yml"
+    }
+  ],
+  "version": "1.3.4"
+}

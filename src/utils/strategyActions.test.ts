@@ -21,7 +21,11 @@ test('autonomous dates preserve recorded progress and can be undone; invalid ran
   assert.deepEqual(result.tasks[0].stepList, task.stepList);
   const undone = undoStrategyAction({ ...result, actionId: result.applied[0].id, ownerId: 'a', currentOwnerId: 'a' });
   assert.equal(undone.undone, true);
-  assert.deepEqual(undone.tasks, [task]);
+  // Undo restores task data exactly; the activity journal keeps both reschedules.
+  const { activityTrail, updatedAt: _updatedAt, ...restored } = undone.tasks[0] as any;
+  assert.deepEqual([restored], [task]);
+  assert.deepEqual(activityTrail.map((event: any) => [event.kind, event.plannedDate, event.deadlineDate]),
+    [['rescheduled', '2026-10-12', '2026-10-15'], ['rescheduled', null, null]]);
   for (const dates of [{ plannedDate: '2026-02-30' }, { plannedDate: '2026-10-15', deadlineDate: '2026-10-12' }]) {
     const rejected = applyStrategyActions(options([action(dates)]));
     assert.equal(rejected.applied.length, 0);

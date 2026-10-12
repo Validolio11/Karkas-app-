@@ -14,7 +14,10 @@ const installWindow = (desktop: unknown) => {
 
 test('desktop sends selected model and request through the bridge and preserves provider errors', async () => {
   const restore = installWindow({ ai: { assist: async (input: unknown) => {
-    assert.deepEqual(input, { prompt: 'Plan my work', selectedModel: 'gemini-selected' });
+    // Each bridged request carries a cancellable request id.
+    const { desktopRequestId, ...request } = input as any;
+    assert.match(desktopRequestId, /^[a-zA-Z0-9_-]{8,128}$/);
+    assert.deepEqual(request, { prompt: 'Plan my work', selectedModel: 'gemini-selected' });
     return { ok: true, value: { status: 429, body: { success: false, code: 'QUOTA_EXCEEDED' } } };
   } } });
   try {

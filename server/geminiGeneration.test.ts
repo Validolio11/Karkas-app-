@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { GoogleGenAI } from '@google/genai';
-import { AIRequestError, aiRequestFailure, classifyAIRequestError, generateGeminiWithFallback } from './geminiGeneration.ts';
+import { AIRequestError, aiRequestFailure, classifyAIRequestError, generateGeminiWithFallback, resetModelHealthForTests, thinkingConfigForModel } from './geminiGeneration.ts';
 import { confirmedProfile, discoveryGoal, understandingProfile } from '../src/utils/strategyDiscovery.testHelpers';
 import { continueStrategyDiscovery } from '../src/utils/strategyDiscovery';
 import { applyStrategyActions } from '../src/utils/strategyActions';
@@ -32,6 +32,8 @@ after(() => {
 
 function mockProvider(respond: (model: string, body: any, options: RequestInit) => Response | Promise<Response>) {
   calls.length = 0;
+  // Quota cooldowns and thinking support are remembered per client; isolate tests.
+  resetModelHealthForTests();
   provider = (async (url: any, options: RequestInit) => {
     assert.match(String(url), /^https:\/\/generativelanguage\.googleapis\.com\//);
     const model = /models\/([^:]+):generateContent/.exec(String(url))?.[1];
@@ -274,6 +276,8 @@ test('retired selected model falls back through the real SDK and preserves seria
     const schema = body.generationConfig.responseSchema;
     assert.equal(schema.properties.tasks.items.properties.countdownDurationSeconds.minimum, 60);
     assert.equal(schema.properties.tasks.items.properties.countdownDurationSeconds.maximum, 86400);
+    // Ordinary commands no longer ask the model for a personal strategy.
+    assert.equal(schema.properties.strategy, undefined);
     assert.deepEqual(schema.properties.taskUpdates.items.properties.timerAction.enum, ['start', 'pause', 'stop']);
     return model === 'gemini-retired-model' ? rejected(404, 'NOT_FOUND') : success({
       reply: 'Пропоную таймер на 25 хвилин.', tasks: [], taskUpdates: [{ id: 't1', timerMode: 'countdown', countdownDurationSeconds: 1500 }],
@@ -293,7 +297,7 @@ test('fallback attempts each model once, then returns the quota category without
   const result = await chat();
   assert.equal(result.status, 429);
   assert.equal(result.body.code, 'QUOTA_EXCEEDED');
-  assert.deepEqual(calls.map(call => call.model), ['gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-flash-latest']);
+  assert.deepEqual(calls.map(call => call.model), ['gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-2.5-flash']);
   assert.deepEqual(result.body.taskUpdates, []);
   assert.equal(result.body.source, 'ai-error');
   assert.doesNotMatch(JSON.stringify(result.body), /private-test-key|provider-internal-data/);
@@ -342,7 +346,7 @@ test('invalid Gemini output does not silently generate heuristic changes', async
   assert.equal(result.body.code, 'INVALID_AI_RESPONSE');
   assert.deepEqual(result.body.tasks, []);
   assert.deepEqual(result.body.taskUpdates, []);
-  assert.deepEqual(calls.map(call => call.model), ['gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-flash-latest']);
+  assert.deepEqual(calls.map(call => call.model), ['gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-2.5-flash']);
 });
 
 const lottieTask = { title: 'Пошук референсів для анімації Lottie', phase: 'focus', priority: 2, steps: 0, stepList: [], timerMode: 'countdown', countdownDurationSeconds: 2400 };
@@ -385,9 +389,9 @@ test('invalid duration is not reinterpreted as minutes and a valid distinct fall
   const result = await chat({ prompt: lottiePrompt, tabs: ['focus'] });
   assert.equal(result.status, 200);
   assert.equal(result.body.tasks[0].countdownDurationSeconds, 2400);
-  assert.equal(result.body.usedModel, 'gemini-2.5-flash');
+  assert.equal(result.body.usedModel, 'gemini-flash-latest');
   assert.equal(result.body.fallbackUsed, true);
-  assert.deepEqual(calls.map(call => call.model), ['gemini-3.1-flash-lite', 'gemini-2.5-flash']);
+  assert.deepEqual(calls.map(call => call.model), ['gemini-3.1-flash-lite', 'gemini-flash-latest']);
 });
 
 test('all invalid timer, target and required-title variants fail without a partial proposal', async () => {
@@ -417,7 +421,7 @@ test('malformed optional mutation values trigger model fallback before a success
     const result = await chat({ currentTasks: [{ id: 't1', title: lottieTask.title }] });
     assert.equal(result.status, 200);
     assert.deepEqual(result.body.taskUpdates, [{ id: 't1', countdownDurationSeconds: 2400, timerMode: 'countdown' }]);
-    assert.equal(result.body.usedModel, 'gemini-2.5-flash');
+    assert.equal(result.body.usedModel, 'gemini-flash-latest');
     assert.equal(calls.length, 2);
   }
 });
@@ -464,7 +468,9 @@ test('all assistant modes send classified records and recomputed statistics to t
       assert.equal(profile.completionRate, 50);
       if (action === 'chat') assert.deepEqual(context.stats, { total: 4, completed: 2, active: 1, cancelled: 1, percent: 50, phaseCounts: { focus: 4 } });
       else assert.deepEqual(context.overview, { totalTasks: 4, completedCount: 2, completionPercent: 50, activeCount: 1, urgentP1Count: 0 });
-      assert.deepEqual(body.generationConfig.responseSchema.properties.taskDeletions.items.properties.deletionReason.enum, ['accidental', 'cancelled']);
+      // Chat analysis is read-only and no longer requests mutation arrays.
+      if (action === 'chat') assert.equal(body.generationConfig.responseSchema.properties.taskDeletions, undefined);
+      else assert.deepEqual(body.generationConfig.responseSchema.properties.taskDeletions.items.properties.deletionReason.enum, ['accidental', 'cancelled']);
       return success({ reply: 'Review prepared.', summary: 'Review prepared.', tasks: [], taskUpdates: [], taskDeletions: [] });
     });
     const result = await chat({ prompt: 'Audit the workspace', lang: 'en', action, fullAppContext });
@@ -654,4 +660,57 @@ test('structured API key reasons and malformed request failures are categorized 
   const failure = aiRequestFailure(invalid, false);
   assert.equal(failure.status, 401);
   assert.match(failure.body.error, /No changes were prepared or applied/);
+});
+
+test('thinking effort maps to settings each model family accepts', () => {
+  // Flash-Lite keeps its fastest level for commands and never rises above LOW.
+  assert.deepEqual(thinkingConfigForModel('gemini-3.1-flash-lite', 'low'), { thinkingLevel: 'MINIMAL' });
+  assert.deepEqual(thinkingConfigForModel('models/gemini-3.5-flash-lite', 'medium'), { thinkingLevel: 'LOW' });
+  // 3.7/3.8 Flash reject MINIMAL, so Flash never receives it.
+  for (const model of ['gemini-3.6-flash', 'gemini-3.7-flash', 'gemini-3.8-flash', 'gemini-flash-latest']) {
+    assert.deepEqual(thinkingConfigForModel(model, 'minimal'), { thinkingLevel: 'LOW' });
+    assert.deepEqual(thinkingConfigForModel(model, 'medium'), { thinkingLevel: 'MEDIUM' });
+  }
+  assert.deepEqual(thinkingConfigForModel('gemini-2.5-flash', 'low'), { thinkingBudget: 512 });
+  assert.deepEqual(thinkingConfigForModel('gemini-2.5-pro', 'minimal'), { thinkingBudget: 128 });
+  assert.equal(thinkingConfigForModel('gemini-3.8-flash', 'default'), undefined);
+  assert.equal(thinkingConfigForModel('custom-tuned-model', 'low'), undefined);
+});
+
+test('chat sends route thinking settings and reports timing metrics', async () => {
+  mockProvider((_model, body) => {
+    assert.deepEqual(body.generationConfig.thinkingConfig, { thinkingLevel: 'MINIMAL' });
+    return json({ candidates: [{ content: { role: 'model', parts: [{ text: JSON.stringify({ reply: 'Пропоную таймер.', taskUpdates: [{ id: 't1', timerMode: 'countdown', countdownDurationSeconds: 1500 }] }) }] }, finishReason: 'STOP' }],
+      usageMetadata: { promptTokenCount: 900, candidatesTokenCount: 40, thoughtsTokenCount: 12 } });
+  });
+  const result = await chat({ currentTasks: [{ id: 't1', title: 'Референси' }] });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.aiMetrics.model, 'gemini-3.1-flash-lite');
+  assert.equal(result.body.aiMetrics.thinking, 'MINIMAL');
+  assert.equal(result.body.aiMetrics.promptTokens, 900);
+  assert.equal(result.body.aiMetrics.thoughtsTokens, 12);
+  assert.equal(typeof result.body.aiMetrics.elapsedMs, 'number');
+});
+
+test('a model that rejects the thinking setting is retried once with its default', async () => {
+  mockProvider((model, body) => body.generationConfig.thinkingConfig
+    ? rejected(400, 'INVALID_ARGUMENT', 'Thinking level MINIMAL is not supported for this model.')
+    : success({ reply: 'Готово.', taskUpdates: [{ id: 't1', timerMode: 'countdown', countdownDurationSeconds: 1500 }] }));
+  const first = await chat({ selectedModel: 'gemini-3.8-flash', currentTasks: [{ id: 't1', title: 'Референси' }] });
+  assert.equal(first.status, 200);
+  assert.deepEqual(calls.map(call => [call.model, Boolean(call.body.generationConfig.thinkingConfig)]), [['gemini-3.8-flash', true], ['gemini-3.8-flash', false]]);
+  assert.equal(first.body.usedModel, 'gemini-3.8-flash');
+});
+
+test('a model that exhausted its free quota is tried last on the next request', async () => {
+  mockProvider(model => model === 'gemini-3.1-flash-lite' ? rejected(429, 'RESOURCE_EXHAUSTED') : success({ reply: 'Готово.', taskUpdates: [] }));
+  const first = await chat({ currentTasks: [{ id: 't1', title: 'Референси' }] });
+  assert.equal(first.status, 200);
+  assert.deepEqual(calls.map(call => call.model), ['gemini-3.1-flash-lite', 'gemini-flash-latest']);
+  // Keep the remembered cooldown for the second request (mockProvider would reset it).
+  calls.length = 0;
+  const second = await chat({ currentTasks: [{ id: 't1', title: 'Референси' }] });
+  assert.equal(second.status, 200);
+  assert.deepEqual(calls.map(call => call.model), ['gemini-flash-latest']);
+  assert.equal(second.body.usedModel, 'gemini-flash-latest');
 });

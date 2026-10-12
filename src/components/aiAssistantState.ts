@@ -3,6 +3,7 @@ import { looksLikeGeminiApiKey } from '../utils/apiKey';
 import { normalizeTaskSchedule } from '../utils/taskScheduling';
 import type { AIIntent } from '../types';
 import { readAccountStorage, writeAccountStorage, removeAccountStorage } from '../utils/accountStorage';
+import { AI_CHAT_CLIENT_TIMEOUT_MS } from '../utils/aiChatTiming';
 
 export type AIMode = 'chat' | 'breakdown' | 'analyze' | 'generate';
 export interface AIRequest {
@@ -74,8 +75,8 @@ export function appendChatRequest<T extends { role: 'user' | 'assistant'; conten
   return last?.role === 'user' && last.content === text ? messages : [...messages, { role: 'user', content: text }];
 }
 
-export type AIRequestErrorCode = 'INVALID_API_KEY' | 'ACCESS_DENIED' | 'QUOTA_EXCEEDED' | 'MODEL_UNAVAILABLE' | 'INVALID_REQUEST' | 'INVALID_AI_REQUEST' | 'NETWORK_ERROR' | 'TIMEOUT' | 'PROVIDER_ERROR' | 'PROVIDER_UNAVAILABLE' | 'INTERNAL_ERROR' | 'MISSING_API_KEY' | 'INVALID_RESPONSE' | 'CANCELLED';
-const knownCodes: AIRequestErrorCode[] = ['INVALID_API_KEY', 'ACCESS_DENIED', 'QUOTA_EXCEEDED', 'MODEL_UNAVAILABLE', 'INVALID_REQUEST', 'INVALID_AI_REQUEST', 'NETWORK_ERROR', 'TIMEOUT', 'PROVIDER_ERROR', 'PROVIDER_UNAVAILABLE', 'INTERNAL_ERROR', 'MISSING_API_KEY', 'INVALID_RESPONSE', 'CANCELLED'];
+export type AIRequestErrorCode = 'INVALID_API_KEY' | 'ACCESS_DENIED' | 'QUOTA_EXCEEDED' | 'MODEL_UNAVAILABLE' | 'INVALID_REQUEST' | 'INVALID_AI_REQUEST' | 'NETWORK_ERROR' | 'TIMEOUT' | 'CLIENT_TIMEOUT' | 'PROVIDER_ERROR' | 'PROVIDER_UNAVAILABLE' | 'INTERNAL_ERROR' | 'MISSING_API_KEY' | 'INVALID_RESPONSE' | 'CANCELLED';
+const knownCodes: AIRequestErrorCode[] = ['INVALID_API_KEY', 'ACCESS_DENIED', 'QUOTA_EXCEEDED', 'MODEL_UNAVAILABLE', 'INVALID_REQUEST', 'INVALID_AI_REQUEST', 'NETWORK_ERROR', 'TIMEOUT', 'CLIENT_TIMEOUT', 'PROVIDER_ERROR', 'PROVIDER_UNAVAILABLE', 'INTERNAL_ERROR', 'MISSING_API_KEY', 'INVALID_RESPONSE', 'CANCELLED'];
 export class AIRequestError extends Error {
   constructor(public readonly code: AIRequestErrorCode) { super(code); this.name = 'AIRequestError'; }
 }
@@ -171,7 +172,8 @@ const errorMessages: Record<AIRequestErrorCode, { uk: string; en: string }> = {
   INVALID_REQUEST: { uk: 'Gemini не прийняв запит. Уточніть його й спробуйте ще раз.', en: 'Gemini did not accept this request. Revise it and try again.' },
   INVALID_AI_REQUEST: { uk: 'Сервіс AI відхилив запит додатка. Повторіть пізніше; якщо помилка повторюється, оновіть додаток.', en: 'The AI service rejected the app request. Retry later; if this continues, update the app.' },
   NETWORK_ERROR: { uk: 'Не вдалося з’єднатися з AI. Перевірте інтернет і повторіть запит.', en: 'Could not connect to AI. Check your connection and retry.' },
-  TIMEOUT: { uk: 'AI не відповів вчасно. Спробуйте ще раз або виберіть іншу модель.', en: 'AI did not respond in time. Retry or select another model.' },
+  TIMEOUT: { uk: 'Google не відповів у відведений для запиту час. Повторіть запит або виберіть іншу модель.', en: 'Google did not respond within the request time limit. Retry or select another model.' },
+  CLIENT_TIMEOUT: { uk: `Додаток припинив очікування відповіді через ${AI_CHAT_CLIENT_TIMEOUT_MS / 1000} секунд. Повторіть запит або виберіть іншу модель.`, en: `The app stopped waiting for a response after ${AI_CHAT_CLIENT_TIMEOUT_MS / 1000} seconds. Retry or select another model.` },
   PROVIDER_ERROR: { uk: 'Google не зміг виконати запит до AI. Повторіть запит пізніше або виберіть іншу модель.', en: 'Google could not complete the AI request. Retry later or select another model.' },
   PROVIDER_UNAVAILABLE: { uk: 'Google повідомив, що AI тимчасово недоступний. Зачекайте й повторіть запит або виберіть іншу модель.', en: 'Google reported that AI is temporarily unavailable. Wait and retry or select another model.' },
   INTERNAL_ERROR: { uk: 'Додаток не зміг обробити AI-запит. Повторіть запит; якщо помилка повторюється, повідомте про неї.', en: 'The app could not process the AI request. Retry; if this continues, report the problem.' },

@@ -57,17 +57,20 @@ before(async () => {
       }};
     }
   `;
-  const hookSource = `
-    import { registerHooks } from 'node:module';
-    registerHooks({
-      resolve(specifier, context, next) {
-        return specifier === '@google/genai' ? { url: 'mock:gemini', shortCircuit: true } : next(specifier, context);
-      },
-      load(url, context, next) {
-        return url === 'mock:gemini' ? { format: 'module', source: ${JSON.stringify(sdkSource)}, shortCircuit: true } : next(url, context);
-      }
-    });
+  // Async hooks: Node 22 synchronous hooks reject null CommonJS/builtin sources.
+  const loaderSource = `
+    export async function resolve(specifier, context, next) {
+      return specifier === '@google/genai' ? { url: 'mock:gemini', shortCircuit: true } : next(specifier, context);
+    }
+    export async function load(url, context, next) {
+      return url === 'mock:gemini' ? { format: 'module', source: ${JSON.stringify(sdkSource)}, shortCircuit: true } : next(url, context);
+    }
   `;
+  const hookSource = `
+    import { register } from 'node:module';
+    register(${JSON.stringify(`data:text/javascript,${encodeURIComponent(loaderSource)}`)});
+  `;
+
   child = spawn(process.execPath, ["--import", `data:text/javascript,${encodeURIComponent(hookSource)}`,
     "--import", "tsx", "--input-type=module", "--eval",
     "const {startServer}=await import('./server.ts'); await startServer({port:Number(process.env.PORT),host:'127.0.0.1'}); console.log('server running');"], {

@@ -4,14 +4,15 @@ import path from "path";
 import dotenv from "dotenv";
 import { type GoogleGenAI, Modality, Type } from "@google/genai";
 import { verifyGeminiKey } from "./server/geminiKeyVerification";
-import { AIRequestError, aiRequestFailure, classifyAIRequestError, generateGeminiWithFallback, createGeminiClient } from "./server/geminiGeneration";
+import { AIRequestError, aiRequestFailure, classifyAIRequestError, generateGeminiWithFallback, createGeminiClient, type AIThinkingEffort } from "./server/geminiGeneration";
 import { isCompletedArchivedTask, isCancelledArchivedTask, selectRelevantArchivedTasks } from "./src/utils/taskArchive";
 import { recordedTaskSeconds, summarizeTaskTime } from "./src/utils/taskTimeStats";
 import { buildWorkInsights } from "./src/utils/workInsights";
 import type { AIStrategyResponse } from './src/types';
 import { normalizeStrategyDiscovery, isPersonalStrategyReady, preparePersonalDiscoveryRequest, STRATEGY_DISCOVERY_TOPICS } from './src/utils/strategyDiscovery';
 import { classifyPersonalChatRequest, constrainOrdinaryChatResponse, constrainReadyPersonalResponse, personalGuidanceSystemPolicy, personalProfileForRequest, sanitizeDiscoveryResponse } from './server/strategyDiscovery';
-import { AI_CHAT_MODEL_TIMEOUT_MS, AI_CHAT_TOTAL_TIMEOUT_MS } from './src/utils/aiChatTiming';
+import { AI_CHAT_MODEL_TIMEOUT_MS, AI_CHAT_TOTAL_TIMEOUT_MS, AI_CHAT_FALLBACK_MODELS, AI_CHAT_MAX_ATTEMPTS } from './src/utils/aiChatTiming';
+import { boundedPersonalPromptContext, compactTaskPromptContext } from './server/aiPromptContext';
 import { buildTaskTemporalContext, temporalAwarenessSystemPolicy } from './src/utils/taskTemporalContext';
 import { currentClockReply } from './server/clockReply';
 import { guardTemporalResponse, guardUnappliedClaims } from './server/temporalResponseGuard';
@@ -51,6 +52,8 @@ function requestValidationError(body: unknown): string | undefined {
   if (body.intent !== undefined && !['auto', 'plan', 'analysis', 'steps'].includes(body.intent)) return 'Invalid intent';
   if (body.strategyContext !== undefined && !isRecord(body.strategyContext)) return 'Invalid strategyContext';
   if (body.discoveryConfirmationId !== undefined && typeof body.discoveryConfirmationId !== 'string') return 'Invalid discoveryConfirmationId';
+  if (body.lastAssistantProposalStatus !== undefined && !['pending', 'stale', 'applied'].includes(body.lastAssistantProposalStatus)) return 'Invalid lastAssistantProposalStatus';
+  if (body.lastAssistantMessageId !== undefined && (typeof body.lastAssistantMessageId !== 'string' || body.lastAssistantMessageId.length > 200)) return 'Invalid lastAssistantMessageId';
   if (body.taskSnapshots !== undefined && (!Array.isArray(body.taskSnapshots) || !body.taskSnapshots.every((task: unknown) => isRecord(task) && nonEmptyText(task.id) && nonEmptyText(task.title)) || new Set(body.taskSnapshots.map((task: any) => task.id)).size !== body.taskSnapshots.length)) return 'Invalid taskSnapshots';
   try { if (body.clientClock !== undefined) schedulingClockContext(body.clientClock); } catch { return 'Invalid clientClock'; }
   const contexts = [body];
@@ -146,6 +149,18 @@ const strategySchema = { type: Type.OBJECT, properties: {
       ...taskScheduleProperties, ...taskDateProperties, stepTitles: { type: Type.ARRAY, items: { type: Type.STRING } } } },
   }, required: ['id', 'goalId', 'reason', 'type', 'changes'] } },
 } };
+
+/**
+ * Ask the model only for fields the server will keep for this route. Every
+ * omitted field is output the model no longer has to plan or generate; the
+ * server-side constraints still strip anything outside the command scope.
+ */
+function chatResponseSchema(route: string, full: { type: any; properties: Record<string, any>; required: string[] }) {
+  if (route === 'personal') return full;
+  // Ordinary commands never keep a personal strategy; help and analysis are read-only.
+  const keep = new Set(route === 'task_command' ? ['reply', 'insights', 'tasks', 'tabs', 'taskUpdates', 'taskDeletions'] : ['reply', 'insights']);
+  return { ...full, properties: Object.fromEntries(Object.entries(full.properties).filter(([key]) => keep.has(key))) };
+}
 
 /** Provider output cannot supply permissions or unvalidated autonomous accounting fields. */
 function validateStrategyResponse(value: unknown, tasks: any[], taskSnapshots?: any[]): AIStrategyResponse {
@@ -257,6 +272,35 @@ function getGeminiClient(): GoogleGenAI | null {
   return geminiClient;
 }
 
+// Reuse clients for custom keys so per-model quota cooldowns survive between
+// requests (free-tier limits are per project and per model).
+const customGeminiClients = new Map<string, GoogleGenAI>();
+function geminiClientFor(customApiKey: string): GoogleGenAI {
+  let client = customGeminiClients.get(customApiKey);
+  if (!client) {
+    client = createGeminiClient(customApiKey);
+    if (customGeminiClients.size >= 4) customGeminiClients.delete(customGeminiClients.keys().next().value!);
+    customGeminiClients.set(customApiKey, client);
+  }
+  return client;
+}
+
+// Thinking effort per request kind: commands and help answer fast, subtle
+// personal memory keeps more reasoning. See thinkingConfigForModel for mapping.
+const AI_THINKING: Record<string, AIThinkingEffort> = {
+  help: 'minimal', task_command: 'low', workspace_analysis: 'low', personal: 'medium', discovery: 'medium',
+  generate: 'low', analyze: 'low', breakdown: 'low', recommendations: 'low', transcription: 'minimal',
+};
+
+/** KARKAS_AI_THINKING=default restores provider defaults (used by the benchmark). */
+function thinkingFor(kind: string): AIThinkingEffort {
+  return process.env.KARKAS_AI_THINKING === 'default' ? 'default' : AI_THINKING[kind] ?? 'low';
+}
+
+function logAIMetrics(kind: string, metrics: unknown) {
+  if (metrics) console.info(`[karkas-ai] ${kind} ${JSON.stringify(metrics)}`);
+}
+
 // Shared bounded generation path for HTTP and the native desktop bridge.
 async function generateGeminiContentWithFallback(params: {
   contents: string;
@@ -266,6 +310,9 @@ async function generateGeminiContentWithFallback(params: {
   validateResponse?: (text: string) => unknown;
   timeoutMs?: number;
   totalTimeoutMs?: number;
+  fallbackModels?: string[];
+  maxAttempts?: number;
+  thinking?: AIThinkingEffort;
   signal?: AbortSignal;
 }): Promise<any> {
   const ai = params.customAi || getGeminiClient();
@@ -346,18 +393,7 @@ export function slugifyTabId(rawName: string, requestedId?: string): string {
 
 function strategyPromptContext(input: any) {
   if (!isRecord(input)) return null;
-  const discovery = normalizeStrategyDiscovery(personalProfileForRequest(input));
-  const { processedTurnIds: _processedTurnIds, pendingSummary, ...discoveryContext } = discovery;
-  const summaryContext = pendingSummary ? {
-    id: pendingSummary.id, text: pendingSummary.text, goalIds: pendingSummary.goalIds, confirmed: pendingSummary.confirmed,
-  } : undefined;
-  return { onboardingStatus: input.onboardingStatus, phase: input.phase, goals: input.goals,
-    facts: input.facts, barriers: input.barriers, preferences: input.preferences,
-    // Deduplication IDs and the confirmation fingerprint stay in app memory;
-    // they can grow indefinitely and contain no additional personal context.
-    discovery: { ...discoveryContext, pendingSummary: summaryContext },
-    feedback: Array.isArray(input.feedback) ? input.feedback.slice(-20) : [],
-    latestStrategy: input.latestStrategy ? { narrative: input.latestStrategy.narrative, nextAction: input.latestStrategy.nextAction } : undefined };
+  return boundedPersonalPromptContext(personalProfileForRequest(input));
 }
 const reservedTabIds = new Set(['ALL', 'DASHBOARD', 'STRATEGY', 'NOTES', 'HISTORY']);
 function selectClientPeriodTasks(tasks: any[], archive: any[], period: string, clock: { now: string; timeZone: string }) {
@@ -444,7 +480,7 @@ export async function assistHandler(req: any, res: any) {
     // Dynamic AI Client setup
     let ai = getGeminiClient();
     if (customApiKey && typeof customApiKey === "string") {
-      ai = createGeminiClient(customApiKey);
+      ai = geminiClientFor(customApiKey);
     }
 
     // The client sends the complete state as fullAppContext. Accept both formats.
@@ -468,7 +504,9 @@ export async function assistHandler(req: any, res: any) {
     const scheduledPlans = (Array.isArray(suppliedContext.scheduledPlans) ? suppliedContext.scheduledPlans : currentActiveRecords.filter((task: any) => task.scheduledPending)).filter((task: any) => task.scheduledPending && !task.done);
     const mutationTargets = [...effectiveActiveTasks, ...effectiveCompletedTasks, ...scheduledPlans];
     const effectiveDeletedTasks = deletedTasks.length > 0 ? deletedTasks : contextDeletedTasks;
-    const temporalContext = buildTaskTemporalContext(mutationTargets, clientClock, { archivedTasks: selectRelevantArchivedTasks(mutationTargets, effectiveDeletedTasks) });
+    // Deduplicate the archive against every current record, including accidental
+    // ones: an excluded current task must not resurface through an older archive row.
+    const temporalContext = buildTaskTemporalContext(mutationTargets, clientClock, { archivedTasks: selectRelevantArchivedTasks([...currentActiveRecords, ...currentCompletedRecords, ...scheduledPlans], effectiveDeletedTasks) });
     const productivity = workspaceProductivityContext(effectiveActiveTasks, effectiveCompletedTasks, effectiveDeletedTasks, [...currentActiveRecords, ...currentCompletedRecords]);
     const effectiveStats = productivity.stats;
     const effectiveAdaptiveProfile = productivity.adaptiveProfile;
@@ -486,6 +524,15 @@ export async function assistHandler(req: any, res: any) {
     const isTimerRequest = /(?:таймер|секундомір|відлік|timer|stopwatch|countdown)/iu.test(prompt);
     const personalRequest = preparePersonalDiscoveryRequest(personalProfileForRequest(strategyContext), prompt, discoveryConfirmationId);
     const personalProfile = personalRequest.profile;
+    const pendingQuestion = personalProfile ? normalizeStrategyDiscovery(personalProfile).pendingQuestion : undefined;
+    const respondsToCurrentQuestion = pendingQuestion?.turnId && req.body.lastAssistantMessageId === `reply-${pendingQuestion.turnId}`;
+    const hasPendingOperations = isRecord(pendingChanges) && ['tasks', 'tabs', 'taskUpdates', 'taskDeletions'].some(key => Array.isArray(pendingChanges[key]) && pendingChanges[key].length > 0);
+    if (action === 'chat' && intent === 'auto' && /^(?:так|гаразд|добре|погоджуюсь|погоджуюся|підтверджую|yes|ok|okay|agreed|confirm|i agree)[.!\s]*$/iu.test(prompt.trim())
+      && req.body.lastAssistantProposalStatus === 'stale' && !hasPendingOperations && !discoveryConfirmationId && !respondsToCurrentQuestion) {
+      const reply = isUk ? 'Ця пропозиція з попередньої розмови вже неактуальна для застосування. Повторіть, будь ласка, сам запит або назвіть потрібні завдання й дату — я підготую актуальні зміни.'
+        : 'This earlier proposal can no longer be applied. Please repeat the request or name the intended tasks and date so I can prepare current changes.';
+      return res.json({ reply, summary: reply, tasks: [], tabs: [], taskUpdates: [], taskDeletions: [], source: 'stale-proposal-clarification' });
+    }
     const chatRoute = classifyPersonalChatRequest(prompt, intent, mutationTargets, personalProfile, isRecord(pendingChanges) ? pendingChanges : undefined);
     if (action === 'chat' && chatRoute.route === 'task_command' && chatRoute.scope?.operation === 'update' && !chatRoute.scope.taskIds.length
       && /(?:розкладай|розклади|розплануй|сплануй|перенеси|заплануй|reschedule|schedule|move)/iu.test(prompt)
@@ -496,6 +543,14 @@ export async function assistHandler(req: any, res: any) {
     }
     const personalReady = isPersonalStrategyReady(personalProfile);
     const isPersonalDiscovery = chatRoute.route === 'personal' && !personalReady;
+    const detailedTaskIds = [...(chatRoute.scope?.taskIds || []), ...(personalReady && chatRoute.route === 'personal'
+      ? personalProfile.goals.filter(goal => goal.agreed).flatMap(goal => goal.taskIds) : []),
+      ...(personalProfile.latestStrategy?.focusTaskId ? [personalProfile.latestStrategy.focusTaskId] : [])];
+    const chatTemporalContext = { ...temporalContext, tasks: temporalContext.tasks.map(task => detailedTaskIds.includes(task.id!) ? task : {
+      id: task.id, title: task.title, archived: task.archived, done: task.done,
+      statuses: task.statuses, plannedDay: task.plannedDay, deadlineDay: task.deadlineDay, scheduledStart: task.scheduledStart,
+      recordedWorkSeconds: task.recordedWorkSeconds, timerRunning: task.timerRunning,
+    }), evidenceLimits: `${temporalContext.evidenceLimits} Detailed journals are included only for the tasks currently in scope; compact workspace records retain known lifecycle timestamps.` };
 
     if (ai && action === "chat") {
       try {
@@ -504,9 +559,12 @@ export async function assistHandler(req: any, res: any) {
             signal: controller.signal,
             timeoutMs: AI_CHAT_MODEL_TIMEOUT_MS,
             totalTimeoutMs: AI_CHAT_TOTAL_TIMEOUT_MS,
+            fallbackModels: AI_CHAT_FALLBACK_MODELS,
+            maxAttempts: AI_CHAT_MAX_ATTEMPTS,
+            thinking: thinkingFor('discovery'),
             contents: `PERSONAL_DISCOVERY. LANGUAGE: ${isUk ? 'Ukrainian' : 'English'}.
 The person is getting to know their assistant. Understand rather than prescribe. No plan, time blocks, next action, commitments or task operations, including when this message asks for @plan.
-TASK TEMPORAL CONTEXT (recorded facts, not proof of personal motives): ${JSON.stringify(temporalContext)}
+CURRENT CLIENT CLOCK AND TASK COUNTS (not proof of personal motives): ${JSON.stringify({ clock: temporalContext.clock, counts: temporalContext.counts })}
 PERSISTENT PERSONAL CONTEXT (includes the pending question and grounded evidence even beyond recent chat):
 ${JSON.stringify(strategyPromptContext(personalProfile))}
 CURRENT USER MESSAGE: ${JSON.stringify(prompt)}
@@ -531,12 +589,36 @@ Select goal IDs only after the person identifies a direction. Ask ONE adaptive f
             validateResponse: text => validateAssistProposal(JSON.stringify(sanitizeDiscoveryResponse(cleanAndParseJson(text), personalProfile, prompt, textOr(req.body.turnId, textOr(req.body.requestId, 'discovery-preview')), isUk)), 'chat', mutationTargets),
           });
           const parsed = response.validatedResponse;
-          return res.json({ ...parsed, summary: parsed.reply, source: 'gemini-chat', usedModel: response.usedModel, fallbackUsed: response.fallbackUsed, workInsights });
+          logAIMetrics('chat:discovery', response.metrics);
+          return res.json({ ...parsed, summary: parsed.reply, source: 'gemini-chat', usedModel: response.usedModel, fallbackUsed: response.fallbackUsed, workInsights, aiMetrics: response.metrics });
         }
+        // Commands and app help need the current queue, not history analytics.
+        // Sending less context is the main input-side latency saving.
+        const lightweightRoute = chatRoute.route === 'task_command' || chatRoute.route === 'help';
+        const workspaceContext = lightweightRoute ? {
+          scheduledPlans: compactTaskPromptContext(scheduledPlans, { detailTaskIds: detailedTaskIds }),
+          activeTasks: compactTaskPromptContext(effectiveActiveTasks, { detailTaskIds: detailedTaskIds }),
+          completedTasksCount: effectiveStats.completed,
+          completedTasks: compactTaskPromptContext(effectiveCompletedTasks, { detailTaskIds: detailedTaskIds }),
+          availableTabs: tabList,
+          omittedContext: 'History, time statistics and work insights are not included for this request type. If the user needs them, suggest asking for an analysis instead of guessing.',
+        } : {
+          scheduledPlans: compactTaskPromptContext(scheduledPlans, { detailTaskIds: detailedTaskIds }),
+          activeTasks: compactTaskPromptContext(effectiveActiveTasks, { detailTaskIds: detailedTaskIds }),
+          completedTasksCount: effectiveStats.completed,
+          completedTasks: compactTaskPromptContext(effectiveCompletedTasks, { detailTaskIds: detailedTaskIds }),
+          completedHistory: compactTaskPromptContext(productivity.completedHistory),
+          cancelledTasks: compactTaskPromptContext(productivity.cancelledTasks),
+          timeStatistics: productivity.timeStatistics,
+          availableTabs: tabList,
+          stats: effectiveStats,
+          adaptiveProfile: effectiveAdaptiveProfile,
+          workInsights,
+        };
         const chatPrompt = `You are Karkas AI, a thoughtful conversational productivity assistant embedded directly in the user's workspace.
 LANGUAGE: ${isUk ? "Ukrainian" : "English"}.
 CURRENT CLIENT CLOCK (authoritative for relative dates): ${JSON.stringify(clientClock)}.
-TASK TEMPORAL CONTEXT: ${JSON.stringify(temporalContext)}
+TASK TEMPORAL CONTEXT: ${JSON.stringify(chatTemporalContext)}
 CURRENT USER PROMPT: "${prompt}".
 The CURRENT USER PROMPT overrides dates and preferences in old conversation or PENDING UNAPPLIED PROPOSAL. If the user now requests today, do not preserve tomorrow from an earlier proposal. The app has not applied any operations in this response yet; describe only proposals, never claim you already moved, saved or updated tasks.
 MESSAGE INTENT: ${intent}. REQUEST ROUTE: ${chatRoute.route}. CONCRETE COMMAND SCOPE: ${JSON.stringify(chatRoute.scope || null)}. PERSONAL READY (app-derived): ${personalReady}. Plan intent cannot authorize a personal plan without readiness. Ordinary operations must stay within the supplied concrete command scope; ask for an ambiguous target.
@@ -551,48 +633,17 @@ Only for a READY personal request within goals ALREADY agreed in supplied memory
 analysis never authorizes changes. All goal agreement must be based on current user confirmation, not your own strategy status.` : ''}
 When asking a personal clarification, populate strategy.memoryPatch.discovery.question with the question topic and exactly the same single question text. This keeps the active question available even beyond the recent conversation window; a question never replaces the saved strategy or permits task changes.
 RECENT CONVERSATION:
-${JSON.stringify(Array.isArray(conversation) ? conversation.slice(-10) : [], null, 2)}
+${JSON.stringify(Array.isArray(conversation) ? conversation.slice(-10) : [])}
 PENDING UNAPPLIED PROPOSAL:
 ${JSON.stringify(pendingChanges || {})}
 If the user revises this proposal, return the entire revised proposal. If they cancel it, return empty action arrays. Never assume it has been applied; actual application happens via the UI button.
 WORKSPACE CONTEXT:
-${JSON.stringify({
-          scheduledPlans,
-          activeTasks: effectiveActiveTasks.map((t: any) => ({
-            id: t.id,
-            title: t.title,
-            phase: t.phase,
-            priority: t.priority,
-            progress: `${t.currentStep || 0}/${t.steps || 1}`,
-            stepList: t.stepList || [],
-            note: t.note || '',
-            schedule: t.schedule,
-            plannedDate: t.plannedDate,
-            deadlineDate: t.deadlineDate,
-            scheduledPending: t.scheduledPending,
-            timerRunning: !!t.timerRunning,
-            timerMode: t.timerMode ?? (t.countdownDurationSeconds > 0 ? 'countdown' : 'stopwatch'),
-            countdownDurationSeconds: t.countdownDurationSeconds ?? null,
-            countdownRemainingSeconds: t.countdownRemainingSeconds ?? null,
-            timeSpentSeconds: recordedTaskSeconds(t),
-            plannedDurationSeconds: t.plannedDurationSeconds ?? null,
-            done: !!t.done,
-          })),
-          completedTasksCount: effectiveStats.completed,
-          completedTasks: effectiveCompletedTasks,
-          completedHistory: productivity.completedHistory,
-          cancelledTasks: productivity.cancelledTasks,
-          timeStatistics: productivity.timeStatistics,
-          availableTabs: tabList,
-          stats: effectiveStats,
-          adaptiveProfile: effectiveAdaptiveProfile,
-          workInsights,
-        }, null, 2)}
+${JSON.stringify(workspaceContext)}
 
 INSTRUCTIONS:
-${workInsightInstructions}
+${lightweightRoute ? '' : `${workInsightInstructions}
 For time analysis, timeStatistics counts only completed tasks with positive recorded work. Report measurement coverage. Missing readings are unknown, never zero. Recorded time excludes pauses and may omit untracked work; do not infer time from createdAt/completedAt. Countdown duration is the current timer budget, may include extensions, and is not necessarily the original estimate. Recommend time blocks and buffers with uncertainty; an analysis request alone does not authorize task changes.
-1. Provide a natural, concise, empowering conversational "reply".
+`}1. Provide a natural, concise, empowering conversational "reply".
    Make the reply easy to scan: use short paragraphs separated by blank lines, **bold** only for key facts, and numbered or bulleted lists for actual steps. Use a brief heading only for a longer answer. A small, relevant emoji is welcome when helpful, but avoid decoration in every paragraph. Format only the reply string this way; keep task titles and structured fields plain, and return valid JSON with escaped newlines.
 2. For a concrete task command, populate ONLY the requested structured operations within CONCRETE COMMAND SCOPE. Wishes, questions and a personal plan request cannot authorize legacy operations. READY personal autonomous changes use strategy.actions exclusively within agreed goals; never bypass personal readiness with tasks/taskUpdates. Analysis/help are read-only. A clarification returns empty action arrays.
 3. "tasks": New tasks to create. Each task must have:
@@ -611,11 +662,14 @@ For time analysis, timeStatistics counts only completed tasks with positive reco
           signal: controller.signal,
           timeoutMs: AI_CHAT_MODEL_TIMEOUT_MS,
           totalTimeoutMs: AI_CHAT_TOTAL_TIMEOUT_MS,
+          fallbackModels: AI_CHAT_FALLBACK_MODELS,
+          maxAttempts: AI_CHAT_MAX_ATTEMPTS,
+          thinking: thinkingFor(chatRoute.route),
           contents: chatPrompt,
           config: {
             systemInstruction: `${personalGuidanceSystemPolicy}\n${temporalAwarenessSystemPolicy}\nREQUEST ROUTE: ${chatRoute.route}. PERSONAL READY: ${personalReady}. CONCRETE COMMAND SCOPE: ${JSON.stringify(chatRoute.scope || null)}.\n${taskActionInstructions}`,
             responseMimeType: "application/json",
-            responseSchema: {
+            responseSchema: chatResponseSchema(chatRoute.route, {
               type: Type.OBJECT,
               properties: {
                 reply: { type: Type.STRING },
@@ -665,7 +719,7 @@ For time analysis, timeStatistics counts only completed tasks with positive reco
                 strategy: strategySchema,
               },
               required: ["reply"],
-            },
+            }),
           },
           customAi: ai,
           selectedModel,
@@ -691,6 +745,7 @@ For time analysis, timeStatistics counts only completed tasks with positive reco
         });
 
         if (chatResponse?.text) {
+          logAIMetrics(`chat:${chatRoute.route}`, chatResponse.metrics);
           const parsed = guardUnappliedClaims(guardTemporalResponse(chatResponse.validatedResponse, prompt, clientClock, isUk), isUk);
           if (intent === 'analysis') {
             parsed.tasks = []; parsed.taskUpdates = []; parsed.taskDeletions = []; parsed.tabs = [];
@@ -744,6 +799,7 @@ For time analysis, timeStatistics counts only completed tasks with positive reco
             fallbackUsed: chatResponse.fallbackUsed,
             workInsights,
             strategy: parsed.strategy,
+            aiMetrics: chatResponse.metrics,
           });
         }
       } catch (chatError) {
@@ -800,7 +856,7 @@ Return valid JSON adhering to schema.`;
           },
           behavioralProfile: effectiveAdaptiveProfile,
           categoryTabs: tabList,
-          scheduledPlans,
+          scheduledPlans: compactTaskPromptContext(scheduledPlans),
           activeTasks: effectiveActiveTasks.map((t: any) => ({
             id: t.id,
             title: t.title,
@@ -821,9 +877,10 @@ Return valid JSON adhering to schema.`;
             countdownRemainingSeconds: t.countdownRemainingSeconds ?? null,
             done: !!t.done,
           })),
-          completedTasks: effectiveCompletedTasks,
-          completedHistory: productivity.completedHistory,
-          cancelledTasks: productivity.cancelledTasks,
+          // History is compact so the provider does not re-read sync/timer journals on every request.
+          completedTasks: compactTaskPromptContext(effectiveCompletedTasks),
+          completedHistory: compactTaskPromptContext(productivity.completedHistory),
+          cancelledTasks: compactTaskPromptContext(productivity.cancelledTasks),
           timeStatistics: productivity.timeStatistics,
           workInsights,
         };
@@ -833,7 +890,7 @@ Return valid JSON adhering to schema.`;
           contents: `USER REQUEST: "${prompt}".
 ACTION: ${action}.
 WORKSPACE REAL-TIME CONTEXT:
-${JSON.stringify(fullContextPayload, null, 2)}`,
+${JSON.stringify(fullContextPayload)}`,
           config: {
             systemInstruction,
             responseMimeType: "application/json",
@@ -912,10 +969,12 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
           },
           customAi: ai,
           selectedModel: selectedModel,
+          thinking: thinkingFor(isAnalyzeMode ? 'analyze' : 'generate'),
           validateResponse: text => validateAssistProposal(text, action, mutationTargets),
         });
 
         if (response && response.text) {
+          logAIMetrics(`assist:${action}`, response.metrics);
           const parsed = response.validatedResponse;
 
           const existingTabIds = new Set(activeTabIds);
@@ -971,6 +1030,7 @@ ${JSON.stringify(fullContextPayload, null, 2)}`,
             usedModel: response.usedModel,
             fallbackUsed: response.fallbackUsed,
             workInsights,
+            aiMetrics: response.metrics,
           });
         }
       } catch (geminiError) {
@@ -1183,7 +1243,7 @@ export async function breakdownTaskHandler(req: any, res: any) {
     // Dynamic AI Client setup
     let ai = getGeminiClient();
     if (customApiKey && typeof customApiKey === "string") {
-      ai = createGeminiClient(customApiKey);
+      ai = geminiClientFor(customApiKey);
     }
 
     const effectiveAllTasks = (fullAppContext?.activeTasks || allTasks || []).filter((item: any) => !item.done && isLiveProductivityTask(item));
@@ -1198,7 +1258,7 @@ export async function breakdownTaskHandler(req: any, res: any) {
         const systemInstruction = `You are an expert tactical task decomposition engine for the app "Karkas".
 CURRENT CLIENT CLOCK: ${JSON.stringify(clientClock)}.
 ${temporalAwarenessSystemPolicy}
-TASK TEMPORAL CONTEXT: ${JSON.stringify(buildTaskTemporalContext([{ ...task, id: task.id || '__current_task_draft__' }, ...effectiveAllTasks], clientClock))}
+TASK TEMPORAL CONTEXT (this task only; other active titles are listed in APP CONTEXT): ${JSON.stringify(buildTaskTemporalContext([{ ...task, id: task.id || '__current_task_draft__' }], clientClock))}
 Your mission: Break down a single specific task using a lightweight Work Breakdown Structure (WBS) into 2 to 5 concrete, actionable, sequential sub-steps.
 LANGUAGE REQUIREMENT: ${isUk ? "All output (sub-step titles, note, explanation) MUST be in UKRAINIAN." : "All output must be in English."}
 
@@ -1254,6 +1314,7 @@ APP CONTEXT:
           },
           customAi: ai,
           selectedModel: selectedModel,
+          thinking: thinkingFor('breakdown'),
         });
 
         if (response && response.text) {
@@ -1328,7 +1389,7 @@ export async function recommendationsHandler(req: any, res: any) {
     // Dynamic AI Client setup
     let ai = getGeminiClient();
     if (customApiKey && typeof customApiKey === "string") {
-      ai = createGeminiClient(customApiKey);
+      ai = geminiClientFor(customApiKey);
     }
 
     const activeTabIds: string[] = Array.isArray(tabs) && tabs.length > 0
@@ -1338,8 +1399,10 @@ export async function recommendationsHandler(req: any, res: any) {
 
     const tasks = suppliedTasks.filter(isLiveProductivityTask);
     const relevantArchive = selectRelevantArchivedTasks(suppliedTasks, suppliedDeletedTasks);
-    const temporalContext = buildTaskTemporalContext(suppliedTasks, clientClock, { archivedTasks: relevantArchive });
     const periodTasks = selectClientPeriodTasks(tasks, relevantArchive, period, clientClock);
+    // Accidental entries are excluded from AI context, not only from statistics,
+    // and a period report only sees archive rows from that period.
+    const temporalContext = buildTaskTemporalContext(tasks, clientClock, { archivedTasks: [...periodTasks.deletedCompleted, ...periodTasks.droppedInPeriod] });
     const activeTasks = periodTasks.activeInPeriod;
     const completedTasks = [...periodTasks.completedInPeriod, ...periodTasks.deletedCompleted];
     const timeStatistics = summarizeTaskTime(completedTasks);
@@ -1472,6 +1535,7 @@ Language: ${isUk ? "Ukrainian" : "English"}.`,
           },
           customAi: ai,
           selectedModel: selectedModel,
+          thinking: thinkingFor('recommendations'),
         });
 
         if (response && response.text) {
@@ -1650,7 +1714,7 @@ export async function voiceTokenHandler(req: any, res: any) {
     const { customApiKey } = req.body || {};
     let ai = getGeminiClient();
     if (customApiKey && typeof customApiKey === "string") {
-      ai = createGeminiClient(customApiKey);
+      ai = geminiClientFor(customApiKey);
     }
 
     if (!ai) {
@@ -1683,7 +1747,7 @@ export async function transcribeAudioHandler(req: any, res: any) {
 
     let ai = getGeminiClient();
     if (customApiKey && typeof customApiKey === "string") {
-      ai = createGeminiClient(customApiKey);
+      ai = geminiClientFor(customApiKey);
     }
 
     if (!ai) {
@@ -1727,12 +1791,13 @@ export async function transcribeAudioHandler(req: any, res: any) {
     // Batch transcription deliberately uses fast, broadly available models and
     // does not inherit the chat model selected by the user.
     const response = await generateGeminiWithFallback({
-      ai, selectedModel: 'gemini-2.5-flash', fallbackModels: ['gemini-flash-latest'],
+      ai, selectedModel: 'gemini-3.1-flash-lite', fallbackModels: ['gemini-flash-latest', 'gemini-2.5-flash'],
       allowEmptyText: true, timeoutMs: 15_000, totalTimeoutMs: 30_000, signal: controller.signal,
+      thinking: thinkingFor('transcription'),
       contents: [{ role: 'user', parts: [
         { inlineData: { mimeType: cleanMime, data: cleanBase64 } }, { text: prompt },
       ] }],
-      config: { temperature: 0.1, thinkingConfig: { thinkingBudget: 0 } },
+      config: { temperature: 0.1 },
     });
     const transcription = response.text.trim();
 

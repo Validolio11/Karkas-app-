@@ -637,7 +637,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
 
     if (!requestText) return;
     if (requestInFlight.current) return;
-    const latestAssistantMessage = [...chatMessages].reverse().find(message => message.role === 'assistant');
+    const latestAssistantMessage = [...chatMessages].reverse().find(message => message.role === 'assistant' && message.id !== `reply-${currentRequest.turnId}`);
     const currentQuestion = strategyProfile?.discovery?.pendingQuestion;
     const questionResumeId = currentQuestion ? `discovery-resume-${currentQuestion.id}` : '';
     const discoveryHasQuestion = !!currentQuestion && !!latestAssistantMessage && (
@@ -818,6 +818,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
           messageId: currentRequest.turnId,
           requestId: currentRequest.turnId,
           discoveryConfirmationId: currentRequest.discoveryConfirmationId,
+          lastAssistantProposalStatus: latestAssistantMessage?.proposalStatus,
+          lastAssistantMessageId: latestAssistantMessage?.id,
           turnId: currentRequest.turnId,
           lang,
           tabs: tabs.map((tb) => tb.id),
@@ -891,7 +893,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       });
       const rawData: unknown = await res.json().catch(() => { throw new AIRequestError('INVALID_RESPONSE'); });
       if (assistController.current !== controller) return;
-      if (controller.signal.aborted) throw new AIRequestError(timedOut ? 'TIMEOUT' : 'CANCELLED');
+      if (controller.signal.aborted) throw new AIRequestError(timedOut ? 'CLIENT_TIMEOUT' : 'CANCELLED');
       if (!res.ok) throw responseRequestError(rawData, res.status);
       const data = readAIResponse(rawData, 'chat');
       activeRequest.current = null;
@@ -929,7 +931,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       sound.activate();
     } catch (err) {
       if (assistController.current !== controller) return;
-      const error = controller.signal.aborted ? new AIRequestError(timedOut ? 'TIMEOUT' : 'CANCELLED') : err;
+      const error = controller.signal.aborted ? new AIRequestError(timedOut ? 'CLIENT_TIMEOUT' : 'CANCELLED') : err;
       setRequestError(aiRequestErrorMessage(error, lang));
       setRecoverableRequest(currentRequest);
       setPrompt(previous => preservedRequestDraftRef.current ?? previous);

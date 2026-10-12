@@ -17,7 +17,7 @@ function shiftedDay(today: string, offset: number): string {
 }
 
 function explicitDates(text: string): string[] {
-  const dates = text.match(/\b\d{4}-\d{2}-\d{2}\b/g) || [];
+  const dates: string[] = [...(text.match(/\b\d{4}-\d{2}-\d{2}\b/g) || [])];
   for (const match of text.matchAll(/\b(\d{1,2})[./](\d{1,2})[./](\d{4})\b/g)) {
     dates.push(`${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`);
   }

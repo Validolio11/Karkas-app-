@@ -15,8 +15,13 @@ const statusByCode: Record<AIRequestCode, number> = {
   INVALID_AI_RESPONSE: 502, INVALID_AI_REQUEST: 502,
 };
 
+export interface AIRequestDiagnostics {
+  attempts: { model: string; code: AIRequestCode; elapsedMs: number }[];
+  elapsedMs: number;
+}
+
 export class AIRequestError extends Error {
-  constructor(public code: AIRequestCode) {
+  constructor(public code: AIRequestCode, public diagnostics?: AIRequestDiagnostics) {
     super(code);
     this.name = 'AIRequestError';
   }
@@ -73,32 +78,140 @@ export function aiRequestFailure(error: AIRequestError, isUk: boolean) {
     status: statusByCode[error.code],
     body: {
       code: error.code, error: `${messages[error.code][isUk ? 0 : 1]} ${isUk ? 'Зміни не підготовлено й не застосовано.' : 'No changes were prepared or applied.'}`,
+      ...(error.diagnostics ? { diagnostics: error.diagnostics } : {}),
       tasks: [], tabs: [], taskUpdates: [], taskDeletions: [], source: 'ai-error',
     },
   };
 }
 
+/**
+ * How much a model may reason before answering. Speed-sensitive commands use the
+ * smallest level every target model accepts; subtle memory/analysis keeps more.
+ * 'default' leaves the provider default untouched.
+ */
+export type AIThinkingEffort = 'minimal' | 'low' | 'medium' | 'default';
+
+/**
+ * Gemini 3.x accepts thinkingLevel; Gemini 2.5 accepts thinkingBudget. Some 3.x
+ * Flash models (3.7/3.8) reject MINIMAL with HTTP 400, so Flash never receives
+ * it. Flash-Lite already defaults to MINIMAL, so "low" must not raise it.
+ * Unknown models keep their provider default rather than risk a 400.
+ */
+export function thinkingConfigForModel(model: string, effort: AIThinkingEffort = 'default'): Record<string, unknown> | undefined {
+  if (effort === 'default') return undefined;
+  const id = model.trim().toLowerCase().replace(/^models\//, '');
+  const legacy = /^gemini-2\.5-(flash-lite|flash|pro)(?![a-z])/.exec(id);
+  if (legacy) {
+    const budgets: Record<string, Record<'minimal' | 'low' | 'medium', number>> = {
+      'flash-lite': { minimal: 0, low: 0, medium: 1024 },
+      flash: { minimal: 0, low: 512, medium: 2048 },
+      pro: { minimal: 128, low: 512, medium: 2048 }, // 2.5 Pro cannot disable thinking.
+    };
+    return { thinkingBudget: budgets[legacy[1]][effort] };
+  }
+  const isLite = /^gemini-(?:[3-9]|\d{2,})(?:\.\d+)?-flash-lite(?![a-z])/.test(id) || id === 'gemini-flash-lite-latest';
+  if (isLite) return { thinkingLevel: effort === 'medium' ? 'LOW' : 'MINIMAL' };
+  const isCurrent = /^gemini-(?:[3-9]|\d{2,})(?:\.\d+)?-(?:flash|pro)(?![a-z-]*lite)/.test(id) || id === 'gemini-flash-latest' || id === 'gemini-pro-latest';
+  if (isCurrent) return { thinkingLevel: effort === 'medium' ? 'MEDIUM' : 'LOW' };
+  return undefined;
+}
+
+export interface AIGenerationMetrics {
+  model: string;
+  elapsedMs: number;
+  attempts: number;
+  thinking: string;
+  promptTokens?: number;
+  cachedTokens?: number;
+  outputTokens?: number;
+  thoughtsTokens?: number;
+}
+
+// Free-tier quotas are per project and per model. A model that just answered 429
+// (or does not exist for this key) is tried last until its cooldown expires, so
+// later requests do not wait on a request that is known to fail.
+const QUOTA_COOLDOWN_MS = 60_000;
+const MAX_QUOTA_COOLDOWN_MS = 15 * 60_000;
+const UNAVAILABLE_COOLDOWN_MS = 10 * 60_000;
+let modelCooldowns = new WeakMap<object, Map<string, number>>();
+// Models that rejected an explicit thinking setting keep their provider default.
+const thinkingRejectedModels = new Set<string>();
+
+function providerRetryDelayMs(error: any): number | undefined {
+  let details: any = error?.error;
+  if (!details && typeof error?.message === 'string') {
+    try { details = JSON.parse(error.message)?.error; } catch { /* not JSON */ }
+  }
+  const entries = Array.isArray(details?.details) ? details.details : [];
+  for (const entry of entries) {
+    const match = typeof entry?.retryDelay === 'string' ? /^(\d+(?:\.\d+)?)s$/.exec(entry.retryDelay) : null;
+    if (match) return Math.round(Number(match[1]) * 1000);
+  }
+  return undefined;
+}
+
+/** Only a 400 about the thinking setting itself justifies a retry without it. */
+function mentionsThinking(error: any): boolean {
+  let details: any = error?.error;
+  if (!details && typeof error?.message === 'string') {
+    try { details = JSON.parse(error.message)?.error; } catch { /* not JSON */ }
+  }
+  return /thinking/i.test(String(details?.message ?? error?.message ?? ''));
+}
+
+function cooldownsFor(ai: object) {
+  let map = modelCooldowns.get(ai);
+  if (!map) { map = new Map(); modelCooldowns.set(ai, map); }
+  return map;
+}
+
+/** Test hook: forget remembered quota/availability state. */
+export function resetModelHealthForTests() {
+  thinkingRejectedModels.clear();
+  modelCooldowns = new WeakMap();
+}
+
 /** Bound the whole operation and cancel transport before trying a distinct fallback. */
 export async function generateGeminiWithFallback({
   ai, contents, config, selectedModel, validateResponse, timeoutMs = 15_000, totalTimeoutMs = 30_000,
-  fallbackModels, allowEmptyText = false, signal,
+  fallbackModels, maxAttempts, allowEmptyText = false, signal, thinking = 'default',
 }: {
   ai: GoogleGenAI; contents: Parameters<GoogleGenAI['models']['generateContent']>[0]['contents']; config: any; selectedModel?: string;
   validateResponse?: (text: string) => unknown;
   timeoutMs?: number; totalTimeoutMs?: number;
-  fallbackModels?: string[]; allowEmptyText?: boolean;
+  fallbackModels?: string[]; maxAttempts?: number; allowEmptyText?: boolean;
   signal?: AbortSignal;
+  thinking?: AIThinkingEffort;
 }) {
   signal?.throwIfAborted();
   const selected = typeof selectedModel === 'string' ? selectedModel.trim().replace(/^models\//, '') : '';
-  const models = [...new Set([selected, ...(fallbackModels ?? ['gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-flash-latest'])].filter(Boolean))];
-  const deadline = Date.now() + totalTimeoutMs;
+  const distinctModels = [...new Set([selected, ...(fallbackModels ?? ['gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-2.5-flash'])].filter(Boolean))];
+  const attemptLimit = typeof maxAttempts === 'number' && Number.isFinite(maxAttempts) && maxAttempts >= 1
+    ? Math.floor(maxAttempts) : distinctModels.length;
+  const cooldowns = cooldownsFor(ai);
+  const nowMs = Date.now();
+  const cooling = (model: string) => (cooldowns.get(model) ?? 0) > nowMs;
+  // Stable partition: healthy models keep their order, cooling models go last.
+  const ordered = [...distinctModels.filter(model => !cooling(model)), ...distinctModels.filter(cooling)];
+  const queue = ordered.slice(0, attemptLimit).map(model => ({ model, applyThinking: !config?.thinkingConfig && !thinkingRejectedModels.has(model), thinkingRetry: false }));
+  const firstModel = queue[0]?.model;
+  // Deadline accounting must survive a wall-clock correction during the request.
+  const startedAt = performance.now();
+  const deadline = startedAt + totalTimeoutMs;
+  const attempts: AIRequestDiagnostics['attempts'] = [];
+  const withDiagnostics = (failure: AIRequestError) => new AIRequestError(failure.code, {
+    attempts: attempts.map(attempt => ({ ...attempt })),
+    elapsedMs: Math.round(performance.now() - startedAt),
+  });
   let lastError = new AIRequestError('MODEL_UNAVAILABLE');
-  for (const model of models) {
+  for (let index = 0; index < queue.length; index++) {
+    const { model, applyThinking, thinkingRetry } = queue[index];
     signal?.throwIfAborted();
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) throw new AIRequestError('TIMEOUT');
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) throw withDiagnostics(new AIRequestError('TIMEOUT'));
     const attemptMs = Math.min(timeoutMs, remaining);
+    const attemptStartedAt = performance.now();
+    const thinkingConfig = applyThinking ? thinkingConfigForModel(model, thinking) : undefined;
     const controller = new AbortController();
     let cancelAttempt: (() => void) | undefined;
     const cancelled = new Promise<never>((_, reject) => {
@@ -121,7 +234,7 @@ export async function generateGeminiWithFallback({
         ai.models.generateContent({
           model, contents,
           config: {
-            ...config, abortSignal: controller.signal,
+            ...config, ...(thinkingConfig ? { thinkingConfig } : {}), abortSignal: controller.signal,
             httpOptions: { ...config?.httpOptions, timeout: attemptMs, retryOptions: { attempts: 1 } },
           },
         }),
@@ -135,23 +248,53 @@ export async function generateGeminiWithFallback({
         try { validatedResponse = validateResponse(responseText); }
         catch { throw new AIRequestError('INVALID_AI_RESPONSE'); }
       }
-      return { ...response, text: responseText, usedModel: model, fallbackUsed: model !== models[0], validatedResponse };
+      cooldowns.delete(model);
+      // Remember only when the same request succeeded without the thinking setting.
+      if (thinkingRetry) thinkingRejectedModels.add(model);
+      const usage: any = (response as any)?.usageMetadata;
+      const count = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+      const metrics: AIGenerationMetrics = {
+        model, attempts: attempts.length + 1,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        thinking: thinkingConfig ? String(thinkingConfig.thinkingLevel ?? `budget:${thinkingConfig.thinkingBudget}`) : 'provider-default',
+        ...(count(usage?.promptTokenCount) !== undefined ? { promptTokens: count(usage.promptTokenCount) } : {}),
+        ...(count(usage?.cachedContentTokenCount) !== undefined ? { cachedTokens: count(usage.cachedContentTokenCount) } : {}),
+        ...(count(usage?.candidatesTokenCount) !== undefined ? { outputTokens: count(usage.candidatesTokenCount) } : {}),
+        ...(count(usage?.thoughtsTokenCount) !== undefined ? { thoughtsTokens: count(usage.thoughtsTokenCount) } : {}),
+      };
+      return { ...response, text: responseText, usedModel: model, fallbackUsed: model !== firstModel, validatedResponse, metrics };
     } catch (error) {
       // Cancelling the parent request must never start another provider attempt.
       if (signal?.aborted) throw signal.reason ?? error;
       const failure = classifyAIRequestError(error);
+      // Only model IDs and error categories are returned. Provider error text,
+      // API keys and the person's message are never part of diagnostics.
+      attempts.push({ model: /^[a-z0-9._-]{1,100}$/i.test(model) ? model : 'custom-model',
+        code: failure.code, elapsedMs: Math.round(performance.now() - attemptStartedAt) });
+      if (failure.code === 'QUOTA_EXCEEDED') {
+        const delay = Math.min(MAX_QUOTA_COOLDOWN_MS, Math.max(QUOTA_COOLDOWN_MS, providerRetryDelayMs(error) ?? 0));
+        cooldowns.set(model, Date.now() + delay);
+      } else if (failure.code === 'MODEL_UNAVAILABLE') {
+        cooldowns.set(model, Date.now() + UNAVAILABLE_COOLDOWN_MS);
+      }
+      // A model that rejects our thinking setting gets one immediate retry with
+      // its provider default instead of failing the whole request.
+      if (failure.code === 'INVALID_AI_REQUEST' && thinkingConfig && mentionsThinking(error)) {
+        queue.splice(index + 1, 0, { model, applyThinking: false, thinkingRetry: true });
+        continue;
+      }
       // This attempt was allotted the entire remaining operation budget. A transport
-      // timeout can fire fractionally before Date.now reaches the deadline; do not
+      // timeout can fire fractionally before the clock reaches the deadline; do not
       // spend that rounding remainder on another fallback request.
-      if (failure.code === 'TIMEOUT' && attemptMs === remaining) throw failure;
+      if (failure.code === 'TIMEOUT' && attemptMs === remaining) throw withDiagnostics(failure);
       if (failure.code !== 'MODEL_UNAVAILABLE' || lastError.code === 'MODEL_UNAVAILABLE') lastError = failure;
       // Invalid structured output may recover on another model; credentials and request errors cannot.
       if (['INVALID_API_KEY', 'ACCESS_DENIED', 'INVALID_AI_REQUEST', 'INTERNAL_ERROR'].includes(failure.code) ||
-          failure.code === 'PROVIDER_ERROR' && Number((error as any)?.status) < 500) throw failure;
+          failure.code === 'PROVIDER_ERROR' && Number((error as any)?.status) < 500) throw withDiagnostics(failure);
     } finally {
       clearTimeout(timer!);
       if (cancelAttempt) signal?.removeEventListener('abort', cancelAttempt);
     }
   }
-  throw lastError;
+  throw withDiagnostics(lastError);
 }

@@ -34,11 +34,13 @@ export function loadAIChatHistory(accountId?: string | null): PersistedAIChatMes
       .map(message => {
         let response: AIResponse | undefined;
         try { if (message.response && message.role === 'assistant') response = readAIResponse(message.response, 'chat'); } catch { /* Preserve the conversation even if an old card is malformed. */ }
+        const hasProposal = response && ([response.tasks, response.tabs, response.taskUpdates, response.taskDeletions, response.strategy?.actions].some(actions => (actions?.length || 0) > 0)
+          || message.proposalStatus === 'pending' || message.proposalStatus === 'applied');
         return {
           role: message.role, content: message.content,
           ...(typeof message.sentAt === 'number' && Number.isFinite(message.sentAt) && message.sentAt > 0 && message.sentAt <= 8640000000000000 ? { sentAt: message.sentAt } : {}),
           ...(typeof message.id === 'string' ? { id: message.id } : {}),
-          ...(response ? { response, proposalStatus: message.proposalStatus === 'applied' ? 'applied' as const : 'stale' as const } : {}),
+          ...(response ? { response, ...(hasProposal ? { proposalStatus: message.proposalStatus === 'applied' ? 'applied' as const : 'stale' as const } : {}) } : {}),
           ...(typeof message.actionId === 'string' ? { actionId: message.actionId } : {}),
           ...(typeof message.notice === 'string' ? { notice: message.notice } : {}),
           ...(message.greeting === true ? { greeting: true } : {}),

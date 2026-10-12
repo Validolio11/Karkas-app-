@@ -74,16 +74,22 @@ export function appendChatRequest<T extends { role: 'user' | 'assistant'; conten
   return last?.role === 'user' && last.content === text ? messages : [...messages, { role: 'user', content: text }];
 }
 
-export type AIRequestErrorCode = 'INVALID_API_KEY' | 'ACCESS_DENIED' | 'QUOTA_EXCEEDED' | 'MODEL_UNAVAILABLE' | 'INVALID_REQUEST' | 'INVALID_AI_REQUEST' | 'NETWORK_ERROR' | 'TIMEOUT' | 'PROVIDER_ERROR' | 'MISSING_API_KEY' | 'INVALID_RESPONSE' | 'CANCELLED';
-const knownCodes: AIRequestErrorCode[] = ['INVALID_API_KEY', 'ACCESS_DENIED', 'QUOTA_EXCEEDED', 'MODEL_UNAVAILABLE', 'INVALID_REQUEST', 'INVALID_AI_REQUEST', 'NETWORK_ERROR', 'TIMEOUT', 'PROVIDER_ERROR', 'MISSING_API_KEY', 'INVALID_RESPONSE', 'CANCELLED'];
+export type AIRequestErrorCode = 'INVALID_API_KEY' | 'ACCESS_DENIED' | 'QUOTA_EXCEEDED' | 'MODEL_UNAVAILABLE' | 'INVALID_REQUEST' | 'INVALID_AI_REQUEST' | 'NETWORK_ERROR' | 'TIMEOUT' | 'PROVIDER_ERROR' | 'PROVIDER_UNAVAILABLE' | 'INTERNAL_ERROR' | 'MISSING_API_KEY' | 'INVALID_RESPONSE' | 'CANCELLED';
+const knownCodes: AIRequestErrorCode[] = ['INVALID_API_KEY', 'ACCESS_DENIED', 'QUOTA_EXCEEDED', 'MODEL_UNAVAILABLE', 'INVALID_REQUEST', 'INVALID_AI_REQUEST', 'NETWORK_ERROR', 'TIMEOUT', 'PROVIDER_ERROR', 'PROVIDER_UNAVAILABLE', 'INTERNAL_ERROR', 'MISSING_API_KEY', 'INVALID_RESPONSE', 'CANCELLED'];
 export class AIRequestError extends Error {
   constructor(public readonly code: AIRequestErrorCode) { super(code); this.name = 'AIRequestError'; }
 }
 
 export function responseRequestError(data: unknown, status: number): AIRequestError {
   const code = data && typeof data === 'object' && 'code' in data ? data.code : null;
-  return new AIRequestError(code === 'INVALID_AI_RESPONSE' ? 'INVALID_RESPONSE' : knownCodes.includes(code as AIRequestErrorCode) ? code as AIRequestErrorCode
-    : status === 429 ? 'QUOTA_EXCEEDED' : status === 401 ? 'INVALID_API_KEY' : status === 403 ? 'ACCESS_DENIED' : 'PROVIDER_ERROR');
+  if (code === 'INVALID_AI_RESPONSE') return new AIRequestError('INVALID_RESPONSE');
+  if (knownCodes.includes(code as AIRequestErrorCode)) return new AIRequestError(code as AIRequestErrorCode);
+  // Native transport failures are not evidence that Google is unavailable.
+  if (code === 'DESKTOP_ERROR' || code === 'UNTRUSTED_SENDER') return new AIRequestError('INTERNAL_ERROR');
+  return new AIRequestError(status === 429 ? 'QUOTA_EXCEEDED' : status === 401 ? 'INVALID_API_KEY'
+    : status === 403 ? 'ACCESS_DENIED' : status === 408 || status === 504 ? 'TIMEOUT'
+      : status === 400 || status === 413 || status === 422 ? 'INVALID_REQUEST'
+        : status === 503 ? 'PROVIDER_UNAVAILABLE' : status >= 500 ? 'PROVIDER_ERROR' : 'INTERNAL_ERROR');
 }
 
 export function readAIResponse(value: unknown, mode: AIMode): AIResponse & { usedModel?: string; fallbackUsed?: boolean } {
@@ -166,12 +172,19 @@ const errorMessages: Record<AIRequestErrorCode, { uk: string; en: string }> = {
   INVALID_AI_REQUEST: { uk: 'Сервіс AI відхилив запит додатка. Повторіть пізніше; якщо помилка повторюється, оновіть додаток.', en: 'The AI service rejected the app request. Retry later; if this continues, update the app.' },
   NETWORK_ERROR: { uk: 'Не вдалося з’єднатися з AI. Перевірте інтернет і повторіть запит.', en: 'Could not connect to AI. Check your connection and retry.' },
   TIMEOUT: { uk: 'AI не відповів вчасно. Спробуйте ще раз або виберіть іншу модель.', en: 'AI did not respond in time. Retry or select another model.' },
-  PROVIDER_ERROR: { uk: 'Сервіс AI зараз недоступний. Спробуйте повторити запит пізніше.', en: 'The AI service is unavailable. Retry later.' },
+  PROVIDER_ERROR: { uk: 'Google не зміг виконати запит до AI. Повторіть запит пізніше або виберіть іншу модель.', en: 'Google could not complete the AI request. Retry later or select another model.' },
+  PROVIDER_UNAVAILABLE: { uk: 'Google повідомив, що AI тимчасово недоступний. Зачекайте й повторіть запит або виберіть іншу модель.', en: 'Google reported that AI is temporarily unavailable. Wait and retry or select another model.' },
+  INTERNAL_ERROR: { uk: 'Додаток не зміг обробити AI-запит. Повторіть запит; якщо помилка повторюється, повідомте про неї.', en: 'The app could not process the AI request. Retry; if this continues, report the problem.' },
   INVALID_RESPONSE: { uk: 'AI не зміг підготувати коректну відповідь. Повторіть запит або виберіть іншу модель.', en: 'AI could not prepare a valid response. Retry the request or select another model.' },
   CANCELLED: { uk: 'Запит перервано. Його збережено, щоб ви могли продовжити.', en: 'The request was interrupted and saved so you can continue.' },
 };
 export function aiRequestErrorMessage(error: unknown, lang: 'uk' | 'en'): string {
-  const code = error instanceof AIRequestError ? error.code : 'NETWORK_ERROR';
+  const name = error instanceof Error ? error.name : '';
+  const message = error instanceof Error ? error.message : '';
+  const code: AIRequestErrorCode = error instanceof AIRequestError ? error.code
+    : name === 'AbortError' ? 'CANCELLED' : name === 'TimeoutError' ? 'TIMEOUT'
+      : name === 'NetworkError' || /failed to fetch|fetch failed|network(?:error| error| request failed)|load failed|ENOTFOUND|ECONNRESET|ECONNREFUSED|EAI_AGAIN/i.test(message)
+        ? 'NETWORK_ERROR' : 'INTERNAL_ERROR';
   return `${errorMessages[code][lang]} ${lang === 'uk' ? 'Зміни до завдань не застосовано.' : 'No task changes were applied.'}`;
 }
 

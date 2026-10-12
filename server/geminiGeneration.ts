@@ -6,12 +6,13 @@ export const createGeminiClient = (apiKey: string) => new GoogleGenAI({
 
 export type AIRequestCode = 'MISSING_API_KEY' | 'INVALID_API_KEY' | 'ACCESS_DENIED'
   | 'QUOTA_EXCEEDED' | 'NETWORK_ERROR' | 'TIMEOUT' | 'MODEL_UNAVAILABLE'
-  | 'PROVIDER_ERROR' | 'INVALID_AI_RESPONSE' | 'INVALID_AI_REQUEST';
+  | 'PROVIDER_ERROR' | 'PROVIDER_UNAVAILABLE' | 'INTERNAL_ERROR' | 'INVALID_AI_RESPONSE' | 'INVALID_AI_REQUEST';
 
 const statusByCode: Record<AIRequestCode, number> = {
   MISSING_API_KEY: 503, INVALID_API_KEY: 401, ACCESS_DENIED: 403,
   QUOTA_EXCEEDED: 429, NETWORK_ERROR: 503, TIMEOUT: 504,
-  MODEL_UNAVAILABLE: 503, PROVIDER_ERROR: 502, INVALID_AI_RESPONSE: 502, INVALID_AI_REQUEST: 502,
+  MODEL_UNAVAILABLE: 503, PROVIDER_ERROR: 502, PROVIDER_UNAVAILABLE: 503, INTERNAL_ERROR: 500,
+  INVALID_AI_RESPONSE: 502, INVALID_AI_REQUEST: 502,
 };
 
 export class AIRequestError extends Error {
@@ -28,19 +29,29 @@ export function classifyAIRequestError(error: any): AIRequestError {
   if (!details && typeof error?.message === 'string') {
     try { details = JSON.parse(error.message)?.error; } catch { /* SDK/network errors need not be JSON. */ }
   }
-  const status = Number(error?.status ?? details?.code);
+  // SDK errors use numeric status; structured Google errors may use a symbolic
+  // status with a numeric code. Do not lose that code by converting UNAVAILABLE.
+  const numericStatus = error?.status === undefined || error?.status === null ? NaN : Number(error.status);
+  const status = Number.isFinite(numericStatus) ? numericStatus : Number(details?.code ?? error?.code);
+  const providerStatus = details?.status ?? (typeof error?.status === 'string' ? error.status : undefined);
   const message = String(details?.message ?? error?.message ?? '');
   const reasons = Array.isArray(details?.details) ? details.details.map((entry: any) => entry?.reason) : [];
-  if (status === 401 || details?.status === 'UNAUTHENTICATED' ||
+  if (status === 401 || providerStatus === 'UNAUTHENTICATED' ||
       reasons.some((reason: string) => ['API_KEY_INVALID', 'API_KEY_EXPIRED', 'API_KEY_NOT_FOUND'].includes(reason)) ||
       status === 400 && /api key (not valid|is invalid|expired)/i.test(message)) return new AIRequestError('INVALID_API_KEY');
-  if (status === 403 || details?.status === 'PERMISSION_DENIED') return new AIRequestError('ACCESS_DENIED');
-  if (status === 429 || details?.status === 'RESOURCE_EXHAUSTED') return new AIRequestError('QUOTA_EXCEEDED');
-  if (status === 404 || details?.status === 'NOT_FOUND') return new AIRequestError('MODEL_UNAVAILABLE');
-  if (status === 400 || details?.status === 'INVALID_ARGUMENT') return new AIRequestError('INVALID_AI_REQUEST');
-  if (error?.name === 'AbortError' || error?.name === 'TimeoutError' || status === 408 || status === 504 || /timed? ?out|timeout/i.test(message)) return new AIRequestError('TIMEOUT');
-  if (error instanceof TypeError || /fetch failed|network|ENOTFOUND|ECONNRESET|ECONNREFUSED|EAI_AGAIN/i.test(message)) return new AIRequestError('NETWORK_ERROR');
-  return new AIRequestError('PROVIDER_ERROR');
+  if (status === 403 || providerStatus === 'PERMISSION_DENIED') return new AIRequestError('ACCESS_DENIED');
+  if (status === 429 || providerStatus === 'RESOURCE_EXHAUSTED') return new AIRequestError('QUOTA_EXCEEDED');
+  if (status === 404 || providerStatus === 'NOT_FOUND') return new AIRequestError('MODEL_UNAVAILABLE');
+  if (status === 400 || providerStatus === 'INVALID_ARGUMENT') return new AIRequestError('INVALID_AI_REQUEST');
+  const networkCode = String(error?.cause?.code ?? error?.code ?? '');
+  if (error?.name === 'AbortError' || error?.name === 'TimeoutError' || status === 408 || status === 504 || /timed? ?out|timeout/i.test(message)
+      || /^(ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT)$/.test(networkCode)) return new AIRequestError('TIMEOUT');
+  if (/fetch failed|failed to fetch|network|ENOTFOUND|ECONNRESET|ECONNREFUSED|EAI_AGAIN/i.test(message)
+      || /^(ENOTFOUND|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH)$/.test(networkCode)) return new AIRequestError('NETWORK_ERROR');
+  if (status === 503 || providerStatus === 'UNAVAILABLE') return new AIRequestError('PROVIDER_UNAVAILABLE');
+  if (status >= 400 && status < 600 || providerStatus === 'INTERNAL' || providerStatus === 'UNKNOWN') return new AIRequestError('PROVIDER_ERROR');
+  // A programmer error (including TypeError) is not evidence that Google is down.
+  return new AIRequestError('INTERNAL_ERROR');
 }
 
 export function aiRequestFailure(error: AIRequestError, isUk: boolean) {
@@ -53,6 +64,8 @@ export function aiRequestFailure(error: AIRequestError, isUk: boolean) {
     TIMEOUT: ['Google не відповів вчасно. Повторіть запит або виберіть іншу модель.', 'Google did not respond in time. Retry or select another model.'],
     MODEL_UNAVAILABLE: ['Вибрана модель і резервні моделі недоступні. Оновіть список моделей у налаштуваннях AI й повторіть запит.', 'The selected and fallback models are unavailable. Refresh the model list in AI settings and retry.'],
     PROVIDER_ERROR: ['Google не зміг виконати запит до AI. Повторіть запит пізніше або виберіть іншу модель.', 'Google could not complete the AI request. Retry later or select another model.'],
+    PROVIDER_UNAVAILABLE: ['Google тимчасово не може обробити запит до AI. Повторіть пізніше або виберіть іншу модель.', 'Google is temporarily unable to process the AI request. Retry later or select another model.'],
+    INTERNAL_ERROR: ['Додаток не зміг обробити запит до AI. Повторіть запит; якщо помилка повторюється, оновіть додаток.', 'The app could not process the AI request. Retry; if this continues, update the app.'],
     INVALID_AI_RESPONSE: ['AI повернув некоректну відповідь. Уточніть запит і спробуйте ще раз.', 'AI returned an invalid response. Clarify the request and retry.'],
     INVALID_AI_REQUEST: ['Сервіс AI відхилив запит додатка. Повторіть пізніше; якщо помилка повторюється, оновіть додаток.', 'The AI service rejected the app request. Retry later; if the error persists, update the app.'],
   };
@@ -133,7 +146,7 @@ export async function generateGeminiWithFallback({
       if (failure.code === 'TIMEOUT' && attemptMs === remaining) throw failure;
       if (failure.code !== 'MODEL_UNAVAILABLE' || lastError.code === 'MODEL_UNAVAILABLE') lastError = failure;
       // Invalid structured output may recover on another model; credentials and request errors cannot.
-      if (['INVALID_API_KEY', 'ACCESS_DENIED', 'INVALID_AI_REQUEST'].includes(failure.code) ||
+      if (['INVALID_API_KEY', 'ACCESS_DENIED', 'INVALID_AI_REQUEST', 'INTERNAL_ERROR'].includes(failure.code) ||
           failure.code === 'PROVIDER_ERROR' && Number((error as any)?.status) < 500) throw failure;
     } finally {
       clearTimeout(timer!);

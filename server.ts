@@ -13,6 +13,8 @@ import { normalizeStrategyDiscovery, isPersonalStrategyReady, preparePersonalDis
 import { classifyPersonalChatRequest, constrainOrdinaryChatResponse, constrainReadyPersonalResponse, personalGuidanceSystemPolicy, personalProfileForRequest, sanitizeDiscoveryResponse } from './server/strategyDiscovery';
 import { AI_CHAT_MODEL_TIMEOUT_MS, AI_CHAT_TOTAL_TIMEOUT_MS } from './src/utils/aiChatTiming';
 import { buildTaskTemporalContext, temporalAwarenessSystemPolicy } from './src/utils/taskTemporalContext';
+import { currentClockReply } from './server/clockReply';
+import { guardTemporalResponse, guardUnappliedClaims } from './server/temporalResponseGuard';
 
 import { MAX_AUTONOMOUS_STRATEGY_ACTIONS } from './src/utils/strategyLimits';
 import { parseAIRecommendation } from './src/utils/aiRecommendations';
@@ -425,6 +427,8 @@ export async function assistHandler(req: any, res: any) {
 
     const clientClock = schedulingClockContext(req.body.clientClock);
     const isUk = lang === "uk" || /[а-яіїєґ]/i.test(prompt);
+    const clockReply = action === 'chat' && intent === 'auto' ? currentClockReply(prompt, clientClock, isUk) : null;
+    if (clockReply) return res.json({ reply: clockReply, summary: clockReply, tasks: [], tabs: [], taskUpdates: [], taskDeletions: [], source: 'client-clock' });
     const normalizedPrompt = prompt.trim().toLowerCase().replace(/[!?.,]/g, "");
     const isSimpleGreeting = /^(привіт|вітаю|добрий день|доброго ранку|добрий вечір|hello|hi|hey)$/.test(normalizedPrompt);
 
@@ -483,6 +487,13 @@ export async function assistHandler(req: any, res: any) {
     const personalRequest = preparePersonalDiscoveryRequest(personalProfileForRequest(strategyContext), prompt, discoveryConfirmationId);
     const personalProfile = personalRequest.profile;
     const chatRoute = classifyPersonalChatRequest(prompt, intent, mutationTargets, personalProfile, isRecord(pendingChanges) ? pendingChanges : undefined);
+    if (action === 'chat' && chatRoute.route === 'task_command' && chatRoute.scope?.operation === 'update' && !chatRoute.scope.taskIds.length
+      && /(?:розкладай|розклади|розплануй|сплануй|перенеси|заплануй|reschedule|schedule|move)/iu.test(prompt)
+      && /(?:сьогодні|завтра|today|tomorrow|\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}\.\d{2,4})/iu.test(prompt)) {
+      const reply = isUk ? 'Які саме завдання потрібно запланувати на вказану вами дату? Назвіть їх, щоб я підготував зміни для потрібних завдань.'
+        : 'Which tasks should be scheduled for the date you requested? Name them so I can prepare changes for the intended tasks.';
+      return res.json({ reply, summary: reply, tasks: [], tabs: [], taskUpdates: [], taskDeletions: [], source: 'task-scope-clarification' });
+    }
     const personalReady = isPersonalStrategyReady(personalProfile);
     const isPersonalDiscovery = chatRoute.route === 'personal' && !personalReady;
 
@@ -527,6 +538,7 @@ LANGUAGE: ${isUk ? "Ukrainian" : "English"}.
 CURRENT CLIENT CLOCK (authoritative for relative dates): ${JSON.stringify(clientClock)}.
 TASK TEMPORAL CONTEXT: ${JSON.stringify(temporalContext)}
 CURRENT USER PROMPT: "${prompt}".
+The CURRENT USER PROMPT overrides dates and preferences in old conversation or PENDING UNAPPLIED PROPOSAL. If the user now requests today, do not preserve tomorrow from an earlier proposal. The app has not applied any operations in this response yet; describe only proposals, never claim you already moved, saved or updated tasks.
 MESSAGE INTENT: ${intent}. REQUEST ROUTE: ${chatRoute.route}. CONCRETE COMMAND SCOPE: ${JSON.stringify(chatRoute.scope || null)}. PERSONAL READY (app-derived): ${personalReady}. Plan intent cannot authorize a personal plan without readiness. Ordinary operations must stay within the supplied concrete command scope; ask for an ambiguous target.
 PERSONAL STRATEGY MEMORY (persistent independently of recent conversation; user statements and AI hypotheses are distinct):
 ${JSON.stringify(strategyPromptContext(personalProfile))}
@@ -679,7 +691,7 @@ For time analysis, timeStatistics counts only completed tasks with positive reco
         });
 
         if (chatResponse?.text) {
-          const parsed = chatResponse.validatedResponse;
+          const parsed = guardUnappliedClaims(guardTemporalResponse(chatResponse.validatedResponse, prompt, clientClock, isUk), isUk);
           if (intent === 'analysis') {
             parsed.tasks = []; parsed.taskUpdates = []; parsed.taskDeletions = []; parsed.tabs = [];
             if (parsed.strategy) parsed.strategy.actions = [];

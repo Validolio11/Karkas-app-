@@ -324,7 +324,7 @@ test('model outages and network failures retain their category instead of a succ
   for (const [respond, code] of [
     [() => rejected(404, 'NOT_FOUND'), 'MODEL_UNAVAILABLE'],
     [() => { throw new TypeError('fetch failed'); }, 'NETWORK_ERROR'],
-    [() => rejected(503, 'UNAVAILABLE'), 'PROVIDER_ERROR'],
+    [() => rejected(503, 'UNAVAILABLE'), 'PROVIDER_UNAVAILABLE'],
   ] as const) {
     mockProvider(respond);
     const result = await chat();

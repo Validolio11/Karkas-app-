@@ -85,6 +85,13 @@ export function clearAIChatHistory(accountId?: string | null): void {
   }
 }
 
+/** Compact client-local send time, e.g. "[12.10 16:25]"; the server prompt explains the format. */
+export function chatTimestampPrefix(sentAt: number): string {
+  const date = new Date(sentAt);
+  const two = (value: number) => String(value).padStart(2, '0');
+  return `[${two(date.getDate())}.${two(date.getMonth() + 1)} ${two(date.getHours())}:${two(date.getMinutes())}]`;
+}
+
 /** A restarted introduction keeps old text visible but starts fresh provider context. */
 export function recentAIChatContext(messages: PersistedAIChatMessage[], limit = 10, currentTurnId?: string): { role: 'user' | 'assistant'; content: string }[] {
   let start = 0;
@@ -95,7 +102,7 @@ export function recentAIChatContext(messages: PersistedAIChatMessage[], limit = 
   // answer to the preceding question. Keep earlier identical text by its ID.
   return messages.slice(start).filter(message => !currentTurnId || message.id !== currentTurnId)
     .slice(-limit).map(({ role, content, sentAt }) => ({ role, content: typeof sentAt === 'number' && Number.isFinite(sentAt) && sentAt > 0 && sentAt <= 8640000000000000
-      ? `[Message recorded at ${new Date(sentAt).toISOString()}; resolve relative dates against this instant in the client time zone.]\n${content}` : content }));
+      ? `${chatTimestampPrefix(sentAt)} ${content}` : content }));
 }
 
 export function visibleAIChatMessages(messages: PersistedAIChatMessage[], introductionId: string | null): { messages: PersistedAIChatMessage[]; previousCount: number } {

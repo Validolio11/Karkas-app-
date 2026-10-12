@@ -101,3 +101,87 @@ export function compactTaskPromptContext(tasks: readonly PromptTask[], options: 
     } : {}),
   }));
 }
+
+/**
+ * One shared persona for every Karkas model call. Keep it byte-identical: it
+ * opens each systemInstruction, so it is part of the implicitly cached prefix.
+ */
+export const KARKAS_ASSISTANT_PERSONA = `ROLE AND STYLE:
+You are the Karkas assistant inside the person's task workspace: warm, direct and concise, like a smart colleague.
+- In Ukrainian write natural, modern language: no bureaucratic or calqued phrasing and no "Шановний". Use "ти" only if the person writes with "ти"; otherwise stay neutral.
+- Answer first, then give brief reasoning. No filler, canned praise or generic productivity lectures.
+- Use markdown lists or short headings only when they help scanning; use **bold** only for key facts. Keep task titles and structured fields plain.
+- Ask at most one clarifying question, and only when it is needed.
+- Never claim that tasks, dates, timers or settings were changed, saved or applied unless the application confirmed it.`;
+
+type TemporalPromptRecord = {
+  id?: string;
+  statuses?: string[];
+  created?: { local: string } | null;
+  lastEdited?: { local: string } | null;
+  started?: { local: string } | null;
+  completed?: { local: string } | null;
+  archivedAt?: { local: string } | null;
+  plannedDay?: unknown;
+  deadlineDay?: unknown;
+  scheduledStart?: { local: string; future: boolean } | null;
+  nextOccurrence?: { local: string } | null;
+  timerSessionStarted?: { local: string } | null;
+  recentActivity?: unknown[];
+  omittedActivityCount?: number;
+};
+const RAW_TIME_FIELDS = ['createdAt', 'updatedAt', 'startedAt', 'completedAt', 'plannedDate', 'deadlineDate', 'scheduledFor', 'scheduleNextStartAt', 'timerStartedAt', 'deletedAt'];
+
+/**
+ * A single task representation for chat: compact settings plus temporal fields
+ * from the client-zone temporal context, instead of sending every task twice.
+ * Raw epoch timestamps are replaced by client-local times; absent fields are unknown.
+ * Recorded activity is attached only for tasks in detailed scope.
+ */
+export function mergeTemporalTaskContext(tasks: ReturnType<typeof compactTaskPromptContext>, temporalTasks: readonly TemporalPromptRecord[], options: { detailTaskIds?: readonly string[] } = {}) {
+  const byId = new Map(temporalTasks.filter(task => task.id).map(task => [task.id!, task]));
+  const detailed = new Set(options.detailTaskIds || []);
+  return tasks.map(task => {
+    const temporal = byId.get(task.id || '');
+    // Without a temporal record (e.g. beyond its bound) keep the raw values rather than losing them.
+    if (!temporal) return { ...task } as Record<string, unknown>;
+    const merged: Record<string, unknown> = Object.fromEntries(Object.entries(task).filter(([key]) => !RAW_TIME_FIELDS.includes(key)));
+    const local = (value: { local: string } | null | undefined) => value ? value.local : undefined;
+    const fields: Record<string, unknown> = {
+      statuses: temporal.statuses?.length ? temporal.statuses : undefined,
+      created: local(temporal.created), lastEdited: local(temporal.lastEdited), started: local(temporal.started),
+      completed: local(temporal.completed), archivedAt: local(temporal.archivedAt),
+      plannedDay: temporal.plannedDay ?? undefined, deadlineDay: temporal.deadlineDay ?? undefined,
+      scheduledStart: temporal.scheduledStart ? { local: temporal.scheduledStart.local, future: temporal.scheduledStart.future } : undefined,
+      nextOccurrence: local(temporal.nextOccurrence), timerSessionStarted: local(temporal.timerSessionStarted),
+      ...(detailed.has(task.id || '') && temporal.recentActivity ? { recentActivity: temporal.recentActivity, omittedActivityCount: temporal.omittedActivityCount } : {}),
+    };
+    for (const [key, value] of Object.entries(fields)) if (value !== undefined) merged[key] = value;
+    return merged;
+  });
+}
+
+type ChatTurn = { role: 'user' | 'model'; parts: { text: string }[] };
+
+/**
+ * Gemini multi-turn contents: alternating roles that start with 'user' and end
+ * with the current user turn. Consecutive same-role messages become one turn
+ * with several parts; a leading model message gets a short user prefix so the
+ * assistant's earlier question is not lost. History stays data (see system rules).
+ */
+export function chatHistoryContents(history: unknown, finalUserText: string): ChatTurn[] {
+  const turns: ChatTurn[] = [];
+  const push = (role: ChatTurn['role'], text: string) => {
+    const last = turns[turns.length - 1];
+    if (last?.role === role) last.parts.push({ text });
+    else turns.push({ role, parts: [{ text }] });
+  };
+  for (const message of Array.isArray(history) ? history as any[] : []) {
+    if (!message || typeof message !== 'object' || typeof message.content !== 'string' || !message.content.trim()) continue;
+    const role = message.role === 'user' ? 'user' : message.role === 'assistant' || message.role === 'model' ? 'model' : undefined;
+    if (role) push(role, message.content);
+  }
+  if (turns[0]?.role === 'model') turns.unshift({ role: 'user', parts: [{ text: '[Earlier conversation follows.]' }] });
+  push('user', finalUserText);
+  return turns;
+}

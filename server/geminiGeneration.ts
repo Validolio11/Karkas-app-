@@ -27,6 +27,44 @@ export class AIRequestError extends Error {
   }
 }
 
+/**
+ * A model rejected the function-calling request itself (HTTP 400 about tools or
+ * functions). Nothing was generated; the caller may repeat the operation without tools.
+ */
+export class AIToolsRejectedError extends AIRequestError {
+  constructor(diagnostics?: AIRequestDiagnostics) {
+    super('INVALID_AI_REQUEST', diagnostics);
+    this.name = 'AIToolsRejectedError';
+  }
+}
+
+/** A function call proposed by the model. Arguments are unvalidated provider data. */
+export interface AIFunctionCall { name: string; args: unknown }
+
+/**
+ * Visible text and function calls of one response or stream chunk. Thought parts
+ * are skipped. Parts are read directly, so a function-call part does not make the
+ * SDK warn about non-text parts; objects without candidates use text/functionCalls.
+ */
+export function responseOutput(response: any): { text: string; functionCalls: AIFunctionCall[] } {
+  const parts = response?.candidates?.[0]?.content?.parts;
+  const toCall = (call: any): AIFunctionCall => ({ name: typeof call?.name === 'string' ? call.name : '', args: call?.args });
+  if (Array.isArray(parts)) {
+    let text = '';
+    const functionCalls: AIFunctionCall[] = [];
+    for (const part of parts) {
+      if (!part || typeof part !== 'object') continue;
+      if (part.functionCall) functionCalls.push(toCall(part.functionCall));
+      else if (typeof part.text === 'string' && part.thought !== true) text += part.text;
+    }
+    return { text, functionCalls };
+  }
+  let text = '';
+  try { text = typeof response?.text === 'string' ? response.text : ''; } catch { text = ''; }
+  const calls = Array.isArray(response?.functionCalls) ? response.functionCalls : [];
+  return { text, functionCalls: calls.map(toCall) };
+}
+
 /** Retain an actionable category without exposing provider diagnostics or credentials. */
 export function classifyAIRequestError(error: any): AIRequestError {
   if (error instanceof AIRequestError) return error;
@@ -125,6 +163,10 @@ export interface AIGenerationMetrics {
   cachedTokens?: number;
   outputTokens?: number;
   thoughtsTokens?: number;
+  /** Streaming only: operation start to the first emitted text chunk. */
+  timeToFirstTokenMs?: number;
+  /** Function-calling requests only: number of function calls the model returned. */
+  toolCalls?: number;
 }
 
 // Free-tier quotas are per project and per model. A model that just answered 429
@@ -134,8 +176,12 @@ const QUOTA_COOLDOWN_MS = 60_000;
 const MAX_QUOTA_COOLDOWN_MS = 15 * 60_000;
 const UNAVAILABLE_COOLDOWN_MS = 10 * 60_000;
 let modelCooldowns = new WeakMap<object, Map<string, number>>();
-// Models that rejected an explicit thinking setting keep their provider default.
+// Model + exact thinking setting combinations that were rejected keep the provider
+// default; other levels/budgets for the same model are still tried.
 const thinkingRejectedModels = new Set<string>();
+function thinkingRejectionKey(model: string, thinkingConfig: Record<string, unknown>) {
+  return `${model}|${String(thinkingConfig.thinkingLevel ?? `budget:${thinkingConfig.thinkingBudget}`)}`;
+}
 
 function providerRetryDelayMs(error: any): number | undefined {
   let details: any = error?.error;
@@ -150,13 +196,22 @@ function providerRetryDelayMs(error: any): number | undefined {
   return undefined;
 }
 
-/** Only a 400 about the thinking setting itself justifies a retry without it. */
-function mentionsThinking(error: any): boolean {
+function providerMessage(error: any): string {
   let details: any = error?.error;
   if (!details && typeof error?.message === 'string') {
     try { details = JSON.parse(error.message)?.error; } catch { /* not JSON */ }
   }
-  return /thinking/i.test(String(details?.message ?? error?.message ?? ''));
+  return String(details?.message ?? error?.message ?? '');
+}
+
+/** Only a 400 about the thinking setting itself justifies a retry without it. */
+function mentionsThinking(error: any): boolean {
+  return /thinking/i.test(providerMessage(error));
+}
+
+/** A 400 about function declarations or calling: the request may be repeated without tools. */
+function mentionsTools(error: any): boolean {
+  return /\btools?\b|function/i.test(providerMessage(error));
 }
 
 function cooldownsFor(ai: object) {
@@ -171,19 +226,22 @@ export function resetModelHealthForTests() {
   modelCooldowns = new WeakMap();
 }
 
-/** Bound the whole operation and cancel transport before trying a distinct fallback. */
-export async function generateGeminiWithFallback({
-  ai, contents, config, selectedModel, validateResponse, timeoutMs = 15_000, totalTimeoutMs = 30_000,
-  fallbackModels, maxAttempts, allowEmptyText = false, signal, thinking = 'default',
-}: {
-  ai: GoogleGenAI; contents: Parameters<GoogleGenAI['models']['generateContent']>[0]['contents']; config: any; selectedModel?: string;
-  validateResponse?: (text: string) => unknown;
-  timeoutMs?: number; totalTimeoutMs?: number;
-  fallbackModels?: string[]; maxAttempts?: number; allowEmptyText?: boolean;
-  signal?: AbortSignal;
-  thinking?: AIThinkingEffort;
-}) {
-  signal?.throwIfAborted();
+type GeminiContents = Parameters<GoogleGenAI['models']['generateContent']>[0]['contents'];
+interface PlannedAttempt { model: string; applyThinking: boolean; thinkingRetry: boolean; rejectedThinkingKey?: string }
+
+interface FallbackOptions {
+  ai: GoogleGenAI; config: any; selectedModel?: string;
+  totalTimeoutMs: number; fallbackModels?: string[]; maxAttempts?: number;
+  thinking: AIThinkingEffort;
+}
+
+const diagnosticModelId = (model: string) => /^[a-z0-9._-]{1,100}$/i.test(model) ? model : 'custom-model';
+
+/**
+ * Shared model queue, cooldown, thinking-retry, deadline and diagnostics logic
+ * for the unary and streaming paths. Only the transport differs between them.
+ */
+function createFallbackPlan({ ai, config, selectedModel, totalTimeoutMs, fallbackModels, maxAttempts, thinking }: FallbackOptions) {
   const selected = typeof selectedModel === 'string' ? selectedModel.trim().replace(/^models\//, '') : '';
   const distinctModels = [...new Set([selected, ...(fallbackModels ?? ['gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-2.5-flash'])].filter(Boolean))];
   const attemptLimit = typeof maxAttempts === 'number' && Number.isFinite(maxAttempts) && maxAttempts >= 1
@@ -193,84 +251,54 @@ export async function generateGeminiWithFallback({
   const cooling = (model: string) => (cooldowns.get(model) ?? 0) > nowMs;
   // Stable partition: healthy models keep their order, cooling models go last.
   const ordered = [...distinctModels.filter(model => !cooling(model)), ...distinctModels.filter(cooling)];
-  const queue = ordered.slice(0, attemptLimit).map(model => ({ model, applyThinking: !config?.thinkingConfig && !thinkingRejectedModels.has(model), thinkingRetry: false }));
-  const firstModel = queue[0]?.model;
+  const queue: PlannedAttempt[] = ordered.slice(0, attemptLimit).map(model => {
+    const planned = thinkingConfigForModel(model, thinking);
+    return { model, applyThinking: !config?.thinkingConfig && !(planned && thinkingRejectedModels.has(thinkingRejectionKey(model, planned))), thinkingRetry: false };
+  });
+  // A cooling selected model is demoted, so "fallback" means "not the model the person preferred".
+  const preferredModel = selected || distinctModels[0];
   // Deadline accounting must survive a wall-clock correction during the request.
   const startedAt = performance.now();
   const deadline = startedAt + totalTimeoutMs;
   const attempts: AIRequestDiagnostics['attempts'] = [];
+  let lastError = new AIRequestError('MODEL_UNAVAILABLE');
   const withDiagnostics = (failure: AIRequestError) => new AIRequestError(failure.code, {
     attempts: attempts.map(attempt => ({ ...attempt })),
     elapsedMs: Math.round(performance.now() - startedAt),
   });
-  let lastError = new AIRequestError('MODEL_UNAVAILABLE');
-  for (let index = 0; index < queue.length; index++) {
-    const { model, applyThinking, thinkingRetry } = queue[index];
-    signal?.throwIfAborted();
-    const remaining = deadline - performance.now();
-    if (remaining <= 0) throw withDiagnostics(new AIRequestError('TIMEOUT'));
-    const attemptMs = Math.min(timeoutMs, remaining);
-    const attemptStartedAt = performance.now();
-    const thinkingConfig = applyThinking ? thinkingConfigForModel(model, thinking) : undefined;
-    const controller = new AbortController();
-    let cancelAttempt: (() => void) | undefined;
-    const cancelled = new Promise<never>((_, reject) => {
-      cancelAttempt = () => {
-        controller.abort(signal?.reason);
-        reject(signal?.reason ?? new DOMException('Request cancelled', 'AbortError'));
-      };
-      signal?.addEventListener('abort', cancelAttempt, { once: true });
-      if (signal?.aborted) cancelAttempt();
-    });
-    let timer: ReturnType<typeof setTimeout>;
-    const timedOut = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => {
-        controller.abort();
-        reject(new AIRequestError('TIMEOUT'));
-      }, attemptMs);
-    });
-    try {
-      const response = await Promise.race([
-        ai.models.generateContent({
-          model, contents,
-          config: {
-            ...config, ...(thinkingConfig ? { thinkingConfig } : {}), abortSignal: controller.signal,
-            httpOptions: { ...config?.httpOptions, timeout: attemptMs, retryOptions: { attempts: 1 } },
-          },
-        }),
-        timedOut,
-        cancelled,
-      ]);
-      const responseText = response?.text ?? '';
-      if (!responseText.trim() && !allowEmptyText) throw new AIRequestError('INVALID_AI_RESPONSE');
-      let validatedResponse: unknown;
-      if (validateResponse) {
-        try { validatedResponse = validateResponse(responseText); }
-        catch { throw new AIRequestError('INVALID_AI_RESPONSE'); }
-      }
-      cooldowns.delete(model);
+  return {
+    queue, preferredModel, startedAt, deadline, attempts, withDiagnostics,
+    lastError: () => lastError,
+    thinkingConfig: (entry: PlannedAttempt) => entry.applyThinking ? thinkingConfigForModel(entry.model, thinking) : undefined,
+    succeeded(entry: PlannedAttempt) {
+      cooldowns.delete(entry.model);
       // Remember only when the same request succeeded without the thinking setting.
-      if (thinkingRetry) thinkingRejectedModels.add(model);
-      const usage: any = (response as any)?.usageMetadata;
+      if (entry.thinkingRetry && entry.rejectedThinkingKey) thinkingRejectedModels.add(entry.rejectedThinkingKey);
+    },
+    metrics(entry: PlannedAttempt, thinkingConfig: Record<string, unknown> | undefined, usage: any, extra: Partial<AIGenerationMetrics> = {}): AIGenerationMetrics {
       const count = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-      const metrics: AIGenerationMetrics = {
-        model, attempts: attempts.length + 1,
+      return {
+        model: entry.model, attempts: attempts.length + 1,
         elapsedMs: Math.round(performance.now() - startedAt),
         thinking: thinkingConfig ? String(thinkingConfig.thinkingLevel ?? `budget:${thinkingConfig.thinkingBudget}`) : 'provider-default',
+        ...extra,
         ...(count(usage?.promptTokenCount) !== undefined ? { promptTokens: count(usage.promptTokenCount) } : {}),
         ...(count(usage?.cachedContentTokenCount) !== undefined ? { cachedTokens: count(usage.cachedContentTokenCount) } : {}),
         ...(count(usage?.candidatesTokenCount) !== undefined ? { outputTokens: count(usage.candidatesTokenCount) } : {}),
         ...(count(usage?.thoughtsTokenCount) !== undefined ? { thoughtsTokens: count(usage.thoughtsTokenCount) } : {}),
       };
-      return { ...response, text: responseText, usedModel: model, fallbackUsed: model !== firstModel, validatedResponse, metrics };
-    } catch (error) {
-      // Cancelling the parent request must never start another provider attempt.
-      if (signal?.aborted) throw signal.reason ?? error;
+    },
+    /**
+     * Record a failed attempt. Returns the error that ends the operation, or
+     * undefined when the queue continues with the next (or a retried) attempt.
+     */
+    failed(index: number, entry: PlannedAttempt, thinkingConfig: Record<string, unknown> | undefined, error: unknown,
+      attemptStartedAt: number, attemptUsedWholeBudget: boolean): AIRequestError | undefined {
       const failure = classifyAIRequestError(error);
+      const { model } = entry;
       // Only model IDs and error categories are returned. Provider error text,
       // API keys and the person's message are never part of diagnostics.
-      attempts.push({ model: /^[a-z0-9._-]{1,100}$/i.test(model) ? model : 'custom-model',
-        code: failure.code, elapsedMs: Math.round(performance.now() - attemptStartedAt) });
+      attempts.push({ model: diagnosticModelId(model), code: failure.code, elapsedMs: Math.round(performance.now() - attemptStartedAt) });
       if (failure.code === 'QUOTA_EXCEEDED') {
         const delay = Math.min(MAX_QUOTA_COOLDOWN_MS, Math.max(QUOTA_COOLDOWN_MS, providerRetryDelayMs(error) ?? 0));
         cooldowns.set(model, Date.now() + delay);
@@ -280,21 +308,238 @@ export async function generateGeminiWithFallback({
       // A model that rejects our thinking setting gets one immediate retry with
       // its provider default instead of failing the whole request.
       if (failure.code === 'INVALID_AI_REQUEST' && thinkingConfig && mentionsThinking(error)) {
-        queue.splice(index + 1, 0, { model, applyThinking: false, thinkingRetry: true });
-        continue;
+        queue.splice(index + 1, 0, { model, applyThinking: false, thinkingRetry: true, rejectedThinkingKey: thinkingRejectionKey(model, thinkingConfig) });
+        return undefined;
+      }
+      // Function calling itself was rejected: the caller decides whether to retry without tools.
+      if (failure.code === 'INVALID_AI_REQUEST' && config?.tools && mentionsTools(error)) {
+        return new AIToolsRejectedError(withDiagnostics(failure).diagnostics);
       }
       // This attempt was allotted the entire remaining operation budget. A transport
       // timeout can fire fractionally before the clock reaches the deadline; do not
       // spend that rounding remainder on another fallback request.
-      if (failure.code === 'TIMEOUT' && attemptMs === remaining) throw withDiagnostics(failure);
+      if (failure.code === 'TIMEOUT' && attemptUsedWholeBudget) return withDiagnostics(failure);
       if (failure.code !== 'MODEL_UNAVAILABLE' || lastError.code === 'MODEL_UNAVAILABLE') lastError = failure;
       // Invalid structured output may recover on another model; credentials and request errors cannot.
       if (['INVALID_API_KEY', 'ACCESS_DENIED', 'INVALID_AI_REQUEST', 'INTERNAL_ERROR'].includes(failure.code) ||
-          failure.code === 'PROVIDER_ERROR' && Number((error as any)?.status) < 500) throw withDiagnostics(failure);
+          failure.code === 'PROVIDER_ERROR' && Number((error as any)?.status) < 500) return withDiagnostics(failure);
+      return undefined;
+    },
+  };
+}
+
+/**
+ * One provider attempt's transport controller. `interrupted` rejects on parent
+ * cancellation or when the (re-armable) timer fires; both abort the transport.
+ */
+function createAttemptGuard(signal: AbortSignal | undefined, timeoutMs: number) {
+  const controller = new AbortController();
+  let rejectInterrupted!: (reason: unknown) => void;
+  const interrupted = new Promise<never>((_, reject) => { rejectInterrupted = reject; });
+  // Raced against the transport; never an unhandled rejection after the race settles.
+  interrupted.catch(() => {});
+  const cancel = () => {
+    controller.abort(signal?.reason);
+    rejectInterrupted(signal?.reason ?? new DOMException('Request cancelled', 'AbortError'));
+  };
+  signal?.addEventListener('abort', cancel, { once: true });
+  if (signal?.aborted) cancel();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const arm = (ms: number) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      controller.abort();
+      rejectInterrupted(new AIRequestError('TIMEOUT'));
+    }, Math.max(0, ms));
+  };
+  arm(timeoutMs);
+  return {
+    signal: controller.signal, interrupted, arm,
+    abort: () => controller.abort(),
+    dispose() { clearTimeout(timer); signal?.removeEventListener('abort', cancel); },
+  };
+}
+
+/** Bound the whole operation and cancel transport before trying a distinct fallback. */
+export async function generateGeminiWithFallback({
+  ai, contents, config, selectedModel, validateResponse, timeoutMs = 15_000, totalTimeoutMs = 30_000,
+  fallbackModels, maxAttempts, allowEmptyText = false, signal, thinking = 'default',
+}: {
+  ai: GoogleGenAI; contents: GeminiContents; config: any; selectedModel?: string;
+  /** Throwing rejects this model's answer (INVALID_AI_RESPONSE) and tries the next model. */
+  validateResponse?: (text: string, output: { text: string; functionCalls: AIFunctionCall[] }) => unknown;
+  timeoutMs?: number; totalTimeoutMs?: number;
+  fallbackModels?: string[]; maxAttempts?: number; allowEmptyText?: boolean;
+  signal?: AbortSignal;
+  thinking?: AIThinkingEffort;
+}) {
+  signal?.throwIfAborted();
+  const plan = createFallbackPlan({ ai, config, selectedModel, totalTimeoutMs, fallbackModels, maxAttempts, thinking });
+  const { queue } = plan;
+  for (let index = 0; index < queue.length; index++) {
+    const entry = queue[index];
+    const { model } = entry;
+    signal?.throwIfAborted();
+    const remaining = plan.deadline - performance.now();
+    if (remaining <= 0) throw plan.withDiagnostics(new AIRequestError('TIMEOUT'));
+    const attemptMs = Math.min(timeoutMs, remaining);
+    const attemptStartedAt = performance.now();
+    const thinkingConfig = plan.thinkingConfig(entry);
+    const guard = createAttemptGuard(signal, attemptMs);
+    try {
+      const response = await Promise.race([
+        ai.models.generateContent({
+          model, contents,
+          config: {
+            ...config, ...(thinkingConfig ? { thinkingConfig } : {}), abortSignal: guard.signal,
+            httpOptions: { ...config?.httpOptions, timeout: attemptMs, retryOptions: { attempts: 1 } },
+          },
+        }),
+        guard.interrupted,
+      ]);
+      const output = responseOutput(response);
+      const responseText = output.text;
+      if (!responseText.trim() && !output.functionCalls.length && !allowEmptyText) throw new AIRequestError('INVALID_AI_RESPONSE');
+      let validatedResponse: unknown;
+      if (validateResponse) {
+        try { validatedResponse = validateResponse(responseText, output); }
+        catch { throw new AIRequestError('INVALID_AI_RESPONSE'); }
+      }
+      plan.succeeded(entry);
+      const metrics = plan.metrics(entry, thinkingConfig, (response as any)?.usageMetadata, config?.tools ? { toolCalls: output.functionCalls.length } : {});
+      return { ...response, text: responseText, functionCalls: output.functionCalls, usedModel: model, fallbackUsed: model !== plan.preferredModel, validatedResponse, metrics };
+    } catch (error) {
+      // Cancelling the parent request must never start another provider attempt.
+      if (signal?.aborted) throw signal.reason ?? error;
+      const fatal = plan.failed(index, entry, thinkingConfig, error, attemptStartedAt, attemptMs === remaining);
+      if (fatal) throw fatal;
     } finally {
-      clearTimeout(timer!);
-      if (cancelAttempt) signal?.removeEventListener('abort', cancelAttempt);
+      guard.dispose();
     }
   }
-  throw withDiagnostics(lastError);
+  throw plan.withDiagnostics(plan.lastError());
+}
+
+/** A stream failed after text was already delivered; no other model was tried. */
+export class AIStreamInterruptedError extends AIRequestError {
+  constructor(code: AIRequestCode, diagnostics: AIRequestDiagnostics | undefined, public partialText: string) {
+    super(code, diagnostics);
+    this.name = 'AIStreamInterruptedError';
+  }
+}
+
+export interface AIStreamResult<T = unknown> {
+  text: string;
+  /** Function calls collected from every chunk; never emitted as text. */
+  functionCalls: AIFunctionCall[];
+  /** The value returned by `validate`, when one was given. */
+  validated?: T;
+  usedModel: string;
+  fallbackUsed: boolean;
+  metrics: AIGenerationMetrics;
+}
+
+/**
+ * Streaming counterpart of generateGeminiWithFallback, sharing its model queue,
+ * cooldowns, thinking retry, deadline and diagnostics. Text parts are emitted via
+ * onText; function-call parts (config.tools) are collected and returned, never
+ * emitted. Another model may be tried only until the first text chunk was
+ * emitted; afterwards any failure, including a `validate` rejection of the
+ * completed output, ends the operation with AIStreamInterruptedError (the caller
+ * keeps the partial text). timeoutMs bounds time-to-first-chunk, idleTimeoutMs
+ * each gap between chunks and totalTimeoutMs the whole operation.
+ */
+export async function streamGeminiWithFallback<T = unknown>({
+  ai, contents, config, selectedModel, onText, validate, timeoutMs = 15_000, idleTimeoutMs = 10_000, totalTimeoutMs = 30_000,
+  fallbackModels, maxAttempts, signal, thinking = 'default',
+}: {
+  ai: GoogleGenAI; contents: GeminiContents; config: any; selectedModel?: string;
+  onText: (delta: string) => void;
+  /** Runs on the completed output; throwing rejects it as INVALID_AI_RESPONSE. */
+  validate?: (output: { text: string; functionCalls: AIFunctionCall[] }) => T;
+  timeoutMs?: number; idleTimeoutMs?: number; totalTimeoutMs?: number;
+  fallbackModels?: string[]; maxAttempts?: number;
+  signal?: AbortSignal;
+  thinking?: AIThinkingEffort;
+}): Promise<AIStreamResult<T>> {
+  signal?.throwIfAborted();
+  // Streaming is plain text: structured output would arrive as unreadable JSON fragments.
+  const { responseMimeType: _mime, responseSchema: _schema, responseJsonSchema: _jsonSchema, ...textConfig } = config ?? {};
+  const plan = createFallbackPlan({ ai, config: textConfig, selectedModel, totalTimeoutMs, fallbackModels, maxAttempts, thinking });
+  const { queue } = plan;
+  for (let index = 0; index < queue.length; index++) {
+    const entry = queue[index];
+    const { model } = entry;
+    signal?.throwIfAborted();
+    const remaining = plan.deadline - performance.now();
+    if (remaining <= 0) throw plan.withDiagnostics(new AIRequestError('TIMEOUT'));
+    const attemptMs = Math.min(timeoutMs, remaining);
+    const attemptStartedAt = performance.now();
+    const thinkingConfig = plan.thinkingConfig(entry);
+    const guard = createAttemptGuard(signal, attemptMs);
+    let text = '';
+    const functionCalls: AIFunctionCall[] = [];
+    let timeToFirstTokenMs: number | undefined;
+    let usage: any;
+    let iterator: AsyncIterator<any> | undefined;
+    try {
+      const stream = await Promise.race([
+        ai.models.generateContentStream({
+          model, contents,
+          config: {
+            ...textConfig, ...(thinkingConfig ? { thinkingConfig } : {}), abortSignal: guard.signal,
+            // The SDK timeout spans the whole streamed body, so it gets the remaining
+            // operation budget; first-chunk and idle limits are enforced by the guard.
+            httpOptions: { ...textConfig?.httpOptions, timeout: Math.max(1, Math.ceil(remaining)), retryOptions: { attempts: 1 } },
+          },
+        }),
+        guard.interrupted,
+      ]);
+      iterator = stream[Symbol.asyncIterator]();
+      while (true) {
+        const step = await Promise.race([iterator.next(), guard.interrupted]);
+        if (step.done) break;
+        const chunk = step.value;
+        if (chunk?.usageMetadata) usage = chunk.usageMetadata;
+        const output = responseOutput(chunk);
+        const delta = output.text;
+        functionCalls.push(...output.functionCalls);
+        if (delta) {
+          if (timeToFirstTokenMs === undefined) timeToFirstTokenMs = Math.round(performance.now() - plan.startedAt);
+          text += delta;
+          onText(delta);
+        }
+        // Any chunk proves the stream is alive; bound the next gap and the total deadline.
+        guard.arm(Math.min(idleTimeoutMs, plan.deadline - performance.now()));
+      }
+      if (!text.trim() && !functionCalls.length) throw new AIRequestError('INVALID_AI_RESPONSE');
+      let validated: T | undefined;
+      if (validate) {
+        try { validated = validate({ text, functionCalls }); }
+        catch { throw new AIRequestError('INVALID_AI_RESPONSE'); }
+      }
+      plan.succeeded(entry);
+      const metrics = plan.metrics(entry, thinkingConfig, usage, {
+        ...(timeToFirstTokenMs !== undefined ? { timeToFirstTokenMs } : {}),
+        ...(textConfig?.tools ? { toolCalls: functionCalls.length } : {}),
+      });
+      return { text, functionCalls, ...(validate ? { validated } : {}), usedModel: model, fallbackUsed: model !== plan.preferredModel, metrics };
+    } catch (error) {
+      guard.abort();
+      const pending = iterator;
+      if (pending?.return) void Promise.resolve().then(() => pending.return!()).catch(() => {});
+      if (signal?.aborted) throw signal.reason ?? error;
+      if (text) {
+        // Text already reached the person: another model would splice two answers.
+        const failure = classifyAIRequestError(error);
+        plan.attempts.push({ model: diagnosticModelId(model), code: failure.code, elapsedMs: Math.round(performance.now() - attemptStartedAt) });
+        throw new AIStreamInterruptedError(failure.code, plan.withDiagnostics(failure).diagnostics, text);
+      }
+      const fatal = plan.failed(index, entry, thinkingConfig, error, attemptStartedAt, attemptMs === remaining);
+      if (fatal) throw fatal;
+    } finally {
+      guard.dispose();
+    }
+  }
+  throw plan.withDiagnostics(plan.lastError());
 }

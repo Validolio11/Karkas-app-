@@ -395,6 +395,9 @@ declare global {
         verifyAndStoreKey: (apiKey: string) => Promise<DesktopResult<{ models: string[] }>>;
         clearKey: () => Promise<DesktopResult<void>>;
         assist: (input: unknown) => Promise<DesktopResult<{ status: number; body: any }>>;
+        /** Resolves with the final body; reply fragments arrive through onStreamDelta. */
+        assistStream?: (input: unknown) => Promise<DesktopResult<{ status: number; body: any }>>;
+        onStreamDelta?: (callback: (event: { requestId: string; text: string }) => void) => () => void;
         breakdown: (input: unknown) => Promise<DesktopResult<{ status: number; body: any }>>;
         recommendations: (input: unknown) => Promise<DesktopResult<{ status: number; body: any }>>;
         voiceToken: (input: unknown) => Promise<DesktopResult<{ status: number; body: any }>>;

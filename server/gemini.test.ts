@@ -20,7 +20,26 @@ before(async () => {
     export const Type = new Proxy({}, { get: (_, key) => key });
     export const Modality = new Proxy({}, { get: (_, key) => key });
     export class GoogleGenAI {
-      models = { generateContent: async ({ config, contents }) => {
+      models = { generateContent: async ({ config, contents: rawContents }) => {
+        // Chat sends multi-turn contents; the other endpoints send one prompt string.
+        const contents = typeof rawContents === 'string' ? rawContents
+          : rawContents.flatMap(turn => turn.parts.map(part => part.text ?? '')).join(' ');
+        // Chat commands use function calling: reply text plus one call per proposed operation.
+        if (config.tools) {
+          const parameters = Object.fromEntries(config.tools[0].functionDeclarations.map(declaration => [declaration.name, declaration.parameters]));
+          if (config.responseSchema || config.toolConfig.functionCallingConfig.mode !== 'AUTO') throw new Error('Unexpected tools configuration');
+          if (!contents.includes('timer-case-')) throw new Error('Unexpected tools request');
+          if (!parameters.propose_create_task.properties.timerMode || !parameters.propose_update_task.properties.timerAction) throw new Error('Missing timer schema');
+          if (config.systemInstruction.includes('control timers, or change app settings')) throw new Error('Timers still forbidden');
+          if (contents.includes('timer-case-create')) {
+            return { text: 'Timer proposed', functionCalls: [{ name: 'propose_create_task', args: { title: 'References', phase: 'focus', priority: 2, steps: 0, timerMode: 'countdown', countdownDurationSeconds: 1500 } }] };
+          }
+          if (contents.includes('timer-case-invalid')) {
+            return { text: 'Timer proposed', functionCalls: [{ name: 'propose_update_task', args: { id: 'parent', timerMode: 'countdown', countdownDurationSeconds: 0 } }] };
+          }
+          if (!contents.includes('countdownRemainingSeconds') || !contents.includes('timerMode')) throw new Error('Missing timer context');
+          return { text: 'Stop proposed', functionCalls: [{ name: 'propose_update_task', args: { id: 'parent', timerAction: 'stop' } }] };
+        }
         const properties = config.responseSchema.properties;
         let result;
         if (properties.memoryPatch && contents.includes('discovery-http-case')) {

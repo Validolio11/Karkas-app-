@@ -63,6 +63,8 @@ contextBridge.exposeInMainWorld('karkasDesktop', {
     verifyAndStoreKey: (apiKey) => invoke('karkas:ai:verify-key', { apiKey }),
     clearKey: () => invoke('karkas:ai:clear-key'),
     assist: (input) => invoke('karkas:ai:assist', input),
+    assistStream: (input) => invoke('karkas:ai:assist-stream', input),
+    onStreamDelta: (callback) => subscribe('karkas:ai:stream-delta', callback),
     breakdown: (input) => invoke('karkas:ai:breakdown', input),
     recommendations: (input) => invoke('karkas:ai:recommendations', input),
     voiceToken: (input) => invoke('karkas:ai:voice-token', input),

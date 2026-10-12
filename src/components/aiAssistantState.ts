@@ -197,3 +197,32 @@ export function restoredAIRequestNotice(request: AIRequest | null | undefined, l
     : 'The unapplied proposal was not restored. Retry the request to prepare a new proposal. No task changes were applied.';
   return aiRequestErrorMessage(new AIRequestError('CANCELLED'), lang);
 }
+
+/**
+ * Accumulates streamed reply fragments and publishes the growing text at most
+ * once per animation frame, so a fast stream does not re-render per token.
+ */
+export function createStreamedReplyBuffer(publish: (text: string) => void, schedule: (callback: () => void) => unknown = callback => requestAnimationFrame(callback),
+  unschedule: (handle: unknown) => void = handle => cancelAnimationFrame(handle as number)) {
+  let text = '';
+  let handle: unknown = null;
+  let stopped = false;
+  const flush = () => {
+    handle = null;
+    if (!stopped) publish(text);
+  };
+  return {
+    get text() { return text; },
+    push(delta: string) {
+      if (stopped || !delta) return;
+      text += delta;
+      if (handle === null) handle = schedule(flush);
+    },
+    /** Stop publishing; the accumulated text stays readable. */
+    stop() {
+      stopped = true;
+      if (handle !== null) unschedule(handle);
+      handle = null;
+    },
+  };
+}

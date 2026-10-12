@@ -1,3 +1,5 @@
+import { readAIEventStream } from './aiEventStream';
+
 const routeMap = {
   '/api/ai/verify-key': 'verifyKey',
   '/api/ai/assist': 'assist',
@@ -60,6 +62,38 @@ export async function karkasApiFetch(input: string, init?: RequestInit): Promise
 
   if ('error' in result) return responseFromDesktop(503, { code: result.error.code, error: result.error.message });
   return responseFromDesktop(result.value.status, result.value.body);
+}
+
+/**
+ * Streamed chat request. Reply fragments go to onDelta as they arrive; the result
+ * is an ordinary JSON Response holding the final body (the same body the
+ * non-streaming request returns, whose reply replaces the streamed text) or the
+ * error body. The request body must already contain `stream: true`.
+ */
+export async function karkasApiStream(input: '/api/ai/assist', init: RequestInit, onDelta: (text: string) => void): Promise<Response> {
+  const desktop = window.karkasDesktop;
+  const signal = init.signal;
+  const deliver = (text: string) => { if (!signal?.aborted && text) onDelta(text); };
+  if (!desktop) {
+    const response = await fetch(input, init);
+    if (!response.body || !/text\/event-stream/i.test(response.headers.get('Content-Type') || '')) return response;
+    return readAIEventStream(response.body, deliver);
+  }
+  // Older desktop bridges cannot stream; they still return the final body.
+  if (typeof desktop.ai.assistStream !== 'function' || typeof desktop.ai.onStreamDelta !== 'function') return karkasApiFetch(input, init);
+  const body = typeof init.body === 'string' && init.body ? JSON.parse(init.body) : {};
+  const requestId = crypto.randomUUID();
+  const unsubscribe = desktop.ai.onStreamDelta(event => {
+    if (event && event.requestId === requestId && typeof event.text === 'string') deliver(event.text);
+  });
+  try {
+    const result = await awaitDesktop(() => desktop.ai.assistStream!({ ...body, desktopRequestId: requestId }), signal,
+      () => { if (typeof desktop.ai.cancelRequest === 'function') void desktop.ai.cancelRequest(requestId).catch(() => {}); });
+    if ('error' in result) return responseFromDesktop(503, { code: result.error.code, error: result.error.message });
+    return responseFromDesktop(result.value.status, result.value.body);
+  } finally {
+    unsubscribe();
+  }
 }
 
 export async function desktopHasAiKey(options: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<boolean> {

@@ -40,12 +40,33 @@ function mockProvider(respond: (model: string, body: any, options: RequestInit) 
     assert.ok(model);
     const body = JSON.parse(String(options.body));
     calls.push({ model, body, signal: options.signal ?? undefined });
-    return respond(model, body, options);
+    const response = await respond(model, body, options);
+    // task_command uses function calling: the same proposal arrives as reply text plus one call per operation.
+    const proposal = (response as any)?.proposal;
+    return body.tools && proposal ? toolCallResponse(proposal) : response;
   }) as typeof fetch;
 }
 
 const json = (data: any, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
-const success = (proposal: any) => json({ candidates: [{ content: { role: 'model', parts: [{ text: JSON.stringify(proposal) }] }, finishReason: 'STOP' }] });
+const success = (proposal: any) => Object.assign(json({ candidates: [{ content: { role: 'model', parts: [{ text: JSON.stringify(proposal) }] }, finishReason: 'STOP' }] }), { proposal });
+const TOOL_FOR: Record<string, string> = { tasks: 'propose_create_task', taskUpdates: 'propose_update_task', taskDeletions: 'propose_delete_task', tabs: 'propose_create_tab' };
+/** The function-calling form of a JSON proposal: reply text, then one functionCall part per operation. */
+function toolCallResponse(proposal: any, usageMetadata?: any) {
+  const parts: any[] = typeof proposal.reply === 'string' && proposal.reply ? [{ text: proposal.reply }] : [];
+  for (const [field, name] of Object.entries(TOOL_FOR)) {
+    for (const args of Array.isArray(proposal[field]) ? proposal[field] : []) parts.push({ functionCall: { name, args } });
+  }
+  return json({ candidates: [{ content: { role: 'model', parts }, finishReason: 'STOP' }], ...(usageMetadata ? { usageMetadata } : {}) });
+}
+/** Exercise the forced-JSON path (the KARKAS_AI_TOOLS kill switch) inside one test. */
+async function withToolsOff<T>(run: () => Promise<T>): Promise<T> {
+  const previous = process.env.KARKAS_AI_TOOLS;
+  process.env.KARKAS_AI_TOOLS = 'off';
+  try { return await run(); } finally {
+    if (previous === undefined) delete process.env.KARKAS_AI_TOOLS;
+    else process.env.KARKAS_AI_TOOLS = previous;
+  }
+}
 const rejected = (status: number, providerStatus: string, message = 'private-test-key provider-internal-data') => json({ error: { code: status, status: providerStatus, message } }, status);
 const chat = (overrides: any = {}) => invokeDesktopApi('assist', {
   prompt: 'Додай таймер на 25 хвилин до завдання', action: 'chat', lang: 'uk', customApiKey: 'test-only-fake-key',
@@ -131,8 +152,9 @@ test('exact visible summary ID and standalone consent are required before a pers
     const result = await chat({ prompt, discoveryConfirmationId: id, turnId: `consent-${prompt}-${id}`, currentTasks: [{ id: 't', title: 'Study', phase: 'work', done: false }], strategyContext: profile });
     assert.equal(result.status, 200);
     assert.equal(calls.length, 1);
-    assert.equal(result.body.strategy.actions.length, allowed ? 1 : 0);
-    if (!allowed) assert.doesNotMatch(result.body.reply, /FORBIDDEN/);
+    // Without valid consent the request may become a read-only general chat; it must never carry plan actions.
+    assert.equal(result.body.strategy?.actions?.length ?? 0, allowed ? 1 : 0);
+    if (!allowed && result.body.strategy) assert.doesNotMatch(result.body.reply, /FORBIDDEN/);
   }
   mockProvider(() => { throw new Error('Validation must happen before transport'); });
   const invalid = await chat({ discoveryConfirmationId: 10 });
@@ -273,12 +295,14 @@ test('selected period uses the client calendar timezone across a New Year bounda
 test('retired selected model falls back through the real SDK and preserves serialized timer schema', async () => {
   mockProvider((model, body, options) => {
     assert.ok(options.signal);
-    const schema = body.generationConfig.responseSchema;
-    assert.equal(schema.properties.tasks.items.properties.countdownDurationSeconds.minimum, 60);
-    assert.equal(schema.properties.tasks.items.properties.countdownDurationSeconds.maximum, 86400);
+    // Commands use function calling: the tool parameters carry the same timer constraints.
+    assert.equal(body.generationConfig?.responseSchema, undefined);
+    const declarations = Object.fromEntries(body.tools[0].functionDeclarations.map((declaration: any) => [declaration.name, declaration.parameters]));
+    assert.equal(declarations.propose_create_task.properties.countdownDurationSeconds.minimum, 60);
+    assert.equal(declarations.propose_create_task.properties.countdownDurationSeconds.maximum, 86400);
     // Ordinary commands no longer ask the model for a personal strategy.
-    assert.equal(schema.properties.strategy, undefined);
-    assert.deepEqual(schema.properties.taskUpdates.items.properties.timerAction.enum, ['start', 'pause', 'stop']);
+    assert.equal(Object.keys(declarations).some(name => /strategy/.test(name)), false);
+    assert.deepEqual(declarations.propose_update_task.properties.timerAction.enum, ['start', 'pause', 'stop']);
     return model === 'gemini-retired-model' ? rejected(404, 'NOT_FOUND') : success({
       reply: 'Пропоную таймер на 25 хвилин.', tasks: [], taskUpdates: [{ id: 't1', timerMode: 'countdown', countdownDurationSeconds: 1500 }],
     });
@@ -453,7 +477,7 @@ test('all assistant modes send classified records and recomputed statistics to t
       const contents = body.contents.flatMap((content: any) => content.parts.map((part: any) => part.text ?? '')).join('\n');
       assert.doesNotMatch(contents, /EXCLUDED-|999/);
       const serialized = action === 'chat'
-        ? /WORKSPACE CONTEXT:\n([\s\S]+?)\n\nINSTRUCTIONS:/.exec(contents)?.[1]
+        ? /WORKSPACE CONTEXT:\n([\s\S]+?)\n\nCURRENT USER MESSAGE:/.exec(contents)?.[1]
         : /WORKSPACE REAL-TIME CONTEXT:\n([\s\S]+)$/.exec(contents)?.[1];
       assert.ok(serialized);
       const context = JSON.parse(serialized);
@@ -523,6 +547,30 @@ test('recommendations send server-derived period metrics and distinct completion
   assert.equal(calls.length, 1);
 });
 
+test('period report temporal context keeps open work and plans but only completions from the period', async () => {
+  const at = (iso: string) => Date.parse(iso);
+  let temporalIds: string[] = [];
+  mockProvider((_model, body) => {
+    const contents = body.contents.flatMap((content: any) => content.parts.map((part: any) => part.text ?? '')).join('\n');
+    temporalIds = JSON.parse(/Task temporal context \([^)]*\): (.+)/.exec(contents)![1]).tasks.map((task: any) => task.id);
+    return success({ focusAdvice: 'a', optimizationTip: 'b', workloadStatus: 'c', periodRetrospective: 'd', dropoffAnalysis: 'e', futureStrategy: 'f', suggestedTasks: [] });
+  });
+  const result = await invokeDesktopApi('recommendations', {
+    customApiKey: 'test-only-fake-key', lang: 'en', period: 'THIS_MONTH', clientClock: { now: '2026-10-12T12:00:00Z', timeZone: 'Europe/Kyiv' },
+    tasks: [
+      { id: 'open-old', title: 'Open old', done: false, createdAt: at('2026-07-01T10:00:00Z') },
+      { id: 'done-in-period', title: 'Done now', done: true, createdAt: at('2026-10-01T10:00:00Z'), completedAt: at('2026-10-05T10:00:00Z') },
+      { id: 'done-before-period', title: 'Done before', done: true, createdAt: at('2026-07-01T10:00:00Z'), completedAt: at('2026-08-01T10:00:00Z') },
+      { id: 'plan', title: 'Plan', done: false, scheduledPending: true, createdAt: at('2026-10-10T10:00:00Z'), scheduledFor: at('2026-10-20T10:00:00Z') },
+    ],
+  });
+  assert.equal(result.status, 200);
+  assert.deepEqual([...temporalIds].sort(), ['done-in-period', 'open-old', 'plan']);
+  // Technical metrics are reported by every Gemini-backed endpoint, not only chat.
+  assert.equal(typeof result.body.aiMetrics?.elapsedMs, 'number');
+  assert.equal(result.body.aiMetrics.model, result.body.usedModel);
+});
+
 test('breakdown excludes completed, accidental and archived tasks from other active work', async () => {
   mockProvider((_model, body) => {
     const contents = body.contents.flatMap((content: any) => content.parts.map((part: any) => part.text ?? '')).join('\n');
@@ -560,7 +608,7 @@ test('classified deletion proposals round-trip through the SDK and unknown enum 
   }
 });
 
-test('real SDK ignores thought text and joins fenced JSON text parts for the Lottie proposal', async () => {
+test('real SDK ignores thought text and joins fenced JSON text parts for the Lottie proposal', () => withToolsOff(async () => {
   mockProvider(() => {
     const proposal = JSON.stringify({ reply: 'Пропоную завдання.', tasks: [lottieTask] });
     const split = Math.floor(proposal.length / 2);
@@ -573,9 +621,9 @@ test('real SDK ignores thought text and joins fenced JSON text parts for the Lot
   assert.equal(result.status, 200);
   assert.equal(result.body.tasks[0].countdownDurationSeconds, 2400);
   assert.equal(calls.length, 1);
-});
+}));
 
-test('malformed JSON uses a distinct model, while repeated truncation stays an explicit failure', async () => {
+test('malformed JSON uses a distinct model, while repeated truncation stays an explicit failure', () => withToolsOff(async () => {
   for (const repair of [true, false]) {
     mockProvider(model => model !== 'gemini-3.1-flash-lite' && repair
       ? success({ reply: 'Пропоную завдання.', tasks: [lottieTask] })
@@ -585,7 +633,7 @@ test('malformed JSON uses a distinct model, while repeated truncation stays an e
     assert.equal(calls.length, repair ? 2 : 3);
     if (!repair) assert.deepEqual(result.body.tasks, []);
   }
-});
+}));
 
 test('validation fallback shares the original deadline and does not grant another full timeout', async () => {
   mockProvider((model, _body, options) => model === 'gemini-3.1-flash-lite' ? success({ invalid: true })
@@ -680,11 +728,13 @@ test('thinking effort maps to settings each model family accepts', () => {
 test('chat sends route thinking settings and reports timing metrics', async () => {
   mockProvider((_model, body) => {
     assert.deepEqual(body.generationConfig.thinkingConfig, { thinkingLevel: 'MINIMAL' });
-    return json({ candidates: [{ content: { role: 'model', parts: [{ text: JSON.stringify({ reply: 'Пропоную таймер.', taskUpdates: [{ id: 't1', timerMode: 'countdown', countdownDurationSeconds: 1500 }] }) }] }, finishReason: 'STOP' }],
-      usageMetadata: { promptTokenCount: 900, candidatesTokenCount: 40, thoughtsTokenCount: 12 } });
+    return toolCallResponse({ reply: 'Пропоную таймер.', taskUpdates: [{ id: 't1', timerMode: 'countdown', countdownDurationSeconds: 1500 }] },
+      { promptTokenCount: 900, candidatesTokenCount: 40, thoughtsTokenCount: 12 });
   });
   const result = await chat({ currentTasks: [{ id: 't1', title: 'Референси' }] });
   assert.equal(result.status, 200);
+  assert.equal(result.body.aiMetrics.toolCalls, 1);
+  assert.deepEqual(result.body.taskUpdates, [{ id: 't1', timerMode: 'countdown', countdownDurationSeconds: 1500 }]);
   assert.equal(result.body.aiMetrics.model, 'gemini-3.1-flash-lite');
   assert.equal(result.body.aiMetrics.thinking, 'MINIMAL');
   assert.equal(result.body.aiMetrics.promptTokens, 900);
@@ -713,4 +763,132 @@ test('a model that exhausted its free quota is tried last on the next request', 
   assert.equal(second.status, 200);
   assert.deepEqual(calls.map(call => call.model), ['gemini-flash-latest']);
   assert.equal(second.body.usedModel, 'gemini-flash-latest');
+  // The selected model was demoted by its cooldown, yet another model answered.
+  assert.equal(second.body.fallbackUsed, true);
+});
+
+test('fallbackUsed compares against the preferred model, not the cooldown-reordered head', async () => {
+  mockProvider(model => model === 'gemini-3.1-flash-lite'
+    ? rejected(429, 'RESOURCE_EXHAUSTED')
+    : json({ candidates: [{ content: { role: 'model', parts: [{ text: 'ok' }] }, finishReason: 'STOP' }] }));
+  const ai = new GoogleGenAI({ apiKey: 'test-only-fake-key' });
+  const options = { ai, contents: 'Test', config: {}, selectedModel: 'gemini-3.1-flash-lite', fallbackModels: ['gemini-flash-latest'] };
+  const first = await generateGeminiWithFallback(options);
+  assert.equal(first.usedModel, 'gemini-flash-latest');
+  assert.equal(first.fallbackUsed, true);
+  calls.length = 0;
+  const second = await generateGeminiWithFallback(options);
+  assert.deepEqual(calls.map(call => call.model), ['gemini-flash-latest']);
+  assert.equal(second.fallbackUsed, true);
+});
+
+test('confirmation words accepted by the client also trigger the stale-proposal guard', async () => {
+  mockProvider(() => success({ reply: 'Should not be called.', taskUpdates: [] }));
+  for (const prompt of ['ок', 'Окей!', 'Застосувати', 'застосуй', 'зберегти', 'Збережи.', 'підтверджено']) {
+    const result = await chat({ prompt, lastAssistantProposalStatus: 'stale' });
+    assert.equal(result.status, 200, prompt);
+    assert.equal(result.body.source, 'stale-proposal-clarification', prompt);
+  }
+  assert.equal(calls.length, 0);
+});
+
+test('a rejected thinking level is remembered only for that model and level', async () => {
+  mockProvider((_model, body) => body.generationConfig?.thinkingConfig?.thinkingLevel === 'MEDIUM'
+    ? rejected(400, 'INVALID_ARGUMENT', 'Thinking level MEDIUM is not supported for this model.')
+    : json({ candidates: [{ content: { role: 'model', parts: [{ text: 'ok' }] }, finishReason: 'STOP' }] }));
+  const ai = new GoogleGenAI({ apiKey: 'test-only-fake-key' });
+  const run = (thinking: 'low' | 'medium') => generateGeminiWithFallback({ ai, contents: 'Test', config: {}, selectedModel: 'gemini-3.8-flash', fallbackModels: [], thinking });
+  await run('medium');
+  assert.deepEqual(calls.map(call => call.body.generationConfig?.thinkingConfig?.thinkingLevel), ['MEDIUM', undefined]);
+  calls.length = 0;
+  const repeated = await run('medium');
+  assert.deepEqual(calls.map(call => call.body.generationConfig?.thinkingConfig?.thinkingLevel), [undefined]);
+  assert.equal(repeated.metrics.thinking, 'provider-default');
+  calls.length = 0;
+  const low = await run('low');
+  assert.deepEqual(calls.map(call => call.body.generationConfig?.thinkingConfig?.thinkingLevel), ['LOW']);
+  assert.equal(low.metrics.thinking, 'LOW');
+});
+
+const turnText = (body: any) => body.contents.flatMap((content: any) => content.parts.map((part: any) => part.text ?? '')).join('\n');
+
+test('a free message gets a general read-only answer, not a personal interview or task operations', async () => {
+  mockProvider((_model, body) => {
+    const system = body.systemInstruction.parts[0].text;
+    assert.match(system, /ROUTE general/);
+    assert.doesNotMatch(system, /APPLICATION ACTION CONTRACT|PERSONAL_DISCOVERY RULES/);
+    assert.equal(body.generationConfig.responseSchema.properties.tasks, undefined);
+    assert.equal(body.generationConfig.responseSchema.properties.strategy, undefined);
+    assert.deepEqual(body.generationConfig.thinkingConfig, { thinkingLevel: 'MINIMAL' });
+    assert.match(turnText(body), /REQUEST ROUTE: general/);
+    return success({ reply: 'Спробуй почати з короткого блоку без сповіщень.', tasks: [{ title: 'FORBIDDEN-TASK', phase: 'work', priority: 2, steps: 0 }], strategy: { status: 'ready', narrative: 'FORBIDDEN' } });
+  });
+  const result = await chat({ prompt: 'Як мені зосередитись після обіду?', strategyContext: { goals: [] }, currentTasks: [{ id: 't', title: 'Study', done: false }] });
+  assert.equal(result.status, 200);
+  assert.equal(calls.length, 1);
+  assert.match(result.body.reply, /короткого блоку/);
+  assert.deepEqual(result.body.tasks, []);
+  assert.equal(result.body.strategy, undefined);
+  assert.doesNotMatch(JSON.stringify(result.body), /FORBIDDEN/);
+});
+
+test('chat history is sent as real alternating turns with the dynamic request last', async () => {
+  mockProvider((_model, body) => {
+    assert.deepEqual(body.contents.map((turn: any) => turn.role), ['user', 'model', 'user', 'model', 'user']);
+    assert.equal(body.contents[1].parts[0].text, 'HISTORY-WELCOME');
+    assert.deepEqual(body.contents[2].parts.map((part: any) => part.text), ['HISTORY-A', 'HISTORY-B']);
+    const last = body.contents.at(-1).parts.map((part: any) => part.text).join('\n');
+    assert.match(last, /^REQUEST CONTEXT/);
+    assert.match(last, /CURRENT USER MESSAGE:\nДякую, це допомогло$/);
+    assert.doesNotMatch(last, /HISTORY-/);
+    return success({ reply: 'Радий допомогти.' });
+  });
+  const result = await chat({ prompt: 'Дякую, це допомогло', conversation: [
+    { role: 'assistant', content: 'HISTORY-WELCOME' }, { role: 'user', content: 'HISTORY-A' }, { role: 'user', content: 'HISTORY-B' }, { role: 'assistant', content: 'HISTORY-C' },
+  ] });
+  assert.equal(result.status, 200);
+  assert.equal(calls.length, 1);
+});
+
+test('chat system instructions are static per route and read-only routes omit the action contract', async () => {
+  const systems: Record<string, string[]> = {};
+  mockProvider((_model, body) => {
+    const route = /REQUEST ROUTE: (\w+)/.exec(turnText(body))![1];
+    (systems[route] ||= []).push(body.systemInstruction.parts[0].text);
+    return success({ reply: 'Готово.', tasks: [], taskUpdates: [] });
+  });
+  const requests = [
+    { prompt: 'Як запустити таймер?', clientClock: { now: '2026-10-12T09:00:00Z', timeZone: 'Europe/Kyiv' }, currentTasks: [{ id: 'a', title: 'UNIQUE-A' }] },
+    { prompt: 'Як працює меню?', clientClock: { now: '2026-11-01T20:00:00Z', timeZone: 'UTC' }, lang: 'en', currentTasks: [{ id: 'b', title: 'UNIQUE-B' }] },
+    { prompt: 'Проаналізуй поточні завдання', intent: 'analysis', currentTasks: [{ id: 'c', title: 'UNIQUE-C' }] },
+    { prompt: 'Видали завдання UNIQUE-D', currentTasks: [{ id: 'd', title: 'UNIQUE-D' }] },
+  ];
+  for (const request of requests) assert.equal((await chat(request)).status, 200);
+  assert.equal(systems.help.length, 2);
+  assert.equal(systems.help[0], systems.help[1], 'same route, different data: byte-identical system prefix');
+  for (const text of [...systems.help, ...systems.workspace_analysis]) {
+    assert.doesNotMatch(text, /APPLICATION ACTION CONTRACT|strategy\.actions|UNIQUE-|2026-/);
+  }
+  assert.match(systems.task_command[0], /APPLICATION ACTION CONTRACT/);
+  assert.doesNotMatch(systems.task_command[0], /UNIQUE-D|Видали/);
+});
+
+test('each workspace task is sent once with its temporal fields merged in', async () => {
+  mockProvider((_model, body) => {
+    const text = turnText(body);
+    assert.equal(text.split('UNIQUE-TASK-TITLE').length - 1, 2, 'once in the workspace record, once in the user message');
+    const context = JSON.parse(/WORKSPACE CONTEXT:\n([\s\S]+?)\n\nCURRENT USER MESSAGE:/.exec(text)![1]);
+    const [task] = context.activeTasks;
+    assert.deepEqual(task.plannedDay, { date: '2026-10-12', relation: 'today' });
+    assert.ok(task.statuses.includes('planned_today_unfinished'));
+    assert.equal(task.plannedDate, undefined);
+    const temporal = JSON.parse(/TASK TEMPORAL CONTEXT: (.+)/.exec(text)![1]);
+    assert.equal(temporal.tasks, undefined);
+    assert.equal(temporal.clock.localDate, '2026-10-12');
+    return success({ reply: 'Пропоную таймер.', taskUpdates: [{ id: 't1', timerMode: 'countdown', countdownDurationSeconds: 1500 }] });
+  });
+  const result = await chat({ prompt: 'Додай таймер на 25 хвилин до завдання UNIQUE-TASK-TITLE', clientClock: { now: '2026-10-12T09:00:00Z', timeZone: 'Europe/Kyiv' },
+    currentTasks: [{ id: 't1', title: 'UNIQUE-TASK-TITLE', done: false, plannedDate: '2026-10-12' }] });
+  assert.equal(result.status, 200);
+  assert.equal(calls.length, 1);
 });

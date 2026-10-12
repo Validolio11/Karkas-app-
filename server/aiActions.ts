@@ -66,6 +66,42 @@ export const taskMutationProperties = {
   },
 };
 
+/** One genuinely new top-level task: chat "tasks" items and the propose_create_task tool. */
+export const newTaskItemSchema = {
+  type: Type.OBJECT,
+  properties: {
+    title: { type: Type.STRING },
+    phase: { type: Type.STRING },
+    priority: { type: Type.INTEGER },
+    steps: { type: Type.INTEGER },
+    note: { type: Type.STRING },
+    ...taskTimerProperties,
+    ...taskScheduleProperties,
+    ...taskDateProperties,
+    stepList: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          title: { type: Type.STRING },
+        },
+        required: ['title'],
+      },
+    },
+  },
+  required: ['title', 'phase', 'priority', 'steps'],
+};
+
+/** One new category tab: chat "tabs" items and the propose_create_tab tool. */
+export const newTabItemSchema = {
+  type: Type.OBJECT,
+  properties: {
+    id: { type: Type.STRING },
+    name: { type: Type.STRING },
+  },
+  required: ['id', 'name'],
+};
+
 export const taskActionInstructions = `
 APPLICATION ACTION CONTRACT:
 - Existing tasks with scheduledPending:true are future templates, not active work or unfinished failures. Preserve their schedules unless explicitly asked to change them. Never output application-owned schedulePlanId, scheduledFor, scheduledPending or scheduleNextStartAt.

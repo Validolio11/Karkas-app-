@@ -102,12 +102,14 @@ test('chat sends recomputed evidence and preserves priorities for an analysis-on
   assert.equal(result.status, 200);
   assert.equal(providerCalls.length, 1);
   const prompt = requestText(providerCalls[0]);
-  const context = JSON.parse(prompt.split('WORKSPACE CONTEXT:\n')[1].split('\n\nINSTRUCTIONS:')[0]);
+  const context = JSON.parse(prompt.split('WORKSPACE CONTEXT:\n')[1].split('\n\nCURRENT USER MESSAGE:')[0]);
   assertEvidence(context.workInsights);
   assertEvidence(result.body.workInsights);
-  assert.match(prompt, /analysis request or detected overload alone does not authorize any task mutation/);
-  assert.match(prompt, /proposals requiring the Apply button/);
-  assert.match(prompt, /application controls reminders and must remain running/);
+  // Analysis rules are static system instructions, not part of the per-request turn.
+  const system = providerCalls[0].systemInstruction.parts[0].text;
+  assert.match(system, /analysis request or detected overload alone does not authorize any task mutation/);
+  assert.match(system, /proposals requiring the Apply button/);
+  assert.match(system, /application controls reminders and must remain running/);
   assert.deepEqual(result.body.taskUpdates, []);
   assert.deepEqual(input, original);
 });

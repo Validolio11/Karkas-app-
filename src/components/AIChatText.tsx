@@ -21,8 +21,25 @@ const listItem = (line: string) => line.match(/^\s{0,3}(?:([-*+])|(\d{1,6})[.)])
 const heading = (line: string) => line.match(/^(#{1,3})\s+(.+)$/);
 const fence = (line: string) => /^\s{0,3}```/.test(line);
 
-export function AIChatText({ text }: { text: string }) {
-  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+/**
+ * A reply that is still streaming may end inside inline markup. Hide only the
+ * dangling marker on the last line, so "**bo" shows "bo" rather than raw asterisks;
+ * complete markup and an unclosed code fence (rendered as code) are untouched.
+ */
+export function settlePartialMarkdown(text: string): string {
+  const lines = text.split('\n');
+  let last = lines[lines.length - 1];
+  if (fence(last)) return text;
+  if ((last.match(/\*\*/g) || []).length % 2) last = last.replace(/\*\*(?!.*\*\*)/, '');
+  last = last.replace(/(^|[^*])\*$/, '$1');
+  if ((last.match(/`/g) || []).length % 2) last = last.replace(/`(?!.*`)/, '');
+  lines[lines.length - 1] = last;
+  return lines.join('\n');
+}
+
+export function AIChatText({ text, streaming = false }: { text: string; streaming?: boolean }) {
+  const normalized = text.replace(/\r\n?/g, '\n');
+  const lines = (streaming ? settlePartialMarkdown(normalized) : normalized).split('\n');
   const blocks: React.ReactNode[] = [];
   let index = 0;
   while (index < lines.length) {

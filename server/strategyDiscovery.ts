@@ -2,17 +2,25 @@ import type { AIIntent, PersonalStrategyProfile, StrategyDiscoveryPatch, Strateg
 import { applyStrategyMemory, readPersonalStrategy } from '../src/utils/personalStrategy';
 import { applyDiscoveryTurn, discoveryQuestionForState, isPersonalStrategyReady, missingStrategyDiscoveryTopics, normalizeStrategyDiscovery, STRATEGY_DISCOVERY_TOPICS } from '../src/utils/strategyDiscovery';
 
-export type PersonalChatRoute = 'personal' | 'task_command' | 'workspace_analysis' | 'help';
+export type PersonalChatRoute = 'personal' | 'task_command' | 'workspace_analysis' | 'help' | 'general';
 export interface ConcreteTaskScope {
   operation: 'create' | 'update' | 'delete' | 'timer' | 'steps' | 'tabs' | 'proposal' | 'cancel';
   taskIds: string[];
   createCount?: number;
 }
 const normalized = (value: string) => value.trim().toLocaleLowerCase().replace(/\s+/g, ' ');
+// A reported refusal or unexplained non-start belongs to the personal path, which asks why before adapting.
+export const refusedStart = /(?:не\s+почав|не\s+почала|не\s+зробив|не\s+зробила|не\s+хочу\s+(?:робити|працювати)|я\s+відволік|did\s+not\s+start|didn['’]?t\s+start|did\s+not\s+do|got\s+distracted|don['’]?t\s+want\s+to\s+(?:do|work))/iu;
+const personalGoalReference = /(?:мо[яїює]\p{L}*|сво[яїює]\p{L}*|my)\s+(?:ціл|мет[аиуі]|мрі|стратегі|goal|dream|strategy)/iu;
 const personalConcern = /(?:прокраст|мотивац|motiv|barrier|distraction|procrast|житт|life goal|чому\s+я|why\s+(?:do\s+i|am\s+i)|що\s+мене\s+гальму|що\s+заважа|what\s+(?:holds|stops)\s+me|не\s+можу\s+(?:поча|зосеред|працюва)|i\s+cannot\s+(?:start|focus))/iu;
 
-/** Wishes are personal context; only an actual command can open the ordinary task-operation path. */
-export function classifyPersonalChatRequest(prompt: string, intent: AIIntent, tasks: any[], profile?: PersonalStrategyProfile, pendingProposal?: Record<string, any>) {
+/**
+ * Wishes are personal context; only an actual command can open the ordinary task-operation path.
+ * Personal discovery is entered only on explicit personal signals; any other free message is a
+ * read-only 'general' conversation. answeringDiscovery is app-derived: the client replied to the
+ * visible discovery question or to the understanding summary.
+ */
+export function classifyPersonalChatRequest(prompt: string, intent: AIIntent, tasks: any[], profile?: PersonalStrategyProfile, pendingProposal?: Record<string, any>, options: { answeringDiscovery?: boolean } = {}) {
   const input = normalized(prompt).replace(/^@(plan|analysis|steps)\s*/iu, '').replace(/^(?:привіт|вітаю|hello|hi|hey)[,!:.]?\s+/iu, '');
   const live = tasks.filter(task => task && typeof task.id === 'string' && typeof task.title === 'string');
   const mentioned = (value: string) => {
@@ -66,7 +74,7 @@ export function classifyPersonalChatRequest(prompt: string, intent: AIIntent, ta
   }
   if (scope) return { route: 'task_command' as PersonalChatRoute, scope };
   if (intent === 'steps') return { route: 'task_command' as PersonalChatRoute, scope: { operation: 'steps', taskIds: [] } as ConcreteTaskScope };
-  if (personalConcern.test(input) || /^(?:я\s+)?(?:хочу|хотів|хотіла|прагну|мрію|i\s+want|i\s+wish|i\s+would\s+like)(?![\p{L}\p{N}_])/iu.test(input)) return { route: 'personal' as PersonalChatRoute };
+  if (personalConcern.test(input) || refusedStart.test(input) || personalGoalReference.test(input) || /^(?:я\s+)?(?:хочу|хотів|хотіла|прагну|мрію|i\s+want|i\s+wish|i\s+would\s+like)(?![\p{L}\p{N}_])/iu.test(input)) return { route: 'personal' as PersonalChatRoute };
   if (intent === 'plan' || /(?:план|plan)(?![\p{L}\p{N}_])/iu.test(command) && /^(?:зроби|склади|створи|допоможи|make|create|help)/iu.test(command)) return { route: 'personal' as PersonalChatRoute };
   const discovery = profile ? normalizeStrategyDiscovery(profile) : undefined;
   const pending = discovery?.pendingQuestion;
@@ -79,13 +87,16 @@ export function classifyPersonalChatRequest(prompt: string, intent: AIIntent, ta
     // Answering our invitation to concrete help must not send the person back into a private interview.
     return { route: 'help' as PersonalChatRoute };
   }
+  // Answering the visible discovery question, or the pending understanding summary, continues discovery.
+  if (intent === 'auto' && !ordinaryInformation && !/\?\s*$/.test(input) && (options.answeringDiscovery || discovery?.phase === 'confirming' || discovery?.pendingSummary)) return { route: 'personal' as PersonalChatRoute };
   const workspaceTopic = /(?:завдан|задач|метрик|статист|черг|навантаж|task|metric|statistic|queue|workload)/iu.test(input);
   const personalTopic = /(?:мо[яїює]|мій|мене|мені|сво[їює]|my\s+(?:goal|life|problem)|about\s+me|продуктив|productiv)/iu.test(input);
   if (intent === 'analysis' && personalTopic && !workspaceTopic) return { route: 'personal' as PersonalChatRoute };
   if (/^(?:як|де|що\s+означає|how|where|what\s+does)(?![\p{L}\p{N}_])/iu.test(input) && /(?:додат|кноп|меню|вклад|таймер|завдан|задач|karkas|button|menu|tab|timer|task|setting)/iu.test(input)) return { route: 'help' as PersonalChatRoute };
   if (intent === 'analysis' || /^(?:проаналізуй|аналіз|покажи|analyse|analyze|show|review|audit)(?![\p{L}\p{N}_])/iu.test(input) && /(?:завдан|задач|час|метрик|статист|черг|навантаж|task|time|metric|statistic|queue|workload|workspace)/iu.test(input)) return { route: 'workspace_analysis' as PersonalChatRoute };
   if (!personalTopic && /^(?:що\s+таке|хто|коли|де|як|поясни|розкажи|напиши|переклади|what|who|when|where|how|explain|tell|write|translate)(?![\p{L}\p{N}_])/iu.test(input)) return { route: 'help' as PersonalChatRoute };
-  return { route: 'personal' as PersonalChatRoute };
+  // Free conversation, small talk and general questions get a natural read-only answer, not an interview.
+  return { route: 'general' as PersonalChatRoute };
 }
 
 /** A model cannot expand a concrete command into a personal plan or unrelated task operations. */
@@ -127,11 +138,15 @@ export function fallbackDiscoveryQuestion(topic: string, uk: boolean): string {
   return (questions[topic] || questions.barriers)[uk ? 0 : 1];
 }
 
+/**
+ * Natural model questions are accepted with any opening word and an optional short lead-in.
+ * Rejected: empty, very long, several questions, multi-line output, or a schedule, commitment
+ * or plan smuggled into the question.
+ */
 export function safeDiscoveryQuestion(question: unknown): question is string {
   return typeof question === 'string' && question.trim().length > 8 && question.length <= 500
     && (question.match(/\?/g) || []).length === 1 && /\?\s*$/.test(question)
-    && /^(?:що|чому|як|коли|які?|яка|яке|котра?|скільки|what|why|how|when|which)(?![\p{L}\p{N}_])/iu.test(question.trim())
-    && !/[\r\n]/.test(question) && !/(?:готов|погодж|домов|зобов|commit|agree|ready|план\s*[:—-]|plan\s*[:—-]|\d+\s*[-–]?\s*(?:хв|minutes|min\b)|почни|почніть|почнем|почнете|почнеш|починайте|починай|почнімо|приступ|займіться|займись|працюй|зроби|зробіть|заплануй|завтра|tomorrow|щодня|кожного\s+дня|every\s+day|start\s+with|will\s+you|shall\s+we|let['’]s)/iu.test(question);
+    && !/[\r\n]/.test(question.trim()) && !/(?:готов|погодж|домов|зобов|commit|agree|ready|план\s*[:—-]|plan\s*[:—-]|\d+\s*[-–]?\s*(?:хв|minutes|min\b)|почни|почніть|почнем|почнете|почнеш|починайте|починай|почнімо|приступ|займіться|займись|працюй|зроби|зробіть|заплануй|завтра|tomorrow|щодня|кожного\s+дня|every\s+day|start\s+with|will\s+you|shall\s+we|let['’]s)/iu.test(question);
 }
 
 const record = (value: unknown): value is Record<string, any> => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -241,7 +256,7 @@ function narrowerDiscoveryQuestion(topic: StrategyDiscoveryTopic, uk: boolean): 
 export function constrainReadyPersonalResponse(parsed: Record<string, any>, profile: PersonalStrategyProfile, userText: string, turnId: string, uk: boolean) {
   const strategy = record(parsed.strategy) ? { ...parsed.strategy } : {};
   const next: Record<string, any> = { ...parsed, tasks: [], taskUpdates: [], taskDeletions: [], tabs: [] };
-  const refused = /(?:не\s+почав|не\s+почала|не\s+зробив|не\s+зробила|не\s+хочу\s+(?:робити|працювати)|я\s+відволік|did\s+not\s+start|didn['’]?t\s+start|did\s+not\s+do|got\s+distracted|don['’]?t\s+want\s+to\s+(?:do|work))/iu.test(userText);
+  const refused = refusedStart.test(userText);
   const reasonGiven = userText.split(/[.!?;,\n]+|\s+(?:але|but)\s+/iu).some(clause => {
     if (/(?:можливо|мабуть|припускаю|не\s+знаю\s+чому|perhaps|maybe|not\s+sure|don['’]?t\s+know\s+why)/iu.test(clause)) return false;
     const grounded = clause.replace(/(?:не\s+(?:(?:дуже|зовсім|аж|так|надто)\s+)*(?:втом\p{L}*|бою\p{L}*|страш\p{L}*|тривож\p{L}*|незрозум\p{L}*)|(?:not|wasn['’]?t|am\s+not|don['’]?t\s+feel)\s+(?:very\s+)?(?:tired|afraid|anxious|unclear))/giu, '');

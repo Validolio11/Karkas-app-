@@ -51,6 +51,13 @@ test('retry context excludes only the current turn and preserves earlier identic
   ]);
 });
 
+test('recorded messages carry a compact client-local timestamp prefix', () => {
+  const sentAt = new Date(2026, 9, 2, 9, 5).getTime();
+  assert.deepEqual(recentAIChatContext([{ id: 'm', role: 'user', content: 'Move it to tomorrow', sentAt }]), [
+    { role: 'user', content: '[02.10 09:05] Move it to tomorrow' },
+  ]);
+});
+
 test('welcome preserves old history for an existing account and repeats only after explicit reset', () => {
   const values = new Map<string, string>();
   const storage = { getItem: (key: string) => values.get(key) || null, setItem: (key: string, value: string) => { values.set(key, value); }, removeItem: (key: string) => { values.delete(key); } };

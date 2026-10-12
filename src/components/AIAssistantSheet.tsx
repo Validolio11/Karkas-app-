@@ -32,7 +32,7 @@ import {
 import { AIIcon, AIIconId } from './AIIconTemplates';
 import { shouldVerifyAsApiKey } from '../utils/apiKey';
 import { verifyApiKey, keyVerificationMessage } from '../utils/verifyApiKey';
-import { desktopHasAiKey, karkasApiFetch } from '../utils/desktopApi';
+import { desktopHasAiKey, karkasApiStream } from '../utils/desktopApi';
 import { AI_CHAT_CLIENT_TIMEOUT_MS } from '../utils/aiChatTiming';
 import { selectRelevantArchivedTasks } from '../utils/taskArchive';
 import { loadAIChatHistory, saveAIChatHistory, ensureAIChatWelcome, recentAIChatContext, visibleAIChatMessages } from '../services/chatHistory';
@@ -46,7 +46,7 @@ import { useDialogKeyboard } from './useDialogKeyboard';
 import { describeAIApplyResult, describeAITimer, getAITimerContext, prepareAITask, type AIApplyResult } from './aiTaskProposal';
 import { describeSchedule } from '../utils/schedulePresentation';
 import { formatTaskDate } from '../utils/taskDates';
-import { AIRequestError, aiRequestErrorMessage, appendChatRequest, readAIAssistantDraft, readAIResponse, responseRequestError, restoredAIRequestNotice, saveAIAssistantDraft, selectAIModel, type AIMode, type AIRequest } from './aiAssistantState';
+import { AIRequestError, aiRequestErrorMessage, appendChatRequest, createStreamedReplyBuffer, readAIAssistantDraft, readAIResponse, responseRequestError, restoredAIRequestNotice, saveAIAssistantDraft, selectAIModel, type AIMode, type AIRequest } from './aiAssistantState';
 
 interface AIAssistantSheetProps {
   isOpen: boolean;
@@ -268,6 +268,19 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   const verificationController = useRef<AbortController | null>(null);
   const backgroundVerification = useRef<AbortController | null>(null);
   const assistController = useRef<AbortController | null>(null);
+  // Live text of the reply being streamed (never persisted) and the received part
+  // of a reply that failed or was cancelled mid-stream (shown until the next request).
+  const [streamingReply, setStreamingReply] = useState<string | null>(null);
+  const [interruptedReply, setInterruptedReply] = useState<string | null>(null);
+  const streamBufferRef = useRef<ReturnType<typeof createStreamedReplyBuffer> | null>(null);
+  /** Stop the live stream; keep any received text as an interrupted reply. */
+  const settleStreamedReply = (keepPartial: boolean) => {
+    const buffer = streamBufferRef.current;
+    streamBufferRef.current = null;
+    buffer?.stop();
+    setStreamingReply(null);
+    if (keepPartial && buffer?.text.trim()) setInterruptedReply(buffer.text);
+  };
   const requestGeneration = useRef(0);
   const latestProposalMessageId = useRef<string | null>(null);
   const welcomeScrollRef = useRef(false);
@@ -289,6 +302,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     requestGeneration.current += 1;
     assistController.current?.abort();
     assistController.current = null;
+    settleStreamedReply(false);
     verificationController.current?.abort();
     requestInFlight.current = false;
     setLoading(false);
@@ -500,6 +514,13 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     });
     return () => cancelAnimationFrame(frame);
   }, [isOpen, chatMessages, loading, awaitingApiKey, keyStatus, requestError]);
+
+  // Follow a growing streamed reply only while the person is reading at the bottom.
+  useEffect(() => {
+    const content = contentRef.current;
+    if (!isOpen || !content || streamingReply === null) return;
+    if (content.scrollHeight - content.scrollTop - content.clientHeight < 160) content.scrollTop = content.scrollHeight;
+  }, [isOpen, streamingReply]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -800,16 +821,22 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     const controller = new AbortController();
     assistController.current?.abort();
     assistController.current = controller;
+    settleStreamedReply(false);
+    setInterruptedReply(null);
+    // Read-only replies arrive progressively; React state updates at most once per frame.
+    const streamBuffer = createStreamedReplyBuffer(text => { if (assistController.current === controller) setStreamingReply(text); });
+    streamBufferRef.current = streamBuffer;
     try {
       const customKey = localStorage.getItem('karkas_custom_api_key') || '';
       const customEnabled = localStorage.getItem('karkas_custom_ai_enabled') === 'true';
 
       requestTimeout = window.setTimeout(() => { timedOut = true; controller.abort(); }, AI_CHAT_CLIENT_TIMEOUT_MS);
-      const res = await karkasApiFetch('/api/ai/assist', {
+      const res = await karkasApiStream('/api/ai/assist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
         body: JSON.stringify({
+          stream: true,
           prompt: requestText,
           clientClock: { now: new Date().toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' },
           action: 'chat',
@@ -890,12 +917,14 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
             adaptiveProfile,
           },
         }),
-      });
+      }, streamBuffer.push);
       const rawData: unknown = await res.json().catch(() => { throw new AIRequestError('INVALID_RESPONSE'); });
       if (assistController.current !== controller) return;
       if (controller.signal.aborted) throw new AIRequestError(timedOut ? 'CLIENT_TIMEOUT' : 'CANCELLED');
       if (!res.ok) throw responseRequestError(rawData, res.status);
       const data = readAIResponse(rawData, 'chat');
+      // The final reply (after server-side guards) replaces the streamed text.
+      if (streamBufferRef.current === streamBuffer) settleStreamedReply(false);
       activeRequest.current = null;
       const hasPendingActions = [data.tasks, data.tabs, data.taskUpdates, data.taskDeletions].some(actions => (actions?.length || 0) > 0);
       const hasPendingChatActions = hasPendingActions;
@@ -931,6 +960,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       sound.activate();
     } catch (err) {
       if (assistController.current !== controller) return;
+      if (streamBufferRef.current === streamBuffer) settleStreamedReply(true);
       const error = controller.signal.aborted ? new AIRequestError(timedOut ? 'CLIENT_TIMEOUT' : 'CANCELLED') : err;
       setRequestError(aiRequestErrorMessage(error, lang));
       setRecoverableRequest(currentRequest);
@@ -958,6 +988,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     requestGeneration.current += 1;
     assistController.current?.abort();
     assistController.current = null;
+    settleStreamedReply(true);
     verificationController.current?.abort();
     verificationController.current = null;
     requestInFlight.current = false;
@@ -1139,7 +1170,25 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
 
               {applyNotice && <div role="status" aria-live="polite" className="border border-neutral-800 bg-[#111116] p-3 text-[15px] leading-[1.6] text-neutral-200">{applyNotice}</div>}
 
-              {loading && (
+              {interruptedReply && !loading && (
+                <div id="ai-interrupted-reply" className="karkas-ai-message is-assistant">
+                  <div className="karkas-ai-message-author">KARKAS AI</div>
+                  <AIChatText text={interruptedReply} />
+                  <p className="mt-3 text-sm text-neutral-400">{lang === 'uk' ? 'Відповідь перервано. Показано лише отриману частину; її не збережено в історії.' : 'The reply was interrupted. Only the received part is shown; it was not saved to history.'}</p>
+                </div>
+              )}
+
+              {loading && streamingReply && (
+                <div id="ai-streaming-reply" className="karkas-ai-message is-assistant" aria-busy="true">
+                  <div className="karkas-ai-message-author">KARKAS AI</div>
+                  <AIChatText text={streamingReply} streaming />
+                  <button id="ai-request-cancel-btn" type="button" onClick={cancelAIRequest} className="mt-3 min-h-11 border border-neutral-700 px-3 py-2 text-xs text-neutral-300 hover:border-white hover:text-white">
+                    {lang === 'uk' ? 'Зупинити відповідь' : 'Stop response'}
+                  </button>
+                </div>
+              )}
+
+              {loading && !streamingReply && (
                 <div role="status" aria-live="polite" className="p-3 border border-neutral-800 bg-black/40 flex flex-col items-center justify-center gap-3 text-center">
                   <div className="w-6 h-6 border-2 border-white border-t-transparent animate-spin rounded-full" />
                   <span className="text-xs font-sans tracking-widest text-neutral-300 uppercase animate-pulse">

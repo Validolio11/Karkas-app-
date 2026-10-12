@@ -329,10 +329,10 @@ async function invokeService(operation, body = {}, useStoredKey = false, options
 
 const aiRequests = new Map();
 
-async function invokeCancellableAi(operation, input, event) {
+async function invokeCancellableAi(operation, input, event, streamOptions = {}) {
   const { desktopRequestId, ...body } = input || {};
   // Preserve compatibility with renderers that do not provide a request ID.
-  if (desktopRequestId === undefined) return invokeService(operation, body, true);
+  if (desktopRequestId === undefined && !streamOptions.onStreamDelta) return invokeService(operation, body, true);
   if (typeof desktopRequestId !== 'string' || !/^[a-zA-Z0-9_-]{8,128}$/.test(desktopRequestId)) throw new Error('Invalid AI request identifier');
   const key = `${event.sender.id}:${desktopRequestId}`;
   if (aiRequests.has(key)) throw new Error('AI request identifier is already active');
@@ -340,7 +340,7 @@ async function invokeCancellableAi(operation, input, event) {
   const cancel = () => controller.abort();
   aiRequests.set(key, { sender: event.sender, controller });
   event.sender.once('destroyed', cancel);
-  try { return await invokeService(operation, body, true, { signal: controller.signal }); }
+  try { return await invokeService(operation, body, true, { signal: controller.signal, ...streamOptions }); }
   finally {
     aiRequests.delete(key);
     event.sender.removeListener('destroyed', cancel);
@@ -405,6 +405,18 @@ function registerIpc() {
   });
   handle('karkas:ai:clear-key', async () => { await secrets.clearGeminiApiKey(); });
   handle('karkas:ai:assist', (input, event) => invokeCancellableAi('assist', input, event));
+  // Streamed chat: reply fragments go only to the requesting renderer, tagged with its
+  // own validated request ID; the invoke result is still the final { status, body }.
+  handle('karkas:ai:assist-stream', (input, event) => {
+    const requestId = input?.desktopRequestId;
+    if (typeof requestId !== 'string' || !/^[a-zA-Z0-9_-]{8,128}$/.test(requestId)) throw new Error('Invalid AI request identifier');
+    const sender = event.sender;
+    return invokeCancellableAi('assist', { ...input, stream: true }, event, {
+      onStreamDelta: (text) => {
+        if (typeof text === 'string' && text && !sender.isDestroyed()) sender.send('karkas:ai:stream-delta', { requestId, text });
+      },
+    });
+  });
   handle('karkas:ai:breakdown', (input) => invokeService('breakdown', input || {}, true));
   handle('karkas:ai:recommendations', (input) => invokeService('recommendations', input || {}, true));
   handle('karkas:ai:voice-token', (input) => invokeService('voiceToken', input || {}, true));

@@ -178,3 +178,36 @@ test('negated and speculative labels do not explain a refused start', () => {
   const valid = constrainReadyPersonalResponse({ reply: 'Reduce work', strategy: { status: 'ready', actions: [], nextAction: 'Rest first' } }, profile, 'Я не почав, бо не маю часу через роботу', 'known-reason', true);
   assert.equal(valid.reply, 'Reduce work');
 });
+
+test('free conversation falls back to the read-only general route instead of personal discovery', () => {
+  for (const prompt of ['Як мені зосередитись?', 'Дякую, це допомогло', 'Сьогодні важкий день', 'Thanks, that helped']) {
+    assert.equal(classifyPersonalChatRequest(prompt, 'auto', tasks).route, 'general', prompt);
+  }
+  // Explicit personal signals still open the personal path.
+  for (const prompt of ['Я не почав працювати', 'Підбери наступні дії для моєї цілі', 'Хочу більше часу для сім’ї', 'Чому я відкладаю справи?']) {
+    assert.equal(classifyPersonalChatRequest(prompt, 'auto', tasks).route, 'personal', prompt);
+  }
+  // Commands keep priority over the general fallback.
+  assert.equal(classifyPersonalChatRequest('Видали завдання English', 'auto', tasks).route, 'task_command');
+  const general = constrainOrdinaryChatResponse(early, 'general');
+  for (const key of ['tasks', 'tabs', 'taskUpdates', 'taskDeletions'] as const) assert.deepEqual(general[key], []);
+  assert.equal(general.strategy, undefined);
+  assert.equal(general.reply, early.reply);
+});
+
+test('a reply to the visible discovery question or pending summary continues discovery', () => {
+  assert.equal(classifyPersonalChatRequest('Мабуть, втома', 'auto', tasks, createPersonalStrategyProfile()).route, 'general');
+  assert.equal(classifyPersonalChatRequest('Мабуть, втома', 'auto', tasks, createPersonalStrategyProfile(), undefined, { answeringDiscovery: true }).route, 'personal');
+  // A question or an ordinary information request is not an answer.
+  assert.equal(classifyPersonalChatRequest('А що ти маєш на увазі?', 'auto', tasks, createPersonalStrategyProfile(), undefined, { answeringDiscovery: true }).route, 'general');
+  assert.equal(classifyPersonalChatRequest('Так', 'auto', tasks, understandingProfile()).route, 'personal');
+});
+
+test('natural discovery questions are accepted while plans, schedules and several questions stay rejected', () => {
+  for (const question of ['А що саме відбувається перед тим, як ви відкладаєте справу?', 'Розумію. Що найчастіше заважає почати?', 'Is there a moment in the day when starting feels easier?']) {
+    assert.equal(safeDiscoveryQuestion(question), true, question);
+  }
+  for (const question of ['', '   ?', 'Що заважає? Скільки часу є?', `${'Дуже довге питання '.repeat(30)}?`, 'Розумію.\nЩо заважає?', 'Чи готовий ти завтра працювати над портфоліо?', 'No question here.']) {
+    assert.equal(safeDiscoveryQuestion(question), false, question);
+  }
+});

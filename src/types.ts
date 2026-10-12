@@ -31,6 +31,23 @@ export interface TaskSchedule {
   leadMinutes: number; // Add the occurrence this many minutes before its start
 }
 
+export type TaskActivityKind = 'created' | 'edited' | 'rescheduled' | 'started' | 'paused' | 'completed' | 'reopened' | 'progress' | 'time_adjusted';
+
+/** App-recorded history, never accepted as editable AI task fields. Missing legacy history is unknown. */
+export interface TaskActivityEvent {
+  id: string;
+  at: number;
+  kind: TaskActivityKind;
+  previousPlannedDate?: string | null;
+  plannedDate?: string | null;
+  previousDeadlineDate?: string | null;
+  deadlineDate?: string | null;
+  previousScheduledStartAt?: string | null;
+  scheduledStartAt?: string | null;
+  /** Deterministic state key prevents double recording a pre-annotated action. */
+  changeKey?: string;
+}
+
 export interface PSTask {
   id: string;
   title: string;
@@ -43,6 +60,8 @@ export interface PSTask {
   pinned: boolean;
   note?: string;
   createdAt: number;
+  updatedAt?: number;
+  activityTrail?: TaskActivityEvent[]; // Most recent 64 app-recorded events, chronological.
   plannedDate?: string; // Local calendar day (YYYY-MM-DD), independent of timed scheduling.
   deadlineDate?: string; // Inclusive local calendar day (YYYY-MM-DD).
   schedule?: TaskSchedule;

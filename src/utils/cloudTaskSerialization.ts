@@ -1,4 +1,5 @@
 import type { DeletedTask, PSTask } from '../types';
+import { mergeTaskActivityTrail } from './taskActivity';
 
 /** Explicit legacy-root serialization prevents task features from disappearing during cloud sync. */
 export function serializeTaskForCloud<T extends PSTask | DeletedTask>(task: T, now = Date.now()): T {
@@ -12,6 +13,8 @@ export function serializeTaskForCloud<T extends PSTask | DeletedTask>(task: T, n
     if ('deletionReason' in task && (task.deletionReason === 'accidental' || task.deletionReason === 'cancelled')) result.deletionReason = task.deletionReason;
   }
   if (task.note != null) result.note = task.note;
+  if (Number.isFinite(task.updatedAt) && task.updatedAt! >= 0) result.updatedAt = task.updatedAt;
+  if (Array.isArray(task.activityTrail)) result.activityTrail = mergeTaskActivityTrail(undefined, task.activityTrail).map(event => ({ ...event }));
   if (task.plannedDate !== undefined) result.plannedDate = task.plannedDate;
   if (task.deadlineDate !== undefined) result.deadlineDate = task.deadlineDate;
   if (task.schedule) result.schedule = { ...task.schedule };

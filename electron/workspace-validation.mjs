@@ -41,6 +41,20 @@ function validSchedule(value) {
   catch { return false; }
 }
 
+/** @param {unknown} value */
+function validTaskActivity(value) {
+  if (!object(value) || !id(value.id) || !number(value.at) || !text(value.kind) ||
+      !['created', 'edited', 'rescheduled', 'started', 'paused', 'completed', 'reopened', 'progress', 'time_adjusted'].includes(value.kind) ||
+      !optional(value, 'changeKey', v => text(v) && v.length <= 128)) return false;
+  for (const key of ['previousPlannedDate', 'plannedDate', 'previousDeadlineDate', 'deadlineDate']) {
+    if (!optional(value, key, v => v === null || validDate(v))) return false;
+  }
+  for (const key of ['previousScheduledStartAt', 'scheduledStartAt']) {
+    if (!optional(value, key, v => v === null || text(v) && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(v) && Number.isFinite(Date.parse(v)))) return false;
+  }
+  return true;
+}
+
 /** @param {unknown} value @param {boolean} deleted */
 function validTask(value, deleted) {
   if (!object(value) || !id(value.id) || !text(value.title) || !id(value.phase) ||
@@ -48,6 +62,11 @@ function validTask(value, deleted) {
       !integer(value.currentStep) || value.currentStep > value.steps ||
       typeof value.done !== 'boolean' || typeof value.pinned !== 'boolean' || !number(value.createdAt)) return false;
   if (deleted && !number(value.deletedAt)) return false;
+  if (!optional(value, 'updatedAt', number)) return false;
+  if (value.activityTrail !== undefined) {
+    if (!Array.isArray(value.activityTrail) || value.activityTrail.length > 64 || value.activityTrail.some(event => !validTaskActivity(event)) ||
+        new Set(value.activityTrail.map(event => event.id)).size !== value.activityTrail.length) return false;
+  }
   if (!optional(value, 'plannedDate', validDate) || !optional(value, 'deadlineDate', validDate)) return false;
   for (const key of ['note', 'timerStepId', 'timerSessionId', 'schedulePlanId', 'scheduleNextStartAt']) if (!optional(value, key, text)) return false;
   if (value.timeSessions !== undefined && (!object(value.timeSessions) || Object.entries(value.timeSessions).some(([key, session]) =>

@@ -5,6 +5,7 @@ import { isNewerAppVersion, isValidAppVersion } from './utils/appVersion';
 import React, { useState, useEffect, useMemo } from 'react';
 import { PSTask, DeletedTask, TaskTab, FilterMode, WorkflowStats, TaskStepItem, AdaptiveProfile, AITaskUpdate, AITimerSettings, AIDeletedTaskRef, NotepadNote, NewTaskInput } from './types';
 import { isTaskDate } from './utils/taskDates';
+import { annotateTaskChanges } from './utils/taskActivity';
 import { isCompletedArchivedTask, selectRelevantArchivedTasks } from './utils/taskArchive';
 import { TaskCard } from './components/TaskCard';
 import { DashboardView } from './components/DashboardView';
@@ -174,8 +175,12 @@ export default function App() {
   const [tabs, setTabs] = useState<TaskTab[]>(() => initialWorkspace.workspace.tabs.map((tab, index, all) => ({
     ...tab, color: tab.color || getRandomTabColor(all.slice(0, index)),
   })));
-  const [tasks, setTasks] = useState<PSTask[]>(() => sanitizeTasksTimerSafeguard(initialWorkspace.workspace.tasks.map(task =>
+  const [tasks, setTaskState] = useState<PSTask[]>(() => sanitizeTasksTimerSafeguard(initialWorkspace.workspace.tasks.map(task =>
     isSystemView(task.phase) && !initialWorkspace.workspace.tabs.some(tab => tab.id === task.phase) ? { ...task, phase: 'focus' } : task)));
+  const setTasks = React.useCallback<React.Dispatch<React.SetStateAction<PSTask[]>>>((action) => {
+    const now = Date.now();
+    setTaskState(previous => annotateTaskChanges(previous, typeof action === 'function' ? action(previous) : action, now));
+  }, []);
   const latestTasksRef = React.useRef(tasks);
   latestTasksRef.current = tasks;
   const notifiedTimersRef = React.useRef(new Set<string>());
@@ -551,15 +556,16 @@ export default function App() {
           taskId: targetTask.id,
           clientClock: { now: new Date().toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' },
           title: targetTask.title,
+          task: targetTask,
           note: targetTask.note,
           currentSteps: targetTask.stepList?.map((s) => s.title) || [],
           lang,
           customApiKey: customEnabled ? customKey : undefined,
           selectedModel: customEnabled ? customModel : undefined,
           fullAppContext: {
-            activeTasks: activeTasks.map((t) => ({ title: t.title, phase: t.phase, priority: t.priority })),
-            completedTasks: completedTasks.map((t) => ({ title: t.title, phase: t.phase })),
-            deletedTasks: selectRelevantArchivedTasks(tasks, deletedTasks).slice(0, 10).map((t) => ({ title: t.title, done: t.done, deletionReason: t.deletionReason })),
+            activeTasks,
+            completedTasks,
+            deletedTasks: selectRelevantArchivedTasks(tasks, deletedTasks).slice(0, 10),
             tabs: tabs.map((tb) => ({ id: tb.id, name: tb.name })),
             stats,
           },
@@ -859,7 +865,7 @@ export default function App() {
     currentFireEnabledRef.current = value.settings.fireEnabled;
     currentLangRef.current = value.settings.lang as Language;
     currentAiIconVariantRef.current = value.settings.aiIconVariant as AIIconId;
-    setTasks(value.tasks);
+    setTaskState(value.tasks);
     setTabs(value.tabs);
     setDeletedTasks(value.deletedTasks);
     setSoundEnabled(value.settings.soundEnabled);
@@ -1449,7 +1455,7 @@ export default function App() {
     if (!stageStrategyTransaction(localStorage, strategyOwner, latestTasksRef.current, nextTasks, nextProfile)) {
       setTimerNotice(lang === 'uk' ? 'Не вдалося зберегти зміну плану. Завдання не змінено; перевірте незавершене відновлення.' : 'Could not persist the plan change. Tasks were not changed; check pending recovery.'); return false;
     }
-    latestTasksRef.current = nextTasks; currentTasksRef.current = nextTasks; setTasks(nextTasks);
+    latestTasksRef.current = nextTasks; currentTasksRef.current = nextTasks; setTaskState(nextTasks);
     personalProfileRef.current = nextProfile; setPersonalProfile(nextProfile);
     try {
       const owner = strategyOwner;
@@ -1506,7 +1512,7 @@ export default function App() {
     if (!strategyReady) return;
     const recovered = recoverStrategyTransaction(localStorage, strategyOwner, latestTasksRef.current);
     if (recovered.status === 'recovered' && recovered.profile) {
-      latestTasksRef.current = recovered.tasks; currentTasksRef.current = recovered.tasks; setTasks(recovered.tasks);
+      latestTasksRef.current = recovered.tasks; currentTasksRef.current = recovered.tasks; setTaskState(recovered.tasks);
       personalProfileRef.current = recovered.profile; setPersonalProfile(recovered.profile);
       try {
         const owner = strategyOwner;
@@ -1882,11 +1888,12 @@ export default function App() {
   const handleDelete = (id: string) => {
     const taskToDelete = tasks.find((t) => t.id === id);
     if (taskToDelete) {
-      const sanitizedToDelete = pauseTaskTimer(taskToDelete);
+      const now = Date.now();
+      const sanitizedToDelete = annotateTaskChanges([taskToDelete], [pauseTaskTimer(taskToDelete, now)], now)[0];
       setRecentlyDeleted(sanitizedToDelete);
       const deletedItem: DeletedTask = {
         ...sanitizedToDelete,
-        deletedAt: Date.now(),
+        deletedAt: now,
       };
       setDeletedTasks((prev) => [deletedItem, ...prev.filter((d) => d.id !== id)]);
     }
@@ -1926,10 +1933,11 @@ export default function App() {
     sound.activate();
     const { deletedAt, deletionReason, ...restTask } = currentArchived;
     const fallbackTab = tabs[0]?.id || 'focus';
-    const safeTask = reopenTask({
+    const now = Date.now();
+    const safeTask = annotateTaskChanges([restTask], [reopenTask({
       ...restTask,
       phase: tabs.some((tb) => tb.id === restTask.phase) ? restTask.phase : fallbackTab,
-    }, Date.now());
+    }, now)], now)[0];
     setTasks((prev) => [safeTask, ...prev.filter(existing => existing.id !== task.id)]);
     setDeletedTasks((prev) => prev.filter((d) => d.id !== task.id));
     setRecentlyDeleted(prev => prev?.id === task.id ? null : prev);

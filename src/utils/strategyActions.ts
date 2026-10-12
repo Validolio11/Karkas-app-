@@ -5,6 +5,7 @@ import { strategyOwnerKey } from './personalStrategy';
 import { isPersonalStrategyReady, normalizeStrategyDiscovery } from './strategyDiscovery';
 import { canonical } from './canonical';
 import { MAX_AUTONOMOUS_STRATEGY_ACTIONS } from './strategyLimits';
+import { annotateTaskChanges } from './taskActivity';
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 const same = (a: unknown, b: unknown) => canonical(a) === canonical(b);
@@ -93,6 +94,9 @@ export function applyStrategyActions(options: ApplyStrategyOptions) {
       }
     }
     if (before && same(before, after)) continue;
+    // The action journal and the paired transaction must store the same fully
+    // annotated snapshot; stamping metadata later would make safe undo fail.
+    after = annotateTaskChanges(before ? [before] : [], [after], now)[0];
     const journal: StrategyActionRecord = { id, turnId, ownerId: strategyOwnerKey(ownerId), goalId: goal.id,
       reason: action.reason.trim(), taskId, before, after: clone(after), appliedAt: now };
     tasks = before ? tasks.map(task => task.id === taskId ? after : task) : [...tasks, after];
@@ -109,7 +113,26 @@ export function undoStrategyAction(options: { tasks: PSTask[]; profile: Personal
   if (ownerId !== currentOwnerId || !journal || journal.ownerId !== strategyOwnerKey(ownerId) || journal.undoneAt || !current || !same(current, journal.after)) {
     return { tasks, profile, undone: false, reason: 'Task changed after the strategy action or account differs' };
   }
-  return { tasks: journal.before ? tasks.map(task => task.id === journal.taskId ? clone(journal.before!) : task) : tasks.filter(task => task.id !== journal.taskId),
-    profile: { ...profile, actionHistory: profile.actionHistory.map(item => item.id === actionId ? { ...item, undoneAt: options.now ?? Date.now() } : item),
+  const now = options.now ?? Date.now();
+  const restored = journal.before ? {
+    ...clone(journal.before), updatedAt: current.updatedAt, activityTrail: clone(current.activityTrail ?? []),
+  } : null;
+  const nextTasks = restored ? annotateTaskChanges(tasks, tasks.map(task => task.id === journal.taskId ? restored : task), now)
+    : tasks.filter(task => task.id !== journal.taskId);
+  const restoredSnapshot = restored && nextTasks.find(task => task.id === journal.taskId);
+  const journalIndex = profile.actionHistory.indexOf(journal);
+  let previousActionIndex = -1;
+  if (restoredSnapshot && journal.before) {
+    // Only a confirmed undo returning to an exact previous action snapshot may
+    // rebase its audit metadata. Other edits still fail the full equality check.
+    for (let index = journalIndex - 1; index >= 0; index--) {
+      const previousAction = profile.actionHistory[index];
+      if (!previousAction.undoneAt && previousAction.taskId === journal.taskId && previousAction.ownerId === journal.ownerId
+        && same(previousAction.after, journal.before)) { previousActionIndex = index; break; }
+    }
+  }
+  return { tasks: nextTasks,
+    profile: { ...profile, actionHistory: profile.actionHistory.map((item, index) => item.id === actionId ? { ...item, undoneAt: now }
+      : index === previousActionIndex && restoredSnapshot ? { ...item, after: clone(restoredSnapshot) } : item),
       goals: journal.before ? profile.goals : profile.goals.map(goal => ({ ...goal, taskIds: goal.taskIds.filter(id => id !== journal.taskId) })) }, undone: true };
 }

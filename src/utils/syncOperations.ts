@@ -1,6 +1,7 @@
 import { canonical } from './canonical';
 import type { DeletedTask, PSTask, TaskTab, TaskStepItem } from '../types';
 import type { SyncMutationIdentity, WorkspaceState } from './syncState';
+import { mergeTaskActivityTrail } from './taskActivity';
 
 type Lifecycle = 'active' | 'deleted' | 'purged';
 type Patch<T> = Partial<Omit<T, 'id'>>;
@@ -211,6 +212,14 @@ export function applyWorkspaceMutation(remote: WorkspaceState, mutation: Workspa
     if (!lifecycle) continue;
     const fallback = { id: operation.id } as DeletedTask;
     const patch = operation.patch ? { ...operation.patch } : undefined;
+    // Offline devices may independently append history. An absolute array
+    // patch must not erase the events already recorded on the other device.
+    if (patch?.activityTrail !== undefined) patch.activityTrail = mergeTaskActivityTrail(current?.value.activityTrail,
+      Array.isArray(patch.activityTrail) ? patch.activityTrail : undefined);
+    if (patch?.updatedAt !== undefined) {
+      if (Number.isFinite(patch.updatedAt) && patch.updatedAt >= 0) patch.updatedAt = Math.max(current?.value.updatedAt ?? 0, patch.updatedAt);
+      else delete patch.updatedAt;
+    }
     const staleReset = patch?.timeResetAt !== undefined && patch.timeResetAt < (current?.value.timeResetAt ?? 0);
     if (staleReset) {
       delete patch.timeResetAt;
@@ -223,7 +232,9 @@ export function applyWorkspaceMutation(remote: WorkspaceState, mutation: Workspa
     const timeFields = new Set(['timeSpentSeconds', 'timeSessions', 'timeResetAt', 'timerRunning', 'timerStartedAt', 'timerSessionId',
       'timerStepId', 'countdownRemainingSeconds', 'countdownDurationSeconds', 'timerMode', 'autoPausedOverdue']);
     if (obsoleteTime && patch) for (const field of timeFields) delete (patch as Record<string, unknown>)[field];
-    const unset = obsoleteTime ? operation.unset?.filter(field => !timeFields.has(field)) : operation.unset;
+    // App-owned chronology is cumulative and cannot be removed by older
+    // clients or an undo patch that lacks the newer metadata fields.
+    const unset = operation.unset?.filter(field => field !== 'activityTrail' && field !== 'updatedAt' && (!obsoleteTime || !timeFields.has(field)));
     const value = applyPatch(current?.value ?? fallback, patch, unset);
     if (operation.timeDelta !== undefined && sameTimeEpoch) value.timeSpentSeconds = (value.timeSpentSeconds ?? 0) + operation.timeDelta;
     if (operation.stepChanges || operation.stepOrder) {

@@ -329,6 +329,24 @@ async function invokeService(operation, body = {}, useStoredKey = false, options
 
 const aiRequests = new Map();
 
+async function invokeCancellableAi(operation, input, event) {
+  const { desktopRequestId, ...body } = input || {};
+  // Preserve compatibility with renderers that do not provide a request ID.
+  if (desktopRequestId === undefined) return invokeService(operation, body, true);
+  if (typeof desktopRequestId !== 'string' || !/^[a-zA-Z0-9_-]{8,128}$/.test(desktopRequestId)) throw new Error('Invalid AI request identifier');
+  const key = `${event.sender.id}:${desktopRequestId}`;
+  if (aiRequests.has(key)) throw new Error('AI request identifier is already active');
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  aiRequests.set(key, { sender: event.sender, controller });
+  event.sender.once('destroyed', cancel);
+  try { return await invokeService(operation, body, true, { signal: controller.signal }); }
+  finally {
+    aiRequests.delete(key);
+    event.sender.removeListener('destroyed', cancel);
+  }
+}
+
 function registerIpc() {
   on('karkas:window:minimize', () => mainWindow?.minimize());
   on('karkas:window:toggle-maximize', () => mainWindow?.isMaximized() ? mainWindow.unmaximize() : mainWindow?.maximize());
@@ -386,27 +404,11 @@ function registerIpc() {
     return { models: Array.isArray(response.body.models) ? response.body.models : [] };
   });
   handle('karkas:ai:clear-key', async () => { await secrets.clearGeminiApiKey(); });
-  handle('karkas:ai:assist', (input) => invokeService('assist', input || {}, true));
+  handle('karkas:ai:assist', (input, event) => invokeCancellableAi('assist', input, event));
   handle('karkas:ai:breakdown', (input) => invokeService('breakdown', input || {}, true));
   handle('karkas:ai:recommendations', (input) => invokeService('recommendations', input || {}, true));
   handle('karkas:ai:voice-token', (input) => invokeService('voiceToken', input || {}, true));
-  handle('karkas:ai:transcribe-audio', async (input, event) => {
-    const { desktopRequestId, ...body } = input || {};
-    // Older renderers remain compatible; new callers have a sender-scoped ID.
-    if (desktopRequestId === undefined) return invokeService('transcribeAudio', body, true);
-    if (typeof desktopRequestId !== 'string' || !/^[a-zA-Z0-9_-]{8,128}$/.test(desktopRequestId)) throw new Error('Invalid AI request identifier');
-    const key = `${event.sender.id}:${desktopRequestId}`;
-    if (aiRequests.has(key)) throw new Error('AI request identifier is already active');
-    const controller = new AbortController();
-    const cancel = () => controller.abort();
-    aiRequests.set(key, { sender: event.sender, controller });
-    event.sender.once('destroyed', cancel);
-    try { return await invokeService('transcribeAudio', body, true, { signal: controller.signal }); }
-    finally {
-      aiRequests.delete(key);
-      event.sender.removeListener('destroyed', cancel);
-    }
-  });
+  handle('karkas:ai:transcribe-audio', (input, event) => invokeCancellableAi('transcribeAudio', input, event));
   handle('karkas:ai:cancel-request', ({ requestId }, event) => {
     if (typeof requestId !== 'string' || !/^[a-zA-Z0-9_-]{8,128}$/.test(requestId)) return { cancelled: false };
     const request = aiRequests.get(`${event.sender.id}:${requestId}`);

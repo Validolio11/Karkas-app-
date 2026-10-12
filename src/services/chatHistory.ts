@@ -5,6 +5,7 @@ import { readAccountStorage, writeAccountStorage, removeAccountStorage } from '.
 export interface PersistedAIChatMessage {
   role: 'user' | 'assistant';
   content: string;
+  sentAt?: number;
   id?: string;
   response?: AIResponse;
   proposalStatus?: 'pending' | 'stale' | 'applied';
@@ -35,6 +36,7 @@ export function loadAIChatHistory(accountId?: string | null): PersistedAIChatMes
         try { if (message.response && message.role === 'assistant') response = readAIResponse(message.response, 'chat'); } catch { /* Preserve the conversation even if an old card is malformed. */ }
         return {
           role: message.role, content: message.content,
+          ...(typeof message.sentAt === 'number' && Number.isFinite(message.sentAt) && message.sentAt > 0 && message.sentAt <= 8640000000000000 ? { sentAt: message.sentAt } : {}),
           ...(typeof message.id === 'string' ? { id: message.id } : {}),
           ...(response ? { response, proposalStatus: message.proposalStatus === 'applied' ? 'applied' as const : 'stale' as const } : {}),
           ...(typeof message.actionId === 'string' ? { actionId: message.actionId } : {}),
@@ -90,7 +92,8 @@ export function recentAIChatContext(messages: PersistedAIChatMessage[], limit = 
   // A retried message is already sent as the current prompt, not a second
   // answer to the preceding question. Keep earlier identical text by its ID.
   return messages.slice(start).filter(message => !currentTurnId || message.id !== currentTurnId)
-    .slice(-limit).map(({ role, content }) => ({ role, content }));
+    .slice(-limit).map(({ role, content, sentAt }) => ({ role, content: typeof sentAt === 'number' && Number.isFinite(sentAt) && sentAt > 0 && sentAt <= 8640000000000000
+      ? `[Message recorded at ${new Date(sentAt).toISOString()}; resolve relative dates against this instant in the client time zone.]\n${content}` : content }));
 }
 
 export function visibleAIChatMessages(messages: PersistedAIChatMessage[], introductionId: string | null): { messages: PersistedAIChatMessage[]; previousCount: number } {

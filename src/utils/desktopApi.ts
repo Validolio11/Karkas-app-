@@ -42,9 +42,9 @@ export async function karkasApiFetch(input: string, init?: RequestInit): Promise
     return verifyAndStoreDesktopApiKey(typeof body.apiKey === 'string' ? body.apiKey : '', init?.signal);
   }
 
-  if (operation === 'transcribeAudio') {
+  if (operation === 'transcribeAudio' || operation === 'assist') {
     const requestId = crypto.randomUUID();
-    const result = await awaitDesktop(() => desktop.ai.transcribeAudio({ ...body, desktopRequestId: requestId }), init?.signal,
+    const result = await awaitDesktop(() => desktop.ai[operation]({ ...body, desktopRequestId: requestId }), init?.signal,
       () => { if (typeof desktop.ai.cancelRequest === 'function') void desktop.ai.cancelRequest(requestId).catch(() => {}); });
     if ('error' in result) return responseFromDesktop(503, { code: result.error.code, error: result.error.message });
     return responseFromDesktop(result.value.status, result.value.body);
@@ -52,9 +52,7 @@ export async function karkasApiFetch(input: string, init?: RequestInit): Promise
 
   const result = await awaitDesktop(() => operation === 'checkLatest'
     ? desktop.updates.checkLatest()
-    : operation === 'assist'
-      ? desktop.ai.assist(body)
-      : operation === 'breakdown'
+    : operation === 'breakdown'
         ? desktop.ai.breakdown(body)
         : operation === 'voiceToken'
           ? desktop.ai.voiceToken(body)

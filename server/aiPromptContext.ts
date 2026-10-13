@@ -66,11 +66,21 @@ export function boundedPersonalPromptContext(profile: PersonalStrategyProfile) {
 
 type PromptTask = Partial<PSTask> & { deletedAt?: number; deletionReason?: string };
 
+/**
+ * The stored priority is a bare 1|2|3 where 1 is the most urgent. Models misread the
+ * number (3 as "high", 2 as "low"), so every task record carries its meaning as data;
+ * the static system prompts stay byte-identical.
+ */
+export function priorityLabel(priority: unknown): 'high' | 'normal' | 'low' | undefined {
+  return priority === 1 ? 'high' : priority === 2 ? 'normal' : priority === 3 ? 'low' : undefined;
+}
+
 /** Keep all target identities and current settings without duplicating sync/timer journals. */
 export function compactTaskPromptContext(tasks: readonly PromptTask[], options: { detailTaskIds?: readonly string[] } = {}) {
   const detailed = new Set(options.detailTaskIds || []);
   return tasks.map(task => ({
     id: task.id, title: task.title, phase: task.phase, priority: task.priority,
+    ...(priorityLabel(task.priority) ? { priorityLabel: priorityLabel(task.priority) } : {}),
     done: task.done === true,
     progress: { completedSteps: task.currentStep ?? 0, totalSteps: task.steps ?? 0 },
     ...(task.createdAt !== undefined ? { createdAt: task.createdAt } : {}),
@@ -108,11 +118,12 @@ export function compactTaskPromptContext(tasks: readonly PromptTask[], options: 
  */
 export const KARKAS_ASSISTANT_PERSONA = `ROLE AND STYLE:
 You are the Karkas assistant inside the person's task workspace: warm, direct and concise, like a smart colleague.
-- In Ukrainian write natural, modern language: no bureaucratic or calqued phrasing and no "Шановний". Use "ти" only if the person writes with "ти"; otherwise stay neutral.
+- In Ukrainian write natural, modern literary Ukrainian in current orthography ("проєкт", not "проект"): no russianisms, surzhyk, bureaucratic or calqued phrasing, no odd word-for-word translations (not "зосередьтеся на цій ємності") and no "Шановний"; use Ukrainian professional terms (розкадровка, таймлайн, ключові кадри, композиція). Use "ти" only if the person writes with "ти", otherwise "ви"; never mix them in one reply. When the request context has an ADDRESS FORM line, follow it.
 - Answer first, then give brief reasoning. No filler, canned praise or generic productivity lectures.
 - Use markdown lists or short headings only when they help scanning; use **bold** only for key facts. Keep task titles and structured fields plain.
 - Ask at most one clarifying question, and only when it is needed.
-- Never claim that tasks, dates, timers or settings were changed, saved or applied unless the application confirmed it.`;
+- Describe behaviour, not conditions: no medical or psychological diagnoses or labels (depression, ADHD/СДУГ, burnout, "симптом виснаження"). Suggest a professional only if the person mentions serious distress.
+- Never claim that tasks, dates, timers or settings were changed, saved or applied unless the application confirmed it; an unapplied proposal changed nothing.`;
 
 type TemporalPromptRecord = {
   id?: string;
@@ -164,10 +175,22 @@ export function mergeTemporalTaskContext(tasks: ReturnType<typeof compactTaskPro
 type ChatTurn = { role: 'user' | 'model'; parts: { text: string }[] };
 
 /**
+ * The client's record of what happened to a proposal in an earlier assistant reply.
+ * The reply text alone reads as if its changes were made, so the model gets the real status.
+ */
+export const PROPOSAL_STATUS_NOTES: Record<'applied' | 'partial' | 'not_applied', string> = {
+  applied: '[App note: the person applied the proposal in the previous assistant reply.]',
+  partial: '[App note: the proposal in the previous assistant reply was only PARTLY applied; some of its changes did not happen. WORKSPACE CONTEXT shows what is real.]',
+  not_applied: '[App note: the proposal in the previous assistant reply was NOT applied; none of its changes happened.]',
+};
+
+/**
  * Gemini multi-turn contents: alternating roles that start with 'user' and end
  * with the current user turn. Consecutive same-role messages become one turn
  * with several parts; a leading model message gets a short user prefix so the
  * assistant's earlier question is not lost. History stays data (see system rules).
+ * A reply that carried a proposal is followed by an app note in the user role with
+ * its real status, so the model's own turns stay clean and are not imitated.
  */
 export function chatHistoryContents(history: unknown, finalUserText: string): ChatTurn[] {
   const turns: ChatTurn[] = [];
@@ -179,7 +202,10 @@ export function chatHistoryContents(history: unknown, finalUserText: string): Ch
   for (const message of Array.isArray(history) ? history as any[] : []) {
     if (!message || typeof message !== 'object' || typeof message.content !== 'string' || !message.content.trim()) continue;
     const role = message.role === 'user' ? 'user' : message.role === 'assistant' || message.role === 'model' ? 'model' : undefined;
-    if (role) push(role, message.content);
+    if (!role) continue;
+    push(role, message.content);
+    const status = role === 'model' && ['applied', 'partial', 'not_applied'].includes(message.proposalStatus) ? message.proposalStatus as keyof typeof PROPOSAL_STATUS_NOTES : undefined;
+    if (status) push('user', PROPOSAL_STATUS_NOTES[status]);
   }
   if (turns[0]?.role === 'model') turns.unshift({ role: 'user', parts: [{ text: '[Earlier conversation follows.]' }] });
   push('user', finalUserText);

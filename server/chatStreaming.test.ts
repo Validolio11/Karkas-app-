@@ -70,6 +70,8 @@ const rejected = (status: number, providerStatus: string) => json({ error: { cod
 const base = { action: 'chat', lang: 'uk', customApiKey: 'test-only-fake-key', selectedModel: 'gemini-3.1-flash-lite',
   clientClock: { now: '2026-10-12T09:00:00.000Z', timeZone: 'Europe/Kyiv' } };
 const GENERAL = 'Як мені краще зосередитись після обіду?';
+// The help route stays prose-only: no proposal tools.
+const HELP = 'Поясни, що таке техніка помодоро';
 
 /** Minimal Express-like response that records SSE output. */
 function fakeHttpResponse() {
@@ -99,7 +101,7 @@ const httpAssist = async (body: any, signal?: AbortSignal) => {
   return res;
 };
 
-test('a read-only route streams plain text deltas, then a done event with the full final body', async () => {
+test('a prose-only route streams plain text deltas, then a done event with the full final body', async () => {
   mockProvider(({ streaming, body }) => {
     assert.equal(streaming, true);
     assert.equal(body.generationConfig?.responseMimeType, undefined);
@@ -110,9 +112,10 @@ test('a read-only route streams plain text deltas, then a done event with the fu
     assert.doesNotMatch(system, /OPERATION FIELDS/);
     // Same thinking config as the unary path for this route (general: minimal).
     assert.deepEqual(body.generationConfig.thinkingConfig, { thinkingLevel: 'MINIMAL' });
+    assert.equal(body.tools, undefined);
     return sseResponse(['Спробуйте ', 'коротку **прогулянку**', ' після обіду.']);
   });
-  const res = await httpAssist({ ...base, prompt: GENERAL, stream: true });
+  const res = await httpAssist({ ...base, prompt: HELP, stream: true });
   assert.match(res.headers['content-type'], /text\/event-stream/);
   assert.equal(res.writableEnded, true);
   const events = res.events();
@@ -150,7 +153,7 @@ test('the desktop bridge forwards deltas through its callback and returns the fi
 
 test('a model that fails before its first chunk falls back; only the fallback text is streamed', async () => {
   mockProvider(({ index }) => index === 0 ? rejected(503, 'UNAVAILABLE') : sseResponse(['Відповідь резервної моделі.']));
-  const res = await httpAssist({ ...base, prompt: GENERAL, stream: true });
+  const res = await httpAssist({ ...base, prompt: HELP, stream: true });
   const events = res.events();
   assert.deepEqual(events.map((event: AIStreamEvent) => event.event), ['delta', 'done']);
   assert.equal(events[1].data.reply, 'Відповідь резервної моделі.');
@@ -161,7 +164,7 @@ test('a model that fails before its first chunk falls back; only the fallback te
 
 test('a failure after text was emitted ends with an error event and never tries another model', async () => {
   mockProvider(() => sseResponse(['Перша частина відповіді'], { fail: new TypeError('fetch failed') }));
-  const res = await httpAssist({ ...base, prompt: GENERAL, stream: true });
+  const res = await httpAssist({ ...base, prompt: HELP, stream: true });
   const events = res.events();
   assert.deepEqual(events.map((event: AIStreamEvent) => event.event), ['delta', 'error']);
   assert.equal(events[0].data.text, 'Перша частина відповіді');
@@ -176,7 +179,7 @@ test('a failure after text was emitted ends with an error event and never tries 
 
 test('reply guards run on the final text and the done payload carries the replacement', async () => {
   mockProvider(() => sseResponse(['Я переніс ', 'ваше завдання на завтра.']));
-  const res = await httpAssist({ ...base, prompt: GENERAL, stream: true });
+  const res = await httpAssist({ ...base, prompt: HELP, stream: true });
   const events = res.events();
   assert.deepEqual(events.map((event: AIStreamEvent) => event.event), ['delta', 'delta', 'done']);
   const done = events[2].data;
@@ -200,7 +203,7 @@ test('canned replies and invalid requests return a single final event without ca
 
 test('a provider rejection before streaming becomes an error event with the safe failure body', async () => {
   mockProvider(() => rejected(401, 'UNAUTHENTICATED'));
-  const res = await httpAssist({ ...base, prompt: GENERAL, stream: true });
+  const res = await httpAssist({ ...base, prompt: HELP, stream: true });
   const events = res.events();
   assert.deepEqual(events.map((event: AIStreamEvent) => event.event), ['error']);
   assert.equal(events[0].data.code, 'INVALID_API_KEY');
@@ -215,7 +218,7 @@ test('cancelling mid-stream aborts the provider transport and sends no final eve
   const res = fakeHttpResponse();
   const write = res.write;
   res.write = (chunk: string) => { const result = write(chunk); if (chunk.includes('event: delta')) controller.abort(); return result; };
-  await server.assistHandler({ body: { ...base, prompt: GENERAL, stream: true }, signal: controller.signal, on() {}, removeListener() {} }, res);
+  await server.assistHandler({ body: { ...base, prompt: HELP, stream: true }, signal: controller.signal, on() {}, removeListener() {} }, res);
   assert.deepEqual(res.events().map((event: AIStreamEvent) => event.event), ['delta']);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].signal?.aborted, true);
@@ -310,7 +313,7 @@ test('task_command declares static tools with the JSON schema constraints and ma
     assert.equal(body.toolConfig.functionCallingConfig.mode, 'AUTO');
     const declarations = body.tools[0].functionDeclarations;
     declarationSets.push(JSON.stringify(body.tools));
-    assert.deepEqual(declarations.map((declaration: any) => declaration.name), ['propose_create_task', 'propose_update_task', 'propose_delete_task', 'propose_create_tab']);
+    assert.deepEqual(declarations.map((declaration: any) => declaration.name), ['propose_create_task', 'propose_create_tasks', 'propose_update_task', 'propose_delete_task', 'propose_create_tab']);
     const byName = Object.fromEntries(declarations.map((declaration: any) => [declaration.name, declaration.parameters]));
     for (const name of ['propose_create_task', 'propose_update_task']) {
       assert.equal(byName[name].properties.countdownDurationSeconds.minimum, 60);
@@ -356,6 +359,33 @@ test('task_command streams its prose, never the tool call, and ends with the val
   assert.deepEqual(done.taskUpdates, TIMER_UPDATE);
   assert.equal(done.aiMetrics.toolCalls, 1);
   assert.equal(typeof done.aiMetrics.timeToFirstTokenMs, 'number');
+  assert.equal(calls.length, 1);
+});
+
+test('a listed multi-task create arrives as one batch call and keeps every task with its dates and priority', async () => {
+  const MULTI = 'Додай завдання: 1) Анімувати інтро, терміново, дедлайн у п\'ятницю; 2) Зробити анімовані банери, дедлайн 20 жовтня; 3) Змонтувати шоурил 2026; 4) Переписати сайт-портфоліо на Next.js, низький пріоритет';
+  mockProvider(({ body }) => {
+    const system = body.systemInstruction.parts[0].text;
+    assert.match(system, /SEVERAL NEW TASKS: .*ALL of them in ONE propose_create_tasks call/);
+    assert.match(system, /never put a date or the priority only into note or title/i);
+    const batch = body.tools[0].functionDeclarations.find((declaration: any) => declaration.name === 'propose_create_tasks');
+    assert.deepEqual(batch.parameters.required, ['tasks']);
+    assert.deepEqual(batch.parameters.properties.tasks.items.required, ['title', 'phase', 'priority', 'steps']);
+    return sseResponse(['Пропоную чотири нові завдання.', [call('propose_create_tasks', { tasks: [
+      { title: 'Анімувати інтро', phase: 'focus', priority: 1, steps: 0, deadlineDate: '2026-10-16' },
+      { title: 'Зробити анімовані банери', phase: 'focus', priority: 2, steps: 0, deadlineDate: '2026-10-20' },
+      { title: 'Змонтувати шоурил 2026', phase: 'focus', priority: 2, steps: 0 },
+      { title: 'Переписати сайт-портфоліо на Next.js', phase: 'focus', priority: 3, steps: 0 },
+    ] })]]);
+  });
+  const res = await httpAssist({ ...base, prompt: MULTI, tabs: ['focus'], currentTasks: READING, stream: true });
+  const done = res.events().at(-1)!;
+  assert.equal(done.event, 'done');
+  assert.deepEqual(done.data.tasks.map((task: any) => [task.title, task.priority, task.deadlineDate]), [
+    ['Анімувати інтро', 1, '2026-10-16'], ['Зробити анімовані банери', 2, '2026-10-20'],
+    ['Змонтувати шоурил 2026', 2, undefined], ['Переписати сайт-портфоліо на Next.js', 3, undefined],
+  ]);
+  assert.deepEqual([done.data.taskUpdates, done.data.taskDeletions], [[], []]);
   assert.equal(calls.length, 1);
 });
 
@@ -465,4 +495,123 @@ test('tool calls without text get a summary reply; claims of applied changes are
   assert.equal(done.replyReplaced, true);
   assert.doesNotMatch(done.reply, /Я додав/);
   assert.deepEqual(done.taskUpdates, TIMER_UPDATE);
+});
+
+// ---- ordinary conversation: proposals the person asks for or agrees to ----
+const finalUserTurn = (body: any) => body.contents.at(-1).parts.map((part: any) => part.text).join('\n');
+const STEPS_OFFER = 'Почніть з малого:\n1. Відкрити книгу — 15 хв\n2. Прочитати один розділ — 20 хв\n\nДодати ці кроки до завдання «Читання»?';
+
+test('general chat streams prose with the proposal tools; calls stay within the conversational scope', async () => {
+  mockProvider(({ streaming, body }) => {
+    assert.equal(streaming, true);
+    assert.ok(body.tools);
+    const system = body.systemInstruction.parts[0].text;
+    assert.match(system, /ROUTE general/);
+    assert.match(system, /never say you are read-only/);
+    assert.match(system, /COACHING:/);
+    assert.doesNotMatch(system, /PERSONAL_DISCOVERY RULES/);
+    assert.match(finalUserTurn(body), /CONCRETE COMMAND SCOPE: \{"operation":"proposal","taskIds":\[\]\}/);
+    return sseResponse(['Спробуйте почати з короткого кроку.', [
+      call('propose_update_task', { id: 't', timerMode: 'countdown', countdownDurationSeconds: 1500 }),
+      call('propose_create_task', { title: 'Прогулянка після обіду', phase: 'focus', priority: 2, steps: 0 }),
+    ]]);
+  });
+  const res = await httpAssist({ ...base, prompt: GENERAL, currentTasks: READING, stream: true });
+  const events = res.events();
+  assert.deepEqual(events.map((event: AIStreamEvent) => event.event), ['delta', 'done']);
+  const done = events[1].data;
+  // No task was named, so only the new task survives; nothing is applied until Apply.
+  assert.deepEqual(done.taskUpdates, []);
+  assert.deepEqual(done.tasks.map((task: any) => task.title), ['Прогулянка після обіду']);
+  assert.equal(done.reply, 'Спробуйте почати з короткого кроку.');
+});
+
+test('a yes to an offered change becomes a scoped proposal request carrying the offered plan', async () => {
+  mockProvider(({ body }) => {
+    const turn = finalUserTurn(body);
+    assert.match(turn, /REQUEST ROUTE: task_command/);
+    assert.match(turn, /CONCRETE COMMAND SCOPE: \{"operation":"proposal","taskIds":\["t"\]\}/);
+    assert.match(turn, /ACCEPTED OFFER[^\n]*\n[\s\S]*Відкрити книгу — 15 хв/);
+    return sseResponse(['Пропоную додати два кроки до «Читання».', [
+      call('propose_update_task', { id: 't', stepList: [{ title: 'Відкрити книгу — 15 хв' }, { title: 'Прочитати один розділ — 20 хв' }] }),
+    ]]);
+  });
+  const conversation = [{ role: 'user', content: 'Як почати читання?' }, { role: 'assistant', content: STEPS_OFFER }];
+  const res = await httpAssist({ ...base, prompt: 'Так, додай', conversation, currentTasks: READING, stream: true });
+  const done = res.events().at(-1)!;
+  assert.equal(done.event, 'done');
+  assert.deepEqual(done.data.taskUpdates.map((update: any) => [update.id, update.stepList.map((step: any) => step.title)]),
+    [['t', ['Відкрити книгу — 15 хв', 'Прочитати один розділ — 20 хв']]]);
+  // A refusal of the same offer stays an ordinary reply without the accepted plan.
+  mockProvider(({ body }) => {
+    assert.match(finalUserTurn(body), /REQUEST ROUTE: general/);
+    assert.doesNotMatch(finalUserTurn(body), /ACCEPTED OFFER/);
+    return sseResponse(['Добре, залишимо як є.']);
+  });
+  const refused = await httpAssist({ ...base, prompt: 'Ні, не треба', conversation, currentTasks: READING, stream: true });
+  assert.equal(refused.events().at(-1)!.data.reply, 'Добре, залишимо як є.');
+});
+
+test('an offer in a prose reply is kept because a yes can be carried over', async () => {
+  mockProvider(() => sseResponse([STEPS_OFFER]));
+  const res = await httpAssist({ ...base, prompt: HELP, currentTasks: READING, stream: true });
+  const done = res.events().at(-1)!.data;
+  assert.equal(done.reply, STEPS_OFFER);
+  assert.equal(done.replyReplaced, undefined);
+});
+
+test('the discovery interview runs only in the explicit discovery mode', async () => {
+  const prompt = 'В мене жахлива прокрастинація, не можу почати працювати';
+  mockProvider(() => sseResponse(['Почніть з найменшого кроку.']));
+  await httpAssist({ ...base, prompt, currentTasks: READING, stream: true });
+  assert.doesNotMatch(calls[0].body.systemInstruction.parts[0].text, /PERSONAL_DISCOVERY RULES/);
+  assert.match(finalUserTurn(calls[0].body), /REQUEST ROUTE: general/);
+  mockProvider(() => jsonProposal({ memoryPatch: { discovery: {} } }));
+  await httpAssist({ ...base, prompt, currentTasks: READING, stream: true, discoveryMode: true });
+  assert.match(calls[0].body.systemInstruction.parts[0].text, /PERSONAL_DISCOVERY RULES/);
+  // A clear command in discovery mode is still handled as a command for that turn.
+  mockProvider(() => sseResponse(['Пропоную кроки.']));
+  await httpAssist({ ...base, prompt: 'Розбий завдання Читання на кроки', currentTasks: READING, stream: true, discoveryMode: true });
+  assert.match(finalUserTurn(calls[0].body), /REQUEST ROUTE: task_command/);
+});
+
+test('chat history marks unapplied proposals and the rules forbid describing them as done', async () => {
+  mockProvider(({ body }) => {
+    const system = body.systemInstruction.parts[0].text;
+    assert.match(system, /Only WORKSPACE CONTEXT is the truth/);
+    assert.match(system, /reports doing something that matches a not-done step/);
+    assert.match(system, /timerRunning:true, offer to pause its timer/);
+    // The note follows the assistant reply in the user role, so it opens the final user turn.
+    const finalTurn = body.contents.at(-1);
+    assert.equal(finalTurn.role, 'user');
+    assert.match(finalTurn.parts[0].text, /was NOT applied; none of its changes happened/);
+    assert.match(finalTurn.parts.at(-1).text, /CURRENT USER MESSAGE/);
+    assert.doesNotMatch(JSON.stringify(body.contents.filter((turn: any) => turn.role === 'model')), /App note/);
+    return sseResponse(['Кроки для банерів ще не додані. Додати їх?']);
+  });
+  const conversation = [
+    { role: 'user', content: 'Розбий банери на кроки' },
+    { role: 'assistant', content: 'Пропоную 5 кроків для «Банери».', proposalStatus: 'not_applied' },
+  ];
+  const res = await httpAssist({ ...base, prompt: 'Не можу почати', conversation, currentTasks: READING, stream: true });
+  assert.equal(res.events().at(-1)!.event, 'done');
+  assert.equal(calls.length, 1);
+});
+
+test('a new task note that only repeats its title is dropped, as is a title-echo note in an update', async () => {
+  const title = 'Змонтувати шоурил моушн-дизайну 2026';
+  mockProvider(() => sseResponse(['Пропоную нові завдання.', [call('propose_create_tasks', { tasks: [
+    { title, phase: 'focus', priority: 2, steps: 0, note: title },
+    { title: 'Оновити сайт-портфоліо', phase: 'focus', priority: 3, steps: 0, note: 'Додати три нові кейси' },
+  ] })]]));
+  const res = await httpAssist({ ...base, prompt: `Додай завдання: ${title}; Оновити сайт-портфоліо`, tabs: ['focus'], currentTasks: READING, stream: true });
+  const done = res.events().at(-1)!;
+  assert.equal(done.event, 'done');
+  assert.deepEqual(done.data.tasks.map((task: any) => [task.title, task.note]), [[title, ''], ['Оновити сайт-портфоліо', 'Додати три нові кейси']]);
+
+  mockProvider(() => sseResponse(['Пропоную оновити «Читання».', [call('propose_update_task', { id: 't', note: 'Читання', priority: 1 })]]));
+  const update = await httpAssist({ ...base, prompt: 'Зміни пріоритет завдання Читання на високий', currentTasks: READING, stream: true });
+  const updated = update.events().at(-1)!;
+  assert.equal(updated.event, 'done');
+  assert.deepEqual(updated.data.taskUpdates, [{ id: 't', priority: 1 }]);
 });

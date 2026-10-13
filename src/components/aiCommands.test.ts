@@ -100,6 +100,44 @@ test('proposal cards survive reload as historical snapshots and cannot restore e
   }
 });
 
+test('provider history tells which proposals were applied, partly applied or never applied', () => {
+  const response = { summary: 'Plan', tasks: [{ title: 'Prepare', phase: 'work', priority: 2 as const, steps: 0 }] };
+  const messages = [
+    { id: 'u1', role: 'user' as const, content: 'Break down the banners' },
+    { id: 'a1', role: 'assistant' as const, content: 'Five steps', response, proposalStatus: 'stale' as const },
+    { id: 'a2', role: 'assistant' as const, content: 'A timer', response, proposalStatus: 'applied' as const, applyOutcome: 'partial' as const },
+    { id: 'a3', role: 'assistant' as const, content: 'A step', response, proposalStatus: 'applied' as const, applyOutcome: 'applied' as const },
+    { id: 'a4', role: 'assistant' as const, content: 'Rejected', response, proposalStatus: 'applied' as const, applyOutcome: 'none' as const },
+    { id: 'a5', role: 'assistant' as const, content: 'Waiting', response, proposalStatus: 'pending' as const },
+    { id: 'a6', role: 'assistant' as const, content: 'Just advice' },
+  ];
+  assert.deepEqual(recentAIChatContext(messages).map(message => [message.content, message.proposalStatus]), [
+    ['Break down the banners', undefined], ['Five steps', 'not_applied'], ['A timer', 'partial'],
+    ['A step', 'applied'], ['Rejected', 'not_applied'], ['Waiting', 'not_applied'], ['Just advice', undefined],
+  ]);
+  assert.equal('proposalStatus' in recentAIChatContext(messages)[0], false);
+});
+
+test('the apply outcome survives reload for an applied proposal', () => {
+  const values = new Map<string, string>();
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: (key: string) => values.get(key) || null, setItem: (key: string, value: string) => values.set(key, value) } });
+  try {
+    const response = { summary: 'A plan', tasks: [{ title: 'Prepare', phase: 'work', priority: 2 as const, steps: 0 }] };
+    saveAIChatHistory('account', [
+      { id: 'partial', role: 'assistant', content: 'A plan', response, proposalStatus: 'applied', applyOutcome: 'partial' },
+      { id: 'pending', role: 'assistant', content: 'Another plan', response, proposalStatus: 'pending', applyOutcome: 'applied' },
+    ]);
+    const loaded = loadAIChatHistory('account');
+    assert.equal(loaded[0].applyOutcome, 'partial');
+    assert.equal(loaded[1].proposalStatus, 'stale');
+    assert.equal(loaded[1].applyOutcome, undefined);
+    assert.deepEqual(recentAIChatContext(loaded).map(message => message.proposalStatus), ['partial', 'not_applied']);
+  } finally {
+    if (previous) Object.defineProperty(globalThis, 'localStorage', previous); else Reflect.deleteProperty(globalThis, 'localStorage');
+  }
+});
+
 test('malformed structured strategy cannot reach card rendering or automatic application', () => {
   assert.throws(() => readAIResponse({ summary: 'Reply', strategy: { actions: {} } }, 'chat'));
   assert.throws(() => readAIResponse({ summary: 'Reply', strategy: { memoryPatch: { goals: [{ id: 'goal', title: 'Goal' }] } } }, 'chat'));

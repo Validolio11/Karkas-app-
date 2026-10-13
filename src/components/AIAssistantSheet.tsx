@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence, useDragControls } from 'motion/react';
 import {
   PSTask,
@@ -41,12 +41,14 @@ import { AICommandMenu } from './AICommandMenu';
 import { proposalTargetsUnchanged } from './aiProposalGuard';
 import { AI_COMMANDS, intentMode, migrateAIComposer, modeIntent, parseAICommand } from './aiCommands';
 import { strategyGreeting } from '../utils/personalStrategy';
-import { discoveryQuestionForState } from '../utils/strategyDiscovery';
+import { addressedDiscoveryQuestion, detectDiscoveryAddress, discoveryQuestionForState, practicalHelpRequested } from '../utils/strategyDiscovery';
+import { exitDiscoveryMode, nextDiscoveryMode, readDiscoveryMode, saveDiscoveryMode, type DiscoveryModeState } from './aiDiscoveryMode';
 import { useDialogKeyboard } from './useDialogKeyboard';
-import { describeAIApplyResult, describeAITimer, getAITimerContext, prepareAITask, type AIApplyResult } from './aiTaskProposal';
+import { aiApplyOutcome, describeAIApplyResult, describeAITimer, getAITimerContext, prepareAITask, type AIApplyResult } from './aiTaskProposal';
 import { describeSchedule } from '../utils/schedulePresentation';
 import { formatTaskDate } from '../utils/taskDates';
-import { AIRequestError, aiRequestErrorMessage, appendChatRequest, createStreamedReplyBuffer, readAIAssistantDraft, readAIResponse, responseRequestError, restoredAIRequestNotice, saveAIAssistantDraft, selectAIModel, type AIMode, type AIRequest } from './aiAssistantState';
+import { AIRequestError, adoptedAIModel, aiRequestErrorMessage, appendChatRequest, createStreamedReplyBuffer, readAIAssistantDraft, readAIResponse, responseRequestError, restoredAIRequestNotice, saveAIAssistantDraft, selectAIModel, visibleChatModels, type AIMode, type AIRequest } from './aiAssistantState';
+import { readAIUsageLedger, saveAIUsage, unavailableModels, usageView, type AIUsageLedger } from '../utils/aiModelUsage';
 
 interface AIAssistantSheetProps {
   isOpen: boolean;
@@ -70,7 +72,8 @@ interface AIAssistantSheetProps {
   strategyProfile?: PersonalStrategyProfile;
   onStrategyResponse?: (response: AIResponse, userText: string, turnId: string, intent: AIIntent, ownerId: string | null, requestProfile?: PersonalStrategyProfile, discoveryConfirmationId?: string) => void | { notice?: string; actionId?: string };
   onChatWelcome?: (ownerId: string | null) => void;
-  onDeepenDiscovery?: (ownerId: string | null) => boolean;
+  /** recentUserTexts (oldest first) set the form of address of the opening question. */
+  onDeepenDiscovery?: (ownerId: string | null, recentUserTexts?: string[]) => boolean;
   onUndoStrategy?: (actionId: string) => boolean;
 }
 
@@ -245,6 +248,11 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   const visibleConversation = visibleAIChatMessages(chatMessages, introductionId);
   const hydratedAccountRef = useRef(accountId);
   const skipPersistRef = useRef(false);
+  // The explicit «Поглибити знайомство» interview mode; ordinary chat never shows interview questions.
+  const [discoveryMode, setDiscoveryMode] = useState<DiscoveryModeState>(() => readDiscoveryMode(localStorage, accountId));
+  const discoveryModeAccountRef = useRef(accountId);
+  // A practical-help reply given inside discovery mode offers to continue or finish the interview.
+  const [discoveryChoiceId, setDiscoveryChoiceId] = useState<string | null>(null);
 
   const [pendingChatTasks, setPendingChatTasks] = useState<NonNullable<AIResponse['tasks']>>([]);
   const [pendingChatTabs, setPendingChatTabs] = useState<TaskTab[]>([]);
@@ -325,12 +333,66 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       return [];
     }
   });
+  // Locally observed per-model usage of the current key (see aiModelUsage.ts).
+  const [usageLedger, setUsageLedger] = useState<AIUsageLedger>(() => {
+    try { return readAIUsageLedger(localStorage, Date.now()); } catch { return { day: '', models: {} }; }
+  });
+  const [usageNow, setUsageNow] = useState(() => Date.now());
+  const hiddenModels = useMemo(() => unavailableModels(usageLedger), [usageLedger]);
+  const visibleModels = useMemo(() => visibleChatModels(availableModels, hiddenModels), [availableModels, hiddenModels]);
+  /** 404 models known for the current key, read fresh for selections made in effects. */
+  const storedHiddenModels = () => { try { return unavailableModels(readAIUsageLedger(localStorage, Date.now())); } catch { return []; } };
   const [customModel, setCustomModel] = useState(() => {
     const storedModel = localStorage.getItem('karkas_custom_model') || '';
-    return selectAIModel(availableModels, storedModel);
+    return selectAIModel(availableModels, storedModel, unavailableModels(usageLedger));
   });
   const customModelRef = useRef(customModel);
+  // Read after an awaited reply, when the request's render closure may be stale.
+  const visibleModelsRef = useRef(visibleModels);
+  visibleModelsRef.current = visibleModels;
   const chooseCustomModel = (model: string) => { customModelRef.current = model; setCustomModel(model); };
+  /** Select a model and remember it on this device (and in desktop preferences). */
+  const persistCustomModel = (model: string) => {
+    chooseCustomModel(model);
+    try { localStorage.setItem('karkas_custom_model', model); }
+    catch { setKeyStatus(lang === 'uk' ? 'Вибір моделі діє зараз, але його не вдалося зберегти на пристрої.' : 'This model is selected for now, but could not be saved on this device.'); }
+    if (window.karkasDesktop) {
+      void window.karkasDesktop.preferences.update({ karkas_custom_model: model }).then(result => {
+        if ('error' in result) setKeyStatus(lang === 'uk' ? 'Не вдалося зберегти вибір моделі. Вона діє для поточного запиту; виберіть її знову після перезапуску.' : 'Could not save the model selection. It applies to this session; select it again after restarting.');
+      }).catch(() => setKeyStatus(lang === 'uk' ? 'Не вдалося зберегти вибір моделі. Спробуйте вибрати її ще раз.' : 'Could not save the model selection. Try selecting it again.'));
+    }
+  };
+  // Sibling toolbar controls reset on account change; each needs its own key.
+  const accountScope = accountId == null ? 'guest' : `account:${accountId}`;
+
+  // A pruned or 404 model must not stay selected or stored (other AI features read
+  // the stored model); selectAIModel keeps a still offered choice.
+  useEffect(() => {
+    if (!visibleModels.length) return;
+    const nextModel = selectAIModel(availableModels, customModelRef.current, hiddenModels);
+    let stored: string | null = null;
+    try { stored = localStorage.getItem('karkas_custom_model'); } catch { /* unreadable storage */ }
+    const previous = customModelRef.current;
+    if (nextModel !== previous || stored !== nextModel) persistCustomModel(nextModel);
+    if (nextModel && nextModel !== previous && hiddenModels.includes(previous)) {
+      const freeTier = usageLedger.models[previous]?.noQuota;
+      setKeyStatus(lang === 'uk'
+        ? `Модель ${previous} ${freeTier ? 'недоступна на безкоштовному тарифі Google' : 'недоступна для цього ключа'}, тому вибрано ${nextModel}.`
+        : `Model ${previous} is ${freeTier ? 'not available on the Google free tier' : 'unavailable for this key'}, so ${nextModel} is selected.`);
+    }
+  }, [visibleModels]);
+
+  // Limits and "limited until" states expire with time, not only with new replies.
+  useEffect(() => {
+    if (!isOpen) return;
+    const refresh = () => {
+      setUsageNow(Date.now());
+      try { setUsageLedger(readAIUsageLedger(localStorage, Date.now())); } catch { /* keep the last ledger */ }
+    };
+    refresh();
+    const interval = window.setInterval(refresh, 60_000);
+    return () => window.clearInterval(interval);
+  }, [isOpen]);
 
   // Each dictation owns its microphone, socket, buffered audio and cancellation.
   const [voicePhase, setVoicePhase] = useState<VoicePhase>('idle');
@@ -481,11 +543,53 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   }, [isOpen, accountId, strategyProfile?.onboardingStatus]);
 
   useEffect(() => {
+    if (discoveryModeAccountRef.current === accountId) return;
+    discoveryModeAccountRef.current = accountId;
+    setDiscoveryMode(readDiscoveryMode(localStorage, accountId));
+    setDiscoveryChoiceId(null);
+  }, [accountId]);
+
+  // A fresh «Поглибити знайомство» press enters the mode; a confirmed summary ends it.
+  useEffect(() => {
+    setDiscoveryMode(previous => nextDiscoveryMode(previous, strategyProfile));
+  }, [strategyProfile?.discovery?.pendingQuestion?.id, strategyProfile?.discovery?.phase]);
+
+  useEffect(() => {
+    if (discoveryModeAccountRef.current !== accountId) return;
+    saveDiscoveryMode(localStorage, accountId, discoveryMode);
+    if (!discoveryMode.active) setDiscoveryChoiceId(null);
+  }, [discoveryMode]);
+
+  /** The person's latest chat messages, oldest first; they decide the form of address ("ти"/"ви"). */
+  const recentUserTexts = () => chatMessages.filter(message => message.role === 'user').slice(-10).map(message => message.content);
+  /** App-written questions use the form of address of the person's recent messages. */
+  const discoveryAddress = () => detectDiscoveryAddress(recentUserTexts());
+
+  const finishDiscovery = () => setDiscoveryMode(previous => exitDiscoveryMode(previous));
+
+  /** "Продовжити знайомство" after practical help: show the pending interview question again. */
+  const resumeDiscovery = () => {
+    setDiscoveryChoiceId(null);
+    const discovery = strategyProfile?.discovery;
+    const pending = discovery?.pendingQuestion;
+    if (!discovery || !pending) return;
+    // An accepted help offer is answered; continue with its topic's question instead of repeating the offer.
+    const text = pending.id.startsWith('offer:') ? discoveryQuestionForState(discovery, pending.topic, lang, discoveryAddress()) : addressedDiscoveryQuestion(discovery, pending, lang, discoveryAddress());
+    setChatMessages(previous => {
+      const latest = previous.at(-1);
+      const id = `discovery-resume-${pending.id}:after:${latest?.id || previous.length}`;
+      return previous.some(message => message.id === id) ? previous : [...previous, { id, role: 'assistant', content: text }];
+    });
+  };
+
+  useEffect(() => {
+    if (!discoveryMode.active) return;
     const discovery = strategyProfile?.discovery;
     const storedQuestion = discovery?.pendingQuestion;
-    const question = storedQuestion && discovery && storedQuestion.id.startsWith('discovery:')
-      ? { ...storedQuestion, text: discoveryQuestionForState(discovery, storedQuestion.topic, lang) }
-      : storedQuestion || (discovery?.pendingSummary && !discovery.pendingSummary.confirmed ? discovery.pendingSummary : undefined);
+    // App-written questions (opener, «Поглибити знайомство») are shown in the person's current form.
+    const question = storedQuestion && discovery
+      ? { ...storedQuestion, text: addressedDiscoveryQuestion(discovery, storedQuestion, lang, discoveryAddress()) }
+      : discovery?.pendingSummary && !discovery.pendingSummary.confirmed ? discovery.pendingSummary : undefined;
     if (!isOpen || hydratedAccountRef.current !== accountId || !question?.text) return;
     setChatMessages(previous => {
       const resumeId = `discovery-resume-${question.id}`;
@@ -499,7 +603,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       if (previous.some(message => message.id === id)) return previous;
       return [...previous, { id, role: 'assistant', content: question.text }];
     });
-  }, [isOpen, accountId, lang, strategyProfile?.discovery?.pendingQuestion?.id, strategyProfile?.discovery?.pendingSummary?.id, strategyProfile?.discovery?.pendingSummary?.confirmed]);
+  }, [isOpen, accountId, lang, discoveryMode.active, strategyProfile?.discovery?.pendingQuestion?.id, strategyProfile?.discovery?.pendingSummary?.id, strategyProfile?.discovery?.pendingSummary?.confirmed]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -542,7 +646,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
           ? preferences.karkas_custom_model : customModel;
         if (models.length) {
           setAvailableModels(models);
-          const nextModel = selectAIModel(models, preferred);
+          const nextModel = selectAIModel(models, preferred, storedHiddenModels());
           chooseCustomModel(nextModel);
           localStorage.setItem('karkas_available_models', JSON.stringify(models));
           localStorage.setItem('karkas_custom_model', nextModel);
@@ -562,7 +666,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       .then((models) => {
         if (controller.signal.aborted) return;
         setAvailableModels(models);
-        const nextModel = selectAIModel(models, localStorage.getItem('karkas_custom_model') || customModel);
+        const nextModel = selectAIModel(models, localStorage.getItem('karkas_custom_model') || customModel, storedHiddenModels());
         chooseCustomModel(nextModel);
         localStorage.setItem('karkas_custom_model', nextModel);
         localStorage.setItem('karkas_available_models', JSON.stringify(models));
@@ -598,7 +702,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
 
     const result = onInjectTasks(tasks, pendingChatTabs, pendingChatUpdates, pendingChatDeletions);
     const appliedId = latestProposalMessageId.current;
-    setChatMessages(previous => previous.map(message => message.id === appliedId ? { ...message, proposalStatus: 'applied', notice: describeAIApplyResult(result, lang) } : message));
+    // applyOutcome tells later turns whether the changes really happened (all, some or none).
+    setChatMessages(previous => previous.map(message => message.id === appliedId ? { ...message, proposalStatus: 'applied', applyOutcome: aiApplyOutcome(result), notice: describeAIApplyResult(result, lang) } : message));
 
     setRecoverableRequest(null);
     setRequestError(null);
@@ -659,15 +764,19 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     if (!requestText) return;
     if (requestInFlight.current) return;
     const latestAssistantMessage = [...chatMessages].reverse().find(message => message.role === 'assistant' && message.id !== `reply-${currentRequest.turnId}`);
-    const currentQuestion = strategyProfile?.discovery?.pendingQuestion;
+    // Inside discovery mode an explicit request for help (or a yes to the help offer) gets practical
+    // help now as an ordinary turn; the reply then offers to continue or finish the interview.
+    const inDiscoveryMode = discoveryMode.active;
+    const discoveryHelpTurn = inDiscoveryMode && parsedCommand.intent === 'auto' && practicalHelpRequested(requestText, strategyProfile);
+    const currentQuestion = inDiscoveryMode ? strategyProfile?.discovery?.pendingQuestion : undefined;
     const questionResumeId = currentQuestion ? `discovery-resume-${currentQuestion.id}` : '';
     const discoveryHasQuestion = !!currentQuestion && !!latestAssistantMessage && (
       (currentQuestion.turnId && latestAssistantMessage.id === `reply-${currentQuestion.turnId}`)
       || latestAssistantMessage.id === questionResumeId || latestAssistantMessage.id?.startsWith(`${questionResumeId}:after:`)
       || (!currentQuestion.turnId && !latestAssistantMessage.proposalStatus
         && normalizedProposalText(latestAssistantMessage.content).includes(normalizedProposalText(currentQuestion.text))));
-    const discoveryNeedsConfirmation = !!strategyProfile?.discovery?.pendingSummary && !strategyProfile.discovery.pendingSummary.confirmed;
-    const currentSummary = strategyProfile?.discovery?.pendingSummary;
+    const discoveryNeedsConfirmation = inDiscoveryMode && !!strategyProfile?.discovery?.pendingSummary && !strategyProfile.discovery.pendingSummary.confirmed;
+    const currentSummary = inDiscoveryMode ? strategyProfile?.discovery?.pendingSummary : undefined;
     const summaryResumeId = currentSummary ? `discovery-resume-${currentSummary.id}` : '';
     const summaryTurnId = currentSummary?.id.startsWith('summary:') ? currentSummary.id.slice('summary:'.length) : undefined;
     const summaryIsCurrent = currentSummary && latestAssistantMessage && (
@@ -675,7 +784,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
         && latestAssistantMessage.response?.strategy?.memoryPatch?.discovery?.summary === currentSummary.text)
       || ((latestAssistantMessage.id === summaryResumeId || latestAssistantMessage.id?.startsWith(`${summaryResumeId}:after:`))
         && latestAssistantMessage.content === currentSummary.text));
-    if (currentSummary?.text && !currentSummary.confirmed && summaryIsCurrent) {
+    if (currentSummary?.text && !currentSummary.confirmed && summaryIsCurrent && !discoveryHelpTurn) {
       currentRequest.discoveryConfirmationId = currentSummary.id;
     }
     if (parsedCommand.intent === 'auto' && pendingChangeCount > 0 && !discoveryHasQuestion && !discoveryNeedsConfirmation
@@ -737,7 +846,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       try {
         const models = await verifyApiKey(requestText, { signal: controller.signal });
         if (controller.signal.aborted) return;
-        const nextModel = selectAIModel(models, customModelRef.current);
+        const nextModel = selectAIModel(models, customModelRef.current, storedHiddenModels());
         if (!window.karkasDesktop) localStorage.setItem('karkas_custom_api_key', requestText.trim());
         localStorage.setItem('karkas_custom_ai_enabled', 'true');
         localStorage.setItem('karkas_custom_model', nextModel);
@@ -831,6 +940,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       const customEnabled = localStorage.getItem('karkas_custom_ai_enabled') === 'true';
 
       requestTimeout = window.setTimeout(() => { timedOut = true; controller.abort(); }, AI_CHAT_CLIENT_TIMEOUT_MS);
+      const requestedModel = customModelRef.current;
       const res = await karkasApiStream('/api/ai/assist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -845,6 +955,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
           messageId: currentRequest.turnId,
           requestId: currentRequest.turnId,
           discoveryConfirmationId: currentRequest.discoveryConfirmationId,
+          discoveryMode: inDiscoveryMode && !discoveryHelpTurn,
           lastAssistantProposalStatus: latestAssistantMessage?.proposalStatus,
           lastAssistantMessageId: latestAssistantMessage?.id,
           turnId: currentRequest.turnId,
@@ -861,7 +972,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
           },
           allowNewTabs: isTabMutation,
           customApiKey: customEnabled ? customKey : undefined,
-          selectedModel: customModelRef.current || undefined,
+          selectedModel: requestedModel || undefined,
           fullAppContext: {
             scheduledPlans: currentTasks.filter(task => task.scheduledPending),
             activeTasks: activeList.map((t) => ({
@@ -919,6 +1030,11 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
         }),
       }, streamBuffer.push);
       const rawData: unknown = await res.json().catch(() => { throw new AIRequestError('INVALID_RESPONSE'); });
+      // Every attempt Google answered counts, including failed fallbacks and superseded requests.
+      try {
+        const ledger = saveAIUsage(localStorage, rawData, Date.now());
+        if (ledger) { setUsageLedger(ledger); setUsageNow(Date.now()); }
+      } catch { /* Usage display is best-effort. */ }
       if (assistController.current !== controller) return;
       if (controller.signal.aborted) throw new AIRequestError(timedOut ? 'CLIENT_TIMEOUT' : 'CANCELLED');
       if (!res.ok) throw responseRequestError(rawData, res.status);
@@ -931,7 +1047,17 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       setRecoverableRequest(hasPendingActions ? { ...currentRequest, purpose: 'proposal' } : null);
       setRequestError(null);
       if (preservedRequestDraftRef.current !== null) setPrompt(preservedRequestDraftRef.current);
-      if (data.fallbackUsed && data.usedModel) setKeyStatus(lang === 'uk' ? `Відповідь підготувала доступна модель ${data.usedModel}.` : `The response was generated by the available model ${data.usedModel}.`);
+      // A selected model that does not exist for this key would slow every request
+      // through the fallback chain; keep the model that answered unless the person
+      // picked another one meanwhile.
+      const adoptedModel = customModelRef.current === requestedModel ? adoptedAIModel(data, requestedModel, visibleModelsRef.current) : null;
+      if (adoptedModel) {
+        persistCustomModel(adoptedModel);
+        const freeTier = (data.aiMetrics as { selectedModelFailure?: unknown } | undefined)?.selectedModelFailure === 'MODEL_TIER_UNAVAILABLE';
+        setKeyStatus(lang === 'uk'
+          ? `Модель ${requestedModel} ${freeTier ? 'недоступна на безкоштовному тарифі Google' : 'недоступна для цього ключа'}. Надалі використовується ${adoptedModel}; іншу модель можна вибрати в меню моделей.`
+          : `Model ${requestedModel} is ${freeTier ? 'not available on the Google free tier' : 'unavailable for this key'}. ${adoptedModel} will be used from now on; you can pick another model in the model menu.`);
+      } else if (data.fallbackUsed && data.usedModel) setKeyStatus(lang === 'uk' ? `Відповідь підготувала доступна модель ${data.usedModel}.` : `The response was generated by the available model ${data.usedModel}.`);
       const isDiscoveryResponse = !hasPendingActions && (data.strategy?.status === 'getting_to_know' || data.strategy?.status === 'clarifying');
       const isPlanningResponse = !isDiscoveryResponse && (!!data.tasks?.length || !!data.taskUpdates?.length || currentRequest.intent === 'plan' || currentRequest.intent === 'steps' || /план|\bplan(?:ning)?\b/iu.test((planningSourceRef.current || currentRequest).text));
       setChatPlanningRequest(isPlanningResponse ? planningSourceRef.current || currentRequest : null);
@@ -944,6 +1070,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       setPendingChatDeletions(data.taskDeletions || []);
       const messageId = `reply-${currentRequest.turnId}`;
       latestProposalMessageId.current = messageId;
+      setDiscoveryChoiceId(discoveryHelpTurn ? messageId : null);
       pendingTaskSnapshotRef.current = currentTasks;
       const strategyResult = onStrategyResponse?.(data, currentRequest.text, currentRequest.turnId!, currentRequest.intent || 'auto', requestOwner, requestProfile, currentRequest.discoveryConfirmationId);
       const strategyNotice = strategyResult && typeof strategyResult === 'object' ? strategyResult : undefined;
@@ -1110,10 +1237,17 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                 <span className="min-w-0 break-words text-xs sm:text-sm font-bold uppercase tracking-wider font-sans text-white">
                   KARKAS AI
                 </span>
+                {discoveryMode.active && <span id="ai-discovery-mode-chip" role="status" className="shrink-0 border border-emerald-700/70 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-300">
+                  {lang === 'uk' ? 'Режим знайомства' : 'Getting to know you'}
+                </span>}
               </div>
               <div className="flex shrink-0 items-center gap-2">
-              {onDeepenDiscovery && <button type="button" disabled={loading || isListening || isTranscribing}
-                onClick={() => { if (onDeepenDiscovery(accountId)) { setChatProposalReadiness(false); setChatPlanningRequest(null); setChatPlanningResponse(null); } }}
+              {discoveryMode.active && <button id="ai-finish-discovery-btn" type="button" disabled={loading} onClick={finishDiscovery}
+                className="min-h-11 sm:min-h-8 max-w-32 sm:max-w-none border border-neutral-800 px-2 py-1.5 text-[11px] leading-tight text-neutral-300 hover:border-neutral-600 hover:text-white disabled:opacity-40">
+                {lang === 'uk' ? 'Завершити знайомство' : 'Finish getting to know'}
+              </button>}
+              {onDeepenDiscovery && !discoveryMode.active && <button type="button" disabled={loading || isListening || isTranscribing}
+                onClick={() => { if (onDeepenDiscovery(accountId, recentUserTexts())) { setChatProposalReadiness(false); setChatPlanningRequest(null); setChatPlanningResponse(null); } }}
                 className="min-h-11 sm:min-h-8 max-w-32 sm:max-w-none border border-neutral-800 px-2 py-1.5 text-[11px] leading-tight text-neutral-400 hover:border-neutral-600 hover:text-white disabled:opacity-40">
                 {lang === 'uk' ? 'Поглибити знайомство' : 'Get to know me better'}
               </button>}
@@ -1140,10 +1274,15 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                     {message.role === 'assistant' ? <AIChatText text={parsed.body} /> : <div className="whitespace-pre-wrap">{parsed.body}</div>}
                     {!!parsed.options.length && <div className="flex flex-col gap-2 mt-3">{parsed.options.map(option => <button key={option.text} type="button" disabled={loading} onClick={() => handleGenerate(option.text, 'chat')} className="min-h-11 w-full text-left border border-neutral-700 px-3 py-2 hover:border-white disabled:opacity-40">{option.label}. {option.text}</button>)}</div>}
                     {message.response && <ChatResponseCards response={message.response} currentTasks={currentTasks} tabs={tabs} lang={lang} />}
-                    {message.proposalStatus === 'stale' && <p className="mt-3 text-sm text-neutral-400">{lang === 'uk' ? 'Попередня пропозиція. Повторіть запит, щоб підготувати актуальні зміни.' : 'Previous proposal. Repeat the request to prepare current changes.'}</p>}
+                    {message.proposalStatus === 'stale' && <p className="mt-3 text-sm text-neutral-400">{lang === 'uk' ? `Попередня пропозиція. ${discoveryAddress() === 'ty' ? 'Повтори' : 'Повторіть'} запит, щоб підготувати актуальні зміни.` : 'Previous proposal. Repeat the request to prepare current changes.'}</p>}
                     {message.proposalStatus === 'pending' && message.id === latestProposalMessageId.current && chatProposalReady && pendingChangeCount > 0 && !loading && !requestError && <button id="ai-chat-apply-changes-btn" type="button" onClick={confirmChatChanges} className="mt-3 min-h-11 bg-white text-black px-3 py-2 font-semibold hover:bg-neutral-200">{lang === 'uk' ? `Застосувати зміни (${pendingChangeCount})` : `Apply changes (${pendingChangeCount})`}</button>}
                     {message.notice && <p role="status" className="mt-3 text-sm text-emerald-300">{message.notice}</p>}
                     {message.actionId && onUndoStrategy && <button type="button" onClick={() => { if (onUndoStrategy(message.actionId!) === true) setChatMessages(previous => previous.map(item => item.id === message.id ? { ...item, actionId: undefined, notice: lang === 'uk' ? 'Зміну плану скасовано.' : 'Plan change undone.' } : item)); }} className="mt-2 min-h-11 border border-neutral-700 px-3 py-2 hover:border-white">{lang === 'uk' ? 'Скасувати зміни стратегії' : 'Undo strategy changes'}</button>}
+                    {discoveryMode.active && message.id === discoveryChoiceId && index === visibleConversation.messages.length - 1 && !loading && <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <span className="w-full text-sm text-neutral-400">{lang === 'uk' ? 'Продовжимо знайомство чи завершимо його?' : 'Shall we continue getting to know each other or finish?'}</span>
+                      <button id="ai-continue-discovery-btn" type="button" onClick={resumeDiscovery} className="min-h-11 border border-neutral-700 px-3 py-2 hover:border-white">{lang === 'uk' ? 'Продовжити знайомство' : 'Continue'}</button>
+                      <button type="button" onClick={finishDiscovery} className="min-h-11 border border-neutral-700 px-3 py-2 hover:border-white">{lang === 'uk' ? 'Завершити знайомство' : 'Finish'}</button>
+                    </div>}
                     {message.id === latestProposalMessageId.current && chatPlanningRequest && chatPlanningResponse && !pendingChatConfirmed.current && !loading && !requestError && !awaitingApiKey && <button id="ai-chat-alternative-plan-btn" type="button" onClick={() => requestAlternativePlan(chatPlanningRequest, chatPlanningResponse)} className="mt-3 ml-2 min-h-11 inline-flex items-center gap-2 border border-neutral-700 px-3 py-2 hover:border-white"><RefreshCw size={16} />{lang === 'uk' ? 'Інший варіант планування' : 'Alternative plan'}</button>}
                   </div>;
                 })}
@@ -1285,29 +1424,24 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   className="karkas-ai-composer-field"
                 />}
                 <div className="karkas-ai-composer-toolbar">
-                <AICommandMenu key={accountId == null ? 'guest' : `account:${accountId}`} lang={lang} disabled={loading || awaitingApiKey} onChoose={intent => { setMode(intentMode(intent)); promptInputRef.current?.focus(); }} />
+                <AICommandMenu key={`menu:${accountScope}`} lang={lang} disabled={loading || awaitingApiKey} onChoose={intent => { setMode(intentMode(intent)); promptInputRef.current?.focus(); }} />
                 <AIModelSelect
-                  key={accountId == null ? 'guest' : `account:${accountId}`}
-                  models={availableModels}
+                  key={`model:${accountScope}`}
+                  models={visibleModels}
+                  lang={lang}
+                  usage={model => usageView(usageLedger, model, usageNow)}
                   label={lang === 'uk' ? 'Модель AI' : 'AI model'}
                   emptyLabel={lang === 'uk' ? 'Модель не налаштована' : 'Model not configured'}
                   value={customModel}
                   disabled={loading || availableModels.length === 0}
                   onChange={(model) => {
-                    chooseCustomModel(model);
-                    try { localStorage.setItem('karkas_custom_model', model); }
-                    catch { setKeyStatus(lang === 'uk' ? 'Вибір моделі діє зараз, але його не вдалося зберегти на пристрої.' : 'This model is selected for now, but could not be saved on this device.'); }
-                    if (window.karkasDesktop) {
-                      void window.karkasDesktop.preferences.update({ karkas_custom_model: model }).then(result => {
-                        if ('error' in result) setKeyStatus(lang === 'uk' ? 'Не вдалося зберегти вибір моделі. Вона діє для поточного запиту; виберіть її знову після перезапуску.' : 'Could not save the model selection. It applies to this session; select it again after restarting.');
-                      }).catch(() => setKeyStatus(lang === 'uk' ? 'Не вдалося зберегти вибір моделі. Спробуйте вибрати її ще раз.' : 'Could not save the model selection. Try selecting it again.'));
-                    }
+                    persistCustomModel(model);
                     sound.tick(400);
                   }}
                 />
 
                 <div className="flex-1" />
-                  <AIEmojiPicker key={accountId == null ? 'guest' : `account:${accountId}`} lang={lang} disabled={awaitingApiKey} onChoose={insertEmoji} />
+                  <AIEmojiPicker key={`emoji:${accountScope}`} lang={lang} disabled={awaitingApiKey} onChoose={insertEmoji} />
                   {prompt && <button
                     type="button"
                     onClick={() => { changePrompt(''); document.getElementById('ai-prompt-input')?.focus(); }}

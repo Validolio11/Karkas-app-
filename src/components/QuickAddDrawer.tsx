@@ -6,7 +6,7 @@ import { Language, TRANSLATIONS } from '../utils/i18n';
 import { karkasApiFetch } from '../utils/desktopApi';
 import { Plus, X, Timer, ChevronLeft, ChevronRight, Check } from 'lucide-react';
 import { AIIcon } from './AIIconTemplates';
-import { buildQuickAddSteps, hasQuickAddDraftContent, mergeQuickAddSuggestions, quickAddDraftKey, readQuickAddDraft, saveQuickAddDraft } from './quickAddDraft';
+import { DEFAULT_QUICK_ADD_PRIORITY, buildQuickAddSteps, emptyQuickAddDraft, hasQuickAddDraftContent, mergeQuickAddSuggestions, nextQuickAddWizardStep, previousQuickAddWizardStep, quickAddDraftKey, quickAddWizardSteps, readQuickAddDraft, resolveQuickAddWizardStep, saveQuickAddDraft } from './quickAddDraft';
 import { isTaskDate } from '../utils/taskDates';
 import { TaskDateCalendar } from './TaskDateCalendar';
 
@@ -35,7 +35,7 @@ const QuickAddDraftSession: React.FC<QuickAddDrawerProps> = ({ ownerId = null, i
     if (savedDraft?.phase) return savedDraft.phase;
     return tabs.some(tab => tab.id === selectedPhase) ? selectedPhase! : tabs[0]?.id || 'focus';
   });
-  const [priority, setPriority] = useState<1 | 2 | 3>(savedDraft?.priority || 2);
+  const [priority, setPriority] = useState<1 | 2 | 3>(savedDraft?.priority || DEFAULT_QUICK_ADD_PRIORITY);
   const [customSteps, setCustomSteps] = useState<string[]>(savedDraft?.customSteps || []);
   const [steps, setSteps] = useState(() => savedDraft?.timerMode === undefined && savedDraft?.customSteps.length
     ? Math.min(12, savedDraft.customSteps.length) : savedDraft?.steps ?? 0);
@@ -45,7 +45,12 @@ const QuickAddDraftSession: React.FC<QuickAddDrawerProps> = ({ ownerId = null, i
   const [deadlineDate, setDeadlineDate] = useState(savedDraft?.deadlineDate || '');
   const [aiLoading, setAiLoading] = useState(false);
   const [notice, setNotice] = useState('');
-  const [wizardStep, setWizardStep] = useState(savedDraft?.title.trim() ? savedDraft.wizardStep ?? 0 : 0);
+  const [storedWizardStep, setWizardStep] = useState(savedDraft?.title.trim() ? savedDraft.wizardStep ?? 0 : 0);
+  // Without categories there is nothing to choose, so the category stage is skipped rather than shown empty.
+  const hasCategories = tabs.length > 0;
+  const wizardStep = resolveQuickAddWizardStep(storedWizardStep, hasCategories);
+  const visibleSteps = quickAddWizardSteps(hasCategories);
+  const stepNumber = visibleSteps.indexOf(wizardStep) + 1;
   const stepLabels = uk ? ['Назва й опис', 'Категорія', 'Пріоритет', 'Дати', 'Облік часу', 'Підкроки'] : ['Title and description', 'Category', 'Priority', 'Dates', 'Time tracking', 'Substeps'];
   const stepHeadings = uk ? ['Що потрібно зробити?', 'До якої сфери належить?', 'Що важливе зараз?', 'Коли працюватимемо?', 'Як рахуватимемо час?', 'З яких кроків почнемо?'] : ['What needs to be done?', 'Which area does it belong to?', 'What matters right now?', 'When will we work?', 'How will we track time?', 'What steps will we take?'];
   const stepGuidance = uk ? ['Що потрібно зробити? Опис можна залишити порожнім.', 'Оберіть, до якої сфери належить завдання.', 'Наскільки важливе це завдання зараз?', 'Оберіть день роботи й дедлайн або просто продовжуйте без дат.', 'Оберіть облік часу. Він запуститься лише з картки завдання.', 'Розділіть завдання на кроки або залиште їх кількість нульовою.'] : ['What needs to be done? Description is optional.', 'Choose the area this task belongs to.', 'How important is this task right now?', 'Choose a working day and deadline, or continue without dates.', 'Choose time tracking. Start it later from the task card.', 'Break the task into steps, or leave the count at zero.'];
@@ -146,7 +151,7 @@ const QuickAddDraftSession: React.FC<QuickAddDrawerProps> = ({ ownerId = null, i
     setError('');
     nextFocus.current = null;
     navigationLock.current = Date.now() + 250;
-    setWizardStep(previous => Math.min(5, previous + 1));
+    setWizardStep(nextQuickAddWizardStep(wizardStep, hasCategories));
   };
 
   const handleSubmit = (event: React.FormEvent) => {
@@ -185,8 +190,9 @@ const QuickAddDraftSession: React.FC<QuickAddDrawerProps> = ({ ownerId = null, i
       }
       sound.activate();
       cancelAi();
-      try { saveQuickAddDraft(localStorage, { title: '', note: '', phase, priority, steps: 0, customSteps: [], timerMode: 'stopwatch', countdownMinutes: 25, wizardStep: 0 }, ownerId); } catch { /* Storage is optional. */ }
-      setTitle(''); setNote(''); setCustomSteps([]); setSteps(0); setTimerMode('stopwatch'); setCountdownMinutes('25'); setPlannedDate(''); setDeadlineDate(''); setNotice(''); setError(''); setWizardStep(0);
+      // Only the category carries over; priority and the rest start from defaults for the next task.
+      try { saveQuickAddDraft(localStorage, emptyQuickAddDraft(phase), ownerId); } catch { /* Storage is optional. */ }
+      setTitle(''); setNote(''); setPriority(DEFAULT_QUICK_ADD_PRIORITY); setCustomSteps([]); setSteps(0); setTimerMode('stopwatch'); setCountdownMinutes('25'); setPlannedDate(''); setDeadlineDate(''); setNotice(''); setError(''); setWizardStep(0);
       onClose();
     } catch {
       submitLock.current = false;
@@ -253,9 +259,9 @@ const QuickAddDraftSession: React.FC<QuickAddDrawerProps> = ({ ownerId = null, i
       <div className="px-4 sm:px-6 pt-3 sm:pt-4">
         <div className="flex items-center justify-between gap-4">
           <h2 className="text-sm font-bold uppercase tracking-widest text-white">{uk ? 'Нове завдання' : 'New task'}</h2>
-          <div className="flex items-center gap-3 sm:gap-5"><p className="text-xs font-mono tabular-nums text-neutral-400">{uk ? `Крок ${wizardStep + 1} із 6` : `Step ${wizardStep + 1} of 6`}</p><button type="button" id="quick-add-close-btn" aria-label={uk ? 'Закрити створення завдання — чернетка збережеться' : 'Close task creation — draft will be saved'} onClick={closeDrawer} className="min-h-11 min-w-11 flex items-center justify-center text-neutral-500 hover:text-white focus-visible:outline-2 focus-visible:outline-white"><X className="w-4 h-4" /></button></div>
+          <div className="flex items-center gap-3 sm:gap-5"><p className="text-xs font-mono tabular-nums text-neutral-400">{uk ? `Крок ${stepNumber} із ${visibleSteps.length}` : `Step ${stepNumber} of ${visibleSteps.length}`}</p><button type="button" id="quick-add-close-btn" aria-label={uk ? 'Закрити створення завдання — чернетка збережеться' : 'Close task creation — draft will be saved'} onClick={closeDrawer} className="min-h-11 min-w-11 flex items-center justify-center text-neutral-500 hover:text-white focus-visible:outline-2 focus-visible:outline-white"><X className="w-4 h-4" /></button></div>
         </div>
-        <div role="progressbar" aria-label={uk ? 'Створення завдання' : 'Task creation'} aria-valuemin={1} aria-valuemax={6} aria-valuenow={wizardStep + 1} aria-valuetext={stepLabels[wizardStep]} className="mt-2 grid grid-cols-6 gap-1.5" >{stepLabels.map((label, index) => <span key={label} aria-hidden="true" className={`h-1 ${index <= wizardStep ? 'bg-white' : 'bg-neutral-700'}`} />)}</div>
+        <div role="progressbar" aria-label={uk ? 'Створення завдання' : 'Task creation'} aria-valuemin={1} aria-valuemax={visibleSteps.length} aria-valuenow={stepNumber} aria-valuetext={stepLabels[wizardStep]} className={`mt-2 grid ${visibleSteps.length === 6 ? 'grid-cols-6' : 'grid-cols-5'} gap-1.5`} >{visibleSteps.map(index => <span key={stepLabels[index]} aria-hidden="true" className={`h-1 ${index <= wizardStep ? 'bg-white' : 'bg-neutral-700'}`} />)}</div>
       </div>
       <div className="px-4 sm:px-6 pt-5 sm:pt-6 pb-5 sm:pb-6">
         <div aria-live="polite" className="mb-5"><h3 id="quick-add-step-heading" tabIndex={-1} className="focus:outline-none text-xl sm:text-2xl leading-tight font-semibold tracking-tight text-white">{stepHeadings[wizardStep]}</h3><p className="mt-2 text-sm leading-relaxed text-neutral-400">{stepGuidance[wizardStep]}</p></div>
@@ -274,6 +280,7 @@ const QuickAddDraftSession: React.FC<QuickAddDrawerProps> = ({ ownerId = null, i
           <div className="mb-5 text-center"><span className="inline-block mb-3 h-1 w-10" aria-hidden="true" style={{ backgroundColor: priorityColor }} /><p className="text-xl sm:text-2xl font-medium tracking-tight text-white">{uk ? ['Терміновий', 'Звичайний', 'Низький'][priority - 1] : ['Urgent', 'Standard', 'Low'][priority - 1]}</p><p className="mt-2 text-sm text-neutral-400">{uk ? ['Потребує уваги в першу чергу.', 'Важливо, але без зайвого поспіху.', 'Може зачекати, поки звільниться час.'][priority - 1] : ['Needs attention first.', 'Important, without unnecessary pressure.', 'Can wait until there is time.'][priority - 1]}</p></div>
           <input id="quick-add-priority-slider" aria-label={uk ? 'Пріоритет' : 'Priority'} type="range" min="0" max="2" step="1" value={3 - priority} onChange={event => setPriority((3 - Number(event.target.value)) as 1 | 2 | 3)} aria-valuetext={uk ? ['Терміновий', 'Звичайний', 'Низький'][priority - 1] : ['Urgent', 'Standard', 'Low'][priority - 1]} className={rangeClass} />
           <div className="flex justify-between mt-1 text-sm text-neutral-500">{([3, 2, 1] as const).map(value => <span key={value} className={priority === value ? 'font-medium text-white' : ''}>{uk ? ['Терміновий', 'Звичайний', 'Низький'][value - 1] : ['Urgent', 'Standard', 'Low'][value - 1]}</span>)}</div>
+          {!hasCategories && <p id="quick-add-no-categories-hint" className="mt-6 text-center text-xs leading-relaxed text-neutral-500">{uk ? 'Вкладок-сфер ще немає, тому вибір сфери пропущено. Додайте вкладку кнопкою «+ Вкладка» над списком завдань, щоб групувати завдання.' : 'There are no category tabs yet, so choosing a category was skipped. Add a tab with “+ Tab” above the task list to group tasks.'}</p>}
         </fieldset>}
         {wizardStep === 3 && <section id="quick-add-dates-panel" aria-label={uk ? 'Дати завдання' : 'Task dates'} className="min-w-0">
           <TaskDateCalendar plannedDate={plannedDate} deadlineDate={deadlineDate} onPlannedDateChange={value => { setPlannedDate(value); setError(''); }} onDeadlineDateChange={value => { setDeadlineDate(value); setError(''); }} lang={lang} plannedInputRef={plannedDateRef} deadlineInputRef={deadlineDateRef} invalid={datesReversed || !!plannedDate && !isTaskDate(plannedDate) || !!deadlineDate && !isTaskDate(deadlineDate)} />
@@ -301,7 +308,7 @@ const QuickAddDraftSession: React.FC<QuickAddDrawerProps> = ({ ownerId = null, i
         {(error || datesReversed && wizardStep === 3) && <p id={wizardStep === 3 ? 'quick-add-dates-warning' : undefined} role="alert" className="mt-5 text-sm text-rose-300 leading-relaxed">{error || (uk ? 'Дата роботи пізніша за дедлайн. Змініть одну з дат.' : 'The planned date is after the deadline. Change one of the dates.')}</p>}
       </div>
       <div className="sticky bottom-0 z-10 flex items-center justify-between gap-3 px-4 sm:px-6 py-3 border-t border-neutral-800 bg-[#0c0c0d]">
-        {wizardStep > 0 ? <button type="button" id="quick-add-back-btn" onClick={() => { if (Date.now() < navigationLock.current) return; navigationLock.current = Date.now() + 250; nextFocus.current = null; setError(''); setWizardStep(previous => Math.max(0, previous - 1)); }} className="min-h-11 inline-flex items-center gap-2 pr-3 text-sm text-neutral-300 hover:text-white focus-visible:outline-2 focus-visible:outline-white"><ChevronLeft className="w-5 h-5" />{uk ? 'Назад' : 'Back'}</button> : <span className="max-w-36 sm:max-w-none text-xs sm:text-sm text-neutral-500">{uk ? 'Закриття не очищає форму' : 'Closing keeps your entries'}</span>}
+        {wizardStep > 0 ? <button type="button" id="quick-add-back-btn" onClick={() => { if (Date.now() < navigationLock.current) return; navigationLock.current = Date.now() + 250; nextFocus.current = null; setError(''); setWizardStep(previousQuickAddWizardStep(wizardStep, hasCategories)); }} className="min-h-11 inline-flex items-center gap-2 pr-3 text-sm text-neutral-300 hover:text-white focus-visible:outline-2 focus-visible:outline-white"><ChevronLeft className="w-5 h-5" />{uk ? 'Назад' : 'Back'}</button> : <span className="max-w-36 sm:max-w-none text-xs sm:text-sm text-neutral-500">{uk ? 'Закриття не очищає форму' : 'Closing keeps your entries'}</span>}
         {wizardStep < 5 ? <button type="submit" id="quick-add-next-btn" disabled={wizardStep === 0 && !title.trim()} className={footerButtonClass}>{uk ? 'Далі' : 'Next'}<ChevronRight className="w-5 h-5" /></button> : <button type="submit" id="quick-add-submit-btn" disabled={!title.trim() || aiLoading} className={footerButtonClass}><Plus className="w-5 h-5" />{t.quickAdd.submitBtn}</button>}
       </div>
     </form>

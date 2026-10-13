@@ -18,6 +18,18 @@ export function buildTaskTemporalContext(tasks: TemporalTask[], clock: TemporalC
     return date.toISOString().slice(0, 10);
   };
   const relative = (date: string) => date === today ? 'today' : date === shiftDay(-1) ? 'yesterday' : date === shiftDay(1) ? 'tomorrow' : date < today ? 'past' : 'future';
+  // Calendar weeks run Monday–Sunday in the client zone. Precomputed so the model never
+  // derives weekdays or week membership itself ("no deadlines this week" vs. Friday's).
+  const dayNumber = (date: string) => Math.round(Date.parse(`${date}T12:00:00Z`) / 86_400_000);
+  const todayNumber = dayNumber(today);
+  const mondayOffset = -((new Date(`${today}T12:00:00Z`).getUTCDay() + 6) % 7);
+  const thisWeek = { start: shiftDay(mondayOffset), end: shiftDay(mondayOffset + 6) };
+  const nextWeek = { start: shiftDay(mondayOffset + 7), end: shiftDay(mondayOffset + 13) };
+  const weekdayFormatter = new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', weekday: 'long' });
+  const weekdayOf = (date: string) => weekdayFormatter.format(new Date(`${date}T12:00:00Z`));
+  const calendarWeek = (date: string) => date < shiftDay(mondayOffset - 7) ? 'earlier' : date < thisWeek.start ? 'previous'
+    : date <= thisWeek.end ? 'this' : date <= nextWeek.end ? 'next' : 'later';
+  const calendarDay = (date: string) => ({ date, relation: relative(date), weekday: weekdayOf(date), daysFromToday: dayNumber(date) - todayNumber, week: calendarWeek(date) });
   const timestamp = (value: unknown) => {
     const epoch = typeof value === 'number' ? value : typeof value === 'string' && /T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? Date.parse(value) : NaN;
     if (!Number.isFinite(epoch) || epoch <= 0 || Math.abs(epoch) > 8.64e15) return null;
@@ -52,8 +64,8 @@ export function buildTaskTemporalContext(tasks: TemporalTask[], clock: TemporalC
         id: task.id, title: task.title, archived, done: Boolean(task.done), scheduledPending: Boolean(task.scheduledPending),
         created: timestamp(task.createdAt), lastEdited: timestamp(task.updatedAt), started, completed: timestamp(task.completedAt),
         ...(archived ? { archivedAt: timestamp(task.deletedAt) } : {}),
-        plannedDay: plannedDate ? { date: plannedDate, relation: relative(plannedDate) } : null,
-        deadlineDay: deadlineDate ? { date: deadlineDate, relation: relative(deadlineDate), inclusive: true } : null,
+        plannedDay: plannedDate ? calendarDay(plannedDate) : null,
+        deadlineDay: deadlineDate ? { ...calendarDay(deadlineDate), inclusive: true } : null,
         scheduledStart: timestamp(plannedStartEpoch),
         ...(task.schedule ? { recurrence: task.schedule.recurrence, scheduleTimeZone: task.schedule.timeZone, scheduleAnchor: timestamp(task.schedule.startAt), nextOccurrence: timestamp(task.scheduleNextStartAt) } : {}),
         statuses, recordedWorkSeconds: measuredSeconds, timerRunning: Boolean(task.timerRunning), timerSessionStarted,
@@ -62,21 +74,27 @@ export function buildTaskTemporalContext(tasks: TemporalTask[], clock: TemporalC
       };
     });
   const limit = Math.max(1, Math.min(200, options.limit ?? 80));
+  const upcomingDeadline = (record: typeof records[number], week: string) => !record.done && !record.archived
+    && record.deadlineDay !== null && record.deadlineDay.daysFromToday >= 0 && record.deadlineDay.week === week;
   // Unfinished temporal commitments take precedence over undated history in a bounded prompt.
   const importance = (record: typeof records[number]) => record.archived || record.done ? 2 : record.statuses.length ? 0 : 1;
   records.sort((a, b) => importance(a) - importance(b));
   return {
     clock: { utc: new Date(now).toISOString(), timeZone: clock.timeZone, localDateTime, localDate: today,
-      weekday: new Intl.DateTimeFormat('en-GB', { timeZone: clock.timeZone, weekday: 'long' }).format(new Date(now)), yesterday: shiftDay(-1), tomorrow: shiftDay(1) },
+      weekday: new Intl.DateTimeFormat('en-GB', { timeZone: clock.timeZone, weekday: 'long' }).format(new Date(now)), yesterday: shiftDay(-1), tomorrow: shiftDay(1),
+      thisWeek, nextWeek, weekStartsOn: 'Monday' },
     counts: { total: records.length, plannedTodayUnfinished: records.filter(task => task.statuses.includes('planned_today_unfinished')).length,
       plannedDayPassedUnfinished: records.filter(task => task.statuses.includes('planned_day_passed_unfinished')).length,
-      overdueDeadlines: records.filter(task => task.statuses.includes('deadline_overdue')).length },
+      overdueDeadlines: records.filter(task => task.statuses.includes('deadline_overdue')).length,
+      // Unfinished, not archived, due from today to the end of the week (overdue ones are counted above).
+      upcomingDeadlinesThisWeek: records.filter(task => upcomingDeadline(task, 'this')).length,
+      deadlinesNextWeek: records.filter(task => upcomingDeadline(task, 'next')).length },
     tasks: records.slice(0, limit), omittedTaskCount: Math.max(0, records.length - limit),
     evidenceLimits: 'Unknown timestamps and missing measurements remain unknown. Activity is a bounded recorded journal, not a complete history. Calendar dates have no implied start hour. A passed start or unfinished day is not proof that no work happened.',
   };
 }
 
 export const temporalAwarenessSystemPolicy = `TEMPORAL GROUNDING:
-Before answering, inspect authoritative TASK TEMPORAL CONTEXT and current client local clock. Resolve the current request's today, tomorrow and yesterday using that clock/time zone, never server time. For historical messages with a recorded timestamp, resolve their relative dates against that message's instant in the client zone; a historical 'tomorrow' does not move forward on every new day. Undated old messages cannot establish an exact date. Distinguish creation, edits, scheduled work day, exact scheduled start, deadline (inclusive through the end of its local day), recorded starts, completed time and journal events. A task planned today remains planned today until its date is changed; do not silently treat it as tomorrow. Unknown creation/completion/edit timestamps must not be reconstructed. Creation-to-completion elapsed time is not measured effort.
+Before answering, inspect authoritative TASK TEMPORAL CONTEXT and current client local clock. Resolve the current request's today, tomorrow and yesterday using that clock/time zone, never server time. For historical messages with a recorded timestamp, resolve their relative dates against that message's instant in the client zone; a historical 'tomorrow' does not move forward on every new day. Undated old messages cannot establish an exact date. For 'this week', 'next week' or a weekday use clock.thisWeek/nextWeek (Monday-Sunday) and each plannedDay/deadlineDay's weekday, daysFromToday and week fields; never recompute weekdays or week membership, and keep counts and lists consistent with those fields. Distinguish creation, edits, scheduled work day, exact scheduled start, deadline (inclusive through the end of its local day), recorded starts, completed time and journal events. A task planned today remains planned today until its date is changed; do not silently treat it as tomorrow. Unknown creation/completion/edit timestamps must not be reconstructed. Creation-to-completion elapsed time is not measured effort.
 For an unfinished task with a passed planned day or timed start, first ask what happened if the reason is unknown. Missing timer readings do not prove the person did nothing. Do not automatically move missed commitments to tomorrow. Respect an explicit user request to change a named task's date without forcing a personal interview; if target/date is ambiguous, clarify. Time-based observations must not bypass personal discovery readiness or agreed-goal boundaries.
 Actions in an AI response are proposals until the application confirms them. Say 'I propose moving...' rather than 'I updated...', 'scheduled' or 'saved' when referring to unapplied changes. An intention or a chat claim is not a stored task mutation. Do not invent an hour for a calendar-only date or treat an obsolete recurring template start as a missed daily occurrence. Use supplied task IDs and latest recorded dates, and disclose missing context.`;

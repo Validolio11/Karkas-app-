@@ -1,4 +1,5 @@
 import type { AIResponse } from '../types';
+import type { AIApplyOutcome } from '../components/aiTaskProposal';
 import { readAIResponse } from '../components/aiAssistantState';
 import { readAccountStorage, writeAccountStorage, removeAccountStorage } from '../utils/accountStorage';
 
@@ -9,6 +10,8 @@ export interface PersistedAIChatMessage {
   id?: string;
   response?: AIResponse;
   proposalStatus?: 'pending' | 'stale' | 'applied';
+  /** After Apply: whether every change, only some or none actually took effect. */
+  applyOutcome?: AIApplyOutcome;
   actionId?: string;
   notice?: string;
   greeting?: boolean;
@@ -41,6 +44,7 @@ export function loadAIChatHistory(accountId?: string | null): PersistedAIChatMes
           ...(typeof message.sentAt === 'number' && Number.isFinite(message.sentAt) && message.sentAt > 0 && message.sentAt <= 8640000000000000 ? { sentAt: message.sentAt } : {}),
           ...(typeof message.id === 'string' ? { id: message.id } : {}),
           ...(response ? { response, ...(hasProposal ? { proposalStatus: message.proposalStatus === 'applied' ? 'applied' as const : 'stale' as const } : {}) } : {}),
+          ...(response && hasProposal && message.proposalStatus === 'applied' && (message.applyOutcome === 'applied' || message.applyOutcome === 'partial' || message.applyOutcome === 'none') ? { applyOutcome: message.applyOutcome } : {}),
           ...(typeof message.actionId === 'string' ? { actionId: message.actionId } : {}),
           ...(typeof message.notice === 'string' ? { notice: message.notice } : {}),
           ...(message.greeting === true ? { greeting: true } : {}),
@@ -92,8 +96,25 @@ export function chatTimestampPrefix(sentAt: number): string {
   return `[${two(date.getDate())}.${two(date.getMonth() + 1)} ${two(date.getHours())}:${two(date.getMinutes())}]`;
 }
 
+/** What really happened to a proposal in an earlier reply, as the model must see it. */
+export type AIChatProposalState = 'applied' | 'partial' | 'not_applied';
+
+export interface AIChatContextMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  /** Only on an assistant reply that carried a proposal; the server renders it as an app note. */
+  proposalStatus?: AIChatProposalState;
+}
+
+/** A pending or stale proposal was never applied; an applied one may still have been rejected in part or whole. */
+export function chatProposalState(message: PersistedAIChatMessage): AIChatProposalState | undefined {
+  if (message.role !== 'assistant' || !message.proposalStatus) return undefined;
+  if (message.proposalStatus !== 'applied') return 'not_applied';
+  return message.applyOutcome === 'none' ? 'not_applied' : message.applyOutcome === 'partial' ? 'partial' : 'applied';
+}
+
 /** A restarted introduction keeps old text visible but starts fresh provider context. */
-export function recentAIChatContext(messages: PersistedAIChatMessage[], limit = 10, currentTurnId?: string): { role: 'user' | 'assistant'; content: string }[] {
+export function recentAIChatContext(messages: PersistedAIChatMessage[], limit = 10, currentTurnId?: string): AIChatContextMessage[] {
   let start = 0;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     if (messages[index].greeting) { start = index; break; }
@@ -101,8 +122,12 @@ export function recentAIChatContext(messages: PersistedAIChatMessage[], limit = 
   // A retried message is already sent as the current prompt, not a second
   // answer to the preceding question. Keep earlier identical text by its ID.
   return messages.slice(start).filter(message => !currentTurnId || message.id !== currentTurnId)
-    .slice(-limit).map(({ role, content, sentAt }) => ({ role, content: typeof sentAt === 'number' && Number.isFinite(sentAt) && sentAt > 0 && sentAt <= 8640000000000000
-      ? `${chatTimestampPrefix(sentAt)} ${content}` : content }));
+    .slice(-limit).map(message => {
+      const { role, content, sentAt } = message;
+      const proposalStatus = chatProposalState(message);
+      return { role, content: typeof sentAt === 'number' && Number.isFinite(sentAt) && sentAt > 0 && sentAt <= 8640000000000000
+        ? `${chatTimestampPrefix(sentAt)} ${content}` : content, ...(proposalStatus ? { proposalStatus } : {}) };
+    });
 }
 
 export function visibleAIChatMessages(messages: PersistedAIChatMessage[], introductionId: string | null): { messages: PersistedAIChatMessage[]; previousCount: number } {

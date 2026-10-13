@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { StrategyDiscoveryTopic } from '../types';
 import { applyStrategyMemory, applyStrategyResponse, createPersonalStrategyProfile, readPersonalStrategy, savePersonalStrategy } from './personalStrategy';
-import { applyDiscoveryTurn, continueStrategyDiscovery, isPersonalStrategyReady, missingStrategyDiscoveryTopics, nextStrategyDiscoveryTopic, normalizeStrategyDiscovery, preparePersonalDiscoveryRequest, STRATEGY_DISCOVERY_TOPICS, updateDiscoveryEvidence } from './strategyDiscovery';
+import { addressedDiscoveryQuestion, applyDiscoveryTurn, continueStrategyDiscovery, isPersonalStrategyReady, missingStrategyDiscoveryTopics, nextStrategyDiscoveryTopic, normalizeStrategyDiscovery, preparePersonalDiscoveryRequest, STRATEGY_DISCOVERY_TOPICS, updateDiscoveryEvidence } from './strategyDiscovery';
 import { confirmedProfile, discoveryGoal, discoveryStatements, understandingProfile } from './strategyDiscovery.testHelpers';
+import { addressFormOf, detectDiscoveryAddress, discoveryQuestionStreak, PRACTICAL_HELP_OFFER, practicalHelpRequested, wantsPracticalHelpNow } from './strategyDiscovery';
 
 const answer = (topic: StrategyDiscoveryTopic, quote: string, status: 'answered' | 'deferred' = 'answered') => ({ memoryPatch: { discovery: { answers: [{ topic, quote, status }] } } });
 test('a wishlist does not invent motivation, circumstances, barriers, capacity or attempts', () => {
@@ -127,4 +128,82 @@ test('optional private details can stay deferred while the known practical scope
   const prepared = preparePersonalDiscoveryRequest(profile, 'Так', profile.discovery!.pendingSummary!.id);
   assert.equal(isPersonalStrategyReady(prepared.profile), true);
   assert.equal(prepared.discovery.topics.attempts.status, 'deferred');
+});
+test('the form of address follows the person’s latest message that shows one', () => {
+  assert.equal(detectDiscoveryAddress(['Слухай, я вже все розповів']), 'ty');
+  assert.equal(detectDiscoveryAddress(['Що відбувається, коли ти відкриваєш порожній композишн?']), 'ty');
+  assert.equal(detectDiscoveryAddress(['Скажіть, будь ласка, що мені робити']), 'vy');
+  assert.equal(detectDiscoveryAddress(['Скажіть, що робити', 'Я фрілансер', 'Розбий це на кроки']), 'ty');
+  assert.equal(detectDiscoveryAddress(['Я фрілансер, моушн-дизайн']), 'vy');
+  assert.equal(addressFormOf('Можете пояснити, що вам заважає?'), 'vy');
+  assert.equal(addressFormOf('п’ятий день поспіль'), undefined);
+});
+test('«Поглибити знайомство» resumes an unfinished interview at its first missing topic in the person’s form', () => {
+  const quote = 'Слухай, хочу нарешті стабільно брати проєкти й не зривати дедлайни';
+  const started = applyDiscoveryTurn(createPersonalStrategyProfile(), answer('direction', quote), quote, 'd1');
+  assert.equal(started.discovery?.topics.direction.status, 'answered');
+  const pressed = continueStrategyDiscovery(started, 'uk', 1_800_000_000_000);
+  assert.equal(pressed.discovery?.pendingQuestion?.topic, 'motivation');
+  assert.match(pressed.discovery!.pendingQuestion!.id, /^continue:1800000000000-[a-z0-9]+:motivation$/);
+  assert.equal(addressFormOf(pressed.discovery!.pendingQuestion!.text), 'ty');
+  assert.equal(pressed.discovery?.topics.direction.status, 'answered');
+});
+test('explicit requests for practical help are recognised, while described uncertainty stays an answer', () => {
+  for (const text of ['Слухай, я вже все розповів. Що мені конкретно робити…', 'Що робити?', 'Допоможи', 'Дай пораду', 'з чого мені почати?', 'What should I do?', 'Досить питань']) {
+    assert.equal(wantsPracticalHelpNow(text), true, text);
+  }
+  for (const text of ['Сідаю і не знаю, що робити далі', 'Я відкриваю проєкт і думаю, що робити спочатку', 'Допоможи скласти план', 'Відкриваю After Effects і гортаю YouTube']) {
+    assert.equal(wantsPracticalHelpNow(text), false, text);
+  }
+  const profile = createPersonalStrategyProfile();
+  profile.discovery = normalizeStrategyDiscovery(profile);
+  const offered = { ...profile, discovery: { ...profile.discovery, pendingQuestion: { id: 'offer:t3~q3', turnId: 't3', topic: 'barriers' as const, text: PRACTICAL_HELP_OFFER.uk } } };
+  for (const text of ['Так', 'Давай перший крок', 'Ок, підкажи']) assert.equal(practicalHelpRequested(text, offered), true, text);
+  for (const text of ['Давай ще трохи розберемося', 'Ні, спершу питай далі']) assert.equal(practicalHelpRequested(text, offered), false, text);
+  assert.equal(practicalHelpRequested('Так', profile), false);
+});
+test('question ids count consecutive interview questions and remember the one-time help offer', () => {
+  assert.deepEqual(discoveryQuestionStreak(undefined), { asked: 0, offered: false });
+  assert.deepEqual(discoveryQuestionStreak('discovery:barriers'), { asked: 0, offered: false });
+  assert.deepEqual(discoveryQuestionStreak('continue:1800000000000-ab12:barriers'), { asked: 1, offered: false });
+  assert.deepEqual(discoveryQuestionStreak('offer:t3~q3'), { asked: 3, offered: true });
+  let profile = continueStrategyDiscovery(confirmedProfile());
+  profile = applyDiscoveryTurn(profile, { memoryPatch: { discovery: { question: { topic: 'barriers', text: 'Що саме відбувається перед цим?' } } } }, 'Відкладаю', 'q-a');
+  assert.equal(profile.discovery?.pendingQuestion?.id, 'question:q-a~q2');
+  profile = applyDiscoveryTurn(profile, { memoryPatch: { discovery: { question: { topic: 'barriers', text: PRACTICAL_HELP_OFFER.uk } } } }, 'Відкладаю знову', 'q-b');
+  assert.equal(profile.discovery?.pendingQuestion?.id, 'offer:q-b~q3');
+  assert.equal(profile.discovery?.pendingQuestion?.text, PRACTICAL_HELP_OFFER.uk);
+  profile = applyDiscoveryTurn(profile, { memoryPatch: { discovery: { question: { topic: 'barriers', text: 'Що заважає найбільше?' } } } }, 'Давай ще розберемося', 'q-c');
+  assert.equal(profile.discovery?.pendingQuestion?.id, 'question:q-c~q4:offered');
+});
+test('the «Поглибити знайомство» opener follows the form of the person’s recent chat messages', () => {
+  const fresh = createPersonalStrategyProfile();
+  const now = 1_800_000_000_000;
+  // No discovery answers yet: the recent "ти" messages decide; the wording avoids gendered forms.
+  const pressed = continueStrategyDiscovery(fresh, 'uk', now, ['Допоможи', 'Слухай, що мені робити', 'Так, давай']);
+  assert.equal(pressed.discovery?.pendingQuestion?.text, 'Що тобі хотілося б змінити у своєму житті й чому це для тебе важливо?');
+  assert.equal(continueStrategyDiscovery(fresh, 'uk', now).discovery?.pendingQuestion?.text, 'Що ви хотіли б змінити у своєму житті й чому це для вас важливо?');
+  assert.equal(addressFormOf(continueStrategyDiscovery(fresh, 'uk', now, ['Скажіть, будь ласка, що робити']).discovery!.pendingQuestion!.text), 'vy');
+  // A finished interview reopens barriers in the same form.
+  assert.equal(addressFormOf(continueStrategyDiscovery(confirmedProfile(), 'uk', now, ['Розбий це на кроки']).discovery!.pendingQuestion!.text), 'ty');
+});
+test('a stored app-written question is shown in the current form; model clarifications stay as written', () => {
+  const pressed = continueStrategyDiscovery(createPersonalStrategyProfile(), 'uk', 1_800_000_000_000);
+  const state = pressed.discovery!;
+  const stored = state.pendingQuestion!;
+  assert.equal(addressFormOf(stored.text), 'vy');
+  assert.equal(addressedDiscoveryQuestion(state, stored, 'uk', 'ty'), 'Що тобі хотілося б змінити у своєму житті й чому це для тебе важливо?');
+  assert.equal(addressedDiscoveryQuestion(state, stored, 'uk', 'vy'), stored.text);
+  const opener = normalizeStrategyDiscovery(createPersonalStrategyProfile()).pendingQuestion!;
+  assert.equal(addressFormOf(addressedDiscoveryQuestion(state, opener, 'uk', 'ty')), 'ty');
+  const clarification = { id: 'question:t1~q1', topic: 'barriers' as const, text: 'Що саме ви відкриваєте першим?' };
+  assert.equal(addressedDiscoveryQuestion(state, clarification, 'uk', 'ty'), clarification.text);
+  const english = { ...stored, text: 'What would you like to change in your life, and why does it matter to you?' };
+  assert.equal(addressedDiscoveryQuestion(state, english, 'en', 'ty'), english.text);
+});
+test('task-command imperatives show the form of address too', () => {
+  for (const text of ['Перенеси звіт на завтра', 'Заплануй тренування', 'Покажи мої завдання', 'Онови нотатку', 'Дай пораду']) assert.equal(addressFormOf(text), 'ty', text);
+  for (const text of ['Перенесіть звіт на завтра', 'Заплануйте тренування', 'Покажіть мої завдання', 'Оновіть нотатку', 'Дайте пораду']) assert.equal(addressFormOf(text), 'vy', text);
+  // Nouns and past tense that coincide with an imperative are not a signal.
+  for (const text of ['Зміни в розкладі', 'Розклади на тиждень', 'Мені видали нове завдання']) assert.equal(addressFormOf(text), undefined, text);
 });

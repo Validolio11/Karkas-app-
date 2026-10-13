@@ -111,7 +111,7 @@ before(async () => {
 
 test('HTTP personal discovery contains malicious provider planning before returning to the chat', async () => {
   for (const intent of ['auto', 'plan']) {
-    const data = await post('assist', { prompt: 'Хочу більше вільного часу discovery-http-case', action: 'chat', intent, strategyContext: { onboardingStatus: 'complete', goals: [] }, turnId: `http-${intent}` });
+    const data = await post('assist', { prompt: 'Хочу більше вільного часу discovery-http-case', action: 'chat', intent, discoveryMode: true, strategyContext: { onboardingStatus: 'complete', goals: [] }, turnId: `http-${intent}` });
     assert.equal(data.source, 'gemini-chat');
     assert.equal(data.fallbackUsed, false);
     assert.doesNotMatch(JSON.stringify(data), /FORBIDDEN/);

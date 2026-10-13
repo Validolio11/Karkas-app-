@@ -3,7 +3,7 @@ import { looksLikeGeminiApiKey } from '../utils/apiKey';
 import { normalizeTaskSchedule } from '../utils/taskScheduling';
 import type { AIIntent } from '../types';
 import { readAccountStorage, writeAccountStorage, removeAccountStorage } from '../utils/accountStorage';
-import { AI_CHAT_CLIENT_TIMEOUT_MS } from '../utils/aiChatTiming';
+import { AI_CHAT_CLIENT_TIMEOUT_MS, AI_DEFAULT_MODEL_PREFERENCE } from '../utils/aiChatTiming';
 
 export type AIMode = 'chat' | 'breakdown' | 'analyze' | 'generate';
 export interface AIRequest {
@@ -66,8 +66,85 @@ export function saveAIAssistantDraft(storage: DraftStorage, draft: AIAssistantDr
   } catch { return false; }
 }
 
-export function selectAIModel(models: string[], preferred: string): string {
-  return models.includes(preferred) ? preferred : models[0] || '';
+/** Version of a gemini-<major>[.<minor>] name for newest-first ordering within a tier. */
+const modelVersion = (model: string): [number, number] => {
+  const match = /^gemini-(\d+)(?:\.(\d+))?-/.exec(model);
+  return match ? [Number(match[1]), Number(match[2] ?? 0)] : [-1, -1];
+};
+
+// Selector pruning rules; edit these lists when Google retires or adds families.
+// Legacy generations answer poorly or return 404 for new projects.
+const LEGACY_MODEL = /^gemini-[0-2](?:\.\d+)?-/;
+// Name segments of specialised variants that are not general chat models
+// (omni = video generation, banana = image generation).
+const SPECIALISED_SEGMENTS = new Set(['embedding', 'image', 'tts', 'transcribe', 'robotics', 'computer', 'customtools',
+  'live', 'audio', 'aqa', 'learnlm', 'gemma', 'banana', 'omni', 'exp', 'experimental', 'vision']);
+// Versioned chat families; only the newest release of each is offered.
+const FAMILY_MODEL = /^gemini-(\d+)(?:\.(\d+))?-(flash-lite|flash|pro)(-preview(?:-\d{2}-\d{4})?)?$/;
+/** Family and order of a versioned model: newer version first, then stable over preview. */
+const familyRank = (model: string) => {
+  const match = FAMILY_MODEL.exec(model.toLowerCase());
+  return match ? { family: match[3], score: Number(match[1]) * 1e6 + Number(match[2] ?? 0) * 10 + (match[4] ? 0 : 1) } : null;
+};
+
+/**
+ * Chat models worth offering: no legacy generations, specialised variants or
+ * models this key returned 404 for (`hidden`); per family (flash, flash-lite, pro)
+ * only the newest release, so a newer preview outranks an older stable model but a
+ * stable model outranks a preview of the same version. Aliases (gemini-flash-latest)
+ * stay; pinned (-001) or preview duplicates of another offered name are hidden. If
+ * the rules remove everything, the full list is kept so the selector is never empty.
+ */
+export function visibleChatModels(models: string[], hidden: readonly string[] = []): string[] {
+  const candidates = models.filter(model => {
+    const name = model.toLowerCase();
+    return !LEGACY_MODEL.test(name) && !hidden.includes(model) && !name.split('-').some(segment => SPECIALISED_SEGMENTS.has(segment));
+  });
+  const offered = new Set(candidates);
+  const newest = new Map<string, number>();
+  for (const model of candidates) {
+    const rank = familyRank(model);
+    if (rank && rank.score > (newest.get(rank.family) ?? -1)) newest.set(rank.family, rank.score);
+  }
+  const visible = candidates.filter(model => {
+    const rank = familyRank(model);
+    if (rank) return rank.score === newest.get(rank.family);
+    const base = /^(.+?)-(?:preview(?:-\d{2}-\d{4})?|\d{3})$/.exec(model)?.[1];
+    return !(base && offered.has(base));
+  });
+  return visible.length ? visible : models;
+}
+
+/**
+ * Keep the person's choice while it is still offered; otherwise pick the best
+ * offered model by AI_DEFAULT_MODEL_PREFERENCE instead of the provider's first
+ * entry, which can be a legacy model the project cannot use.
+ */
+export function selectAIModel(listedModels: string[], preferred: string, hidden: readonly string[] = []): string {
+  const models = visibleChatModels(listedModels, hidden);
+  if (models.includes(preferred)) return preferred;
+  for (const tier of AI_DEFAULT_MODEL_PREFERENCE) {
+    const [best] = models.filter(model => tier.test(model)).sort((a, b) => {
+      const [aMajor, aMinor] = modelVersion(a);
+      const [bMajor, bMinor] = modelVersion(b);
+      return bMajor - aMajor || bMinor - aMinor;
+    });
+    if (best) return best;
+  }
+  return models[0] || '';
+}
+
+/**
+ * The model to remember after a successful reply. Only a selected model that
+ * Google reported as unavailable (404, or a 0 quota on the project's tier) is
+ * replaced, and only by a listed model,
+ * so quota or transient failures never override the person's choice.
+ */
+export function adoptedAIModel(response: { usedModel?: unknown; fallbackUsed?: unknown; aiMetrics?: unknown }, selected: string, models: string[]): string | null {
+  const metrics = response.aiMetrics && typeof response.aiMetrics === 'object' ? response.aiMetrics as Record<string, unknown> : {};
+  const used = typeof response.usedModel === 'string' ? response.usedModel : '';
+  if (response.fallbackUsed !== true || !['MODEL_UNAVAILABLE', 'MODEL_TIER_UNAVAILABLE'].includes(metrics.selectedModelFailure as string)) return null;
+  return used && used !== selected && models.includes(used) ? used : null;
 }
 
 export function appendChatRequest<T extends { role: 'user' | 'assistant'; content: string }>(messages: T[], text: string): (T | { role: 'user'; content: string })[] {
@@ -75,8 +152,8 @@ export function appendChatRequest<T extends { role: 'user' | 'assistant'; conten
   return last?.role === 'user' && last.content === text ? messages : [...messages, { role: 'user', content: text }];
 }
 
-export type AIRequestErrorCode = 'INVALID_API_KEY' | 'ACCESS_DENIED' | 'QUOTA_EXCEEDED' | 'MODEL_UNAVAILABLE' | 'INVALID_REQUEST' | 'INVALID_AI_REQUEST' | 'NETWORK_ERROR' | 'TIMEOUT' | 'CLIENT_TIMEOUT' | 'PROVIDER_ERROR' | 'PROVIDER_UNAVAILABLE' | 'INTERNAL_ERROR' | 'MISSING_API_KEY' | 'INVALID_RESPONSE' | 'CANCELLED';
-const knownCodes: AIRequestErrorCode[] = ['INVALID_API_KEY', 'ACCESS_DENIED', 'QUOTA_EXCEEDED', 'MODEL_UNAVAILABLE', 'INVALID_REQUEST', 'INVALID_AI_REQUEST', 'NETWORK_ERROR', 'TIMEOUT', 'CLIENT_TIMEOUT', 'PROVIDER_ERROR', 'PROVIDER_UNAVAILABLE', 'INTERNAL_ERROR', 'MISSING_API_KEY', 'INVALID_RESPONSE', 'CANCELLED'];
+export type AIRequestErrorCode = 'INVALID_API_KEY' | 'ACCESS_DENIED' | 'QUOTA_EXCEEDED' | 'MODEL_UNAVAILABLE' | 'MODEL_TIER_UNAVAILABLE' | 'INVALID_REQUEST' | 'INVALID_AI_REQUEST' | 'NETWORK_ERROR' | 'TIMEOUT' | 'CLIENT_TIMEOUT' | 'PROVIDER_ERROR' | 'PROVIDER_UNAVAILABLE' | 'INTERNAL_ERROR' | 'MISSING_API_KEY' | 'INVALID_RESPONSE' | 'CANCELLED';
+const knownCodes: AIRequestErrorCode[] = ['INVALID_API_KEY', 'ACCESS_DENIED', 'QUOTA_EXCEEDED', 'MODEL_UNAVAILABLE', 'MODEL_TIER_UNAVAILABLE', 'INVALID_REQUEST', 'INVALID_AI_REQUEST', 'NETWORK_ERROR', 'TIMEOUT', 'CLIENT_TIMEOUT', 'PROVIDER_ERROR', 'PROVIDER_UNAVAILABLE', 'INTERNAL_ERROR', 'MISSING_API_KEY', 'INVALID_RESPONSE', 'CANCELLED'];
 export class AIRequestError extends Error {
   constructor(public readonly code: AIRequestErrorCode) { super(code); this.name = 'AIRequestError'; }
 }
@@ -93,7 +170,7 @@ export function responseRequestError(data: unknown, status: number): AIRequestEr
         : status === 503 ? 'PROVIDER_UNAVAILABLE' : status >= 500 ? 'PROVIDER_ERROR' : 'INTERNAL_ERROR');
 }
 
-export function readAIResponse(value: unknown, mode: AIMode): AIResponse & { usedModel?: string; fallbackUsed?: boolean } {
+export function readAIResponse(value: unknown, mode: AIMode): AIResponse & { usedModel?: string; fallbackUsed?: boolean; aiMetrics?: unknown } {
   const record = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : null;
   if (!record || typeof (mode === 'chat' ? record.reply || record.summary : record.summary) !== 'string'
     || !(mode === 'chat' ? record.reply || record.summary : record.summary).trim()) throw new AIRequestError('INVALID_RESPONSE');
@@ -169,6 +246,7 @@ const errorMessages: Record<AIRequestErrorCode, { uk: string; en: string }> = {
   ACCESS_DENIED: { uk: 'Google заборонив доступ до AI. Перевірте дозволи ключа та доступ до Gemini API.', en: 'Google denied AI access. Check key permissions and Gemini API access.' },
   QUOTA_EXCEEDED: { uk: 'Ліміт Gemini вичерпано. Зачекайте на його відновлення або перевірте квоту проєкту Google, потім повторіть запит.', en: 'The Gemini quota is exhausted. Wait for it to reset or check your Google project quota, then retry.' },
   MODEL_UNAVAILABLE: { uk: 'Вибрана модель Gemini недоступна. Виберіть іншу модель і повторіть запит.', en: 'The selected Gemini model is unavailable. Select another model and retry.' },
+  MODEL_TIER_UNAVAILABLE: { uk: 'Модель недоступна на безкоштовному тарифі Google — оберіть іншу, наприклад Flash-Lite, і повторіть запит.', en: 'This model is not available on the Google free tier — select another one, such as Flash-Lite, and retry.' },
   INVALID_REQUEST: { uk: 'Gemini не прийняв запит. Уточніть його й спробуйте ще раз.', en: 'Gemini did not accept this request. Revise it and try again.' },
   INVALID_AI_REQUEST: { uk: 'Сервіс AI відхилив запит додатка. Повторіть пізніше; якщо помилка повторюється, оновіть додаток.', en: 'The AI service rejected the app request. Retry later; if this continues, update the app.' },
   NETWORK_ERROR: { uk: 'Не вдалося з’єднатися з AI. Перевірте інтернет і повторіть запит.', en: 'Could not connect to AI. Check your connection and retry.' },

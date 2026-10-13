@@ -5,6 +5,8 @@ const LEGACY_MIGRATION_KEY = 'karkas_quick_add_draft_migration_v2';
 export const quickAddDraftKey = (ownerId: string | null = null) =>
   `karkas_quick_add_draft_v2:${encodeURIComponent(ownerId === null ? 'guest' : `account:${ownerId}`)}`;
 
+export const DEFAULT_QUICK_ADD_PRIORITY = 2 as const;
+
 export interface QuickAddDraft {
   title: string;
   note: string;
@@ -24,6 +26,48 @@ type DraftStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> & Partia
 
 export function hasQuickAddDraftContent(draft: Pick<QuickAddDraft, 'title' | 'note' | 'customSteps'> & Partial<QuickAddDraft>) {
   return !!(draft.title.trim() || draft.note.trim() || draft.customSteps.some(step => step.trim()) || (draft.steps ?? 0) > 0 || (draft.timerMode && draft.timerMode !== 'none') || draft.plannedDate || draft.deadlineDate);
+}
+
+/** Every new task starts from these choices; only the category carries over between tasks. */
+export function emptyQuickAddDraft(phase: string): QuickAddDraft {
+  return { title: '', note: '', phase, priority: DEFAULT_QUICK_ADD_PRIORITY, steps: 0, customSteps: [], timerMode: 'stopwatch', countdownMinutes: 25, wizardStep: 0 };
+}
+
+/** Wizard stages shown to the user; the category stage is skipped while there is nothing to choose. */
+export function quickAddWizardSteps(hasCategories: boolean): number[] {
+  return hasCategories ? [0, 1, 2, 3, 4, 5] : [0, 2, 3, 4, 5];
+}
+
+export function resolveQuickAddWizardStep(step: number, hasCategories: boolean): number {
+  return step === 1 && !hasCategories ? 2 : step;
+}
+
+export function nextQuickAddWizardStep(step: number, hasCategories: boolean): number {
+  const visible = quickAddWizardSteps(hasCategories);
+  return visible.find(candidate => candidate > step) ?? visible[visible.length - 1];
+}
+
+export function previousQuickAddWizardStep(step: number, hasCategories: boolean): number {
+  const visible = quickAddWizardSteps(hasCategories);
+  return [...visible].reverse().find(candidate => candidate < step) ?? visible[0];
+}
+
+export type TaskDateField = 'planned' | 'deadline';
+export type TaskDatePick =
+  | { field: TaskDateField; value: string; nextActive: TaskDateField }
+  | { rejected: 'deadline-before-planned'; nextActive: TaskDateField };
+
+/**
+ * A calendar click fills the active field. After the work day is chosen the deadline becomes active
+ * when it is still missing or now earlier than the work day; a deadline before the work day is refused.
+ */
+export function pickTaskDate(active: TaskDateField, value: string, plannedDate: string, deadlineDate: string): TaskDatePick {
+  if (active === 'deadline') {
+    if (value && isTaskDate(plannedDate) && value < plannedDate) return { rejected: 'deadline-before-planned', nextActive: 'deadline' };
+    return { field: 'deadline', value, nextActive: 'deadline' };
+  }
+  const needsDeadline = !!value && (!isTaskDate(deadlineDate) || deadlineDate < value);
+  return { field: 'planned', value, nextActive: needsDeadline ? 'deadline' : 'planned' };
 }
 
 export function buildQuickAddSteps(count: number, names: string[], lang: 'uk' | 'en', idPrefix = 's') {
@@ -58,7 +102,7 @@ function parseQuickAddDraft(raw: string | null): QuickAddDraft | null {
       title: typeof input.title === 'string' ? input.title : '',
       note: typeof input.note === 'string' ? input.note : '',
       phase: typeof input.phase === 'string' && !isSystemView(input.phase) ? input.phase : '',
-      priority: input.priority === 1 || input.priority === 3 ? input.priority : 2,
+      priority: input.priority === 1 || input.priority === 3 ? input.priority : DEFAULT_QUICK_ADD_PRIORITY,
       steps: typeof input.steps === 'number' && Number.isSafeInteger(input.steps) && input.steps >= 0 ? Math.min(input.steps, 12) : 0,
       customSteps: Array.isArray(input.customSteps) ? input.customSteps.filter((step): step is string => typeof step === 'string') : [],
       ...(input.timerMode !== undefined ? { timerMode: input.timerMode === 'stopwatch' || input.timerMode === 'countdown' ? input.timerMode : 'none' as const } : {}),

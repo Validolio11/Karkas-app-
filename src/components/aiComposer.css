@@ -86,6 +86,21 @@
 .karkas-ai-model-option span { min-width: 0; overflow-wrap: anywhere; }
 .karkas-ai-model-option.is-active { background: #29292e; }
 .karkas-ai-model-option[aria-selected="true"] { color: #fff; font-weight: 600; }
+.karkas-ai-model-option-body { display: flex; flex: 1 1 auto; flex-direction: column; gap: 4px; }
+/* Locally observed model usage: thin bar plus a small monospace label. */
+.karkas-ai-usage { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.karkas-ai-usage-track { display: block; height: 3px; overflow: hidden; background: #2a2a2e; }
+.karkas-ai-usage-fill { display: block; height: 100%; background: #a3a3a3; transition: width 200ms; }
+.karkas-ai-usage.is-high .karkas-ai-usage-fill { background: #fbbf24; }
+.karkas-ai-usage.is-limited .karkas-ai-usage-fill { background: #d97706; }
+.karkas-ai-usage.is-unknown .karkas-ai-usage-track { background: repeating-linear-gradient(90deg, #2a2a2e 0 4px, transparent 4px 7px); }
+.karkas-ai-usage.is-unavailable .karkas-ai-usage-track { background: #3f1d1d; }
+.karkas-ai-usage-text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; font-weight: 400; line-height: 1.4; color: #8a8a8f; }
+.karkas-ai-usage.is-limited .karkas-ai-usage-text { color: #fbbf24; }
+.karkas-ai-usage.is-unavailable .karkas-ai-usage-text { color: #f87171; }
+.karkas-ai-usage.is-compact { position: absolute; left: 8px; right: 8px; bottom: 5px; pointer-events: none; }
+.karkas-ai-usage.is-compact .karkas-ai-usage-track { height: 2px; }
+@media (prefers-reduced-motion: reduce) { .karkas-ai-usage-fill { transition: none; } }
 .karkas-ai-composer-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 0 8px 8px; }
 .karkas-ai-composer-toolbar > .karkas-ai-model-select { flex: 1 1 150px; }
 .karkas-ai-composer-toolbar > button { flex-shrink: 0; }

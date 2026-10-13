@@ -1419,10 +1419,11 @@ export default function App() {
   const openStrategyChat = (text: string) => {
     setAiPromptSeed(text); setAiSeedAsDraft(true); setIsAIOpen(true);
   };
-  const deepenPersonalDiscovery = (owner: string | null = strategyOwner): boolean => {
+  /** recentUserTexts: the person's latest chat messages, so the opening question uses their "ти"/"ви". */
+  const deepenPersonalDiscovery = (owner: string | null = strategyOwner, recentUserTexts: string[] = []): boolean => {
     if (!strategyReady || owner !== strategyOwner || workspaceOwnerRef.current !== owner) return false;
     const before = personalProfileRef.current;
-    updatePersonalProfile(continueStrategyDiscovery(personalProfileRef.current, lang));
+    updatePersonalProfile(continueStrategyDiscovery(personalProfileRef.current, lang, Date.now(), recentUserTexts));
     if (before === personalProfileRef.current) return false;
     setAiPromptSeed(''); setAiSeedAsDraft(true); setIsAIOpen(true);
     return true;
@@ -1657,6 +1658,30 @@ export default function App() {
         return b.createdAt - a.createdAt;
       });
   }, [operationalTasks, activeFilter, selectedPhase, searchQuery]);
+
+  // Strategy view task links: show the task in the full list, then scroll to it and flash its frame.
+  const [revealTaskId, setRevealTaskId] = useState<string | null>(null);
+  const handleRevealTask = (id: string) => {
+    const task = operationalTasks.find(item => item.id === id);
+    if (!task) return;
+    setSelectedPhase('ALL');
+    setActiveFilter(task.done ? 'DONE' : 'ALL');
+    setSearchQuery('');
+    setRevealTaskId(id);
+  };
+  useEffect(() => {
+    if (!revealTaskId || selectedPhase !== 'ALL') return;
+    const frame = requestAnimationFrame(() => {
+      const wrapper = document.getElementById(`task-wrapper-${revealTaskId}`);
+      setRevealTaskId(null);
+      if (!wrapper) return;
+      const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+      wrapper.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
+      wrapper.querySelector<HTMLElement>('button')?.focus({ preventScroll: true });
+      if (!reduce) wrapper.animate?.([{ boxShadow: '0 0 0 2px rgba(255,255,255,0.85)' }, { boxShadow: '0 0 0 2px rgba(255,255,255,0)' }], { duration: 1600, easing: 'ease-out' });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [revealTaskId, selectedPhase, filteredTasks]);
 
   const listCounts = useMemo(() => {
     const visible = operationalTasks.filter(task => activeFilter === 'DONE' ? task.done : !task.done);
@@ -2243,7 +2268,8 @@ export default function App() {
             remindersEnabled={workReminders.enabled} onRemindersChange={workReminders.setEnabled}
             onProfileChange={updatePersonalProfile} onResetMemory={resetPersonalMemory} onChat={openStrategyChat}
             onDeepenDiscovery={() => deepenPersonalDiscovery()}
-            onStart={handleStartTask} onUndo={handleUndoStrategy} onApplyPriority={applySuggestedPriority} onEditPlan={setWorkPlanTaskId} />
+            onStart={handleStartTask} onPauseTimer={handleStopTimer} onOpenTask={handleRevealTask} onOpenAdd={() => setIsAddOpen(true)}
+            onUndo={handleUndoStrategy} onApplyPriority={applySuggestedPriority} onEditPlan={setWorkPlanTaskId} />
           : <p role="status" className="text-sm text-neutral-400">{lang === 'uk' ? 'Завантажуємо ваш простір…' : 'Loading your workspace…'}</p>
         ) : selectedPhase === 'NOTES' ? (
           <NotepadView

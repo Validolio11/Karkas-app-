@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { PSTask } from '../types';
-import { describeAIApplyResult, describeAITimer, getAITimerContext, prepareAITask } from './aiTaskProposal';
+import { aiApplyOutcome, describeAIApplyResult, describeAITimer, getAITimerContext, prepareAITask } from './aiTaskProposal';
+import { createTask } from '../utils/taskOperations';
 
 test('AI creation keeps a zero-step countdown and explicit start request', () => {
   const proposal = prepareAITask({ title: 'References', phase: 'focus', priority: 2, steps: 0,
@@ -50,6 +51,29 @@ test('a fully rejected timer edit never claims successful application', () => {
   const message = describeAIApplyResult({ created: 0, updated: 0, deleted: 0, tabs: 0, rejected: 1 }, 'en');
   assert.match(message, /^No changes were applied\./);
   assert.match(message, /Not applied: 1/);
+});
+
+test('apply outcome separates full, partial and fully rejected application', () => {
+  assert.equal(aiApplyOutcome({ created: 1, updated: 1, deleted: 0, tabs: 0, rejected: 0 }), 'applied');
+  assert.equal(aiApplyOutcome({ created: 0, updated: 2, deleted: 0, tabs: 0, rejected: 1 }), 'partial');
+  assert.equal(aiApplyOutcome({ created: 0, updated: 0, deleted: 0, tabs: 0, rejected: 3 }), 'none');
+});
+
+test('applying a new AI task keeps its planned and deadline dates', () => {
+  const proposal = prepareAITask({ title: 'Анімувати інтро', phase: 'focus', priority: 1, steps: 0, note: 'Терміново',
+    plannedDate: '2026-10-14', deadlineDate: '2026-10-16' }, index => `step-${index}`);
+  assert.equal(proposal.plannedDate, '2026-10-14');
+  assert.equal(proposal.deadlineDate, '2026-10-16');
+  // The same path the Apply button takes: the stored task carries both dates.
+  const stored = createTask(proposal, 'task-1', 1000)!;
+  assert.equal(stored.plannedDate, '2026-10-14');
+  assert.equal(stored.deadlineDate, '2026-10-16');
+  // A null date (clear) has no meaning for a task that does not exist yet and must not reject it.
+  const cleared = prepareAITask({ title: 'Banners', phase: 'focus', priority: 2, steps: 0, deadlineDate: null } as any, index => `step-${index}`);
+  assert.equal(cleared.deadlineDate, undefined);
+  const created = createTask(cleared, 'task-2', 1000)!;
+  assert.ok(created);
+  assert.equal('deadlineDate' in created, false);
 });
 
 test('review mapper preserves the exact requested future schedule alongside timer configuration', () => {

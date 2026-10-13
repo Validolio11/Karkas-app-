@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { QUICK_ADD_DRAFT_KEY, quickAddDraftKey, buildQuickAddSteps, mergeQuickAddSuggestions, readQuickAddDraft, saveQuickAddDraft, type QuickAddDraft } from './quickAddDraft';
+import { QUICK_ADD_DRAFT_KEY, quickAddDraftKey, buildQuickAddSteps, emptyQuickAddDraft, mergeQuickAddSuggestions, nextQuickAddWizardStep, pickTaskDate, previousQuickAddWizardStep, quickAddWizardSteps, readQuickAddDraft, resolveQuickAddWizardStep, saveQuickAddDraft, type QuickAddDraft } from './quickAddDraft';
 
 const draft: QuickAddDraft = {
   title: ' Чернетка ', note: 'Не втратити нотатку', phase: 'home', priority: 1,
@@ -203,4 +203,41 @@ test('invalid calendar dates and wizard stages do not corrupt usable draft conte
     storage.values.set(quickAddDraftKey('A'), JSON.stringify({ ...draft, plannedDate: '2026-02-29', deadlineDate: '2026-10-12T00:00:00Z', wizardStep }));
     assert.deepEqual(readQuickAddDraft(storage, 'A'), draft);
   }
+});
+
+test('a new task after submission starts at standard priority while an open draft keeps its own', () => {
+  const storage = memoryStorage();
+  saveQuickAddDraft(storage, { ...draft, priority: 1 });
+  assert.equal(readQuickAddDraft(storage)?.priority, 1);
+  saveQuickAddDraft(storage, emptyQuickAddDraft('home'));
+  const next = readQuickAddDraft(storage);
+  assert.equal(next?.priority, 2);
+  assert.equal(next?.phase, 'home');
+  assert.equal(next?.title, '');
+  assert.equal(next?.wizardStep, 0);
+});
+
+test('category stage is skipped consistently when there are no categories', () => {
+  assert.deepEqual(quickAddWizardSteps(true), [0, 1, 2, 3, 4, 5]);
+  assert.deepEqual(quickAddWizardSteps(false), [0, 2, 3, 4, 5]);
+  assert.equal(nextQuickAddWizardStep(0, false), 2);
+  assert.equal(previousQuickAddWizardStep(2, false), 0);
+  assert.equal(nextQuickAddWizardStep(0, true), 1);
+  assert.equal(previousQuickAddWizardStep(2, true), 1);
+  assert.equal(nextQuickAddWizardStep(5, false), 5);
+  assert.equal(previousQuickAddWizardStep(0, true), 0);
+  assert.equal(resolveQuickAddWizardStep(1, false), 2);
+  assert.equal(resolveQuickAddWizardStep(1, true), 1);
+});
+
+test('choosing the work day moves the calendar to the deadline and refuses an earlier deadline', () => {
+  assert.deepEqual(pickTaskDate('planned', '2026-10-12', '', ''), { field: 'planned', value: '2026-10-12', nextActive: 'deadline' });
+  assert.deepEqual(pickTaskDate('deadline', '2026-10-15', '2026-10-12', ''), { field: 'deadline', value: '2026-10-15', nextActive: 'deadline' });
+  assert.deepEqual(pickTaskDate('deadline', '2026-10-12', '2026-10-12', ''), { field: 'deadline', value: '2026-10-12', nextActive: 'deadline' });
+  assert.deepEqual(pickTaskDate('deadline', '2026-10-10', '2026-10-12', ''), { rejected: 'deadline-before-planned', nextActive: 'deadline' });
+  // Re-selecting the work day keeps the planned field active while the existing deadline is still valid.
+  assert.deepEqual(pickTaskDate('planned', '2026-10-13', '2026-10-12', '2026-10-15'), { field: 'planned', value: '2026-10-13', nextActive: 'planned' });
+  assert.deepEqual(pickTaskDate('planned', '2026-10-20', '2026-10-12', '2026-10-15'), { field: 'planned', value: '2026-10-20', nextActive: 'deadline' });
+  assert.deepEqual(pickTaskDate('planned', '', '2026-10-12', ''), { field: 'planned', value: '', nextActive: 'planned' });
+  assert.deepEqual(pickTaskDate('deadline', '', '2026-10-12', '2026-10-15'), { field: 'deadline', value: '', nextActive: 'deadline' });
 });

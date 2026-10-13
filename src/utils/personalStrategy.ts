@@ -66,10 +66,11 @@ export function savePersonalStrategy(storage: StrategyStorage, owner: string | n
 export function clearPersonalStrategy(storage: StrategyStorage, owner: string | null): boolean {
   try { storage.removeItem(personalStrategyKey(owner)); return true; } catch { return false; }
 }
+/** The ordinary chat greeting: no interview question; the discovery interview starts only from «Поглибити знайомство». */
 export function strategyGreeting(lang: 'uk' | 'en'): string {
   return lang === 'uk'
-    ? 'Вітаю! Я ШІ-помічник Karkas. Допоможу вам покращувати продуктивність і розбиратися з тим, що заважає рухатися до важливих цілей. Давайте спершу познайомимося. Що ви хотіли б змінити у своєму житті й чому це для вас важливо?'
-    : 'Hello! I am your Karkas AI assistant. I can help you improve productivity and understand what gets in the way of your important goals. Let us get to know each other first. What would you like to change in your life, and why does it matter to you?';
+    ? 'Вітаю! Я ШІ-помічник Karkas. Можу створити, змінити чи розбити на кроки завдання, допомогти спланувати роботу або проаналізувати, як вона просувається. Якщо захочете персональніших порад, натисніть «Поглибити знайомство» — я поставлю кілька коротких запитань. З чого почнемо?'
+    : 'Hello! I am your Karkas AI assistant. I can create, edit or break down tasks, help plan your work or analyse how it is going. For more personal advice, press “Get to know me better” and I will ask a few short questions. Where shall we start?';
 }
 const mergeById = <T extends { id: string }>(before: T[], next: T[]) => {
   const merged = new Map(before.map(item => [item.id, item]));

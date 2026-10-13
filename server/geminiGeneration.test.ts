@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { GoogleGenAI } from '@google/genai';
-import { AIRequestError, aiRequestFailure, classifyAIRequestError, generateGeminiWithFallback, resetModelHealthForTests, thinkingConfigForModel } from './geminiGeneration.ts';
+import { AIRequestError, aiRequestFailure, classifyAIRequestError, createGeminiClient, generateGeminiWithFallback, quotaInfoFromError, resetModelHealthForTests, thinkingConfigForModel } from './geminiGeneration.ts';
 import { confirmedProfile, discoveryGoal, understandingProfile } from '../src/utils/strategyDiscovery.testHelpers';
 import { continueStrategyDiscovery } from '../src/utils/strategyDiscovery';
 import { applyStrategyActions } from '../src/utils/strategyActions';
@@ -85,7 +85,7 @@ test('unified chat transmits persistent memory and intent without private action
     assert.ok(body.generationConfig.responseSchema.properties.memoryPatch.properties.discovery);
     return success({ reply: 'What would reaching this goal change for you?', strategy: { status: 'getting_to_know', question: 'Why does it matter?' } });
   });
-  const result = await chat({ prompt: 'Хочу більше часу для сім’ї', intent: 'plan', strategyContext: { onboardingStatus: 'in_progress', goals: [], facts: [{ id: 'f', text: 'I want time for family', source: 'user' }], discovery: { version: 1, processedTurnIds: ['PRIVATE-DEDUP-ID'] }, actionHistory: [{ task: 'PRIVATE-JOURNAL-TASK' }] }, currentTasks: [{ id: 't', title: 'Study', done: false }] });
+  const result = await chat({ prompt: 'Хочу більше часу для сім’ї', intent: 'plan', discoveryMode: true, strategyContext: { onboardingStatus: 'in_progress', goals: [], facts: [{ id: 'f', text: 'I want time for family', source: 'user' }], discovery: { version: 1, processedTurnIds: ['PRIVATE-DEDUP-ID'] }, actionHistory: [{ task: 'PRIVATE-JOURNAL-TASK' }] }, currentTasks: [{ id: 't', title: 'Study', done: false }] });
   assert.equal(result.status, 200);
   assert.equal(result.body.strategy.status, 'getting_to_know');
   assert.equal(calls.length, 1);
@@ -94,11 +94,11 @@ test('strategy updates attach the original task snapshot and reject protected au
   const existing = { id: 't', title: 'Study', done: false, timeSpentSeconds: 600 };
   const ready = confirmedProfile([{ ...discoveryGoal, taskIds: ['t'] }]);
   mockProvider(() => success({ reply: 'I reduced the next step.', strategy: { status: 'ready', actions: [{ id: 'a', goalId: 'g', type: 'update', taskId: 't', reason: 'Reduce friction', changes: { title: 'Read one page' } }] } }));
-  const result = await chat({ prompt: 'Підготуй наступний крок', intent: 'plan', currentTasks: [existing], strategyContext: ready });
+  const result = await chat({ prompt: 'Підготуй наступний крок', intent: 'plan', discoveryMode: true, currentTasks: [existing], strategyContext: ready });
   assert.equal(result.status, 200);
   assert.deepEqual(result.body.strategy.actions[0].expectedTask, existing);
   mockProvider(() => success({ reply: 'Done.', strategy: { actions: [{ id: 'a', goalId: 'g', type: 'update', taskId: 't', reason: 'Done', changes: { done: true } }] } }));
-  const refused = await chat({ prompt: 'Підготуй наступний крок', intent: 'plan', currentTasks: [existing], strategyContext: ready });
+  const refused = await chat({ prompt: 'Підготуй наступний крок', intent: 'plan', discoveryMode: true, currentTasks: [existing], strategyContext: ready });
   assert.equal(refused.status, 502);
   assert.equal(refused.body.code, 'INVALID_AI_RESPONSE');
 });
@@ -107,7 +107,7 @@ test('server rejects an oversized autonomous change set rather than returning pa
   mockProvider(() => success({ reply: 'Four new actions', strategy: { status: 'ready', actions: Array.from({ length: 4 }, (_, index) => ({
     id: `new-${index}`, goalId: 'g', type: 'create', reason: 'Next action', changes: { title: `Next ${index}`, phase: 'work' },
   })) } }));
-  const result = await chat({ prompt: 'Підбери наступні дії для моєї цілі', strategyContext: confirmedProfile(), tabs: ['work'] });
+  const result = await chat({ prompt: 'Підбери наступні дії для моєї цілі', discoveryMode: true, strategyContext: confirmedProfile(), tabs: ['work'] });
   assert.equal(result.status, 502);
   assert.equal(result.body.code, 'INVALID_AI_RESPONSE');
   assert.deepEqual(result.body.tasks, []);
@@ -131,7 +131,7 @@ test('wishlists and early @plan discard provider prose, legacy arrays and autono
       assert.match(body.systemInstruction.parts[0].text, /priority over generic task instructions/);
       return success({ reply: 'FORBIDDEN-PLAN tomorrow 20 minutes', tasks: [{ title: 'FORBIDDEN-TASK' }], taskUpdates: [{ id: 'unknown', timerAction: 'start' }], taskDeletions: [{ id: 't' }], strategy: { status: 'ready', narrative: 'FORBIDDEN-NARRATIVE', nextAction: 'FORBIDDEN-NEXT', actions: [{ changes: { done: true } }], memoryPatch: { onboardingStatus: 'complete', discovery: { question: { topic: 'capacity', text: 'Чи готовий ти завтра почати 20-хвилинний блок?' } } } } });
     });
-    const result = await chat({ prompt, intent, turnId: `early-${intent}`, strategyContext: { onboardingStatus: 'complete', goals: [{ ...discoveryGoal, agreed: true }] } });
+    const result = await chat({ prompt, intent, discoveryMode: true, turnId: `early-${intent}`, strategyContext: { onboardingStatus: 'complete', goals: [{ ...discoveryGoal, agreed: true }] } });
     assert.equal(result.status, 200);
     assert.equal(calls.length, 1);
     assert.doesNotMatch(JSON.stringify(result.body), /FORBIDDEN/);
@@ -172,7 +172,7 @@ test('discovery prompts retain the pending question beyond ten messages and neve
     assert.doesNotMatch(prompt, /PRIVATE-JOURNAL|OLD-RECENT-MESSAGE/);
     return success({ memoryPatch: { discovery: {} } });
   });
-  const result = await chat({ prompt: 'Не знаю', strategyContext: profile, turnId: 'resume', conversation: [{ role: 'assistant', content: 'OLD-RECENT-MESSAGE' }, ...Array.from({ length: 10 }, () => ({ role: 'user', content: 'ordinary' }))] });
+  const result = await chat({ prompt: 'Не знаю', discoveryMode: true, strategyContext: profile, turnId: 'resume', conversation: [{ role: 'assistant', content: 'OLD-RECENT-MESSAGE' }, ...Array.from({ length: 10 }, () => ({ role: 'user', content: 'ordinary' }))] });
   assert.equal(result.status, 200);
   assert.match(result.body.strategy.question, /в ту мить/);
   assert.equal(calls.length, 1);
@@ -193,7 +193,7 @@ test('concrete steps and polite timer requests preserve their operation without 
 test('a refused start asks for its reason before provider changes can adapt a ready plan', async () => {
   const profile = confirmedProfile([{ ...discoveryGoal, taskIds: ['t'] }]);
   mockProvider(() => success({ reply: 'FORBIDDEN-ADVICE', strategy: { status: 'ready', nextAction: 'FORBIDDEN-NEXT', actions: [{ id: 'a', goalId: 'g', taskId: 't', type: 'update', reason: 'Unjustified guess', changes: { title: 'Smaller task' } }] } }));
-  const result = await chat({ prompt: 'Я не почав працювати', turnId: 'refused', strategyContext: profile, currentTasks: [{ id: 't', title: 'Study', phase: 'work' }] });
+  const result = await chat({ prompt: 'Я не почав працювати', discoveryMode: true, turnId: 'refused', strategyContext: profile, currentTasks: [{ id: 't', title: 'Study', phase: 'work' }] });
   assert.equal(result.status, 200);
   assert.equal(calls.length, 1);
   assert.match(result.body.reply, /Що відбувалося/);
@@ -219,7 +219,7 @@ test('ready personal analysis keeps its reply and observations without replacing
   const profile = confirmedProfile();
   const prompt = 'Проаналізуй мої перешкоди з продуктивністю';
   mockProvider(() => success({ reply: 'Analysis of your reported obstacles', strategy: { status: 'ready', narrative: 'Forbidden replacement narrative', nextAction: 'Forbidden replacement action', focusTaskId: 't', memoryPatch: { facts: [{ id: 'f', text: prompt, source: 'user' }], discovery: { question: { topic: 'barriers', text: 'Що відбулося?' } } }, actions: [{ id: 'a', goalId: 'g', type: 'create', reason: 'Analysis is not permission', changes: { title: 'Unrequested task', phase: 'work' } }] } }));
-  const result = await chat({ prompt, intent: 'analysis', strategyContext: profile, turnId: 'personal-analysis' });
+  const result = await chat({ prompt, intent: 'analysis', discoveryMode: true, strategyContext: profile, turnId: 'personal-analysis' });
   assert.equal(result.status, 200);
   assert.equal(result.body.reply, 'Analysis of your reported obstacles');
   assert.equal(result.body.strategy.status, 'clarifying');
@@ -241,7 +241,7 @@ test('autonomous updates use exact raw dispatch snapshots rather than derived an
     assert.doesNotMatch(prompt, /taskSnapshots/);
     return success({ reply: 'A smaller next step', strategy: { status: 'ready', nextAction: 'Read one page', actions: [{ id: 'update', type: 'update', goalId: 'g', taskId: 't', reason: 'Clarify the scope', changes: { title: 'Read one page' }, expectedTask: { id: 't', title: 'Provider forgery' } }] } });
   });
-  const result = await chat({ prompt: 'Підготуй наступний крок', intent: 'plan', turnId: 'snapshot-turn', strategyContext: profile,
+  const result = await chat({ prompt: 'Підготуй наступний крок', intent: 'plan', discoveryMode: true, turnId: 'snapshot-turn', strategyContext: profile,
     taskSnapshots: [task], currentTasks: [{ ...task, timeSpentSeconds: 999, countdownDurationSeconds: 0 }], fullAppContext: { activeTasks: [{ id: 't', title: 'Study', phase: 'work', priority: 2, done: false, timeSpentSeconds: 999 }] } });
   assert.equal(result.status, 200);
   assert.deepEqual(result.body.strategy.actions[0].expectedTask, task);
@@ -311,9 +311,10 @@ test('retired selected model falls back through the real SDK and preserves seria
   assert.equal(result.status, 200);
   assert.equal(result.body.source, 'gemini-chat');
   assert.equal(result.body.taskUpdates[0].countdownDurationSeconds, 1500);
-  assert.equal(result.body.usedModel, 'gemini-3.1-flash-lite');
+  assert.equal(result.body.usedModel, 'gemini-3.5-flash-lite');
   assert.equal(result.body.fallbackUsed, true);
-  assert.deepEqual(calls.map(call => call.model), ['gemini-retired-model', 'gemini-3.1-flash-lite']);
+  assert.equal(result.body.aiMetrics.selectedModelFailure, 'MODEL_UNAVAILABLE');
+  assert.deepEqual(calls.map(call => call.model), ['gemini-retired-model', 'gemini-3.5-flash-lite']);
 });
 
 test('fallback attempts each model once, then returns the quota category without raw diagnostics', async () => {
@@ -321,7 +322,7 @@ test('fallback attempts each model once, then returns the quota category without
   const result = await chat();
   assert.equal(result.status, 429);
   assert.equal(result.body.code, 'QUOTA_EXCEEDED');
-  assert.deepEqual(calls.map(call => call.model), ['gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-2.5-flash']);
+  assert.deepEqual(calls.map(call => call.model), ['gemini-3.1-flash-lite', 'gemini-3.5-flash-lite', 'gemini-3.8-flash']);
   assert.deepEqual(result.body.taskUpdates, []);
   assert.equal(result.body.source, 'ai-error');
   assert.doesNotMatch(JSON.stringify(result.body), /private-test-key|provider-internal-data/);
@@ -370,7 +371,7 @@ test('invalid Gemini output does not silently generate heuristic changes', async
   assert.equal(result.body.code, 'INVALID_AI_RESPONSE');
   assert.deepEqual(result.body.tasks, []);
   assert.deepEqual(result.body.taskUpdates, []);
-  assert.deepEqual(calls.map(call => call.model), ['gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-2.5-flash']);
+  assert.deepEqual(calls.map(call => call.model), ['gemini-3.1-flash-lite', 'gemini-3.5-flash-lite', 'gemini-3.8-flash']);
 });
 
 const lottieTask = { title: 'Пошук референсів для анімації Lottie', phase: 'focus', priority: 2, steps: 0, stepList: [], timerMode: 'countdown', countdownDurationSeconds: 2400 };
@@ -413,9 +414,11 @@ test('invalid duration is not reinterpreted as minutes and a valid distinct fall
   const result = await chat({ prompt: lottiePrompt, tabs: ['focus'] });
   assert.equal(result.status, 200);
   assert.equal(result.body.tasks[0].countdownDurationSeconds, 2400);
-  assert.equal(result.body.usedModel, 'gemini-flash-latest');
+  assert.equal(result.body.usedModel, 'gemini-3.5-flash-lite');
   assert.equal(result.body.fallbackUsed, true);
-  assert.deepEqual(calls.map(call => call.model), ['gemini-3.1-flash-lite', 'gemini-flash-latest']);
+  // The selected model answered, only invalidly: the client must not switch away from it.
+  assert.equal(result.body.aiMetrics.selectedModelFailure, 'INVALID_AI_RESPONSE');
+  assert.deepEqual(calls.map(call => call.model), ['gemini-3.1-flash-lite', 'gemini-3.5-flash-lite']);
 });
 
 test('all invalid timer, target and required-title variants fail without a partial proposal', async () => {
@@ -445,7 +448,7 @@ test('malformed optional mutation values trigger model fallback before a success
     const result = await chat({ currentTasks: [{ id: 't1', title: lottieTask.title }] });
     assert.equal(result.status, 200);
     assert.deepEqual(result.body.taskUpdates, [{ id: 't1', countdownDurationSeconds: 2400, timerMode: 'countdown' }]);
-    assert.equal(result.body.usedModel, 'gemini-flash-latest');
+    assert.equal(result.body.usedModel, 'gemini-3.5-flash-lite');
     assert.equal(calls.length, 2);
   }
 });
@@ -492,9 +495,11 @@ test('all assistant modes send classified records and recomputed statistics to t
       assert.equal(profile.completionRate, 50);
       if (action === 'chat') assert.deepEqual(context.stats, { total: 4, completed: 2, active: 1, cancelled: 1, percent: 50, phaseCounts: { focus: 4 } });
       else assert.deepEqual(context.overview, { totalTasks: 4, completedCount: 2, completionPercent: 50, activeCount: 1, urgentP1Count: 0 });
-      // Chat analysis is read-only and no longer requests mutation arrays.
-      if (action === 'chat') assert.equal(body.generationConfig.responseSchema.properties.taskDeletions, undefined);
-      else assert.deepEqual(body.generationConfig.responseSchema.properties.taskDeletions.items.properties.deletionReason.enum, ['accidental', 'cancelled']);
+      // Chat workspace analysis has no JSON mutation schema; requested changes arrive only as propose_* tool calls.
+      if (action === 'chat') {
+        assert.equal(body.generationConfig?.responseSchema, undefined);
+        assert.ok(body.tools[0].functionDeclarations.some((declaration: any) => declaration.name === 'propose_delete_task'));
+      } else assert.deepEqual(body.generationConfig.responseSchema.properties.taskDeletions.items.properties.deletionReason.enum, ['accidental', 'cancelled']);
       return success({ reply: 'Review prepared.', summary: 'Review prepared.', tasks: [], taskUpdates: [], taskDeletions: [] });
     });
     const result = await chat({ prompt: 'Audit the workspace', lang: 'en', action, fullAppContext });
@@ -756,13 +761,14 @@ test('a model that exhausted its free quota is tried last on the next request', 
   mockProvider(model => model === 'gemini-3.1-flash-lite' ? rejected(429, 'RESOURCE_EXHAUSTED') : success({ reply: 'Готово.', taskUpdates: [] }));
   const first = await chat({ currentTasks: [{ id: 't1', title: 'Референси' }] });
   assert.equal(first.status, 200);
-  assert.deepEqual(calls.map(call => call.model), ['gemini-3.1-flash-lite', 'gemini-flash-latest']);
+  assert.deepEqual(calls.map(call => call.model), ['gemini-3.1-flash-lite', 'gemini-3.5-flash-lite']);
   // Keep the remembered cooldown for the second request (mockProvider would reset it).
   calls.length = 0;
   const second = await chat({ currentTasks: [{ id: 't1', title: 'Референси' }] });
   assert.equal(second.status, 200);
-  assert.deepEqual(calls.map(call => call.model), ['gemini-flash-latest']);
-  assert.equal(second.body.usedModel, 'gemini-flash-latest');
+  assert.deepEqual(calls.map(call => call.model), ['gemini-3.5-flash-lite']);
+  assert.equal(second.body.usedModel, 'gemini-3.5-flash-lite');
+  assert.equal(second.body.aiMetrics.selectedModelFailure, 'QUOTA_EXCEEDED');
   // The selected model was demoted by its cooldown, yet another model answered.
   assert.equal(second.body.fallbackUsed, true);
 });
@@ -782,6 +788,117 @@ test('fallbackUsed compares against the preferred model, not the cooldown-reorde
   assert.equal(second.fallbackUsed, true);
 });
 
+test('a selected model unknown to the key outranks later quota and overload failures', async () => {
+  // The field case: listed but 404, then an overloaded and an exhausted fallback.
+  mockProvider(model => model === 'gemini-2.5-flash-lite' ? rejected(404, 'NOT_FOUND')
+    : model === 'gemini-3.5-flash-lite' ? rejected(503, 'UNAVAILABLE') : rejected(429, 'RESOURCE_EXHAUSTED'));
+  const result = await chat({ selectedModel: 'gemini-2.5-flash-lite' });
+  assert.equal(result.body.code, 'MODEL_UNAVAILABLE');
+  assert.match(result.body.error, /Виберіть іншу модель/);
+  assert.deepEqual(result.body.diagnostics.attempts.map((attempt: any) => [attempt.model, attempt.code]), [
+    ['gemini-2.5-flash-lite', 'MODEL_UNAVAILABLE'], ['gemini-3.5-flash-lite', 'PROVIDER_UNAVAILABLE'], ['gemini-3.1-flash-lite', 'QUOTA_EXCEEDED']]);
+  // Without an explicit selection there is no selected model to blame.
+  mockProvider(model => model === 'only-404' ? rejected(404, 'NOT_FOUND') : rejected(429, 'RESOURCE_EXHAUSTED'));
+  await assert.rejects(generateGeminiWithFallback({ ai: new GoogleGenAI({ apiKey: 'test-only-fake-key' }), contents: 'Test', config: {}, fallbackModels: ['only-404', 'quota'] }),
+    (error: unknown) => error instanceof AIRequestError && error.code === 'QUOTA_EXCEEDED');
+});
+
+test('a selected model that returned 404 stays demoted and keeps reporting why', async () => {
+  mockProvider(model => model === 'gemini-2.5-flash'
+    ? rejected(404, 'NOT_FOUND')
+    : json({ candidates: [{ content: { role: 'model', parts: [{ text: 'ok' }] }, finishReason: 'STOP' }] }));
+  const ai = new GoogleGenAI({ apiKey: 'test-only-fake-key' });
+  const options = { ai, contents: 'Test', config: {}, selectedModel: 'gemini-2.5-flash', fallbackModels: ['gemini-3-flash-preview'] };
+  const first = await generateGeminiWithFallback(options);
+  assert.equal(first.usedModel, 'gemini-3-flash-preview');
+  assert.equal(first.metrics.selectedModelFailure, 'MODEL_UNAVAILABLE');
+  calls.length = 0;
+  const second = await generateGeminiWithFallback(options);
+  // The dead model is not retried first; the client still learns it should switch.
+  assert.deepEqual(calls.map(call => call.model), ['gemini-3-flash-preview']);
+  assert.equal(second.metrics.selectedModelFailure, 'MODEL_UNAVAILABLE');
+  // A model that answers itself reports no selected-model failure.
+  const direct = await generateGeminiWithFallback({ ...options, selectedModel: 'gemini-3-flash-preview' });
+  assert.equal(direct.metrics.selectedModelFailure, undefined);
+});
+
+const quotaBody = (violations: any[], retryDelay?: string) => json({ error: { code: 429, status: 'RESOURCE_EXHAUSTED', message: 'private-test-key quota text', details: [
+  { '@type': 'type.googleapis.com/google.rpc.QuotaFailure', violations },
+  { '@type': 'type.googleapis.com/google.rpc.Help', links: [{ url: 'https://ai.google.dev/gemini-api/docs/rate-limits' }] },
+  ...(retryDelay ? [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay }] : []),
+] } }, 429);
+
+test('429 quota details are parsed from the SDK error shape into categories and numbers', () => {
+  // The SDK ApiError carries the JSON body as its message.
+  const sdkError = Object.assign(new Error(JSON.stringify({ error: { code: 429, status: 'RESOURCE_EXHAUSTED', message: 'quota', details: [
+    { '@type': 'type.googleapis.com/google.rpc.QuotaFailure', violations: [
+      { quotaMetric: 'generativelanguage.googleapis.com/generate_content_free_tier_requests', quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier',
+        quotaDimensions: { location: 'global', model: 'gemini-3-flash' }, quotaValue: '250' },
+      { quotaMetric: 'generativelanguage.googleapis.com/generate_content_free_tier_input_token_count', quotaId: 'GenerateContentInputTokensPerModelPerMinute-FreeTier', quotaValue: '250000' },
+      { quotaMetric: 'generativelanguage.googleapis.com/generate_content_free_tier_requests', quotaId: 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier', quotaValue: 'not-a-number' },
+    ] },
+    { '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '43.5s' },
+  ] } })), { name: 'ApiError', status: 429 });
+  assert.deepEqual(quotaInfoFromError(sdkError), { retryAfterMs: 43500, violations: [
+    { unit: 'requests', window: 'day', limit: 250 },
+    { unit: 'input_tokens', window: 'minute', limit: 250000 },
+    { unit: 'requests', window: 'minute' },
+  ] });
+  assert.equal(quotaInfoFromError(new Error('fetch failed')), undefined);
+  assert.deepEqual(quotaInfoFromError({ status: 429, message: JSON.stringify({ error: { details: [{ retryDelay: '5s' }] } }) }), { violations: [], retryAfterMs: 5000 });
+});
+
+test('attempt records carry quota facts, responded flags and a one-way key label for usage accounting', async () => {
+  mockProvider(model => model === 'gemini-3.1-flash-lite'
+    ? quotaBody([{ quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier', quotaValue: '20' }], '30s')
+    : model === 'gemini-3.5-flash-lite' ? success({ invalid: true }) : rejected(503, 'UNAVAILABLE'));
+  const failed = await chat({ currentTasks: [{ id: 't1', title: 'Референси' }] });
+  const { attempts, keyId } = failed.body.diagnostics;
+  assert.match(keyId, /^[a-f0-9]{16}$/);
+  assert.deepEqual(attempts.map((attempt: any) => [attempt.model, attempt.code, attempt.responded ?? false]), [
+    ['gemini-3.1-flash-lite', 'QUOTA_EXCEEDED', false], ['gemini-3.5-flash-lite', 'INVALID_AI_RESPONSE', true], ['gemini-3.8-flash', 'PROVIDER_UNAVAILABLE', false]]);
+  assert.deepEqual(attempts[0].quota, { violations: [{ unit: 'requests', window: 'day', limit: 20 }], retryAfterMs: 30000 });
+  assert.doesNotMatch(JSON.stringify(failed.body), /private-test-key|test-only-fake-key/);
+
+  mockProvider(model => model === 'gemini-3.1-flash-lite' ? rejected(404, 'NOT_FOUND') : success({ reply: 'Готово.', taskUpdates: [] }));
+  const answered = await chat({ currentTasks: [{ id: 't1', title: 'Референси' }] });
+  assert.equal(answered.body.aiMetrics.keyId, keyId);
+  assert.deepEqual(answered.body.aiMetrics.failedAttempts.map((attempt: any) => [attempt.model, attempt.code]), [['gemini-3.1-flash-lite', 'MODEL_UNAVAILABLE']]);
+  // The label is stable per key, differs between keys and does not contain the key.
+  const label = (key: string) => generateGeminiWithFallback({ ai: createGeminiClient(key), contents: 'x', config: {}, selectedModel: 'gemini-3-flash-preview', fallbackModels: [], allowEmptyText: true })
+    .then(result => result.metrics.keyId);
+  const [first, again, other] = await Promise.all([label('key-one'), label('key-one'), label('key-two')]);
+  assert.equal(first, again);
+  assert.notEqual(first, other);
+  assert.doesNotMatch(String(first), /key-one/);
+});
+
+test('a 429 with a quota of 0 means the model is not on this tier, not that a limit was used up', async () => {
+  const zeroQuota = () => quotaBody([{ quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier', quotaValue: '0' },
+    { quotaId: 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier', quotaValue: '0' }]);
+  mockProvider(model => model === 'gemini-3.1-pro-preview' ? zeroQuota()
+    : model === 'gemini-3.5-flash-lite' ? rejected(429, 'RESOURCE_EXHAUSTED') : rejected(503, 'UNAVAILABLE'));
+  const failed = await chat({ selectedModel: 'gemini-3.1-pro-preview' });
+  assert.equal(failed.body.code, 'MODEL_TIER_UNAVAILABLE');
+  assert.match(failed.body.error, /безкоштовному тарифі/);
+  assert.deepEqual(failed.body.diagnostics.attempts.map((attempt: any) => [attempt.model, attempt.code]), [
+    ['gemini-3.1-pro-preview', 'MODEL_TIER_UNAVAILABLE'], ['gemini-3.5-flash-lite', 'QUOTA_EXCEEDED'], ['gemini-3.1-flash-lite', 'PROVIDER_UNAVAILABLE']]);
+  assert.deepEqual(failed.body.diagnostics.attempts[0].quota.violations.map((violation: any) => violation.limit), [0, 0]);
+
+  mockProvider(model => model === 'gemini-3.1-pro-preview' ? zeroQuota() : success({ reply: 'Готово.', taskUpdates: [] }));
+  const answered = await chat({ selectedModel: 'gemini-3.1-pro-preview', currentTasks: [{ id: 't1', title: 'Референси' }] });
+  assert.equal(answered.body.usedModel, 'gemini-3.5-flash-lite');
+  assert.equal(answered.body.aiMetrics.selectedModelFailure, 'MODEL_TIER_UNAVAILABLE');
+  // Remembered like a 404: the next request does not wait on Pro first.
+  calls.length = 0;
+  const next = await chat({ selectedModel: 'gemini-3.1-pro-preview', currentTasks: [{ id: 't1', title: 'Референси' }] });
+  assert.equal(calls[0].model, 'gemini-3.5-flash-lite');
+  assert.equal(next.body.aiMetrics.selectedModelFailure, 'MODEL_TIER_UNAVAILABLE');
+  // A missing quotaValue is not mistaken for 0.
+  assert.deepEqual(quotaInfoFromError({ status: 429, message: JSON.stringify({ error: { details: [{ violations: [{ quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier', quotaValue: '' }] }] } }) }),
+    { violations: [{ unit: 'requests', window: 'day' }] });
+});
+
 test('confirmation words accepted by the client also trigger the stale-proposal guard', async () => {
   mockProvider(() => success({ reply: 'Should not be called.', taskUpdates: [] }));
   for (const prompt of ['ок', 'Окей!', 'Застосувати', 'застосуй', 'зберегти', 'Збережи.', 'підтверджено']) {
@@ -789,6 +906,17 @@ test('confirmation words accepted by the client also trigger the stale-proposal 
     assert.equal(result.status, 200, prompt);
     assert.equal(result.body.source, 'stale-proposal-clarification', prompt);
   }
+  assert.equal(calls.length, 0);
+});
+
+test('app-written chat replies follow the person’s ти from recent messages', async () => {
+  mockProvider(() => success({ reply: 'Should not be called.', taskUpdates: [] }));
+  const conversation = [{ role: 'user', content: '[13.10 09:00] Слухай, перенеси звіт на завтра' }, { role: 'assistant', content: 'Підготував пропозицію.' }];
+  const stale = await chat({ prompt: 'Так', lastAssistantProposalStatus: 'stale', conversation });
+  assert.equal(stale.body.source, 'stale-proposal-clarification');
+  assert.match(stale.body.reply, /Повтори, будь ласка, сам запит або назви/);
+  const staleVy = await chat({ prompt: 'Так', lastAssistantProposalStatus: 'stale' });
+  assert.match(staleVy.body.reply, /Повторіть, будь ласка, сам запит або назвіть/, 'no signal: "ви"');
   assert.equal(calls.length, 0);
 });
 
@@ -812,22 +940,27 @@ test('a rejected thinking level is remembered only for that model and level', as
 
 const turnText = (body: any) => body.contents.flatMap((content: any) => content.parts.map((part: any) => part.text ?? '')).join('\n');
 
-test('a free message gets a general read-only answer, not a personal interview or task operations', async () => {
+test('a free message gets general coaching with proposal-only tools, not a personal interview or a strategy', async () => {
   mockProvider((_model, body) => {
     const system = body.systemInstruction.parts[0].text;
     assert.match(system, /ROUTE general/);
-    assert.doesNotMatch(system, /APPLICATION ACTION CONTRACT|PERSONAL_DISCOVERY RULES/);
-    assert.equal(body.generationConfig.responseSchema.properties.tasks, undefined);
-    assert.equal(body.generationConfig.responseSchema.properties.strategy, undefined);
+    assert.doesNotMatch(system, /PERSONAL_DISCOVERY RULES/);
+    // Changes can only be proposed through the propose_* tools; there is no JSON strategy/task schema.
+    assert.equal(body.generationConfig?.responseSchema, undefined);
+    assert.ok(body.tools[0].functionDeclarations.some((declaration: any) => declaration.name === 'propose_create_task'));
     assert.deepEqual(body.generationConfig.thinkingConfig, { thinkingLevel: 'MINIMAL' });
     assert.match(turnText(body), /REQUEST ROUTE: general/);
-    return success({ reply: 'Спробуй почати з короткого блоку без сповіщень.', tasks: [{ title: 'FORBIDDEN-TASK', phase: 'work', priority: 2, steps: 0 }], strategy: { status: 'ready', narrative: 'FORBIDDEN' } });
+    assert.doesNotMatch(turnText(body), /PERSONAL_DISCOVERY/);
+    return success({ reply: 'Спробуй почати з короткого блоку без сповіщень.', tasks: [{ title: 'Короткий блок фокусу', phase: 'work', priority: 2, steps: 0 }], strategy: { status: 'ready', narrative: 'FORBIDDEN' } });
   });
-  const result = await chat({ prompt: 'Як мені зосередитись після обіду?', strategyContext: { goals: [] }, currentTasks: [{ id: 't', title: 'Study', done: false }] });
+  const result = await chat({ prompt: 'Як мені зосередитись після обіду?', strategyContext: { goals: [] }, currentTasks: [{ id: 't', title: 'Study', done: false }], tabs: ['work'] });
   assert.equal(result.status, 200);
   assert.equal(calls.length, 1);
   assert.match(result.body.reply, /короткого блоку/);
-  assert.deepEqual(result.body.tasks, []);
+  // A proposed new task awaits the person's Apply; no existing task is touched and no strategy is set.
+  assert.deepEqual(result.body.tasks.map((task: any) => task.title), ['Короткий блок фокусу']);
+  assert.deepEqual(result.body.taskUpdates, []);
+  assert.deepEqual(result.body.taskDeletions, []);
   assert.equal(result.body.strategy, undefined);
   assert.doesNotMatch(JSON.stringify(result.body), /FORBIDDEN/);
 });
@@ -879,7 +1012,7 @@ test('each workspace task is sent once with its temporal fields merged in', asyn
     assert.equal(text.split('UNIQUE-TASK-TITLE').length - 1, 2, 'once in the workspace record, once in the user message');
     const context = JSON.parse(/WORKSPACE CONTEXT:\n([\s\S]+?)\n\nCURRENT USER MESSAGE:/.exec(text)![1]);
     const [task] = context.activeTasks;
-    assert.deepEqual(task.plannedDay, { date: '2026-10-12', relation: 'today' });
+    assert.deepEqual(task.plannedDay, { date: '2026-10-12', relation: 'today', weekday: 'Monday', daysFromToday: 0, week: 'this' });
     assert.ok(task.statuses.includes('planned_today_unfinished'));
     assert.equal(task.plannedDate, undefined);
     const temporal = JSON.parse(/TASK TEMPORAL CONTEXT: (.+)/.exec(text)![1]);

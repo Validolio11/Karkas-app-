@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CalendarDays, Check } from 'lucide-react';
 import type { Language } from '../utils/i18n';
 import { isTaskDate, localTaskDate } from '../utils/taskDates';
+import { pickTaskDate, type TaskDateField } from './quickAddDraft';
 
 interface TaskDateCalendarProps {
   plannedDate: string;
@@ -26,7 +27,9 @@ export function TaskDateCalendar({ plannedDate, deadlineDate, onPlannedDateChang
   const uk = lang === 'uk';
   const locale = uk ? 'uk-UA' : 'en-GB';
   const today = localTaskDate();
-  const [activeField, setActiveField] = useState<'planned' | 'deadline'>('planned');
+  // Continue where the user left off: with a work day but no deadline, the next click sets the deadline.
+  const [activeField, setActiveField] = useState<TaskDateField>(() => isTaskDate(plannedDate) && !isTaskDate(deadlineDate) ? 'deadline' : 'planned');
+  const [hint, setHint] = useState('');
   const [month, setMonth] = useState(() => {
     const initial = calendarDate(isTaskDate(plannedDate) ? plannedDate : isTaskDate(deadlineDate) ? deadlineDate : today);
     initial.setDate(1);
@@ -41,13 +44,22 @@ export function TaskDateCalendar({ plannedDate, deadlineDate, onPlannedDateChang
   const weekdays = uk ? ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Нд'] : ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
   const plannedLabel = uk ? 'Заплановано на' : 'Planned for';
   const deadlineLabel = uk ? 'Завершити до' : 'Complete by';
+  const shortDate = (value: string) => calendarDate(value).toLocaleDateString(locale, { day: 'numeric', month: 'long' });
   const choose = (value: string) => {
-    (activeField === 'planned' ? onPlannedDateChange : onDeadlineDateChange)(value);
+    const pick = pickTaskDate(activeField, value, plannedDate, deadlineDate);
+    if ('rejected' in pick) {
+      setHint(uk ? `Дедлайн не може бути раніше дня роботи (${shortDate(plannedDate)}). Оберіть пізніший день або змініть «${plannedLabel}».` : `The deadline cannot be before the work day (${shortDate(plannedDate)}). Choose a later day or change “${plannedLabel}”.`);
+      return false;
+    }
+    setHint('');
+    (pick.field === 'planned' ? onPlannedDateChange : onDeadlineDateChange)(pick.value);
+    setActiveField(pick.nextActive);
+    return true;
   };
   const shortcut = (days: number) => {
     const date = calendarDate(today);
     date.setDate(date.getDate() + days);
-    choose(localTaskDate(date.getTime()));
+    if (!choose(localTaskDate(date.getTime()))) return;
     date.setDate(1);
     setMonth(date);
   };
@@ -56,7 +68,8 @@ export function TaskDateCalendar({ plannedDate, deadlineDate, onPlannedDateChang
     next.setMonth(next.getMonth() + delta);
     if (next.getFullYear() >= 1 && next.getFullYear() <= 9999) setMonth(next);
   };
-  const setExactDate = (field: 'planned' | 'deadline', value: string) => {
+  const setExactDate = (field: TaskDateField, value: string) => {
+    setHint('');
     (field === 'planned' ? onPlannedDateChange : onDeadlineDateChange)(value);
     if (isTaskDate(value)) {
       const next = calendarDate(value);
@@ -64,9 +77,10 @@ export function TaskDateCalendar({ plannedDate, deadlineDate, onPlannedDateChang
       setMonth(next);
     }
   };
-  const target = (field: 'planned' | 'deadline', value: string, label: string) => (
+  const target = (field: TaskDateField, value: string, label: string) => (
     <button type="button" onClick={() => {
       setActiveField(field);
+      setHint('');
       if (isTaskDate(value)) {
         const selected = calendarDate(value);
         selected.setDate(1);
@@ -103,9 +117,10 @@ export function TaskDateCalendar({ plannedDate, deadlineDate, onPlannedDateChang
             const planned = value === plannedDate;
             const deadline = value === deadlineDate;
             const current = value === today;
-            const annotations = [planned && plannedLabel, deadline && deadlineLabel, current && (uk ? 'Сьогодні' : 'Today')].filter(Boolean).join(', ');
+            const beforePlanned = activeField === 'deadline' && isTaskDate(plannedDate) && value < plannedDate;
+            const annotations = [planned && plannedLabel, deadline && deadlineLabel, current && (uk ? 'Сьогодні' : 'Today'), beforePlanned && (uk ? 'раніше за день роботи' : 'before the work day')].filter(Boolean).join(', ');
             return (
-              <button key={value} type="button" onClick={() => choose(value)} aria-pressed={activeField === 'planned' ? planned : deadline} aria-current={current ? 'date' : undefined} aria-label={`${date.toLocaleDateString(locale, { day: 'numeric', month: 'long', year: 'numeric', weekday: 'long' })}${annotations ? ` — ${annotations}` : ''}`} className={`relative flex h-9 sm:h-10 items-center justify-center border text-sm transition-colors focus-visible:z-10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white ${planned ? 'border-white bg-white font-semibold text-black' : deadline ? 'border-neutral-400 text-white' : 'border-transparent text-neutral-300 hover:bg-white/[0.07]'} ${planned && deadline ? 'outline outline-1 outline-offset-[-4px] outline-black/40' : ''}`}>
+              <button key={value} type="button" onClick={() => choose(value)} aria-pressed={activeField === 'planned' ? planned : deadline} aria-current={current ? 'date' : undefined} aria-label={`${date.toLocaleDateString(locale, { day: 'numeric', month: 'long', year: 'numeric', weekday: 'long' })}${annotations ? ` — ${annotations}` : ''}`} className={`relative flex h-9 sm:h-10 items-center justify-center border text-sm transition-colors focus-visible:z-10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white ${planned ? 'border-white bg-white font-semibold text-black' : deadline ? 'border-neutral-400 text-white' : beforePlanned ? 'border-transparent text-neutral-600 hover:bg-white/[0.03]' : 'border-transparent text-neutral-300 hover:bg-white/[0.07]'} ${planned && deadline ? 'outline outline-1 outline-offset-[-4px] outline-black/40' : ''}`}>
                 {day}
                 {current && <span aria-hidden="true" className={`absolute bottom-1.5 h-px w-3 ${planned ? 'bg-black' : 'bg-white'}`} />}
               </button>
@@ -113,14 +128,17 @@ export function TaskDateCalendar({ plannedDate, deadlineDate, onPlannedDateChang
           })}
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-white/10 pt-3 text-[11px] text-neutral-400" aria-hidden="true">
-          <span className="flex items-center gap-2"><span className="h-2.5 w-2.5 bg-white" />{plannedLabel}</span>
-          <span className="flex items-center gap-2"><span className="h-2.5 w-2.5 border border-neutral-400" />{deadlineLabel}</span>
+          {([['planned', plannedDate, plannedLabel, 'bg-white'], ['deadline', deadlineDate, deadlineLabel, 'border border-neutral-400']] as const).map(([field, value, label, swatch]) => {
+            const set = isTaskDate(value);
+            return <span key={field} className={`flex items-center gap-2 ${set ? 'text-neutral-200' : 'text-neutral-600'}`}><span className={`h-2.5 w-2.5 ${swatch} ${set ? '' : 'opacity-40'}`} />{label}{set ? <><Check className="h-3 w-3 text-white" />{shortDate(value)}</> : <span>—</span>}</span>;
+          })}
         </div>
       </section>
       <aside className="min-w-0 border-t border-white/10 pt-4 md:border-l md:border-t-0 md:pl-4 md:pt-0" aria-label={uk ? 'Вибрані дати' : 'Selected dates'}>
         <p className="mb-3 text-[11px] uppercase tracking-[0.13em] text-neutral-500">{uk ? 'Ваші дати' : 'Your dates'}</p>
         <div className="space-y-1">{target('planned', plannedDate, plannedLabel)}{target('deadline', deadlineDate, deadlineLabel)}</div>
-        <p className="mt-3 text-xs leading-relaxed text-neutral-400">{uk ? `Зараз обираєте: ${activeField === 'planned' ? 'день роботи' : 'дедлайн'}.` : `Selecting: ${activeField === 'planned' ? 'work day' : 'deadline'}.`}</p>
+        <p aria-live="polite" className="mt-3 text-xs leading-relaxed text-neutral-400">{uk ? `Зараз обираєте: ${activeField === 'planned' ? 'день роботи' : 'дедлайн'}.` : `Selecting: ${activeField === 'planned' ? 'work day' : 'deadline'}.`}</p>
+        {hint && <p role="status" className="mt-2 text-xs leading-relaxed text-amber-300">{hint}</p>}
         <div className="mt-3 flex flex-wrap gap-x-4 gap-y-3 text-xs">
           <button type="button" onClick={() => shortcut(0)} className="text-neutral-300 underline-offset-4 hover:text-white hover:underline focus-visible:outline focus-visible:outline-white">{uk ? 'Сьогодні' : 'Today'}</button>
           <button type="button" onClick={() => shortcut(1)} className="text-neutral-300 underline-offset-4 hover:text-white hover:underline focus-visible:outline focus-visible:outline-white">{uk ? 'Завтра' : 'Tomorrow'}</button>

@@ -1,6 +1,7 @@
 import type { AIIntent, PersonalStrategyProfile, StrategyDiscoveryPatch, StrategyDiscoveryTopic, StrategyMemoryPatch } from '../src/types';
 import { applyStrategyMemory, readPersonalStrategy } from '../src/utils/personalStrategy';
-import { applyDiscoveryTurn, discoveryQuestionForState, isPersonalStrategyReady, missingStrategyDiscoveryTopics, normalizeStrategyDiscovery, STRATEGY_DISCOVERY_TOPICS } from '../src/utils/strategyDiscovery';
+import { addressFormOf, applyDiscoveryTurn, detectDiscoveryAddress, discoveryEvidenceTexts, discoveryQuestionForState, discoveryQuestionStreak, isPersonalStrategyReady, mentionsDiscoveryTopic, missingStrategyDiscoveryTopics, normalizeStrategyDiscovery, PRACTICAL_HELP_OFFER, STRATEGY_DISCOVERY_TOPICS, type DiscoveryAddress } from '../src/utils/strategyDiscovery';
+import { lastChangeOffer } from './temporalResponseGuard';
 
 export type PersonalChatRoute = 'personal' | 'task_command' | 'workspace_analysis' | 'help' | 'general';
 export interface ConcreteTaskScope {
@@ -14,89 +15,264 @@ export const refusedStart = /(?:не\s+почав|не\s+почала|не\s+з�
 const personalGoalReference = /(?:мо[яїює]\p{L}*|сво[яїює]\p{L}*|my)\s+(?:ціл|мет[аиуі]|мрі|стратегі|goal|dream|strategy)/iu;
 const personalConcern = /(?:прокраст|мотивац|motiv|barrier|distraction|procrast|житт|life goal|чому\s+я|why\s+(?:do\s+i|am\s+i)|що\s+мене\s+гальму|що\s+заважа|what\s+(?:holds|stops)\s+me|не\s+можу\s+(?:поча|зосеред|працюва)|i\s+cannot\s+(?:start|focus))/iu;
 
+// Generic words never name a task; command verbs are listed so “видали” cannot match a title such as “Видалити …”.
+const genericWords = new Set(`для про або але так все всі усі всіх усіх мої моє мій моя моїх мого свої своє свій своя цей ця це цю ці цього цієї того той та які яка яке який
+  щодо після перед через також тільки ще уже вже його її їх нам нас вас мені мене тут там коли як що чи щоб від під над при між без біля
+  крок кроки кроків кроком етапи етапів пункти справа справу справи зробити зроби зробіть робити треба потрібно хочу будь ласка можеш можете допоможи допоможіть
+  створи створіть створити додай додайте додати зміни змініть змінити онови оновіть оновити перейменуй перейменуйте перейменувати видали видаліть видалити
+  прибери прибрати познач позначити заверши завершіть завершити відкрий відкрити поверни повернути розбий розбити розділи розділити запусти запустити
+  увімкни увімкнути постав поставити призупини призупинити зупини зупинити вимкни вимкнути зменши зменшити збільши збільшити поміняй поміняти перероби переробити
+  скасуй скасувати перенеси перенесіть перенести заплануй заплануйте запланувати розклади розкладай розплануй сплануй назву назва назві опис дату дата дедлайн термін
+  таймер таймера відлік пріоритет час хвилин хвилини годин години сьогодні завтра післязавтра новий нове нову нові нового виконане виконаним виконаною виконані готове
+  клієнт клієнта клієнтом клієнту клієнтів the for and with from into onto that this these those all every each mine our your task tasks subtask subtasks step steps
+  item items please can you could help make new set add create edit update rename delete remove mark complete completed done reopen break down split start pause stop
+  configure reduce increase change revise cancel reschedule schedule move timer date deadline today tomorrow minutes hours title name client`.split(/\s+/u));
+const titleWords = (value: string) => [...new Set((value.toLocaleLowerCase().replace(/['’ʼ]/gu, '')
+  .replace(/\d{4}-\d{2}-\d{2}|\d{1,2}[.:]\d{1,2}(?:[.:]\d{2,4})?/gu, ' ').match(/[\p{L}\p{N}]+/gu) || [])
+  .filter(word => word.length >= 3 && !genericWords.has(word) && !/^(?:під)?(?:завдан|задач)/u.test(word)))];
+// Inflection-tolerant: a shared stem of 4+ characters leaving at most a 3-character ending on the shorter word (банерами ↔ банери).
+const sameStem = (a: string, b: string) => {
+  if (a === b) return true;
+  let common = 0;
+  while (common < a.length && common < b.length && a[common] === b[common]) common++;
+  return common >= 4 && common >= Math.min(a.length, b.length) - 3;
+};
+
 /**
- * Wishes are personal context; only an actual command can open the ordinary task-operation path.
- * Personal discovery is entered only on explicit personal signals; any other free message is a
- * read-only 'general' conversation. answeringDiscovery is app-derived: the client replied to the
- * visible discovery question or to the understanding summary.
+ * Partial names: a task counts only when the prompt uses a word no other task title shares;
+ * quoted text, when present, is the only name searched. best is the unique top scorer, if any.
  */
-export function classifyPersonalChatRequest(prompt: string, intent: AIIntent, tasks: any[], profile?: PersonalStrategyProfile, pendingProposal?: Record<string, any>, options: { answeringDiscovery?: boolean } = {}) {
+function partiallyNamedTasks(prompt: string, tasks: any[]) {
+  const quoted = [...prompt.matchAll(/[«"“„]([^«»"“”„]{2,})[»"”“]/gu)].map(match => match[1]).join(' ');
+  const asked = titleWords(quoted || prompt);
+  const titles = tasks.map(task => titleWords(task.title));
+  const scored = tasks.map((task, index) => {
+    let score = 0;
+    let distinctive = false;
+    for (const word of asked) {
+      if (!titles[index].some(title => sameStem(word, title))) continue;
+      const shared = titles.filter(other => other.some(title => sameStem(word, title))).length;
+      score += 1 / shared;
+      distinctive = distinctive || shared === 1;
+    }
+    return { id: task.id as string, score, distinctive };
+  }).filter(entry => entry.distinctive).sort((a, b) => b.score - a.score);
+  const unique = scored.length === 1 || scored.length > 1 && scored[0].score - scored[1].score > 1e-9;
+  return { ids: scored.map(entry => entry.id), best: unique ? [scored[0].id] : [] };
+}
+
+export interface PersonalChatClassification {
+  route: PersonalChatRoute;
+  /** task_command only: the operation and targets the command or accepted offer allows. */
+  scope?: ConcreteTaskScope;
+  /** Conversational routes: proposals the person may explicitly ask for or agree to — tasks named now or in the previous turn, otherwise new tasks only. */
+  proposalScope?: ConcreteTaskScope;
+  /** The person agreed to the concrete change offered in the previous assistant reply. */
+  acceptedOffer?: boolean;
+}
+
+export interface PersonalChatRequestOptions {
+  /** App-derived: the client replied to the visible discovery question or to the understanding summary. */
+  answeringDiscovery?: boolean;
+  /** App-derived: the explicit «Поглибити знайомство» mode. Only it opens the discovery interview. */
+  discoveryMode?: boolean;
+  /** The assistant reply directly before this message; its change offer can be accepted with a yes. */
+  previousAssistantText?: string;
+  /** The person's previous message; tasks it named stay in the proposal scope of this turn. */
+  previousUserText?: string;
+  /** The person's recent messages before this one, oldest first (about three); an accepted offer that names no task looks for its target there. */
+  previousUserTexts?: string[];
+}
+
+// What an accepted offer that names no task is about, for inferring its target.
+const timerOfferTopic = /(?:таймер|пауз|зупин|відлік|секундомір|timer|pause|stop|countdown|stopwatch)/iu;
+const timerStopTopic = /(?:пауз|зупин|вимкн|стоп|pause|stop|halt)/iu;
+const timerStartTopic = /(?:запуст|увімкн|старт|почн|start|resume|run)/iu;
+const stepsOfferTopic = /(?:крок|підзавдан|підзадач|пункт|розби|розділ|виконан|познач|заверш|step|subtask|split|break|done|complete|finish|mark)/iu;
+// "Створити окреме завдання для звуку?" proposes new tasks only; it never borrows a target.
+const createOfferTopic = /(?:створ\p{L}*|додат\p{L}*|додам|додамо|create|add)\s+(?:(?:\p{L}+\s+){0,2})?(?:завдан|задач|tasks?(?![\p{L}]))/iu;
+
+// Conversational lead-ins never change the meaning of the command after them (“Так, додай…”, “Ок, розбий…”).
+const conversationalLeadIn = /^(?:ну|ок|окей|окай|добре|гаразд|так|ага|угу|а|тоді|ok|okay|yes|yeah|yep|sure|alright|so|then)(?:\s*[,!.:]\s*|\s+)/iu;
+// A direct request: an infinitive after it is a command (“Давай розбити…”, “Let's split…”).
+const requestPrefix = /^(?:(?:будь\s+ласка|please)[,:]?\s+|(?:можеш|можете|допоможи|допоможіть|давай|давайте|can\s+you|could\s+you|would\s+you|will\s+you|help\s+me|let['’]?s|go\s+ahead\s+and)\s+)/iu;
+// “Зроби так, щоб інтро було розбите на кроки” asks for a change without an imperative verb.
+const changeRequestPrefix = /^(?:зроби|зробіть|make\s+it\s+so)\s+(?:так[,]?\s+)?(?:щоб|that)\s+/iu;
+// The first-person plural (“давай розіб'ємо”, “додамо крок”) is a command too.
+const pluralCommandVerbs: Record<string, string> = {
+  розібємо: 'розбий', розбиймо: 'розбий', додамо: 'додай', додаймо: 'додай', створимо: 'створи', створімо: 'створи', змінимо: 'зміни', змінімо: 'зміни',
+  оновимо: 'онови', перейменуємо: 'перейменуй', видалимо: 'видали', видалімо: 'видали', приберемо: 'прибери', позначимо: 'познач', завершимо: 'заверши',
+  відкриємо: 'відкрий', повернемо: 'поверни', розділимо: 'розділи', запустимо: 'запусти', запустімо: 'запусти', увімкнемо: 'увімкни', поставимо: 'постав',
+  призупинимо: 'призупини', зупинимо: 'зупини', вимкнемо: 'вимкни', перенесемо: 'перенеси', перенесімо: 'перенеси', заплануємо: 'заплануй', зменшимо: 'зменши',
+  збільшимо: 'збільши', поміняємо: 'поміняй', переробимо: 'перероби', скасуємо: 'скасуй', розкладемо: 'розклади', розплануємо: 'розплануй', сплануємо: 'сплануй',
+};
+// A yes to an offered change, optionally with a short verb (“Так, додай”); a doubt or refusal never is.
+const affirmativeReply = /^(?:так|ага|угу|давай(?:те)?|ок|окей|окай|добре|гаразд|звісно|звичайно|авжеж|згоден|згодна|погоджуюсь|погоджуюся|можна|yes|yeah|yep|yup|sure|ok(?:ay)?|alright|go\s+ahead|please\s+do|do\s+it|let['’]?s\s+do\s+it)(?![\p{L}\p{N}_])/iu;
+const doubtfulReply = /(?:^|[^\p{L}])(?:ні|нє|не\s+треба|не\s+потрібно|не\s+зараз|не\s+варто|не\s+додавай|не\s+змінюй|потім|пізніше|згодом|подумаю|no|nope|not\s+now|later|don['’]?t|do\s+not|wait)(?![\p{L}])/iu;
+
+/**
+ * Wishes are personal context; only an actual command or a yes to an offered change opens the
+ * task-operation path. The discovery interview runs only in the explicit discovery mode; every
+ * other message is ordinary conversation (general, help or workspace analysis) that may still
+ * propose changes the person asks for, within proposalScope.
+ */
+export function classifyPersonalChatRequest(prompt: string, intent: AIIntent, tasks: any[], profile?: PersonalStrategyProfile, pendingProposal?: Record<string, any>, options: PersonalChatRequestOptions = {}): PersonalChatClassification {
   const input = normalized(prompt).replace(/^@(plan|analysis|steps)\s*/iu, '').replace(/^(?:привіт|вітаю|hello|hi|hey)[,!:.]?\s+/iu, '');
   const live = tasks.filter(task => task && typeof task.id === 'string' && typeof task.title === 'string');
+  const discoveryMode = options.discoveryMode === true;
   const mentioned = (value: string) => {
     const escaped = normalized(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return !!escaped && new RegExp(`(?:^|[^\\p{L}\\p{N}_-])${escaped}(?![\\p{L}\\p{N}_-])`, 'iu').test(input);
   };
-  const matchingIds = live.filter(task => mentioned(task.title) || mentioned(task.id)).map(task => task.id);
-  const requestPrefix = /^(?:(?:будь\s+ласка|please)[,:]?\s+|(?:можеш|можете|допоможи|допоможіть|can\s+you|could\s+you|help\s+me)\s+)/iu;
+  // An exact title or id is the strongest signal and keeps its previous semantics.
+  const exactIds = live.filter(task => mentioned(task.title) || mentioned(task.id)).map(task => task.id);
   let command = input;
   let requested = false;
-  for (let index = 0; index < 3 && requestPrefix.test(command); index++) {
-    requested = true;
-    command = command.replace(requestPrefix, '');
+  let changeRequested = false;
+  for (let index = 0; index < 4; index++) {
+    if (changeRequestPrefix.test(command)) { changeRequested = true; command = command.replace(changeRequestPrefix, ''); }
+    else if (requestPrefix.test(command)) { requested = true; command = command.replace(requestPrefix, ''); }
+    else if (conversationalLeadIn.test(command)) command = command.replace(conversationalLeadIn, '');
+    else break;
   }
+  command = command.replace(/^([^\s?!.,:;]+)/u, verb => pluralCommandVerbs[verb.replace(/['’ʼ]/gu, '')] || verb);
   // Infinitives are commands only after a direct request, never after a wish such as “хочу”.
   if (requested) {
     const verbs: Record<string, string> = { створити: 'створи', додати: 'додай', змінити: 'зміни', оновити: 'онови', перейменувати: 'перейменуй', видалити: 'видали', прибрати: 'прибери', позначити: 'познач', завершити: 'заверши', відкрити: 'відкрий', повернути: 'поверни', розбити: 'розбий', розділити: 'розділи', запустити: 'запусти', увімкнути: 'увімкни', поставити: 'постав', призупинити: 'призупини', зупинити: 'зупини', вимкнути: 'вимкни', перенести: 'перенеси', запланувати: 'заплануй' };
     command = command.replace(/^([^\s?!.,:;]+)/u, verb => verbs[verb] || verb);
   }
+  const partial = exactIds.length ? undefined : partiallyNamedTasks(command, live);
+  // “Всі мої завдання” covers every live task (unfinished ones when completing); results stay proposals for Apply.
+  const everyTask = /(?:^|[^\p{L}\p{N}_])(?:всі|усі|все|всіх|усіх|all|every|each)\s+(?:(?:мої|свої|наявні|поточні|активні|ці|my|the|current|active|these|of\s+my|of\s+the)\s+)*(?:завдання|завдань|задачі|задач|tasks?)(?![\p{L}\p{N}_])/iu.test(command);
+  const completing = /^(?:заверши|завершіть|познач|complete|mark)(?![\p{L}\p{N}_])/iu.test(command);
+  const matchingIds = exactIds.length ? exactIds : partial!.ids.length ? partial!.ids : everyTask ? live.filter(task => !completing || !task.done).map(task => task.id) : [];
+  // Tasks this message actually names; “all tasks” never widens a conversational proposal scope.
+  const namedNow: string[] = exactIds.length ? exactIds : partial!.ids;
   // Only a wholly unnamed command can use the sole task. An unmatched name
   // (even when there is just one task) must leave scope empty for clarification.
   const unnamedCommand = /^(?:видали|видаліть|прибери|заверши|завершіть|відкрий|поверни|розбий|розділи|запусти|увімкни|призупини|зупини|вимкни|delete|remove|complete|reopen|split|break\s+down|start|pause|stop)\s+(?:(?:це|цей|цю|поточне|поточний|поточну|єдине|the|this|current|only)\s+)*(?:завдання|задачу|таймер|task|timer)(?:\s+(?:для|for)\s+(?:(?:цього|поточного|the|this|current)\s+)?(?:завдання|task))?[.!?]?$/iu.test(command);
   const unnamedTimerCommand = /^(?:(?:додай|додайте|постав|запусти|увімкни)\s+(?:таймер|відлік)(?:\s+на\s+\d+(?:[.,]\d+)?\s*(?:хвилин(?:и|у)?|хв\.?|годин(?:и|у)?|год\.?|секунд(?:и|у)?|сек\.?))?(?:\s+(?:до|для)\s+(?:(?:цього|поточного|єдиного)\s+)?завдання)?|(?:set|add|start|configure)\s+(?:(?:the|this|current|only)\s+)?(?:task\s+)?timer(?:\s+(?:to|for)\s+\d+(?:[.,]\d+)?\s*(?:minutes?|mins?|hours?|seconds?))?(?:\s+for\s+(?:(?:the|this|current|only)\s+)?task)?)[.!?]?$/iu.test(command);
   const unnamedDateCommand = /^(?:(?:перенеси|заплануй|reschedule|schedule|move)\s+(?:(?:це|поточне|єдине|the|this|current|only)\s+)?(?:завдання|task)\s+(?:на|до|on|to|by)\s+(?:завтра|сьогодні|післязавтра|tomorrow|today|\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}\.\d{2,4})|(?:прибери|видали|remove|clear)\s+(?:дату|дедлайн|термін|date|deadline)\s+(?:(?:для|з|for|from)\s+)?(?:(?:цього|поточного|єдиного|the|this|current|only)\s+)?(?:завдання|task))[.!?]?$/iu.test(command);
   const singleTarget = matchingIds.length ? matchingIds : live.length === 1 && (unnamedCommand || unnamedTimerCommand || unnamedDateCommand) ? [live[0].id] : [];
+  // Steps and timers need one target: a partial name must single out one task, and “all tasks” never does.
+  const oneTarget = exactIds.length || !matchingIds.length ? singleTarget : partial!.best;
   const directCalendarPlanning = /^(?:розкладай|розклади|розплануй|сплануй)(?![\p{L}\p{N}_])/iu.test(command)
     && /(?:завдан|задач)/iu.test(command)
     && /(?:сьогодні|завтра|післязавтра|\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}\.\d{2,4})(?![\p{L}\p{N}_])/iu.test(command);
-  if (directCalendarPlanning) return { route: 'task_command' as PersonalChatRoute, scope: { operation: 'update', taskIds: matchingIds } as ConcreteTaskScope };
-  const explicit = /^(?:створи|створіть|додай|додайте|зміни|змініть|онови|оновіть|перейменуй|перейменуйте|видали|видаліть|прибери|познач|заверши|завершіть|відкрий|поверни|розбий|розділи|запусти|увімкни|постав|призупини|зупини|вимкни|зменши|збільши|поміняй|перероби|скасуй|перенеси|перенесіть|заплануй|заплануйте|create|add|edit|update|rename|delete|remove|mark|complete|reopen|break\s+down|split|start|pause|stop|set|configure|reduce|increase|change|revise|cancel|reschedule|schedule|move)(?![\p{L}\p{N}_])/iu.test(command);
+  if (directCalendarPlanning) return { route: 'task_command', scope: { operation: 'update', taskIds: matchingIds } };
+  const explicit = changeRequested || /^(?:створи|створіть|додай|додайте|зміни|змініть|онови|оновіть|перейменуй|перейменуйте|видали|видаліть|прибери|познач|заверши|завершіть|відкрий|поверни|розбий|розділи|запусти|увімкни|постав|призупини|зупини|вимкни|зменши|збільши|поміняй|перероби|скасуй|перенеси|перенесіть|заплануй|заплануйте|create|add|edit|update|rename|delete|remove|mark|complete|reopen|break\s+down|split|start|pause|stop|set|configure|reduce|increase|change|revise|cancel|reschedule|schedule|move)(?![\p{L}\p{N}_])/iu.test(command);
   const hasPending = pendingProposal && ['tasks', 'tabs', 'taskUpdates', 'taskDeletions'].some(key => Array.isArray(pendingProposal[key]) && pendingProposal[key].length);
   if (hasPending && explicit && /(?:пропозиц|замість|\d+\s*(?:хв|год|min|hour)|proposal|instead|duration|priority|пріоритет)/iu.test(command)) {
     const targetIds = [...(Array.isArray(pendingProposal.taskUpdates) ? pendingProposal.taskUpdates : []), ...(Array.isArray(pendingProposal.taskDeletions) ? pendingProposal.taskDeletions : [])].map((item: any) => item?.id).filter((id: any) => live.some(task => task.id === id));
-    return { route: 'task_command' as PersonalChatRoute, scope: { operation: /^(?:скасуй|cancel)(?![\p{L}\p{N}_])/iu.test(command) ? 'cancel' : 'proposal', taskIds: targetIds, createCount: Array.isArray(pendingProposal.tasks) ? pendingProposal.tasks.length : 0 } as ConcreteTaskScope };
+    return { route: 'task_command', scope: { operation: /^(?:скасуй|cancel)(?![\p{L}\p{N}_])/iu.test(command) ? 'cancel' : 'proposal', taskIds: targetIds, createCount: Array.isArray(pendingProposal.tasks) ? pendingProposal.tasks.length : 0 } };
   }
   let scope: ConcreteTaskScope | undefined;
   const taskWord = /(?:завдан|задач|task|subtask|підзавдан|підзадач|крок|step)/iu.test(command);
   const timerWord = /(?:таймер|секундомір|відлік|timer|stopwatch|countdown)/iu.test(command);
   const dateField = /(?:дат[ауи]|дедлайн|термін|deadline|due\s+date|planned\s+date)/iu.test(command);
   const calendarHint = /(?:завтра|сьогодні|післязавтра|tomorrow|today|\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}\.\d{2,4})(?![\p{L}\p{N}_])/iu.test(command);
-  if (intent === 'steps' && matchingIds.length === 1) scope = { operation: 'steps', taskIds: matchingIds };
+  const createVerb = /^(?:створи|створіть|додай|додайте|create|add)(?![\p{L}\p{N}_])/iu.test(command);
+  if (intent === 'steps' && oneTarget.length === 1) scope = { operation: 'steps', taskIds: oneTarget };
   else if (explicit) {
-    if (/^(?:створи|створіть|додай|додайте|create|add)(?![\p{L}\p{N}_])/iu.test(command) && /(?:вкладк|категор|tab|category)/iu.test(command) && !taskWord) scope = { operation: 'tabs', taskIds: [] };
+    if (createVerb && /(?:вкладк|категор|tab|category)/iu.test(command) && !taskWord) scope = { operation: 'tabs', taskIds: [] };
     else if (/^(?:створи|створіть|додай|додайте|create|add)\s+(?:(?:нов[еуії]|новий|a|an|new|the)\s+)*(?:завдання|завдань|задачу|задачі|задач|tasks?)(?![\p{L}\p{N}_])/iu.test(command) && !/(?:підзавдан|підзадач|subtask|крок|step)/iu.test(command)) scope = { operation: 'create', taskIds: [] };
-    else if (timerWord) scope = { operation: 'timer', taskIds: singleTarget };
+    else if (timerWord) scope = { operation: 'timer', taskIds: oneTarget };
     // Removing a date must never archive the parent task, even if its title is mentioned.
     else if (dateField) scope = { operation: 'update', taskIds: singleTarget };
-    else if (/^(?:створи|створіть|додай|додайте|create|add)(?![\p{L}\p{N}_])/iu.test(command) && calendarHint && !matchingIds.length && !/(?:підзавдан|підзадач|subtask|крок|step)/iu.test(command)) scope = { operation: 'create', taskIds: [] };
+    // A partial word match must not turn “add something new” into an edit of a similar task.
+    else if (createVerb && calendarHint && !exactIds.length && !/(?:підзавдан|підзадач|subtask|крок|step)/iu.test(command)) scope = { operation: 'create', taskIds: [] };
     else if (/^(?:видали|видаліть|прибери|delete|remove)(?![\p{L}\p{N}_])/iu.test(command) && taskWord && !/(?:підзавдан|підзадач|subtask|крок|step)/iu.test(command)) scope = { operation: 'delete', taskIds: singleTarget };
-    else if (taskWord || matchingIds.length) scope = { operation: /(?:розбий|розділи|break\s+down|split|підзавдан|підзадач|subtask|крок|step)/iu.test(command) ? 'steps' : 'update', taskIds: singleTarget };
+    else if (taskWord || (createVerb ? exactIds : matchingIds).length) {
+      const steps = /(?:розби[йтв]|розділи|розділен|break\s+down|split|підзавдан|підзадач|subtask|крок|step)/iu.test(command);
+      scope = { operation: steps ? 'steps' : 'update', taskIds: steps ? oneTarget : singleTarget };
+    }
   }
-  if (scope) return { route: 'task_command' as PersonalChatRoute, scope };
-  if (intent === 'steps') return { route: 'task_command' as PersonalChatRoute, scope: { operation: 'steps', taskIds: [] } as ConcreteTaskScope };
-  if (personalConcern.test(input) || refusedStart.test(input) || personalGoalReference.test(input) || /^(?:я\s+)?(?:хочу|хотів|хотіла|прагну|мрію|i\s+want|i\s+wish|i\s+would\s+like)(?![\p{L}\p{N}_])/iu.test(input)) return { route: 'personal' as PersonalChatRoute };
-  if (intent === 'plan' || /(?:план|plan)(?![\p{L}\p{N}_])/iu.test(command) && /^(?:зроби|склади|створи|допоможи|make|create|help)/iu.test(command)) return { route: 'personal' as PersonalChatRoute };
+
+  // Tasks a reply names: exact titles first, then a quoted or distinctive partial name.
+  const namedIn = (text: string | undefined, fuzzy: boolean) => {
+    if (!text) return [];
+    const exact = live.filter(task => normalized(text).includes(normalized(task.title))).map(task => task.id as string);
+    if (exact.length || !fuzzy && !/[«"“„]/u.test(text)) return exact;
+    const found = partiallyNamedTasks(text, live);
+    return found.best.length ? found.best : found.ids;
+  };
+  /**
+   * Targets of an accepted offer, first match wins: (1) tasks named in the offer or the previous
+   * reply; (2) a timer offer ("поставлю таймер на паузу?") → the tasks whose timer is running;
+   * (3) a steps/completion offer → the task the person mentioned most recently; (4) tasks the
+   * person mentioned in the recent conversation; (5) the only active task. An offer of new tasks
+   * borrows no target. The result is still only a proposal scope; nothing is applied.
+   */
+  const acceptedOfferTargets = (offerText: string): string[] => {
+    const offered = namedIn(offerText, true);
+    if (offered.length) return offered;
+    const previous = namedIn(options.previousAssistantText, false);
+    if (previous.length) return previous;
+    if (createOfferTopic.test(offerText) && !stepsOfferTopic.test(offerText)) return [];
+    if (timerOfferTopic.test(offerText) && (timerStopTopic.test(offerText) || !timerStartTopic.test(offerText))) {
+      const running = live.filter(task => task.timerRunning === true && !task.done).map(task => task.id as string);
+      if (running.length) return running;
+    }
+    const recentUserTexts = (options.previousUserTexts?.length ? options.previousUserTexts : [options.previousUserText])
+      .filter((text): text is string => typeof text === 'string' && !!text.trim()).slice(-3);
+    const mentionedRecently = recentUserTexts.map(text => namedIn(text, true));
+    if (stepsOfferTopic.test(offerText)) {
+      const latest = [...mentionedRecently].reverse().find(ids => ids.length);
+      if (latest) return latest;
+    }
+    const recent = [...new Set(mentionedRecently.flat())];
+    if (recent.length) return recent;
+    const active = live.filter(task => !task.done && !task.scheduledPending);
+    return active.length === 1 ? [active[0].id] : [];
+  };
+  // A yes to the change the previous reply offered: the offer's plan becomes the proposal.
+  // Outside discovery only; a doubt, refusal or question is never consent.
+  const offer = !discoveryMode && !options.answeringDiscovery ? lastChangeOffer(options.previousAssistantText) : undefined;
+  if (offer && affirmativeReply.test(input) && !doubtfulReply.test(input) && !/\?\s*$/u.test(input) && input.split(' ').length <= 12) {
+    if (scope && (scope.taskIds.length || ['create', 'tabs'].includes(scope.operation))) return { route: 'task_command', scope, acceptedOffer: true };
+    const targets = [...new Set([...namedNow, ...acceptedOfferTargets(offer)])].slice(0, 8);
+    return { route: 'task_command', scope: { operation: 'proposal', taskIds: targets }, acceptedOffer: true };
+  }
+  if (scope) return { route: 'task_command', scope };
+  if (intent === 'steps') return { route: 'task_command', scope: { operation: 'steps', taskIds: [] } };
+
   const discovery = profile ? normalizeStrategyDiscovery(profile) : undefined;
-  const pending = discovery?.pendingQuestion;
-  const privacyRequest = /(?:не хочу (?:про це|розповідати|обговорювати|відповідати|ділитися)|не готов[аий]* (?:обговорювати|ділитися|розповідати)|особисте|приватн|пропуст(?:имо|ити)|skip (?:this|that)|prefer not|rather not|private|don['’]?t want to (?:share|discuss|answer))/iu;
-  const refusalCount = pending ? discovery!.topics[pending.topic].evidence.filter(answer => privacyRequest.test(answer.quote)).length : 0;
-  const practicalAnswer = /(?:коли|перед|після|сідаю|боюс|страх|важко|незрозум|маю|можу|не\s+можу|не\s+знаю|when|before|after|afraid|unclear|i\s+have|i\s+can|cannot|can['’]?t)/iu.test(input);
   const ordinaryInformation = /^(?:проаналізуй|аналіз|покажи|analyse|analyze|show|review|audit|поясни|розкажи|explain|tell)(?![\p{L}\p{N}_])/iu.test(input);
-  if (intent === 'auto' && !ordinaryInformation && pending && practicalAnswer && !/\?\s*$/.test(input)) return { route: 'personal' as PersonalChatRoute };
-  if (intent === 'auto' && !ordinaryInformation && pending && discovery!.topics[pending.topic].status === 'deferred' && refusalCount > 1 && !practicalAnswer && !privacyRequest.test(input)) {
-    // Answering our invitation to concrete help must not send the person back into a private interview.
-    return { route: 'help' as PersonalChatRoute };
-  }
-  // Answering the visible discovery question, or the pending understanding summary, continues discovery.
-  if (intent === 'auto' && !ordinaryInformation && !/\?\s*$/.test(input) && (options.answeringDiscovery || discovery?.phase === 'confirming' || discovery?.pendingSummary)) return { route: 'personal' as PersonalChatRoute };
+  const question = /\?\s*$/.test(input);
   const workspaceTopic = /(?:завдан|задач|метрик|статист|черг|навантаж|task|metric|statistic|queue|workload)/iu.test(input);
   const personalTopic = /(?:мо[яїює]|мій|мене|мені|сво[їює]|my\s+(?:goal|life|problem)|about\s+me|продуктив|productiv)/iu.test(input);
-  if (intent === 'analysis' && personalTopic && !workspaceTopic) return { route: 'personal' as PersonalChatRoute };
-  if (/^(?:як|де|що\s+означає|how|where|what\s+does)(?![\p{L}\p{N}_])/iu.test(input) && /(?:додат|кноп|меню|вклад|таймер|завдан|задач|karkas|button|menu|tab|timer|task|setting)/iu.test(input)) return { route: 'help' as PersonalChatRoute };
-  if (intent === 'analysis' || /^(?:проаналізуй|аналіз|покажи|analyse|analyze|show|review|audit)(?![\p{L}\p{N}_])/iu.test(input) && /(?:завдан|задач|час|метрик|статист|черг|навантаж|task|time|metric|statistic|queue|workload|workspace)/iu.test(input)) return { route: 'workspace_analysis' as PersonalChatRoute };
-  if (!personalTopic && /^(?:що\s+таке|хто|коли|де|як|поясни|розкажи|напиши|переклади|what|who|when|where|how|explain|tell|write|translate)(?![\p{L}\p{N}_])/iu.test(input)) return { route: 'help' as PersonalChatRoute };
-  // Free conversation, small talk and general questions get a natural read-only answer, not an interview.
-  return { route: 'general' as PersonalChatRoute };
+  const conversationRoute = (): PersonalChatRoute => {
+    if (discoveryMode) {
+      // Inside the explicit discovery mode the interview continues; commands were handled above.
+      if (personalConcern.test(input) || refusedStart.test(input) || personalGoalReference.test(input) || /^(?:я\s+)?(?:хочу|хотів|хотіла|прагну|мрію|i\s+want|i\s+wish|i\s+would\s+like)(?![\p{L}\p{N}_])/iu.test(input)) return 'personal';
+      if (intent === 'plan' || /(?:план|plan)(?![\p{L}\p{N}_])/iu.test(command) && /^(?:зроби|склади|створи|допоможи|make|create|help)/iu.test(command)) return 'personal';
+      const pending = discovery?.pendingQuestion;
+      const privacyRequest = /(?:не хочу (?:про це|розповідати|обговорювати|відповідати|ділитися)|не готов[аий]* (?:обговорювати|ділитися|розповідати)|особисте|приватн|пропуст(?:имо|ити)|skip (?:this|that)|prefer not|rather not|private|don['’]?t want to (?:share|discuss|answer))/iu;
+      const refusalCount = pending ? discovery!.topics[pending.topic].evidence.filter(answer => privacyRequest.test(answer.quote)).length : 0;
+      const practicalAnswer = /(?:коли|перед|після|сідаю|боюс|страх|важко|незрозум|маю|можу|не\s+можу|не\s+знаю|when|before|after|afraid|unclear|i\s+have|i\s+can|cannot|can['’]?t)/iu.test(input);
+      if (intent === 'auto' && !ordinaryInformation && pending && practicalAnswer && !question) return 'personal';
+      if (intent === 'auto' && !ordinaryInformation && pending && discovery!.topics[pending.topic].status === 'deferred' && refusalCount > 1 && !practicalAnswer && !privacyRequest.test(input)) {
+        // Answering our invitation to concrete help must not send the person back into a private interview.
+        return 'help';
+      }
+      // Answering the visible discovery question, or the pending understanding summary, continues discovery.
+      if (intent === 'auto' && !ordinaryInformation && !question && (options.answeringDiscovery || discovery?.phase === 'confirming' || discovery?.pendingSummary)) return 'personal';
+      if (intent === 'analysis' && personalTopic && !workspaceTopic) return 'personal';
+    }
+    if (/^(?:як|де|що\s+означає|how|where|what\s+does)(?![\p{L}\p{N}_])/iu.test(input) && /(?:додат|кноп|меню|вклад|таймер|завдан|задач|karkas|button|menu|tab|timer|task|setting)/iu.test(input)) return 'help';
+    if (intent === 'analysis' || /^(?:проаналізуй|аналіз|покажи|analyse|analyze|show|review|audit)(?![\p{L}\p{N}_])/iu.test(input) && /(?:завдан|задач|час|метрик|статист|черг|навантаж|task|time|metric|statistic|queue|workload|workspace)/iu.test(input)) return 'workspace_analysis';
+    if (!personalTopic && /^(?:що\s+таке|хто|коли|де|як|поясни|розкажи|напиши|переклади|what|who|when|where|how|explain|tell|write|translate)(?![\p{L}\p{N}_])/iu.test(input)) return 'help';
+    // In discovery mode a statement keeps the interview going; a question gets an ordinary answer.
+    if (discoveryMode && intent === 'auto' && !ordinaryInformation && !question) return 'personal';
+    // Wishes, struggles, plan requests, small talk and general questions get ordinary coaching, not an interview.
+    return 'general';
+  };
+  const route = conversationRoute();
+  if (route === 'personal') return { route };
+  // Ordinary conversation may still propose changes the person explicitly asks for or agrees to,
+  // but only for tasks named now or in the previous turn; with none named, only new tasks.
+  const discussed = [...new Set([...namedNow, ...namedIn(options.previousUserText, true), ...namedIn(options.previousAssistantText, false)])].slice(0, 8);
+  return { route, proposalScope: { operation: 'proposal', taskIds: discussed } };
 }
 
 /** A model cannot expand a concrete command into a personal plan or unrelated task operations. */
@@ -123,30 +299,139 @@ For PERSONAL_DISCOVERY, first understand motives, actual barriers and available 
 Concrete CRUD/timer/subtask/help commands and read-only workspace analysis remain available without a personal interview, strictly within the supplied command scope. They do not complete the personal interview or replace an existing strategy.
 Respect negation and ambivalence in the person's actual words. Do not substitute your assumptions for motives, effort, mood or life circumstances. No profession assumptions, diagnoses, personality labels, blame, canned praise or generic productivity lecture. Ask about the specific situation, prior attempts and what happens before distraction when relevant. When someone has not started/refuses, ask what happened before suggesting fixes.
 Memory updates add grounded observations; facts quote exact user words, interpretations are hypotheses. Never silently change or self-confirm goals. Retain existing useful memory and agreed strategy. Discovery questions, ordinary task commands and metric analysis are not new personal strategies.
-Never provide a personal plan via legacy task arrays to bypass discovery. For PERSONAL_DISCOVERY omit all mutations, narrative, nextAction and focusTaskId; return only safe reflection, the next question and discovery evidence/summary.`;
+Never provide a personal plan via legacy task arrays to bypass discovery. For PERSONAL_DISCOVERY omit all mutations, narrative, nextAction and focusTaskId; return only a short reflection in your own words, optionally one grounded insight, the next question and discovery evidence/summary.`;
 
-export function fallbackDiscoveryQuestion(topic: string, uk: boolean): string {
-  const questions: Record<string, [string, string]> = {
-    motivation: ['Що для вас зміниться, якщо ви досягнете цих цілей, і чому це важливо саме зараз?', 'What would reaching these goals change for you, and why does that matter now?'],
-    barriers: ['Коли ви востаннє відклали важливу справу, що відбувалося перед тим, як ви переключилися на щось інше?', 'The last time you put off something important, what happened just before you switched to something else?'],
-    capacity: ['Які обставини зараз впливають на ваші сили й можливість працювати над цими цілями?', 'What circumstances currently affect your energy and ability to work on these goals?'],
-    circumstances: ['Що у вашій теперішній життєвій ситуації найбільше впливає на рух до цих цілей?', 'What in your current life situation most affects progress toward these goals?'],
-    attempts: ['Що ви вже пробували, щоб починати й продовжувати важливу роботу, і що з цього допомагало?', 'What have you tried to start and continue important work, and what helped?'],
-    direction: ['До якої з ваших цілей ви насамперед хочете рухатися і що вона для вас означає?', 'Which of your goals would you like to work toward first, and what does it mean to you?'],
-    goals: ['Що ви хотіли б змінити у своєму житті й чому це для вас важливо?', 'What would you like to change in your life, and why does it matter to you?'],
+/** App-written fallback questions in the person's form of address; ти-variants avoid gendered past tense. */
+export function fallbackDiscoveryQuestion(topic: string, uk: boolean, address: DiscoveryAddress = 'vy'): string {
+  const questions: Record<string, [string, string, string]> = {
+    motivation: ['Що для вас зміниться, якщо ви досягнете цих цілей, і чому це важливо саме зараз?', 'Що для тебе зміниться, якщо ці цілі вдасться досягти, і чому це важливо саме зараз?', 'What would reaching these goals change for you, and why does that matter now?'],
+    barriers: ['Коли ви востаннє відклали важливу справу, що відбувалося перед тим, як ви переключилися на щось інше?', 'Пригадай останній раз, коли важлива справа відкладалася: що відбувалося безпосередньо перед тим, як увага перемкнулася на інше?', 'The last time you put off something important, what happened just before you switched to something else?'],
+    capacity: ['Які обставини зараз впливають на ваші сили й можливість працювати над цими цілями?', 'Які обставини зараз впливають на твої сили й можливість працювати над цими цілями?', 'What circumstances currently affect your energy and ability to work on these goals?'],
+    circumstances: ['Що у вашій теперішній життєвій ситуації найбільше впливає на рух до цих цілей?', 'Що у твоїй теперішній життєвій ситуації найбільше впливає на рух до цих цілей?', 'What in your current life situation most affects progress toward these goals?'],
+    attempts: ['Що ви вже пробували, щоб починати й продовжувати важливу роботу, і що з цього допомагало?', 'Що вже доводилося пробувати, щоб починати й продовжувати важливу роботу, і що з цього допомагало?', 'What have you tried to start and continue important work, and what helped?'],
+    direction: ['До якої з ваших цілей ви насамперед хочете рухатися і що вона для вас означає?', 'До якої з твоїх цілей ти насамперед хочеш рухатися і що вона для тебе означає?', 'Which of your goals would you like to work toward first, and what does it mean to you?'],
+    goals: ['Що ви хотіли б змінити у своєму житті й чому це для вас важливо?', 'Що тобі хотілося б змінити у своєму житті й чому це для тебе важливо?', 'What would you like to change in your life, and why does it matter to you?'],
   };
-  return (questions[topic] || questions.barriers)[uk ? 0 : 1];
+  return (questions[topic] || questions.barriers)[!uk ? 2 : address === 'ty' ? 1 : 0];
+}
+
+// Word-bounded vocabulary: "підготовка", "already", "зробив" or "commitments" are not plans.
+const letterBefore = '(?<![\\p{L}\\p{N}])';
+const letterAfter = '(?![\\p{L}\\p{N}])';
+const words = (alternatives: string) => new RegExp(`${letterBefore}(?:${alternatives})${letterAfter}`, 'iu');
+const stems = (alternatives: string) => new RegExp(`${letterBefore}(?:${alternatives})`, 'iu');
+/** Asks for readiness, consent, a promise or a start ("готовий?", "почнемо?", "will you"). */
+const commitmentAsk = stems(`готов|погодж|домовим|домовились|домовилися|пообіця|обіцяєш|обіцяєте|зобов['’ʼ]?яж|зобов['’ʼ]?язуєш|зобов['’ʼ]?язуєте|почнемо|почнеш|почнете|візьмешся|візьметеся`);
+const englishCommitment = /\b(?:commit(?:ted)?\s+to|agree(?:d)?\s+to|ready\s+to|will\s+you|shall\s+we|let['’]?s|start\s+with|promise)\b/iu;
+/** Advice phrased as an imperative: "почни", "зроби", "спробуй". Quoted words of the person are exempt. */
+const imperativeAdvice = words('почни|почніть|починай|починайте|почнімо|займись|займися|займіться|приступай|приступайте|працюй|працюйте|зроби|зробіть|заплануй|заплануйте|спробуй|спробуйте');
+const durations = new RegExp(`${letterBefore}(?:\\d+(?:[.,]\\d+)?|одн[уаі]|дв[іа]|три|чотири|п['’ʼ]?ять|десять|п['’ʼ]?ятнадцять|двадцять|тридцять|сорок|пів|five|ten|fifteen|twenty|thirty|forty)\\s*[-–]?\\s*(?:хв|хвилин|год|годин|min|minute|hour)|${letterBefore}півгодин`, 'iu');
+const clockTime = /(?<![\p{N}])\d{1,2}[:.]\d{2}(?![\p{N}])|(?<![\p{L}])(?:о|об|at)\s+\d{1,2}(?![\p{N}])/iu;
+const scheduleWord = stems('завтра|післязавтра|сьогодні\\s+ввечері|щодня|щоранку|щовечора|кожного\\s+(?:дня|ранку|вечора)|кожен\\s+день|tomorrow|tonight|every\\s+(?:day|morning|evening)|daily');
+const proposedAction = words('почни|почати|почнемо|почнеш|зроби|зробити|зробиш|сядь|сісти|сядеш|займися|зайнятися|попрацюй|попрацювати|спробуй|спробуєш|спробувати|відкрий|відкрити|візьмися|start|begin|try|work\\s+on');
+const planLabel = new RegExp(`${letterBefore}(?:план|plan)\\s*[:—–-]|(?:^|\\n)\\s*(?:[-*•]|\\d+[.)])\\s`, 'iu');
+const russianLetters = /[ыэъё]/iu;
+const praiseOrLabel = stems('молодець|чудово|прекрасно|супер(?![\\p{L}])|great\\b|awesome|well\\s+done|лінив|ледач|лінь|депрес|діагноз|розлад|сдуг|adhd|lazy');
+const quotedSegments = /[«“„"]([^«»“”„"]{0,80})[»”“"]/gu;
+const withoutQuotes = (value: string) => value.replace(quotedSegments, ' ');
+const sentenceBreaks = (value: string) => (value.replace(/[.!…]+\s*$/u, '').match(/[.!?…]+\s+\S/gu) || []).length;
+
+/** Plans, schedules, durations, commitments and imperative advice that must not leak into discovery text. */
+function leaksPlan(value: string, allowAdvice = false): boolean {
+  return commitmentAsk.test(value) || englishCommitment.test(value) || planLabel.test(value) || durations.test(value) || clockTime.test(value)
+    || scheduleWord.test(value) && proposedAction.test(value) || (!allowAdvice && imperativeAdvice.test(withoutQuotes(value)));
 }
 
 /**
  * Natural model questions are accepted with any opening word and an optional short lead-in.
- * Rejected: empty, very long, several questions, multi-line output, or a schedule, commitment
- * or plan smuggled into the question.
+ * Rejected: empty, very long, several questions, multi-line output, or a schedule, commitment,
+ * plan or imperative advice smuggled into the question. The person's own quoted words are not
+ * treated as advice ("Коли ти кажеш собі «зроби це», що відбувається?").
  */
 export function safeDiscoveryQuestion(question: unknown): question is string {
-  return typeof question === 'string' && question.trim().length > 8 && question.length <= 500
-    && (question.match(/\?/g) || []).length === 1 && /\?\s*$/.test(question)
-    && !/[\r\n]/.test(question.trim()) && !/(?:готов|погодж|домов|зобов|commit|agree|ready|план\s*[:—-]|plan\s*[:—-]|\d+\s*[-–]?\s*(?:хв|minutes|min\b)|почни|почніть|почнем|почнете|почнеш|починайте|починай|почнімо|приступ|займіться|займись|працюй|зроби|зробіть|заплануй|завтра|tomorrow|щодня|кожного\s+дня|every\s+day|start\s+with|will\s+you|shall\s+we|let['’]s)/iu.test(question);
+  if (typeof question !== 'string') return false;
+  const value = question.trim();
+  return value.length > 8 && value.length <= 500 && !/[\r\n]/.test(value)
+    && (withoutQuotes(value).match(/\?/g) || []).length === 1 && /\?[\s»”"')]*$/u.test(value)
+    && !russianLetters.test(value) && !leaksPlan(value);
+}
+
+/** A short lead-in on its own line is joined; list-like or longer multi-line output stays rejected. */
+export function discoveryQuestionText(question: unknown): string | undefined {
+  if (typeof question !== 'string') return undefined;
+  const lines = question.trim().split(/\s*\n+\s*/u).filter(Boolean);
+  const joined = lines.length <= 2 && !planLabel.test(question) ? lines.join(' ') : question.trim();
+  return safeDiscoveryQuestion(joined) ? joined : undefined;
+}
+
+/** True when the candidate copies the person's message: the whole short message or any 9-word run of a long one. */
+function echoesMessage(candidate: string, userText: string): boolean {
+  const tokens = (value: string) => value.toLocaleLowerCase().match(/[\p{L}\p{N}'’ʼ-]+/gu) || [];
+  const source = tokens(userText), target = ` ${tokens(candidate).join(' ')} `;
+  if (source.length < 4) return false;
+  const size = Math.min(source.length, 9);
+  for (let start = 0; start + size <= source.length; start++) if (target.includes(` ${source.slice(start, start + size).join(' ')} `)) return true;
+  return false;
+}
+const addressMismatch = (value: string, address: DiscoveryAddress) => { const form = addressFormOf(value); return !!form && form !== address; };
+const quotedWords = (value: string) => [...value.matchAll(quotedSegments)].reduce((sum, match) => sum + (match[1].match(/[\p{L}\p{N}]+/gu) || []).length, 0);
+
+/**
+ * The model's own one-sentence empathic reflection of the current message. It must be short, in
+ * its own words (at most an 8-word quoted key phrase, never the whole message), and carry no
+ * question, advice, plan, schedule, commitment, praise or label.
+ */
+export function safeDiscoveryReflection(value: unknown, userText: string, address: DiscoveryAddress = 'vy', uk = true): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const reflection = value.trim().replace(/\s+/gu, ' ');
+  if (reflection.length < 6 || reflection.length > 220 || /[?\n]/u.test(value.trim()) || sentenceBreaks(reflection) > 0) return undefined;
+  if (uk && (!/[а-яіїєґ]/iu.test(reflection) || russianLetters.test(reflection))) return undefined;
+  if (leaksPlan(reflection) || praiseOrLabel.test(reflection) || words('раджу|рекомендую|варто|слід|try|should|recommend').test(reflection)) return undefined;
+  if (quotedWords(reflection) > 8 || echoesMessage(reflection, userText) || addressMismatch(reflection, address)) return undefined;
+  return /[.!…»”"]$/u.test(reflection) ? reflection : `${reflection}.`;
+}
+
+/**
+ * One grounded observation or tiny low-commitment tip (at most two short sentences). A gentle
+ * suggestion is allowed; schedules, durations, commitments, tasks and plans are not.
+ */
+export function safeDiscoveryInsight(value: unknown, userText: string, address: DiscoveryAddress = 'vy', uk = true): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const insight = value.trim().replace(/\s+/gu, ' ');
+  if (insight.length < 12 || insight.length > 280 || /[?\n]/u.test(value.trim()) || sentenceBreaks(insight) > 1) return undefined;
+  if (uk && (!/[а-яіїєґ]/iu.test(insight) || russianLetters.test(insight))) return undefined;
+  if (leaksPlan(insight, true) || praiseOrLabel.test(insight)) return undefined;
+  if (stems('створ\\p{L}*\\s+завдан|додам|додай\\s+завдан|розклад|графік|дедлайн|create\\s+(?:a\\s+)?task|add\\s+(?:a\\s+)?task|schedule|deadline').test(insight) || words('план|plan').test(insight)) return undefined;
+  if (quotedWords(insight) > 8 || echoesMessage(insight, userText) || addressMismatch(insight, address)) return undefined;
+  return /[.!…»”"]$/u.test(insight) ? insight : `${insight}.`;
+}
+
+/**
+ * The form of address for this conversation, shared by every chat route and by app-written text
+ * (fallback questions, proposal summaries, guard messages): the current message decides, then the
+ * latest recent user message that shows a form, then the discovery answers; "ви" only without any signal.
+ */
+export function discoveryAddressFor(profile: PersonalStrategyProfile | undefined, userText: string, history?: unknown): DiscoveryAddress {
+  const recent = Array.isArray(history) ? history.filter(message => record(message) && message.role === 'user' && typeof message.content === 'string').map(message => message.content as string).slice(-10) : [];
+  const evidence = profile ? discoveryEvidenceTexts(normalizeStrategyDiscovery(profile)) : [];
+  return detectDiscoveryAddress([...evidence, ...recent, typeof userText === 'string' ? userText : '']);
+}
+
+/**
+ * Request-context line telling the model which form the app itself uses in this reply.
+ * scope 'discovery' names the interview fields; 'chat' covers the whole reply on ordinary routes.
+ */
+export function discoveryAddressContext(address: DiscoveryAddress, uk: boolean, scope: 'discovery' | 'chat' = 'discovery'): string {
+  if (!uk) return 'ADDRESS FORM: English; no special form.';
+  const where = scope === 'discovery' ? 'in every field (reflection, insight, question)' : 'throughout the reply, including questions, offers and instructions';
+  return address === 'ty'
+    ? `ADDRESS FORM (app-derived from the person's messages): use "ти" ${where}; never "ви" or "давайте/хочете". The person's gender is unknown unless they state it: avoid gendered forms about them (write "тобі хотілося б", not "ти хотів/хотіла б").`
+    : `ADDRESS FORM (app-derived from the person's messages): use "ви" ${where}; never "ти" or a mix of forms.`;
+}
+
+export interface DiscoveryReplyOptions {
+  /** Recent conversation ({ role, content }), used to keep the person's form of address. */
+  history?: unknown;
 }
 
 const record = (value: unknown): value is Record<string, any> => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -177,7 +462,7 @@ function discoveryMemory(value: unknown): StrategyMemoryPatch {
   return patch;
 }
 
-function understandingSummary(profile: PersonalStrategyProfile, uk: boolean): string {
+function understandingSummary(profile: PersonalStrategyProfile, uk: boolean, address: DiscoveryAddress = 'vy'): string {
   const state = normalizeStrategyDiscovery(profile);
   const titles = state.selectedGoalIds.map(id => profile.goals.find(goal => goal.id === id)?.title).filter(Boolean).join('; ');
   const labels: Partial<Record<StrategyDiscoveryTopic, string>> = uk
@@ -191,69 +476,130 @@ function understandingSummary(profile: PersonalStrategyProfile, uk: boolean): st
     observations.set(quote, [...(observations.get(quote) || []), label]);
   }
   const concise = (quote: string) => quote.length > 320 ? `${quote.slice(0, 320)}…` : quote;
-  return [`${uk ? 'Ваші обрані цілі' : 'Your selected goals'}: ${titles}.`, ...[...observations].map(([quote, names]) => `${names.join(', ')}: «${concise(quote)}»`)].join('\n\n');
+  const heading = uk ? (address === 'ty' ? 'Твої обрані цілі' : 'Ваші обрані цілі') : 'Your selected goals';
+  return [`${heading}: ${titles}.`, ...[...observations].map(([quote, names]) => `${names.join(', ')}: «${concise(quote)}»`)].join('\n\n');
 }
 
+const tokenCount = (value: string) => (value.match(/[\p{L}\p{N}'’ʼ-]+/gu) || []).length;
 
-/** Ignore free-form provider prose and all action containers when interview evidence is incomplete. */
-export function sanitizeDiscoveryResponse(parsed: Record<string, any>, profile: PersonalStrategyProfile, userText: string, turnId: string, uk: boolean) {
+/** A short clause (2–8 words) of the person's own words about the topic; never the whole message. */
+function keyPhrase(userText: string, nextTopic: StrategyDiscoveryTopic): string | undefined {
+  const sources: Partial<Record<StrategyDiscoveryTopic, StrategyDiscoveryTopic[]>> = {
+    motivation: ['direction'], barriers: ['barriers'], attempts: ['barriers'], capacity: ['capacity', 'circumstances'], circumstances: ['circumstances'],
+  };
+  const topics = sources[nextTopic];
+  if (!topics) return undefined;
+  const total = tokenCount(userText);
+  for (const part of userText.split(/[.!?;:\n,()—–…]+|\s+-\s+/u)) {
+    let clause = part.trim();
+    for (let index = 0; index < 3; index++) clause = clause.replace(/^(?:і|й|а|але|та|бо|що|ну|так|ой|слухай|and|but|so|because)\s+/iu, '');
+    const count = tokenCount(clause);
+    if (count < 2 || count > 8 || count >= total || /[«»"“”„]/u.test(clause) || !topics.some(source => mentionsDiscoveryTopic(source, clause))) continue;
+    return /^\p{Lu}\p{Ll}/u.test(clause) ? `${clause[0].toLocaleLowerCase()}${clause.slice(1)}` : clause;
+  }
+  return undefined;
+}
+
+/** A fallback question grounded in a short key phrase of the person's words, when one exists. */
+function groundedFallbackQuestion(nextTopic: StrategyDiscoveryTopic, userText: string, uk: boolean, address: DiscoveryAddress): string | undefined {
+  const phrase = keyPhrase(userText, nextTopic);
+  const follow: Partial<Record<StrategyDiscoveryTopic, [string, string, string]>> = {
+    motivation: ['Що це змінить саме для вас і чому це важливо зараз?', 'Що це змінить саме для тебе і чому це важливо зараз?', 'What would this change for you, and why does it matter now?'],
+    barriers: ['Що зазвичай відбувається безпосередньо перед тим, як увага перемикається на щось інше?', 'Що зазвичай відбувається безпосередньо перед тим, як увага перемикається на щось інше?', 'What usually happens just before your attention switches to something else?'],
+    attempts: ['Що вже доводилося пробувати з цим і що хоч трохи допомагало?', 'Що вже доводилося пробувати з цим і що хоч трохи допомагало?', 'What have you already tried with this, and what helped even a little?'],
+    capacity: ['Скільки часу й сил у вас реально є на це зараз, з урахуванням відпочинку?', 'Скільки часу й сил у тебе реально є на це зараз, з урахуванням відпочинку?', 'How much time and energy do you realistically have for this now, allowing for rest?'],
+    circumstances: ['Що в цій ситуації найбільше впливає на вашу роботу зараз?', 'Що в цій ситуації найбільше впливає на твою роботу зараз?', 'What in this situation affects your work the most right now?'],
+  };
+  const options = follow[nextTopic];
+  if (!phrase || !options) return undefined;
+  const lead = !uk ? `You mentioned “${phrase}”.` : address === 'ty' ? `Ти пишеш: «${phrase}».` : `Ви пишете: «${phrase}».`;
+  return discoveryQuestionText(`${lead} ${options[!uk ? 2 : address === 'ty' ? 1 : 0]}`);
+}
+
+/** A short neutral acknowledgement when the model gave no safe reflection; nothing for very short replies. */
+function acknowledgement(userText: string, uk: boolean, turn: number): string {
+  if (tokenCount(userText) < 4 || /^(?:так|ні|не знаю|не впевнен[аий]*|важко сказати|yes|no|i don['’]?t know|not sure|maybe|можливо)[.!\s]*$/iu.test(userText.trim())) return '';
+  const options = uk ? ['Зрозуміло, дякую.', 'Це допомагає краще зрозуміти ситуацію.', 'Дякую за відвертість.'] : ['Got it, thanks.', 'That helps me understand the situation better.', 'Thanks for being open about this.'];
+  return options[turn % options.length];
+}
+
+/** The model's optional free-text fields, wherever the schema placed them. */
+function modelField(parsed: Record<string, any>, incoming: Record<string, any>, key: 'reflection' | 'insight'): unknown {
+  return [parsed[key], record(parsed.strategy) ? parsed.strategy[key] : undefined, incoming[key]].find(value => typeof value === 'string' && value.trim());
+}
+
+/**
+ * Ignore free-form provider prose and all action containers when interview evidence is incomplete.
+ * The reply is: a short reflection (the model's own validated sentence, or a neutral acknowledgement),
+ * from the third discovery turn on one validated insight, and one question. If no insight is safe by
+ * then, the app offers practical help once instead of a further interview question.
+ */
+export function sanitizeDiscoveryResponse(parsed: Record<string, any>, profile: PersonalStrategyProfile, userText: string, turnId: string, uk: boolean, options: DiscoveryReplyOptions = {}) {
   const raw = record(parsed.strategy?.memoryPatch) ? parsed.strategy.memoryPatch : parsed.memoryPatch;
   const patch = discoveryMemory(raw);
   const incoming = record(raw?.discovery) ? raw.discovery : {};
+  const address = discoveryAddressFor(profile, userText, options.history);
   let interviewProfile = profile;
+  const before = normalizeStrategyDiscovery(profile);
   const clarification = record(incoming.question) ? incoming.question : undefined;
-  const previousQuestion = normalizeStrategyDiscovery(profile).pendingQuestion;
-  if (clarification && topic(clarification.topic) && safeDiscoveryQuestion(clarification.text) && previousQuestion?.topic === clarification.topic) {
+  const clarificationText = clarification ? discoveryQuestionText(clarification.text) : undefined;
+  const usableClarification = clarification && topic(clarification.topic) && clarificationText && !addressMismatch(clarificationText, address) ? clarificationText : undefined;
+  const previousQuestion = before.pendingQuestion;
+  if (usableClarification && previousQuestion?.topic === clarification!.topic) {
     // A substantive first answer may still need a narrower follow-up on the same topic.
-    patch.discovery = { ...patch.discovery, question: { topic: clarification.topic, text: clarification.text.trim() } };
+    patch.discovery = { ...patch.discovery, question: { topic: clarification!.topic, text: usableClarification } };
   }
-  if (isPersonalStrategyReady(profile) && clarification && topic(clarification.topic) && safeDiscoveryQuestion(clarification.text)) {
-    const discovery = normalizeStrategyDiscovery(profile);
-    interviewProfile = { ...profile, discovery: { ...discovery, phase: 'exploring', pendingSummary: undefined, pendingQuestion: undefined,
-      topics: { ...discovery.topics, [clarification.topic]: { ...discovery.topics[clarification.topic], status: 'unknown' } } } };
+  if (isPersonalStrategyReady(profile) && usableClarification) {
+    interviewProfile = { ...profile, discovery: { ...before, phase: 'exploring', pendingSummary: undefined, pendingQuestion: undefined,
+      topics: { ...before.topics, [clarification!.topic]: { ...before.topics[clarification!.topic as StrategyDiscoveryTopic], status: 'unknown' } } } };
   }
   const candidate = applyDiscoveryTurn(applyStrategyMemory(interviewProfile, patch, userText, turnId), { memoryPatch: patch }, userText, turnId);
   const state = normalizeStrategyDiscovery(candidate);
   const missing = missingStrategyDiscoveryTopics(state);
   const needsDirection = !state.selectedGoalIds.length;
   if (!missing.length && !needsDirection) {
-    const summary = understandingSummary(candidate, uk);
-    const question = uk ? 'Чи правильно я зрозумів вашу ситуацію й ці цілі?' : 'Have I understood your situation and these goals correctly?';
+    const summary = understandingSummary(candidate, uk, address);
+    const question = uk ? (address === 'ty' ? 'Чи правильно я зрозумів твою ситуацію й ці цілі?' : 'Чи правильно я зрозумів вашу ситуацію й ці цілі?') : 'Have I understood your situation and these goals correctly?';
     const fullSummary = `${summary}\n\n${question}`;
     patch.discovery = { ...patch.discovery, summary: fullSummary };
     return { reply: fullSummary, tasks: [], taskUpdates: [], taskDeletions: [], tabs: [], strategy: { status: 'clarifying' as const, question, memoryPatch: patch, actions: [] } };
   }
-  const proposed = record(incoming.question) ? incoming.question : undefined;
-  const desired = proposed && topic(proposed.topic) && missing.includes(proposed.topic) && safeDiscoveryQuestion(proposed.text) ? proposed : undefined;
+  const desired = usableClarification && missing.includes(clarification!.topic) ? { topic: clarification!.topic as StrategyDiscoveryTopic, text: usableClarification } : undefined;
   const defaultTopic = state.topics.direction.status === 'answered' && state.topics.barriers.status === 'unknown' ? 'barriers' : missing[0];
   const nextTopic: StrategyDiscoveryTopic = needsDirection && !missing.length ? 'direction' : desired?.topic || defaultTopic;
-  const saved = state.pendingQuestion?.turnId && state.pendingQuestion.topic === nextTopic && safeDiscoveryQuestion(state.pendingQuestion.text) ? state.pendingQuestion.text : undefined;
+  const lang = uk ? 'uk' : 'en';
+  const reflection = safeDiscoveryReflection(modelField(parsed, incoming, 'reflection'), userText, address, uk);
+  // With the model's own reflection, a quoted key phrase in the question would repeat it.
+  const grounded = reflection ? undefined : groundedFallbackQuestion(nextTopic, userText, uk, address);
   const question = state.topics[nextTopic].status === 'deferred'
-    ? discoveryQuestionForState(state, nextTopic, uk ? 'uk' : 'en')
-    : /^(?:не знаю|не впевнен[аий]*|важко сказати|i don['’]?t know|not sure|maybe|можливо)[.!\s]*$/iu.test(userText.trim()) && profile.discovery?.pendingQuestion?.topic === nextTopic
-      ? narrowerDiscoveryQuestion(nextTopic, uk)
-    : desired?.text?.trim() || saved || (nextTopic === 'capacity' ? discoveryQuestionForState(state, nextTopic, uk ? 'uk' : 'en') : fallbackDiscoveryQuestion(nextTopic, uk));
-  patch.discovery = { ...patch.discovery, question: { topic: nextTopic, text: question } };
-  const quote = userText.trim().replace(/\s+/gu, ' ').slice(0, 280);
-  const describedDirection = state.topics.direction.evidence.some(answer => answer.messageId === turnId);
-  const reflection = quote ? `${uk ? (describedDirection ? 'Ви описали бажані зміни' : 'Ви описали свою ситуацію') : (describedDirection ? 'You described the changes you want' : 'You described your situation')}: «${quote}${userText.trim().length > 280 ? '…' : ''}».` : '';
-  return { reply: [reflection, question].filter(Boolean).join('\n\n'), tasks: [], taskUpdates: [], taskDeletions: [], tabs: [], strategy: { status: 'getting_to_know' as const, question, memoryPatch: patch, actions: [] } };
+    ? discoveryQuestionForState(state, nextTopic, lang, address)
+    : /^(?:не знаю|не впевнен[аий]*|важко сказати|i don['’]?t know|not sure|maybe|можливо)[.!\s]*$/iu.test(userText.trim()) && previousQuestion?.topic === nextTopic
+      ? narrowerDiscoveryQuestion(nextTopic, uk, address)
+    : desired?.text || grounded || (nextTopic === 'capacity' ? discoveryQuestionForState(state, nextTopic, lang, address) : fallbackDiscoveryQuestion(nextTopic, uk, address));
+  // After two interview questions in a row each reply carries one grounded insight, or once offers practical help instead.
+  const streak = discoveryQuestionStreak(previousQuestion?.id);
+  const insight = streak.asked >= 2 ? safeDiscoveryInsight(modelField(parsed, incoming, 'insight'), userText, address, uk) : undefined;
+  const offer = streak.asked >= 2 && !insight && !streak.offered && state.topics[nextTopic].status !== 'deferred';
+  const asked = offer ? PRACTICAL_HELP_OFFER[lang] : question;
+  patch.discovery = { ...patch.discovery, question: { topic: nextTopic, text: asked } };
+  const lead = reflection || (question === grounded && !offer ? '' : acknowledgement(userText, uk, before.processedTurnIds.length));
+  return { reply: [lead, insight, asked].filter(Boolean).join('\n\n'), tasks: [], taskUpdates: [], taskDeletions: [], tabs: [], strategy: { status: 'getting_to_know' as const, question: asked, memoryPatch: patch, actions: [] } };
 }
 
-function narrowerDiscoveryQuestion(topic: StrategyDiscoveryTopic, uk: boolean): string {
-  const questions: Record<StrategyDiscoveryTopic, [string, string]> = {
-    direction: ['Яку одну конкретну справу ви хотіли б полегшити зараз?', 'Which one concrete task would you like to make easier now?'],
-    motivation: ['Що змінилося б у вашому звичайному дні, якби ця справа вдалася?', 'What would change in your ordinary day if this worked out?'],
-    barriers: ['Коли ви востаннє відкрили важливу справу й відклали її, що відбулося в ту мить?', 'The last time you opened an important task and put it aside, what happened at that moment?'],
-    capacity: ['Який невеликий обсяг роботи зараз був би посильним, з урахуванням відпочинку?', 'What small amount of work feels manageable now, allowing for rest?'],
-    circumstances: ['Що у вашому сьогоднішньому дні найбільше впливає на цю справу?', 'What in your day today most affects this task?'],
-    attempts: ['Чи був хоча б один випадок, коли почати цю справу було легше?', 'Has there been one occasion when starting this task was easier?'],
+function narrowerDiscoveryQuestion(topic: StrategyDiscoveryTopic, uk: boolean, address: DiscoveryAddress = 'vy'): string {
+  const questions: Record<StrategyDiscoveryTopic, [string, string, string]> = {
+    direction: ['Яку одну конкретну справу ви хотіли б полегшити зараз?', 'Яку одну конкретну справу тобі хотілося б полегшити зараз?', 'Which one concrete task would you like to make easier now?'],
+    motivation: ['Що змінилося б у вашому звичайному дні, якби ця справа вдалася?', 'Що змінилося б у твоєму звичайному дні, якби ця справа вдалася?', 'What would change in your ordinary day if this worked out?'],
+    barriers: ['Коли ви востаннє відкрили важливу справу й відклали її, що відбулося в ту мить?', 'Що відбувається в ту мить, коли ти відкриваєш важливу справу й відкладаєш її?', 'The last time you opened an important task and put it aside, what happened at that moment?'],
+    capacity: ['Який невеликий обсяг роботи зараз був би посильним, з урахуванням відпочинку?', 'Який невеликий обсяг роботи зараз був би для тебе посильним, з урахуванням відпочинку?', 'What small amount of work feels manageable now, allowing for rest?'],
+    circumstances: ['Що у вашому сьогоднішньому дні найбільше впливає на цю справу?', 'Що у твоєму сьогоднішньому дні найбільше впливає на цю справу?', 'What in your day today most affects this task?'],
+    attempts: ['Чи був хоча б один випадок, коли почати цю справу було легше?', 'Чи був хоча б один випадок, коли почати цю справу було легше?', 'Has there been one occasion when starting this task was easier?'],
   };
-  return questions[topic][uk ? 0 : 1];
+  return questions[topic][!uk ? 2 : address === 'ty' ? 1 : 0];
 }
 
 /** Recheck returned context and keep clarifications from silently becoming a new plan. */
-export function constrainReadyPersonalResponse(parsed: Record<string, any>, profile: PersonalStrategyProfile, userText: string, turnId: string, uk: boolean) {
+export function constrainReadyPersonalResponse(parsed: Record<string, any>, profile: PersonalStrategyProfile, userText: string, turnId: string, uk: boolean, options: DiscoveryReplyOptions = {}) {
   const strategy = record(parsed.strategy) ? { ...parsed.strategy } : {};
   const next: Record<string, any> = { ...parsed, tasks: [], taskUpdates: [], taskDeletions: [], tabs: [] };
   const refused = refusedStart.test(userText);
@@ -264,7 +610,9 @@ export function constrainReadyPersonalResponse(parsed: Record<string, any>, prof
       || /(?:тому,?\s+що|бо|через|because|due\s+to)\s+\S.{5}/iu.test(grounded.trim());
   });
   if (refused && !reasonGiven) {
-    const question = uk ? 'Що відбувалося в той момент, коли ви хотіли почати, але не почали або переключилися на інше?' : 'What was happening when you wanted to start but did not start or switched to something else?';
+    const question = !uk ? 'What was happening when you wanted to start but did not start or switched to something else?'
+      : discoveryAddressFor(profile, userText, options.history) === 'ty' ? 'Що відбувалося в той момент, коли хотілося почати, але справа так і не почалася або увага перемкнулася на інше?'
+      : 'Що відбувалося в той момент, коли ви хотіли почати, але не почали або переключилися на інше?';
     next.reply = question;
     next.strategy = { status: 'clarifying', question, actions: [], memoryPatch: { ...strategy.memoryPatch,
       discovery: { question: { topic: 'barriers', text: question } } } };
@@ -281,7 +629,7 @@ export function constrainReadyPersonalResponse(parsed: Record<string, any>, prof
     next.strategy = strategy;
   }
   const candidate = applyDiscoveryTurn(applyStrategyMemory(profile, strategy.memoryPatch, userText, turnId), strategy, userText, turnId);
-  if (!isPersonalStrategyReady(candidate)) return sanitizeDiscoveryResponse({ ...next, strategy }, profile, userText, turnId, uk);
+  if (!isPersonalStrategyReady(candidate)) return sanitizeDiscoveryResponse({ ...next, strategy }, profile, userText, turnId, uk, options);
   if (parsed.strategy && (strategy.status !== 'ready' || text(strategy.question) || strategy.memoryPatch?.discovery?.question)) {
     next.strategy = { ...strategy, actions: [] };
     for (const key of ['narrative', 'nextAction', 'focusTaskId']) delete next.strategy[key];

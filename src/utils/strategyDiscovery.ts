@@ -9,26 +9,95 @@ const isTopic = (value: unknown): value is StrategyDiscoveryTopic => STRATEGY_DI
 const strictYes = (value: string) => /^(?:так|погоджуюсь|погоджуюся|підтверджую|узгоджую|yes|agreed|confirm|i agree)[.!\s]*$/iu.test(value.trim());
 const uncertain = (value: string) => /^(?:не знаю|не впевнен[аий]*|важко сказати|i don['’]?t know|not sure|maybe|можливо)[.!\s]*$/iu.test(value.trim());
 const decline = (value: string) => /(?:не хочу (?:про це|розповідати|обговорювати|відповідати|ділитися)|не готов[аий]* (?:обговорювати|ділитися|розповідати)|особисте|приватн|пропуст(?:имо|ити)|skip (?:this|that)|prefer not|rather not|private|don['’]?t want to (?:share|discuss|answer))/iu.test(value);
-const questionText: Record<StrategyDiscoveryTopic, string> = {
-  direction: 'Що ви хотіли б змінити у своєму житті й чому це для вас важливо?',
-  motivation: 'Що ця зміна дасть саме вам і чому це для вас важливо?',
-  circumstances: 'Які обставини вашого життя зараз впливають на цю ціль?',
-  barriers: 'Що зараз найчастіше заважає вам почати або продовжити важливу справу?',
-  capacity: 'Скільки часу й сил ви реально можете виділити зараз, з урахуванням відпочинку та інших справ?',
-  attempts: 'Що ви вже пробували для цієї зміни й що з цього допомогло? Якщо ще нічого — це теж важлива відповідь.',
+/**
+ * How the app addresses the person in Ukrainian: "ти" only when they write with "ти", otherwise "ви".
+ * App-written text (acknowledgements, fallback questions) must use the same form as the model.
+ */
+export type DiscoveryAddress = 'ty' | 'vy';
+const notLetter = "(?<![\\p{L}\\p{N}'’ʼ])";
+const wordEnd = "(?![\\p{L}\\p{N}'’ʼ])";
+// Task-command imperatives count too ("Перенеси…", "Заплануйте…"); words that coincide with
+// another form (nouns "зміни", "розклади"; past tense "видали") are left out.
+const tyForms = new RegExp(`${notLetter}(?:ти|тобі|тебе|тобою|твій|твоя|твоє|твої|твого|твоєї|твоїй|твоєму|твоїм|твоїх|твою|слухай|скажи|зроби|допоможи|розбий|поясни|підкажи|порадь|глянь|подивись|створи|додай|напиши|розкажи|знайди|уяви|давай|дай|можеш|знаєш|хочеш|бачиш|розумієш|думаєш|перенеси|заплануй|сплануй|розплануй|онови|познач|заархівуй|прибери|покажи|перевір|проаналізуй|оціни|нагадай|запусти|зупини|постав|встанови|перейменуй|розпиши|відкрий|почни)${wordEnd}`, 'giu');
+const vyForms = new RegExp(`${notLetter}(?:ви|вам|вас|вами|ваш|ваша|ваше|ваші|вашого|вашої|вашій|вашому|вашим|ваших|вашу|слухайте|скажіть|зробіть|допоможіть|розбийте|поясніть|підкажіть|порадьте|гляньте|подивіться|створіть|додайте|напишіть|розкажіть|знайдіть|уявіть|давайте|дайте|можете|знаєте|хочете|бачите|розумієте|думаєте|перенесіть|заплануйте|сплануйте|розплануйте|оновіть|видаліть|позначте|заархівуйте|приберіть|покажіть|перевірте|проаналізуйте|оцініть|нагадайте|запустіть|зупиніть|поставте|встановіть|перейменуйте|розпишіть|відкрийте|почніть)${wordEnd}`, 'giu');
+/** The form one message uses, if it shows one. */
+export function addressFormOf(text: string): DiscoveryAddress | undefined {
+  const ty = (text.match(tyForms) || []).length, vy = (text.match(vyForms) || []).length;
+  return ty > vy ? 'ty' : vy > ty ? 'vy' : undefined;
+}
+/** Texts are oldest first; the latest message that shows a form decides. Default: "ви". */
+export function detectDiscoveryAddress(texts: readonly string[], fallback: DiscoveryAddress = 'vy'): DiscoveryAddress {
+  for (let index = texts.length - 1; index >= 0; index--) {
+    const form = typeof texts[index] === 'string' ? addressFormOf(texts[index]) : undefined;
+    if (form) return form;
+  }
+  return fallback;
+}
+/** The person's own discovery answers, used when no recent chat shows a form. */
+export const discoveryEvidenceTexts = (state: StrategyDiscoveryState): string[] =>
+  STRATEGY_DISCOVERY_TOPICS.flatMap(topic => state.topics[topic].evidence.map(entry => entry.quote));
+
+/** One question per topic: [ви, ти]. Ти-variants avoid gendered past tense. */
+const questionText: Record<StrategyDiscoveryTopic, [string, string]> = {
+  direction: ['Що ви хотіли б змінити у своєму житті й чому це для вас важливо?', 'Що тобі хотілося б змінити у своєму житті й чому це для тебе важливо?'],
+  motivation: ['Що ця зміна дасть саме вам і чому це для вас важливо?', 'Що ця зміна дасть саме тобі і чому це для тебе важливо?'],
+  circumstances: ['Які обставини вашого життя зараз впливають на цю ціль?', 'Які обставини твого життя зараз впливають на цю ціль?'],
+  barriers: ['Що зараз найчастіше заважає вам почати або продовжити важливу справу?', 'Що зараз найчастіше заважає тобі почати або продовжити важливу справу?'],
+  capacity: ['Скільки часу й сил ви реально можете виділити зараз, з урахуванням відпочинку та інших справ?', 'Скільки часу й сил ти реально можеш виділити зараз, з урахуванням відпочинку та інших справ?'],
+  attempts: ['Що ви вже пробували для цієї зміни й що з цього допомогло? Якщо ще нічого — це теж важлива відповідь.', 'Що вже доводилося пробувати для цієї зміни й що з цього допомогло? Якщо ще нічого — це теж важлива відповідь.'],
 };
-const practicalQuestion: Partial<Record<StrategyDiscoveryTopic, string>> = {
-  direction: 'Особистими подробицями можна не ділитися. Яку одну конкретну справу ви хотіли б полегшити зараз?',
-  motivation: 'Без приватних подробиць: який корисний результат дала б одна конкретна справа, з якою ви хочете допомоги?',
-  barriers: 'Приватні подробиці залишимо осторонь. Якщо зручно, згадайте одну справу, яку важко почати: що відбувається безпосередньо перед цим?',
-  capacity: 'Без особистих подробиць: який мінімальний обсяг однієї справи зараз був би для вас посильним?',
+const practicalQuestion: Partial<Record<StrategyDiscoveryTopic, [string, string]>> = {
+  direction: ['Особистими подробицями можна не ділитися. Яку одну конкретну справу ви хотіли б полегшити зараз?', 'Особистими подробицями можна не ділитися. Яку одну конкретну справу тобі хотілося б полегшити зараз?'],
+  motivation: ['Без приватних подробиць: який корисний результат дала б одна конкретна справа, з якою ви хочете допомоги?', 'Без приватних подробиць: який корисний результат дала б одна конкретна справа, з якою тобі потрібна допомога?'],
+  barriers: ['Приватні подробиці залишимо осторонь. Якщо зручно, згадайте одну справу, яку важко почати: що відбувається безпосередньо перед цим?', 'Приватні подробиці залишимо осторонь. Якщо зручно, згадай одну справу, яку важко почати: що відбувається безпосередньо перед цим?'],
+  capacity: ['Без особистих подробиць: який мінімальний обсяг однієї справи зараз був би для вас посильним?', 'Без особистих подробиць: який мінімальний обсяг однієї справи зараз був би для тебе посильним?'],
 };
+const formIndex = (address: DiscoveryAddress) => address === 'ty' ? 1 : 0;
+
+/** After a few interview questions the app may offer practical help instead of the next question. */
+export const PRACTICAL_HELP_OFFER = {
+  uk: 'Можу вже зараз підказати перший маленький крок — чи спершу ще трохи розберемося?',
+  en: 'I can suggest a first small step right now — or would you rather explore a little more first?',
+} as const;
+export const isPracticalHelpOffer = (value: unknown): boolean => typeof value === 'string' && Object.values(PRACTICAL_HELP_OFFER).includes(value.trim() as any);
+// "Не знаю, що робити далі" describes a barrier; it is not a request for advice.
+const describedUncertainty = /(?:знаю|знав|знала|розумію|розумів|розуміла|уявляю|уявляв|уявляла|зрозуміти|думаю|думав|думала|вирішую|вирішити|обираю|обрати|вибираю|вибрати)[,\s]+(?:що|з\s+чого|як|куди)[^.!?…\n]*|(?:know|knew|understand|decide|deciding|figure\s+out)\s+(?:what|where|how)[^.!?\n]*/giu;
+const explicitHelp = /(?:(?<![\p{L}])що\s+(?:ж\s+|же\s+)?(?:(?:мені|нам)\s+)?(?:(?:тепер|зараз|конкретно|ж|же|далі|взагалі)\s+)*(?:робити|зробити|почати|порадиш|порадите)(?![\p{L}])|(?<![\p{L}])з\s+чого\s+(?:мені\s+)?(?:почати|починати)(?![\p{L}])|(?<![\p{L}])(?:допоможи|допоможіть)(?:\s+(?:мені|будь\s+ласка|з\s+цим|нарешті))*\s*(?:[.!?…]|$)|(?<![\p{L}])(?:дай|дайте)\s+(?:мені\s+)?(?:(?:якусь|конкретну|практичну|хоч\s+якусь)\s+)?(?:пораду|поради|рекомендацію|рекомендації)(?![\p{L}])|(?<![\p{L}])(?:порадь|порадьте)(?![\p{L}])|(?<![\p{L}])(?:підкажи|підкажіть)\s+(?:мені\s+)?(?:що|як|з\s+чого|перший|якийсь)(?![\p{L}])|(?<![\p{L}])я\s+(?:ж\s+|же\s+)?(?:вже\s+)?(?:все|усе|достатньо)\s+(?:вже\s+)?(?:розповів|розповіла|розказав|розказала|пояснив|пояснила|описав|описала)(?![\p{L}])|(?<![\p{L}])(?:досить|вистачить|годі)\s+(?:питань|запитань|розпитувати|розпитувань)(?![\p{L}])|\bwhat\s+(?:should|do|can)\s+i\s+(?:do|start\s+with)\b|\bwhere\s+(?:do|should)\s+i\s+start\b|\bgive\s+me\s+(?:some\s+)?(?:advice|a\s+tip|tips|a\s+suggestion)\b|\bany\s+(?:advice|tips|suggestions)\b|\bhelp\s+me(?:\s+(?:now|please|with\s+this))?\s*(?:[.!?]|$)|\bi['’]?ve\s+(?:already\s+)?told\s+you\s+(?:everything|enough)\b|\benough\s+questions\b)/iu;
+/** An explicit request for practical help now ("що мені робити?", "допоможи", "я вже все розповів"). */
+export function wantsPracticalHelpNow(text: string): boolean {
+  const input = text.replace(describedUncertainty, ' ');
+  // A personal plan still needs the interview; this is only a request for immediate practical help.
+  if (/(?:(?<![\p{L}])план(?:у|ом|и)?(?![\p{L}])|\bplan\b|стратегі|\bstrategy\b)/iu.test(input)) return false;
+  return explicitHelp.test(input);
+}
+/** A yes to PRACTICAL_HELP_OFFER; "давай ще трохи розберемося" continues the interview. */
+export function acceptsPracticalHelpOffer(text: string): boolean {
+  const input = text.trim();
+  if (/(?:розбер|ще\s+трохи|спершу|спочатку|продовж|питай|запитуй|(?<![\p{L}])ні(?![\p{L}])|(?<![\p{L}])не\s+(?:треба|зараз|варто)|пізніше|потім|\bno\b|\bnot\s+yet\b|\bexplore\b|\bfirst\b|\bcontinue\b|\blater\b|\bmore\s+questions\b)/iu.test(input)) return false;
+  return /^(?:так|ага|угу|давай|давайте|звісно|звичайно|авжеж|ок|окей|добре|гаразд|хочу|можна|підкажи|підкажіть|yes|yeah|yep|sure|ok|okay|please|go\s+ahead)(?![\p{L}])/iu.test(input)
+    || /(?:перший\s+крок|маленький\s+крок|перший\s+маленький|first\s+step|small\s+step)/iu.test(input) || wantsPracticalHelpNow(input);
+}
+/**
+ * Interview questions asked in a row (this one included) and whether practical help was already
+ * offered, read from a pending question id such as `question:<turn>~q3:offered`. The opener counts as one.
+ */
+export function discoveryQuestionStreak(id: string | undefined): { asked: number; offered: boolean } {
+  if (!id) return { asked: 0, offered: false };
+  const count = /~q(\d+)/.exec(id);
+  return { asked: count ? Number(count[1]) : id.startsWith('discovery:') ? 0 : 1, offered: id.startsWith('offer:') || id.includes(':offered') };
+}
+/** Discovery-mode message that should get practical help now instead of the next interview question. */
+export function practicalHelpRequested(text: string, profile?: PersonalStrategyProfile): boolean {
+  if (wantsPracticalHelpNow(text)) return true;
+  const pending = profile ? normalizeStrategyDiscovery(profile).pendingQuestion : undefined;
+  return !!pending && pending.id.startsWith('offer:') && acceptsPracticalHelpOffer(text);
+}
 export const missingStrategyDiscoveryTopics = (state: StrategyDiscoveryState): StrategyDiscoveryTopic[] => [
   ...STRATEGY_DISCOVERY_TOPICS.filter(topic => state.topics[topic].status === 'unknown'),
   ...STRATEGY_DISCOVERY_TOPICS.filter(topic => required.has(topic) && state.topics[topic].status === 'deferred'),
 ];
 const missingTopic = (state: StrategyDiscoveryState): StrategyDiscoveryTopic | undefined => missingStrategyDiscoveryTopics(state)[0];
-export function discoveryQuestionForState(state: StrategyDiscoveryState, topic: StrategyDiscoveryTopic, lang: 'uk' | 'en' = 'uk'): string {
+export function discoveryQuestionForState(state: StrategyDiscoveryState, topic: StrategyDiscoveryTopic, lang: 'uk' | 'en' = 'uk', address: DiscoveryAddress = 'vy'): string {
   if (lang === 'en') {
     const questions: Record<StrategyDiscoveryTopic, string> = {
       direction: 'What would you like to change in your life, and why does it matter to you?',
@@ -49,12 +118,15 @@ export function discoveryQuestionForState(state: StrategyDiscoveryState, topic: 
       ? 'We can leave this topic aside until you choose to return to it. Which concrete task would you like help with now?'
       : practical[topic] || questions[topic];
   }
-  if (state.topics[topic].status !== 'deferred') return questionText[topic];
+  const form = formIndex(address);
+  if (state.topics[topic].status !== 'deferred') return questionText[topic][form];
   return state.topics[topic].evidence.filter(entry => decline(entry.quote)).length > 1
-    ? 'Можемо відкласти цю тему й повернутися до неї лише за вашим бажанням. З якою конкретною справою допомогти зараз?'
-    : practicalQuestion[topic] || questionText[topic];
+    ? ['Можемо відкласти цю тему й повернутися до неї лише за вашим бажанням. З якою конкретною справою допомогти зараз?', 'Можемо відкласти цю тему й повернутися до неї лише за твоїм бажанням. З якою конкретною справою допомогти зараз?'][form]
+    : (practicalQuestion[topic] || questionText[topic])[form];
 }
-const nextQuestion = (state: StrategyDiscoveryState, topic: StrategyDiscoveryTopic) => discoveryQuestionForState(state, topic);
+const nextQuestion = (state: StrategyDiscoveryState, topic: StrategyDiscoveryTopic, address: DiscoveryAddress = 'vy') => discoveryQuestionForState(state, topic, 'uk', address);
+/** Whether a clause speaks about a topic at all; used to pick a short key phrase from the person's words. */
+export const mentionsDiscoveryTopic = (topic: StrategyDiscoveryTopic, text: string): boolean => anchors[topic].test(text);
 /** Topic-specific anchors prevent a list of wishes from becoming six invented answers. */
 const anchors: Record<StrategyDiscoveryTopic, RegExp> = {
   direction: /(?:хочу|прагну|ціл[ьиі]|мет[аиу]|мрі[яю]|змінити|want|goal|aim|wish|change)/iu,
@@ -168,11 +240,41 @@ export const nextStrategyDiscoveryTopic = (profile: PersonalStrategyProfile): St
   const state = normalizeStrategyDiscovery(profile);
   return missingTopic(state) ?? (state.selectedGoalIds.length ? undefined : 'direction');
 };
-export function continueStrategyDiscovery(profile: PersonalStrategyProfile, lang: 'uk' | 'en' = 'uk'): PersonalStrategyProfile {
+/** Ids of questions opened by the «Поглибити знайомство» button: `continue:<epoch ms>-<nonce>:<topic>`. */
+export const DISCOVERY_MODE_QUESTION_ID = /^continue:(\d{13})-[a-z0-9]+:/;
+/**
+ * The visible text of a pending question in the person's current form of address. App-written
+ * questions (the opener `discovery:` and the «Поглибити знайомство» question `continue:`) are
+ * re-rendered from the state, so a "ти" chat never shows a stored "ви" question; model-written
+ * clarifications, and English `continue:` questions, are shown as stored.
+ */
+export function addressedDiscoveryQuestion(state: StrategyDiscoveryState, question: { id: string; topic: StrategyDiscoveryTopic; text: string }, lang: 'uk' | 'en' = 'uk', address: DiscoveryAddress = 'vy'): string {
+  if (question.id.startsWith('discovery:') || lang === 'uk' && question.id.startsWith('continue:')) return discoveryQuestionForState(state, question.topic, lang, address);
+  return question.text;
+}
+/**
+ * The «Поглибити знайомство» button: an unfinished interview resumes at its first missing topic;
+ * a finished one reopens barriers. The fresh id lets the chat enter the explicit discovery mode.
+ * recentUserTexts (oldest first) are the person's latest chat messages; they decide the form of
+ * address before the stored discovery answers do.
+ */
+export function continueStrategyDiscovery(profile: PersonalStrategyProfile, lang: 'uk' | 'en' = 'uk', now = Date.now(), recentUserTexts: readonly string[] = []): PersonalStrategyProfile {
   const discovery = normalizeStrategyDiscovery(profile);
-  return { ...profile, onboardingStatus: 'in_progress', phase: 'exploring', discovery: { ...discovery, phase: 'exploring',
-    topics: { ...discovery.topics, barriers: { ...discovery.topics.barriers, status: 'unknown' } }, pendingSummary: undefined,
-    pendingQuestion: { id: `continue:${discovery.processedTurnIds.length}:${discovery.topics.barriers.evidence.length}`, topic: 'barriers', text: lang === 'uk' ? questionText.barriers : 'What most often gets in the way of starting or continuing something important right now?' } } };
+  const address = detectDiscoveryAddress([...discoveryEvidenceTexts(discovery), ...recentUserTexts.filter(text => typeof text === 'string')]);
+  const missing = discovery.phase === 'ready' ? undefined : missingTopic(discovery);
+  const topic: StrategyDiscoveryTopic = missing || 'barriers';
+  const topics = missing ? discovery.topics : { ...discovery.topics, barriers: { ...discovery.topics.barriers, status: 'unknown' as const } };
+  const english: Record<StrategyDiscoveryTopic, string> = {
+    direction: 'What would you like to change in your life, and why does it matter to you?',
+    motivation: 'What would this change mean for you personally, and why does that matter?',
+    circumstances: 'What in your current life situation affects this goal?',
+    barriers: 'What most often gets in the way of starting or continuing something important right now?',
+    capacity: 'How much time and energy can you realistically make available now, allowing for rest and other responsibilities?',
+    attempts: 'What have you tried for this change, and what helped, including if you have not tried anything yet?',
+  };
+  const text = lang === 'uk' ? (missing ? discoveryQuestionForState(discovery, topic, 'uk', address) : questionText.barriers[formIndex(address)]) : english[topic];
+  return { ...profile, onboardingStatus: 'in_progress', phase: 'exploring', discovery: { ...discovery, phase: 'exploring', topics, pendingSummary: undefined,
+    pendingQuestion: { id: `continue:${now}-${Math.random().toString(36).slice(2, 8)}:${topic}`, topic, text } } };
 }
 /** A user's correction is a new source; an earlier understanding summary cannot approve it. */
 export function updateDiscoveryEvidence(profile: PersonalStrategyProfile, topic: StrategyDiscoveryTopic, value: string): PersonalStrategyProfile {
@@ -224,12 +326,17 @@ export function applyDiscoveryTurn(profile: PersonalStrategyProfile, response: A
   }
   const selectedGoalIds = patch?.selectedGoalIds === undefined ? discovery.selectedGoalIds : uniqueIds(patch.selectedGoalIds).filter(id => profile.goals.some(goal => goal.id === id));
   discovery = { ...discovery, topics, selectedGoalIds, processedTurnIds: [...discovery.processedTurnIds, turnId].slice(-100000) };
+  // Question ids carry how many interview questions were asked in a row and whether help was offered.
+  const streak = discoveryQuestionStreak(previous.pendingQuestion?.id);
+  const marked = (id: string) => `${id}~q${Math.min(streak.asked + 1, 99)}${streak.offered ? ':offered' : ''}`;
+  const address = detectDiscoveryAddress([...discoveryEvidenceTexts(previous), userText]);
   if (patch?.question && isTopic(patch.question.topic) && clean(patch.question.text)) {
+    const offer = isPracticalHelpOffer(patch.question.text);
     // A fresh clarification reopens that topic even if an older answer was sufficient before.
-    if (topics[patch.question.topic].status === 'answered') topics[patch.question.topic] = { ...topics[patch.question.topic], status: 'unknown' };
+    if (!offer && topics[patch.question.topic].status === 'answered') topics[patch.question.topic] = { ...topics[patch.question.topic], status: 'unknown' };
     discovery.pendingSummary = undefined;
-    discovery.pendingQuestion = { id: `question:${turnId}`, turnId, topic: patch.question.topic,
-      text: topics[patch.question.topic].status === 'deferred' ? nextQuestion(discovery, patch.question.topic) : clean(patch.question.text) };
+    discovery.pendingQuestion = { id: marked(offer ? `offer:${turnId}` : `question:${turnId}`), turnId, topic: patch.question.topic,
+      text: !offer && topics[patch.question.topic].status === 'deferred' ? nextQuestion(discovery, patch.question.topic, address) : clean(patch.question.text) };
     discovery.phase = 'exploring';
   } else if (patch?.summary && covered(discovery) && selectedGoalIds.length) {
     discovery.pendingQuestion = undefined;
@@ -238,7 +345,7 @@ export function applyDiscoveryTurn(profile: PersonalStrategyProfile, response: A
   } else if (patch && discovery.phase !== 'ready') {
     discovery.pendingSummary = undefined;
     const missing = missingTopic(discovery);
-    discovery.pendingQuestion = missing ? { id: `question:${turnId}:${missing}`, turnId, topic: missing, text: nextQuestion(discovery, missing) } : undefined;
+    discovery.pendingQuestion = missing ? { id: marked(`question:${turnId}:${missing}`), turnId, topic: missing, text: nextQuestion(discovery, missing, address) } : undefined;
     discovery.phase = 'exploring';
   }
   // Recompute after every turn: previously completed profiles are not a permanent bypass.

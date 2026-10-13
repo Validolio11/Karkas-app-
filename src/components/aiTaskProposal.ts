@@ -5,6 +5,15 @@ export interface AIApplyResult {
   created: number; updated: number; deleted: number; tabs: number; rejected: number;
 }
 
+/** What actually happened to a proposal after Apply: every change, only some, or none. */
+export type AIApplyOutcome = 'applied' | 'partial' | 'none';
+
+export function aiApplyOutcome(result: AIApplyResult): AIApplyOutcome {
+  const applied = result.created + result.updated + result.deleted + result.tabs;
+  if (!applied) return 'none';
+  return result.rejected ? 'partial' : 'applied';
+}
+
 export function describeAIApplyResult(result: AIApplyResult, lang: 'uk' | 'en'): string {
   const parts: string[] = [];
   if (result.created) parts.push(lang === 'uk' ? `створено: ${result.created}` : `created: ${result.created}`);
@@ -21,7 +30,7 @@ export function describeAIApplyResult(result: AIApplyResult, lang: 'uk' | 'en'):
     : applied;
 }
 
-/** Every AI apply entry point uses this mapper so timer instructions survive review. */
+/** Every AI apply entry point uses this mapper so timer, schedule and date instructions survive review. */
 export function prepareAITask(task: NonNullable<AIResponse['tasks']>[number], makeId: (index: number) => string) {
   const stepList = task.stepList?.map((step, index) => ({
     id: makeId(index),
@@ -36,6 +45,9 @@ export function prepareAITask(task: NonNullable<AIResponse['tasks']>[number], ma
     countdownDurationSeconds: task.countdownDurationSeconds,
     timerAction: task.timerAction,
     schedule: task.schedule,
+    // Date-only fields of the new task; a null (clear) means nothing for a task that does not exist yet.
+    plannedDate: typeof task.plannedDate === 'string' ? task.plannedDate : undefined,
+    deadlineDate: typeof task.deadlineDate === 'string' ? task.deadlineDate : undefined,
   };
 }
 

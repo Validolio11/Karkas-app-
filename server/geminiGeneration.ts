@@ -1,23 +1,44 @@
+import { createHash } from 'node:crypto';
 import { GoogleGenAI } from '@google/genai';
+import { AI_CHAT_FALLBACK_MODELS } from '../src/utils/aiChatTiming';
 
-export const createGeminiClient = (apiKey: string) => new GoogleGenAI({
-  apiKey, httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
-});
+// A short one-way label per API key, so the client can keep per-key model usage
+// without ever holding the key (desktop keeps it in the main process).
+const keyFingerprints = new WeakMap<object, string>();
+export const createGeminiClient = (apiKey: string) => {
+  const client = new GoogleGenAI({ apiKey, httpOptions: { headers: { 'User-Agent': 'aistudio-build' } } });
+  keyFingerprints.set(client, createHash('sha256').update(`karkas-usage-ledger:${apiKey}`).digest('hex').slice(0, 16));
+  return client;
+};
 
 export type AIRequestCode = 'MISSING_API_KEY' | 'INVALID_API_KEY' | 'ACCESS_DENIED'
-  | 'QUOTA_EXCEEDED' | 'NETWORK_ERROR' | 'TIMEOUT' | 'MODEL_UNAVAILABLE'
+  | 'QUOTA_EXCEEDED' | 'NETWORK_ERROR' | 'TIMEOUT' | 'MODEL_UNAVAILABLE' | 'MODEL_TIER_UNAVAILABLE'
   | 'PROVIDER_ERROR' | 'PROVIDER_UNAVAILABLE' | 'INTERNAL_ERROR' | 'INVALID_AI_RESPONSE' | 'INVALID_AI_REQUEST';
 
 const statusByCode: Record<AIRequestCode, number> = {
   MISSING_API_KEY: 503, INVALID_API_KEY: 401, ACCESS_DENIED: 403,
   QUOTA_EXCEEDED: 429, NETWORK_ERROR: 503, TIMEOUT: 504,
-  MODEL_UNAVAILABLE: 503, PROVIDER_ERROR: 502, PROVIDER_UNAVAILABLE: 503, INTERNAL_ERROR: 500,
+  MODEL_UNAVAILABLE: 503, MODEL_TIER_UNAVAILABLE: 503, PROVIDER_ERROR: 502, PROVIDER_UNAVAILABLE: 503, INTERNAL_ERROR: 500,
   INVALID_AI_RESPONSE: 502, INVALID_AI_REQUEST: 502,
 };
 
+/** A provider quota that a 429 reported as exceeded (google.rpc.QuotaFailure). */
+export interface AIQuotaViolation { unit: 'requests' | 'input_tokens' | 'other'; window: 'day' | 'minute' | 'other'; limit?: number }
+export interface AIQuotaInfo { violations: AIQuotaViolation[]; retryAfterMs?: number }
+
+export interface AIAttemptRecord {
+  model: string; code: AIRequestCode; elapsedMs: number;
+  /** Google returned a model response (HTTP 200 / a streamed chunk) that the app then rejected. */
+  responded?: true;
+  /** QUOTA_EXCEEDED only: what Google said about the exhausted quota. */
+  quota?: AIQuotaInfo;
+}
+
 export interface AIRequestDiagnostics {
-  attempts: { model: string; code: AIRequestCode; elapsedMs: number }[];
+  attempts: AIAttemptRecord[];
   elapsedMs: number;
+  /** One-way API key label for the client's usage ledger; never the key. */
+  keyId?: string;
 }
 
 export class AIRequestError extends Error {
@@ -105,7 +126,8 @@ export function aiRequestFailure(error: AIRequestError, isUk: boolean) {
     QUOTA_EXCEEDED: ['Google обмежив запити до AI. Перевірте квоту в Google AI Studio або повторіть пізніше.', 'Google limited AI requests. Check the quota in Google AI Studio or retry later.'],
     NETWORK_ERROR: ['Не вдалося підключитися до Google. Перевірте з’єднання й повторіть запит.', 'Could not connect to Google. Check your connection and retry.'],
     TIMEOUT: ['Google не відповів вчасно. Повторіть запит або виберіть іншу модель.', 'Google did not respond in time. Retry or select another model.'],
-    MODEL_UNAVAILABLE: ['Вибрана модель і резервні моделі недоступні. Оновіть список моделей у налаштуваннях AI й повторіть запит.', 'The selected and fallback models are unavailable. Refresh the model list in AI settings and retry.'],
+    MODEL_TIER_UNAVAILABLE: ['Вибрана модель недоступна на безкоштовному тарифі Google (ліміт 0). Оберіть іншу модель, наприклад Flash-Lite, і повторіть запит.', 'The selected model is not available on the Google free tier (limit 0). Select another model, such as Flash-Lite, and retry.'],
+    MODEL_UNAVAILABLE: ['Вибрана модель недоступна для цього ключа, а резервні моделі не відповіли. Виберіть іншу модель у налаштуваннях AI й повторіть запит.', 'The selected model is unavailable for this key and the fallback models did not answer. Select another model in AI settings and retry.'],
     PROVIDER_ERROR: ['Google не зміг виконати запит до AI. Повторіть запит пізніше або виберіть іншу модель.', 'Google could not complete the AI request. Retry later or select another model.'],
     PROVIDER_UNAVAILABLE: ['Google тимчасово не може обробити запит до AI. Повторіть пізніше або виберіть іншу модель.', 'Google is temporarily unable to process the AI request. Retry later or select another model.'],
     INTERNAL_ERROR: ['Додаток не зміг обробити запит до AI. Повторіть запит; якщо помилка повторюється, оновіть додаток.', 'The app could not process the AI request. Retry; if this continues, update the app.'],
@@ -167,6 +189,16 @@ export interface AIGenerationMetrics {
   timeToFirstTokenMs?: number;
   /** Function-calling requests only: number of function calls the model returned. */
   toolCalls?: number;
+  /**
+   * Another model answered: why the explicitly selected model did not, from this
+   * request or its remembered cooldown. MODEL_UNAVAILABLE / MODEL_TIER_UNAVAILABLE
+   * let the client switch.
+   */
+  selectedModelFailure?: AIRequestCode;
+  /** Failed attempts before the answering one, so the client can count fallbacks too. */
+  failedAttempts?: AIAttemptRecord[];
+  /** One-way API key label for the client's usage ledger; never the key. */
+  keyId?: string;
 }
 
 // Free-tier quotas are per project and per model. A model that just answered 429
@@ -174,8 +206,13 @@ export interface AIGenerationMetrics {
 // later requests do not wait on a request that is known to fail.
 const QUOTA_COOLDOWN_MS = 60_000;
 const MAX_QUOTA_COOLDOWN_MS = 15 * 60_000;
-const UNAVAILABLE_COOLDOWN_MS = 10 * 60_000;
-let modelCooldowns = new WeakMap<object, Map<string, number>>();
+// A 404 for a listed model is a project-level access decision that rarely changes
+// within a session; a success clears it, and a demoted model is still tried after
+// the healthy ones while attempts remain.
+const UNAVAILABLE_COOLDOWN_MS = 6 * 60 * 60_000;
+// An overloaded (503) or silent model is likely to stay so for a short while.
+const TRANSIENT_COOLDOWN_MS = 60_000;
+let modelCooldowns = new WeakMap<object, Map<string, { until: number; code: AIRequestCode }>>();
 // Model + exact thinking setting combinations that were rejected keep the provider
 // default; other levels/budgets for the same model are still tried.
 const thinkingRejectedModels = new Set<string>();
@@ -183,11 +220,17 @@ function thinkingRejectionKey(model: string, thinkingConfig: Record<string, unkn
   return `${model}|${String(thinkingConfig.thinkingLevel ?? `budget:${thinkingConfig.thinkingBudget}`)}`;
 }
 
-function providerRetryDelayMs(error: any): number | undefined {
+/** The google.rpc error object: structured, or JSON in the SDK ApiError message. */
+function providerError(error: any): any {
   let details: any = error?.error;
   if (!details && typeof error?.message === 'string') {
     try { details = JSON.parse(error.message)?.error; } catch { /* not JSON */ }
   }
+  return details;
+}
+
+function providerRetryDelayMs(error: any): number | undefined {
+  const details = providerError(error);
   const entries = Array.isArray(details?.details) ? details.details : [];
   for (const entry of entries) {
     const match = typeof entry?.retryDelay === 'string' ? /^(\d+(?:\.\d+)?)s$/.exec(entry.retryDelay) : null;
@@ -196,11 +239,35 @@ function providerRetryDelayMs(error: any): number | undefined {
   return undefined;
 }
 
-function providerMessage(error: any): string {
-  let details: any = error?.error;
-  if (!details && typeof error?.message === 'string') {
-    try { details = JSON.parse(error.message)?.error; } catch { /* not JSON */ }
+/**
+ * Quota facts from a 429: QuotaFailure violations (e.g. quotaId
+ * "GenerateRequestsPerDayPerProjectPerModel-FreeTier", quotaValue "250") and
+ * RetryInfo.retryDelay. Only categories and numbers leave the server.
+ */
+export function quotaInfoFromError(error: unknown): AIQuotaInfo | undefined {
+  const details = providerError(error);
+  const entries = Array.isArray(details?.details) ? details.details : [];
+  const violations: AIQuotaViolation[] = [];
+  for (const entry of entries) {
+    if (!Array.isArray(entry?.violations) || !/QuotaFailure/.test(String(entry?.['@type'] ?? 'QuotaFailure'))) continue;
+    for (const violation of entry.violations.slice(0, 4)) {
+      const id = `${violation?.quotaId ?? ''} ${violation?.quotaMetric ?? ''}`;
+      // "0" is meaningful: the model has no quota on this project's tier (e.g. Pro on free tier).
+      const value = String(violation?.quotaValue ?? '').trim();
+      violations.push({
+        unit: /input_?token|InputTokens/i.test(id) ? 'input_tokens' : /requests?/i.test(id) ? 'requests' : 'other',
+        window: /PerDay/i.test(id) ? 'day' : /PerMinute/i.test(id) ? 'minute' : 'other',
+        ...(/^\d{1,12}$/.test(value) ? { limit: Number(value) } : {}),
+      });
+    }
   }
+  const retryAfterMs = providerRetryDelayMs(error);
+  if (!violations.length && retryAfterMs === undefined) return undefined;
+  return { violations: violations.slice(0, 4), ...(retryAfterMs !== undefined ? { retryAfterMs } : {}) };
+}
+
+function providerMessage(error: any): string {
+  const details = providerError(error);
   return String(details?.message ?? error?.message ?? '');
 }
 
@@ -236,6 +303,12 @@ interface FallbackOptions {
 }
 
 const diagnosticModelId = (model: string) => /^[a-z0-9._-]{1,100}$/i.test(model) ? model : 'custom-model';
+// When the selected model is unavailable, these outcomes of the fallbacks are less
+// actionable than "select another model"; credential and request errors are not.
+const SUPERSEDED_BY_SELECTED_UNAVAILABLE: AIRequestCode[] = ['QUOTA_EXCEEDED', 'TIMEOUT', 'PROVIDER_ERROR', 'PROVIDER_UNAVAILABLE', 'INVALID_AI_RESPONSE',
+  'MODEL_UNAVAILABLE', 'MODEL_TIER_UNAVAILABLE'];
+/** Failures that mean the model cannot serve this project at all (404, or a 0 quota on its tier). */
+const MODEL_ACCESS_FAILURES: AIRequestCode[] = ['MODEL_UNAVAILABLE', 'MODEL_TIER_UNAVAILABLE'];
 
 /**
  * Shared model queue, cooldown, thinking-retry, deadline and diagnostics logic
@@ -243,12 +316,13 @@ const diagnosticModelId = (model: string) => /^[a-z0-9._-]{1,100}$/i.test(model)
  */
 function createFallbackPlan({ ai, config, selectedModel, totalTimeoutMs, fallbackModels, maxAttempts, thinking }: FallbackOptions) {
   const selected = typeof selectedModel === 'string' ? selectedModel.trim().replace(/^models\//, '') : '';
-  const distinctModels = [...new Set([selected, ...(fallbackModels ?? ['gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-2.5-flash'])].filter(Boolean))];
+  const distinctModels = [...new Set([selected, ...(fallbackModels ?? AI_CHAT_FALLBACK_MODELS)].filter(Boolean))];
   const attemptLimit = typeof maxAttempts === 'number' && Number.isFinite(maxAttempts) && maxAttempts >= 1
     ? Math.floor(maxAttempts) : distinctModels.length;
   const cooldowns = cooldownsFor(ai);
   const nowMs = Date.now();
-  const cooling = (model: string) => (cooldowns.get(model) ?? 0) > nowMs;
+  const cooling = (model: string) => (cooldowns.get(model)?.until ?? 0) > nowMs;
+  const remember = (model: string, ms: number, code: AIRequestCode) => cooldowns.set(model, { until: Date.now() + ms, code });
   // Stable partition: healthy models keep their order, cooling models go last.
   const ordered = [...distinctModels.filter(model => !cooling(model)), ...distinctModels.filter(cooling)];
   const queue: PlannedAttempt[] = ordered.slice(0, attemptLimit).map(model => {
@@ -257,17 +331,35 @@ function createFallbackPlan({ ai, config, selectedModel, totalTimeoutMs, fallbac
   });
   // A cooling selected model is demoted, so "fallback" means "not the model the person preferred".
   const preferredModel = selected || distinctModels[0];
+  // Why the explicitly selected model cannot answer: its failure in this request,
+  // otherwise the reason it was demoted before the request started.
+  const selectedCooldownCode = selected && cooling(selected) ? cooldowns.get(selected)?.code : undefined;
+  let selectedFailureCode: AIRequestCode | undefined;
+  const selectedFailure = () => selectedFailureCode ?? selectedCooldownCode;
   // Deadline accounting must survive a wall-clock correction during the request.
   const startedAt = performance.now();
   const deadline = startedAt + totalTimeoutMs;
   const attempts: AIRequestDiagnostics['attempts'] = [];
+  const keyId = keyFingerprints.get(ai);
   let lastError = new AIRequestError('MODEL_UNAVAILABLE');
   const withDiagnostics = (failure: AIRequestError) => new AIRequestError(failure.code, {
     attempts: attempts.map(attempt => ({ ...attempt })),
     elapsedMs: Math.round(performance.now() - startedAt),
+    ...(keyId ? { keyId } : {}),
   });
+  /**
+   * The error that ends an exhausted or timed-out operation. A selected model that
+   * does not exist for this key, or has no quota on its tier, outranks later quota,
+   * overload or timeout failures of the fallbacks: choosing another model is what
+   * the person can act on.
+   */
+  const finalFailure = (failure: AIRequestError) => {
+    const selectedCode = selectedFailure();
+    return withDiagnostics(selectedCode && MODEL_ACCESS_FAILURES.includes(selectedCode) && SUPERSEDED_BY_SELECTED_UNAVAILABLE.includes(failure.code)
+      ? new AIRequestError(selectedCode) : failure);
+  };
   return {
-    queue, preferredModel, startedAt, deadline, attempts, withDiagnostics,
+    queue, preferredModel, startedAt, deadline, attempts, withDiagnostics, finalFailure,
     lastError: () => lastError,
     thinkingConfig: (entry: PlannedAttempt) => entry.applyThinking ? thinkingConfigForModel(entry.model, thinking) : undefined,
     succeeded(entry: PlannedAttempt) {
@@ -277,10 +369,14 @@ function createFallbackPlan({ ai, config, selectedModel, totalTimeoutMs, fallbac
     },
     metrics(entry: PlannedAttempt, thinkingConfig: Record<string, unknown> | undefined, usage: any, extra: Partial<AIGenerationMetrics> = {}): AIGenerationMetrics {
       const count = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+      const selectedModelFailure = selected && entry.model !== selected ? selectedFailure() : undefined;
       return {
         model: entry.model, attempts: attempts.length + 1,
         elapsedMs: Math.round(performance.now() - startedAt),
         thinking: thinkingConfig ? String(thinkingConfig.thinkingLevel ?? `budget:${thinkingConfig.thinkingBudget}`) : 'provider-default',
+        ...(selectedModelFailure ? { selectedModelFailure } : {}),
+        ...(attempts.length ? { failedAttempts: attempts.map(attempt => ({ ...attempt })) } : {}),
+        ...(keyId ? { keyId } : {}),
         ...extra,
         ...(count(usage?.promptTokenCount) !== undefined ? { promptTokens: count(usage.promptTokenCount) } : {}),
         ...(count(usage?.cachedContentTokenCount) !== undefined ? { cachedTokens: count(usage.cachedContentTokenCount) } : {}),
@@ -293,17 +389,26 @@ function createFallbackPlan({ ai, config, selectedModel, totalTimeoutMs, fallbac
      * undefined when the queue continues with the next (or a retried) attempt.
      */
     failed(index: number, entry: PlannedAttempt, thinkingConfig: Record<string, unknown> | undefined, error: unknown,
-      attemptStartedAt: number, attemptUsedWholeBudget: boolean): AIRequestError | undefined {
-      const failure = classifyAIRequestError(error);
+      attemptStartedAt: number, attemptUsedWholeBudget: boolean, responded = false): AIRequestError | undefined {
+      const classified = classifyAIRequestError(error);
       const { model } = entry;
-      // Only model IDs and error categories are returned. Provider error text,
-      // API keys and the person's message are never part of diagnostics.
-      attempts.push({ model: diagnosticModelId(model), code: failure.code, elapsedMs: Math.round(performance.now() - attemptStartedAt) });
+      // Only model IDs, error categories and quota numbers are returned. Provider
+      // error text, API keys and the person's message are never part of diagnostics.
+      const quota = classified.code === 'QUOTA_EXCEEDED' ? quotaInfoFromError(error) : undefined;
+      // A quota of 0 is not exhaustion: the model is not offered on this project's tier.
+      const failure = quota?.violations.some(violation => violation.limit === 0) ? new AIRequestError('MODEL_TIER_UNAVAILABLE') : classified;
+      attempts.push({
+        model: diagnosticModelId(model), code: failure.code, elapsedMs: Math.round(performance.now() - attemptStartedAt),
+        ...(responded ? { responded: true as const } : {}), ...(quota ? { quota } : {}),
+      });
+      if (model === selected) selectedFailureCode = failure.code;
       if (failure.code === 'QUOTA_EXCEEDED') {
-        const delay = Math.min(MAX_QUOTA_COOLDOWN_MS, Math.max(QUOTA_COOLDOWN_MS, providerRetryDelayMs(error) ?? 0));
-        cooldowns.set(model, Date.now() + delay);
-      } else if (failure.code === 'MODEL_UNAVAILABLE') {
-        cooldowns.set(model, Date.now() + UNAVAILABLE_COOLDOWN_MS);
+        remember(model, Math.min(MAX_QUOTA_COOLDOWN_MS, Math.max(QUOTA_COOLDOWN_MS, providerRetryDelayMs(error) ?? 0)), failure.code);
+      } else if (MODEL_ACCESS_FAILURES.includes(failure.code)) {
+        remember(model, UNAVAILABLE_COOLDOWN_MS, failure.code);
+      } else if (failure.code === 'PROVIDER_UNAVAILABLE' || failure.code === 'TIMEOUT' && !attemptUsedWholeBudget) {
+        // A timeout cut short by the operation deadline says nothing about the model.
+        remember(model, TRANSIENT_COOLDOWN_MS, failure.code);
       }
       // A model that rejects our thinking setting gets one immediate retry with
       // its provider default instead of failing the whole request.
@@ -318,8 +423,8 @@ function createFallbackPlan({ ai, config, selectedModel, totalTimeoutMs, fallbac
       // This attempt was allotted the entire remaining operation budget. A transport
       // timeout can fire fractionally before the clock reaches the deadline; do not
       // spend that rounding remainder on another fallback request.
-      if (failure.code === 'TIMEOUT' && attemptUsedWholeBudget) return withDiagnostics(failure);
-      if (failure.code !== 'MODEL_UNAVAILABLE' || lastError.code === 'MODEL_UNAVAILABLE') lastError = failure;
+      if (failure.code === 'TIMEOUT' && attemptUsedWholeBudget) return finalFailure(failure);
+      if (!MODEL_ACCESS_FAILURES.includes(failure.code) || MODEL_ACCESS_FAILURES.includes(lastError.code)) lastError = failure;
       // Invalid structured output may recover on another model; credentials and request errors cannot.
       if (['INVALID_API_KEY', 'ACCESS_DENIED', 'INVALID_AI_REQUEST', 'INTERNAL_ERROR'].includes(failure.code) ||
           failure.code === 'PROVIDER_ERROR' && Number((error as any)?.status) < 500) return withDiagnostics(failure);
@@ -381,11 +486,12 @@ export async function generateGeminiWithFallback({
     const { model } = entry;
     signal?.throwIfAborted();
     const remaining = plan.deadline - performance.now();
-    if (remaining <= 0) throw plan.withDiagnostics(new AIRequestError('TIMEOUT'));
+    if (remaining <= 0) throw plan.finalFailure(new AIRequestError('TIMEOUT'));
     const attemptMs = Math.min(timeoutMs, remaining);
     const attemptStartedAt = performance.now();
     const thinkingConfig = plan.thinkingConfig(entry);
     const guard = createAttemptGuard(signal, attemptMs);
+    let responded = false;
     try {
       const response = await Promise.race([
         ai.models.generateContent({
@@ -397,6 +503,7 @@ export async function generateGeminiWithFallback({
         }),
         guard.interrupted,
       ]);
+      responded = true;
       const output = responseOutput(response);
       const responseText = output.text;
       if (!responseText.trim() && !output.functionCalls.length && !allowEmptyText) throw new AIRequestError('INVALID_AI_RESPONSE');
@@ -411,13 +518,13 @@ export async function generateGeminiWithFallback({
     } catch (error) {
       // Cancelling the parent request must never start another provider attempt.
       if (signal?.aborted) throw signal.reason ?? error;
-      const fatal = plan.failed(index, entry, thinkingConfig, error, attemptStartedAt, attemptMs === remaining);
+      const fatal = plan.failed(index, entry, thinkingConfig, error, attemptStartedAt, attemptMs === remaining, responded);
       if (fatal) throw fatal;
     } finally {
       guard.dispose();
     }
   }
-  throw plan.withDiagnostics(plan.lastError());
+  throw plan.finalFailure(plan.lastError());
 }
 
 /** A stream failed after text was already delivered; no other model was tried. */
@@ -472,7 +579,7 @@ export async function streamGeminiWithFallback<T = unknown>({
     const { model } = entry;
     signal?.throwIfAborted();
     const remaining = plan.deadline - performance.now();
-    if (remaining <= 0) throw plan.withDiagnostics(new AIRequestError('TIMEOUT'));
+    if (remaining <= 0) throw plan.finalFailure(new AIRequestError('TIMEOUT'));
     const attemptMs = Math.min(timeoutMs, remaining);
     const attemptStartedAt = performance.now();
     const thinkingConfig = plan.thinkingConfig(entry);
@@ -481,6 +588,7 @@ export async function streamGeminiWithFallback<T = unknown>({
     const functionCalls: AIFunctionCall[] = [];
     let timeToFirstTokenMs: number | undefined;
     let usage: any;
+    let responded = false;
     let iterator: AsyncIterator<any> | undefined;
     try {
       const stream = await Promise.race([
@@ -499,6 +607,7 @@ export async function streamGeminiWithFallback<T = unknown>({
       while (true) {
         const step = await Promise.race([iterator.next(), guard.interrupted]);
         if (step.done) break;
+        responded = true;
         const chunk = step.value;
         if (chunk?.usageMetadata) usage = chunk.usageMetadata;
         const output = responseOutput(chunk);
@@ -532,14 +641,14 @@ export async function streamGeminiWithFallback<T = unknown>({
       if (text) {
         // Text already reached the person: another model would splice two answers.
         const failure = classifyAIRequestError(error);
-        plan.attempts.push({ model: diagnosticModelId(model), code: failure.code, elapsedMs: Math.round(performance.now() - attemptStartedAt) });
+        plan.attempts.push({ model: diagnosticModelId(model), code: failure.code, elapsedMs: Math.round(performance.now() - attemptStartedAt), responded: true });
         throw new AIStreamInterruptedError(failure.code, plan.withDiagnostics(failure).diagnostics, text);
       }
-      const fatal = plan.failed(index, entry, thinkingConfig, error, attemptStartedAt, attemptMs === remaining);
+      const fatal = plan.failed(index, entry, thinkingConfig, error, attemptStartedAt, attemptMs === remaining, responded);
       if (fatal) throw fatal;
     } finally {
       guard.dispose();
     }
   }
-  throw plan.withDiagnostics(plan.lastError());
+  throw plan.finalFailure(plan.lastError());
 }

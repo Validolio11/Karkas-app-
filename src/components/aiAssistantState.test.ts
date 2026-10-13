@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { AIRequestError, aiRequestErrorMessage, appendChatRequest, readAIAssistantDraft, readAIResponse, responseRequestError, restoredAIRequestNotice, saveAIAssistantDraft, selectAIModel } from './aiAssistantState';
+import { AIRequestError, aiRequestErrorMessage, appendChatRequest, readAIAssistantDraft, readAIResponse, responseRequestError, restoredAIRequestNotice, saveAIAssistantDraft, selectAIModel, adoptedAIModel, visibleChatModels } from './aiAssistantState';
 import { accountStorageKey } from '../utils/accountStorage';
 
 function storage() {
@@ -138,10 +138,81 @@ test('corrupt draft data and unavailable storage do not break opening the assist
 });
 
 test('model selection preserves an explicit supported choice and falls back only when unavailable', () => {
-  const models = ['gemini-3.1-flash-lite', 'gemini-2.5-flash'];
-  assert.equal(selectAIModel(models, 'gemini-2.5-flash'), 'gemini-2.5-flash');
-  assert.equal(selectAIModel(models, 'retired-model'), models[0]);
+  const models = ['gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-2.5-flash'];
+  assert.equal(selectAIModel(models, 'gemini-3.1-flash-lite'), 'gemini-3.1-flash-lite');
+  assert.equal(selectAIModel(models, 'retired-model'), 'gemini-3.1-flash-lite');
+  // A stored legacy choice is no longer offered, so it is replaced.
+  assert.equal(selectAIModel(models, 'gemini-2.5-flash'), 'gemini-3.1-flash-lite');
+  // A model this key returned 404 for (or that has no quota on its tier) is not kept either.
+  assert.equal(selectAIModel(models, 'gemini-3.1-flash-lite', ['gemini-3.1-flash-lite']), 'gemini-flash-latest');
   assert.equal(selectAIModel([], 'retired-model'), '');
+});
+
+// models.list of a fresh key (Oct 2026); its project gets 404 for gemini-2.5-*.
+const FIELD_MODELS = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-flash-latest', 'gemini-flash-lite-latest', 'gemini-pro-latest',
+  'gemini-2.5-flash-lite', 'gemini-3-flash-preview', 'gemini-3.1-pro-preview', 'gemini-3.1-pro-preview-customtools', 'gemini-3.1-flash-lite-preview',
+  'gemini-3.1-flash-lite', 'gemini-nano-banana-2.1', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-omni-flash-preview',
+  'gemini-omni-1.1-flash', 'gemini-3.6-flash', 'gemini-3.7-flash', 'gemini-3.8-flash'];
+
+test('the default model follows the preference order, not the provider list order', () => {
+  // Flash-Lite first: ~500 free requests per day against ~20 for Flash.
+  assert.equal(selectAIModel(FIELD_MODELS, ''), 'gemini-3.5-flash-lite');
+  // A stored choice that is still offered wins (Flash stays the higher-quality option); a pruned one does not.
+  assert.equal(selectAIModel(FIELD_MODELS, 'gemini-3.8-flash'), 'gemini-3.8-flash');
+  assert.equal(selectAIModel(FIELD_MODELS, 'gemini-pro-latest'), 'gemini-pro-latest');
+  for (const stale of ['gemini-2.5-pro', 'gemini-3-flash-preview', 'gemini-3.7-flash', 'gemini-omni-1.1-flash', 'gemini-3.1-flash-lite']) {
+    assert.equal(selectAIModel(FIELD_MODELS, stale), 'gemini-3.5-flash-lite', stale);
+  }
+  // A newest model that returned 404 hands its family to the next release.
+  assert.equal(selectAIModel(FIELD_MODELS, 'gemini-3.5-flash-lite', ['gemini-3.5-flash-lite']), 'gemini-3.1-flash-lite');
+  // Pro with no free-tier quota is hidden once learned, and the selection moves on.
+  assert.equal(selectAIModel(FIELD_MODELS, 'gemini-3.1-pro-preview', ['gemini-3.1-pro-preview']), 'gemini-3.5-flash-lite');
+  assert.equal(selectAIModel(FIELD_MODELS, 'gemini-3.1-pro-preview'), 'gemini-3.1-pro-preview');
+  assert.equal(selectAIModel(['gemini-2.5-flash', 'gemini-3.8-flash', 'gemini-flash-latest'], ''), 'gemini-3.8-flash');
+  assert.equal(selectAIModel(['gemini-2.5-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'], ''), 'gemini-3.1-flash-lite');
+  // Only legacy models listed: the unpruned list still yields a sensible default.
+  assert.equal(selectAIModel(['gemini-2.5-flash-lite', 'gemini-2.5-flash'], ''), 'gemini-2.5-flash-lite');
+  // Unknown names never leave the selection empty.
+  assert.equal(selectAIModel(['gemini-9-ultra', 'gemini-pro-latest'], 'gone'), 'gemini-9-ultra');
+});
+
+test('the selector offers the newest release per family plus aliases, never an empty list', () => {
+  assert.deepEqual(visibleChatModels(FIELD_MODELS), ['gemini-flash-latest', 'gemini-flash-lite-latest', 'gemini-pro-latest',
+    'gemini-3.1-pro-preview', 'gemini-3.5-flash-lite', 'gemini-3.8-flash']);
+  // Specialised and legacy variants are hidden even without a newer twin.
+  assert.deepEqual(visibleChatModels(['gemini-2.0-flash-001', 'gemini-1.5-pro', 'gemini-3.1-flash-customtools', 'gemini-3-pro-image-preview',
+    'gemini-2.5-flash-preview-tts', 'gemini-3.1-flash-live-preview', 'gemini-2.5-flash-native-audio-dialog', 'gemini-embedding-001',
+    'nano-banana-pro-preview', 'gemini-exp-1206', 'gemini-omni-1.1-flash', 'gemini-3.1-pro-preview']), ['gemini-3.1-pro-preview']);
+  // Newer preview beats older stable; stable beats a preview of the same version.
+  assert.deepEqual(visibleChatModels(['gemini-3.8-flash', 'gemini-3.9-flash-preview']), ['gemini-3.9-flash-preview']);
+  assert.deepEqual(visibleChatModels(['gemini-3.8-flash-preview', 'gemini-3.8-flash']), ['gemini-3.8-flash']);
+  assert.deepEqual(visibleChatModels(['gemini-3.1-flash-lite', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite-preview']), ['gemini-3.5-flash-lite']);
+  // A pinned -001 hides behind its offered base.
+  assert.deepEqual(visibleChatModels(['gemini-3.1-flash-lite-preview', 'gemini-3-flash', 'gemini-3-flash-001']), ['gemini-3.1-flash-lite-preview', 'gemini-3-flash']);
+  // 404 models are hidden before the newest release is chosen.
+  assert.deepEqual(visibleChatModels(FIELD_MODELS, ['gemini-3.8-flash', 'gemini-pro-latest']),
+    ['gemini-flash-latest', 'gemini-flash-lite-latest', 'gemini-3.1-pro-preview', 'gemini-3.5-flash-lite', 'gemini-3.7-flash']);
+  const onlyLegacy = ['gemini-2.5-flash', 'gemini-2.5-flash-image'];
+  assert.deepEqual(visibleChatModels(onlyLegacy), onlyLegacy);
+  assert.deepEqual(visibleChatModels(['gemini-3.8-flash'], ['gemini-3.8-flash']), ['gemini-3.8-flash']);
+});
+
+test('only a selected model reported unavailable is replaced by the listed model that answered', () => {
+  const models = ['gemini-2.5-flash', 'gemini-3-flash-preview'];
+  const reply = (selectedModelFailure?: string, usedModel = 'gemini-3-flash-preview', fallbackUsed = true) =>
+    ({ usedModel, fallbackUsed, aiMetrics: selectedModelFailure ? { selectedModelFailure } : {} });
+  assert.equal(adoptedAIModel(reply('MODEL_UNAVAILABLE'), 'gemini-2.5-flash', models), 'gemini-3-flash-preview');
+  // A 0 quota on the project's tier (Pro on the free tier) is just as final.
+  assert.equal(adoptedAIModel(reply('MODEL_TIER_UNAVAILABLE'), 'gemini-2.5-flash', models), 'gemini-3-flash-preview');
+  const tier = responseRequestError({ code: 'MODEL_TIER_UNAVAILABLE' }, 503);
+  assert.equal(tier.code, 'MODEL_TIER_UNAVAILABLE');
+  assert.match(aiRequestErrorMessage(tier, 'uk'), /безкоштовному тарифі.*оберіть іншу/);
+  for (const failure of ['QUOTA_EXCEEDED', 'TIMEOUT', 'PROVIDER_UNAVAILABLE', 'INVALID_AI_RESPONSE', undefined]) {
+    assert.equal(adoptedAIModel(reply(failure), 'gemini-2.5-flash', models), null, String(failure));
+  }
+  assert.equal(adoptedAIModel(reply('MODEL_UNAVAILABLE', 'gemini-flash-latest'), 'gemini-2.5-flash', models), null);
+  assert.equal(adoptedAIModel(reply('MODEL_UNAVAILABLE', 'gemini-3-flash-preview', false), 'gemini-2.5-flash', models), null);
+  assert.equal(adoptedAIModel({ usedModel: 'gemini-3-flash-preview', fallbackUsed: true }, 'gemini-2.5-flash', models), null);
 });
 
 test('retry and verification resume do not duplicate an unanswered user request', () => {

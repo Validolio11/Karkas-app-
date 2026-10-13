@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { taskMutationProperties, taskTimerProperties, taskActionInstructions, validateTaskMutations, validatedTimerFields, normalizeAIOptionalFields, taskScheduleProperties, validatedScheduleFields, schedulingClockContext, validatedDateFields } from './aiActions';
+import { taskMutationProperties, taskTimerProperties, taskActionInstructions, validateTaskMutations, validatedTimerFields, normalizeAIOptionalFields, taskScheduleProperties, validatedScheduleFields, schedulingClockContext, validatedDateFields, noteRestatesTitle, distinctTaskNote, withoutTitleEchoNotes } from './aiActions';
 import { applyAITaskUpdate } from '../src/utils/aiTaskUpdates';
 import type { PSTask } from '../src/types';
 
@@ -181,4 +181,29 @@ test('pending existing scheduled templates reject completion and start even with
   assert.deepEqual(validateTaskMutations({ taskUpdates: [{ id: plan.id, title: 'Practice typing', timerAction: 'pause' }] }, [plan]).taskUpdates,
     [{ id: plan.id, title: 'Practice typing', timerAction: 'pause' }]);
   assert.throws(() => validateTaskMutations({ taskUpdates: [{ id: parent.id, schedule: dailySchedule, done: true }] }, [parent]), /cannot be started or completed/);
+});
+
+test('a proposed note that only repeats the task title is dropped; a useful note stays', () => {
+  const title = 'Змонтувати шоурил моушн-дизайну 2026';
+  assert.equal(noteRestatesTitle(title, title), true);
+  assert.equal(noteRestatesTitle('  змонтувати ШОУРИЛ моушн дизайну 2026.  ', title), true);
+  assert.equal(noteRestatesTitle('Завдання: змонтувати шоурил моушн-дизайну 2026', title), true);
+  assert.equal(noteRestatesTitle('шоурил моушн-дизайну', title), true);
+  assert.equal(noteRestatesTitle('Взяти найкращі кадри з трьох останніх проєктів', title), false);
+  assert.equal(noteRestatesTitle('Змонтувати шоурил моушн-дизайну 2026 під музику з бібліотеки Artlist', title), false);
+  assert.equal(noteRestatesTitle('', title), false);
+  assert.equal(distinctTaskNote(title, title), '');
+  assert.equal(distinctTaskNote(' До 90 секунд, найсильніші роботи на початку ', title), 'До 90 секунд, найсильніші роботи на початку');
+  assert.equal(distinctTaskNote(undefined, title), '');
+});
+
+test('task updates lose a note identical to the current or new title; a note-only echo is dropped entirely', () => {
+  const tasks = [{ id: 'reel', title: 'Змонтувати шоурил' }, { id: 'site', title: 'Оновити сайт' }];
+  assert.deepEqual(withoutTitleEchoNotes([
+    { id: 'reel', note: 'Змонтувати шоурил' },
+    { id: 'site', note: 'Оновити сайт', priority: 1 },
+    { id: 'reel', title: 'Шоурил 2026', note: 'шоурил 2026' },
+  ], tasks), [{ id: 'site', priority: 1 }, { id: 'reel', title: 'Шоурил 2026' }]);
+  const useful = [{ id: 'reel', note: 'Музика вже обрана' }];
+  assert.deepEqual(withoutTitleEchoNotes(useful, tasks), useful);
 });

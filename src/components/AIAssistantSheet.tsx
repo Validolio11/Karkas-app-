@@ -525,7 +525,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     const field = promptInputRef.current;
     if (!field) return;
     field.style.height = 'auto';
-    field.style.height = `${Math.min(160, Math.max(52, field.scrollHeight))}px`;
+    field.style.height = `${Math.min(160, Math.max(48, field.scrollHeight))}px`;
     field.style.overflowY = field.scrollHeight > 160 ? 'auto' : 'hidden';
   }, [prompt, isOpen, awaitingApiKey]);
 
@@ -1185,6 +1185,9 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     });
   };
 
+  // A small mark stands in for the repeated «KARKAS AI» caption; screen readers still hear the author.
+  const assistantMark = <div className="karkas-ai-message-author"><AIIcon id={aiIconVariant} className="h-3.5 w-3.5" /><span className="sr-only">Karkas AI:</span></div>;
+
   return (
     <AnimatePresence>
       {isOpen && (
@@ -1263,14 +1266,15 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
             </div>
 
             {/* Content Container (Scrollable) */}
-            <div ref={contentRef} className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 sm:p-5 flex flex-col gap-4">
+            <div ref={contentRef} className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-6 sm:px-6 sm:py-8">
+              <div className="mx-auto flex w-full max-w-3xl flex-col gap-7">
               {/* All replies, analyses and proposals share one persisted conversation. */}
               {visibleConversation.previousCount > 0 && <button id="ai-reveal-previous-history-btn" type="button" onClick={() => setIntroductionId(null)} className="self-start min-h-11 border border-neutral-700 px-3 py-2 text-sm text-neutral-300 hover:border-white">{lang === 'uk' ? 'Попередня історія' : 'Previous history'} ({visibleConversation.previousCount})</button>}
               {visibleConversation.messages.length > 0 && <div role="log" aria-label={lang === 'uk' ? 'Розмова з AI' : 'AI conversation'} aria-live="polite" aria-relevant="additions text" className="karkas-ai-conversation">
                 {visibleConversation.messages.map((message, index) => {
                   const parsed = message.role === 'assistant' ? parseChatOptions(message.content) : { body: message.content, options: [] };
                   return <div key={message.id || `${message.role}-${index}`} data-ai-greeting={message.greeting || undefined} className={`karkas-ai-message ${message.role === 'user' ? 'is-user' : 'is-assistant'}`}>
-                    <div className="karkas-ai-message-author">{message.role === 'user' ? (lang === 'uk' ? 'ВИ' : 'YOU') : 'KARKAS AI'}</div>
+                    {message.role === 'user' ? <span className="sr-only">{lang === 'uk' ? 'Ви:' : 'You:'}</span> : assistantMark}
                     {message.role === 'assistant' ? <AIChatText text={parsed.body} /> : <div className="whitespace-pre-wrap">{parsed.body}</div>}
                     {!!parsed.options.length && <div className="flex flex-col gap-2 mt-3">{parsed.options.map(option => <button key={option.text} type="button" disabled={loading} onClick={() => handleGenerate(option.text, 'chat')} className="min-h-11 w-full text-left border border-neutral-700 px-3 py-2 hover:border-white disabled:opacity-40">{option.label}. {option.text}</button>)}</div>}
                     {message.response && <ChatResponseCards response={message.response} currentTasks={currentTasks} tabs={tabs} lang={lang} />}
@@ -1290,7 +1294,6 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
 
               {keyStatus && (
                 <div role="status" aria-live="polite" className="border border-neutral-800 bg-[#111116] p-3 text-[15px] leading-[1.6] text-neutral-200 whitespace-pre-wrap">
-                  <div className="mb-1 text-[9px] font-bold uppercase tracking-widest opacity-60">KARKAS AI</div>
                   {keyStatus}
                   {awaitingApiKey && <button id="ai-return-to-request-btn" type="button" onClick={returnToRequest} className="mt-3 min-h-11 block border border-neutral-700 px-3 py-2 hover:border-white">
                     {lang === 'uk' ? 'Повернутися до запиту' : 'Return to request'}
@@ -1311,7 +1314,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
 
               {interruptedReply && !loading && (
                 <div id="ai-interrupted-reply" className="karkas-ai-message is-assistant">
-                  <div className="karkas-ai-message-author">KARKAS AI</div>
+                  {assistantMark}
                   <AIChatText text={interruptedReply} />
                   <p className="mt-3 text-sm text-neutral-400">{lang === 'uk' ? 'Відповідь перервано. Показано лише отриману частину; її не збережено в історії.' : 'The reply was interrupted. Only the received part is shown; it was not saved to history.'}</p>
                 </div>
@@ -1319,32 +1322,32 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
 
               {loading && streamingReply && (
                 <div id="ai-streaming-reply" className="karkas-ai-message is-assistant" aria-busy="true">
-                  <div className="karkas-ai-message-author">KARKAS AI</div>
+                  {assistantMark}
                   <AIChatText text={streamingReply} streaming />
-                  <button id="ai-request-cancel-btn" type="button" onClick={cancelAIRequest} className="mt-3 min-h-11 border border-neutral-700 px-3 py-2 text-xs text-neutral-300 hover:border-white hover:text-white">
+                  <button id="ai-request-cancel-btn" type="button" onClick={cancelAIRequest} className="mt-3 min-h-11 sm:min-h-8 border border-neutral-800 px-3 py-1.5 text-xs text-neutral-400 hover:border-neutral-500 hover:text-white">
                     {lang === 'uk' ? 'Зупинити відповідь' : 'Stop response'}
                   </button>
                 </div>
               )}
 
               {loading && !streamingReply && (
-                <div role="status" aria-live="polite" className="p-3 border border-neutral-800 bg-black/40 flex flex-col items-center justify-center gap-3 text-center">
-                  <div className="w-6 h-6 border-2 border-white border-t-transparent animate-spin rounded-full" />
-                  <span className="text-xs font-sans tracking-widest text-neutral-300 uppercase animate-pulse">
-                    {mode === 'chat'
-                      ? (lang === 'uk' ? 'KARKAS AI ФОРМУЄ ВІДПОВІДЬ...' : 'KARKAS AI IS RESPONDING...')
-                      : t.aiSheet.thinking}
-                  </span>
-                  <button id="ai-request-cancel-btn" type="button" onClick={cancelAIRequest} className="min-h-11 border border-neutral-700 px-3 py-2 text-xs text-neutral-300 hover:border-white hover:text-white">
-                    {lang === 'uk' ? 'Скасувати запит' : 'Cancel request'}
-                  </button>
+                <div role="status" aria-live="polite" className="karkas-ai-message is-assistant">
+                  {assistantMark}
+                  <div className="karkas-ai-typing">
+                    <span className="karkas-ai-typing-dots" aria-hidden="true"><span /><span /><span /></span>
+                    <span>{mode === 'chat' ? (lang === 'uk' ? 'Думаю…' : 'Thinking…') : t.aiSheet.thinking}</span>
+                    <button id="ai-request-cancel-btn" type="button" onClick={cancelAIRequest} className="min-h-11 sm:min-h-8 px-2 text-xs text-neutral-500 underline-offset-4 hover:text-white hover:underline">
+                      {lang === 'uk' ? 'Скасувати' : 'Cancel'}
+                    </button>
+                  </div>
                 </div>
               )}
-
+              </div>
             </div>
 
             {/* Custom Prompt Input at the bottom of the sheet */}
-            <div className="shrink-0 px-3 sm:px-4 py-2 bg-[#08080a] border-t border-neutral-800 space-y-2">
+            <div className="shrink-0 px-3 sm:px-6 pt-3 pb-3 sm:pb-4 bg-[#0c0c0e]">
+              <div className="mx-auto w-full max-w-3xl space-y-2">
               {/* Voice recording / transcription status indicator */}
               {voiceNotice && <div role="status" className="flex items-center gap-2 text-amber-400 text-xs">
                 <AlertTriangle className="w-4 h-4 shrink-0" />
@@ -1447,7 +1450,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                     onClick={() => { changePrompt(''); document.getElementById('ai-prompt-input')?.focus(); }}
                     aria-label={lang === 'uk' ? 'Очистити введений текст' : 'Clear entered text'}
                     title={lang === 'uk' ? 'Очистити текст' : 'Clear text'}
-                    className="min-w-11 min-h-11 flex items-center justify-center text-neutral-400 hover:text-white"
+                    className="karkas-ai-tool"
                   ><X className="w-4 h-4" /></button>}
                   <button
                     id="ai-voice-dictation-btn"
@@ -1456,13 +1459,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                     disabled={loading || awaitingApiKey || isTranscribing}
                     title={isListening ? t.aiSheet.voiceStop : t.aiSheet.voiceInput}
                     aria-label={isListening ? t.aiSheet.voiceStop : t.aiSheet.voiceInput}
-                    className={`min-w-11 min-h-11 flex items-center justify-center rounded transition-all cursor-pointer ${
-                      isListening
-                        ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
-                        : isTranscribing
-                        ? 'text-neutral-500 cursor-wait'
-                        : 'text-neutral-400 hover:text-white hover:bg-neutral-800/60'
-                    }`}
+                    className={`karkas-ai-tool ${isListening ? 'is-recording' : isTranscribing ? 'cursor-wait' : ''}`}
                   >
                     {isTranscribing ? (
                       <Loader2 className="w-4 h-4 animate-spin text-neutral-300" />
@@ -1479,15 +1476,16 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   disabled={loading || isTranscribing || (!prompt.trim() && (awaitingApiKey || mode === 'chat'))}
                   title={t.aiSheet.execute}
                   aria-label={t.aiSheet.execute}
-                  className="w-11 h-11 bg-white text-black hover:bg-neutral-200 disabled:opacity-30 disabled:hover:bg-white transition-all flex items-center justify-center cursor-pointer shrink-0"
+                  className="karkas-ai-send shrink-0"
                 >
                   {loading ? (
-                    <Loader2 className="w-4 h-4 animate-spin text-black" />
+                    <Loader2 className="w-4 h-4 animate-spin" />
                   ) : (
                     <ArrowUp className="w-4 h-4 stroke-[2.5]" />
                   )}
                 </button>
                 </div>
+              </div>
               </div>
             </div>
           </motion.div>

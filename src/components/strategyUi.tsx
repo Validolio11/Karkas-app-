@@ -9,7 +9,9 @@ export const btn = 'inline-flex min-h-11 sm:min-h-8 items-center justify-center 
 export const primaryBtn = 'inline-flex min-h-11 sm:min-h-9 items-center justify-center gap-2 border border-white bg-white px-3 py-2 text-sm font-bold text-black transition-colors hover:bg-neutral-200 disabled:opacity-40 motion-reduce:transition-none';
 export const ghostBtn = 'inline-flex min-h-11 sm:min-h-8 items-center justify-center gap-1.5 px-2 py-1.5 text-xs text-neutral-400 transition-colors hover:text-white motion-reduce:transition-none';
 export const chipBtn = 'inline-flex min-h-11 sm:min-h-8 items-center justify-center gap-1.5 border border-neutral-800 px-2.5 py-1 text-xs text-neutral-400 transition-colors hover:border-neutral-500 hover:text-white motion-reduce:transition-none';
-export const panel ='min-w-0 border border-neutral-800 bg-[#09090b] p-4';
+export const panel = 'min-w-0 border border-neutral-800 bg-[#09090b]/95 p-5 sm:p-6';
+/** The one emphasised surface of the tab: the next step. */
+export const heroPanel = 'relative min-w-0 border bg-[#0e0e10] p-5 sm:p-8 transition-colors motion-reduce:transition-none';
 export const heading = 'text-[11px] font-bold uppercase tracking-wider text-neutral-300';
 export const monoLabel = 'font-mono text-[11px] uppercase tracking-wider text-neutral-500';
 export const field = 'mt-1 w-full min-h-11 sm:min-h-8 border border-neutral-700 bg-[#09090b] px-2 py-1.5 text-xs text-neutral-200';
@@ -45,9 +47,9 @@ export const Meter: React.FC<{ value: number; label: string; tone?: 'green' | 'w
 };
 
 /** Segmented step bar, as in the quick-add wizard and task cards. */
-export const SegmentBar: React.FC<{ segments: ('on' | 'partial' | 'off')[]; label: string; valueText: string; className?: string }> = ({ segments, label, valueText, className = '' }) =>
+export const SegmentBar: React.FC<{ segments: ('on' | 'partial' | 'off')[]; label: string; valueText: string; className?: string; thick?: boolean }> = ({ segments, label, valueText, className = '', thick = false }) =>
   <div role="img" aria-label={`${label}: ${valueText}`} className={`flex gap-1 ${className}`}>
-    {segments.map((state, index) => <span key={index} aria-hidden="true" className={`h-1 min-w-2 flex-1 transition-colors motion-reduce:transition-none ${state === 'on' ? 'bg-white' : state === 'partial' ? 'bg-neutral-500' : 'bg-neutral-800'}`} />)}
+    {segments.map((state, index) => <span key={index} aria-hidden="true" className={`${thick ? 'h-1.5' : 'h-1'} min-w-2 flex-1 transition-colors motion-reduce:transition-none ${state === 'on' ? 'bg-white' : state === 'partial' ? 'bg-neutral-500' : 'bg-neutral-800'}`} />)}
   </div>;
 
 /** Read-only priority indicator matching the task card PRI bars. */

@@ -50,7 +50,7 @@ test('inconsistent running task remains stoppable rather than hiding its control
   const html = renderTimer({ timerMode: 'none', done: true, timerRunning: true, timerStartedAt: Date.now() });
   assert.match(html, /id="task-timer-widget-timer-test"/);
   assert.match(html, /id="task-timer-stop-timer-test"/);
-  assert.match(html, /Таймер працює/);
+  assert.match(html, /Таймер іде/);
 });
 
 test('Stop is localized for English users', () => {

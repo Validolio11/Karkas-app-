@@ -8,7 +8,6 @@ import {
   CheckCircle2,
   ArrowLeft,
   Search,
-  Calendar,
   AlertTriangle,
   X,
   Timer,
@@ -16,6 +15,7 @@ import {
 import { sound } from '../utils/audio';
 import { isCompletedArchivedTask, selectArchivedTasks } from '../utils/taskArchive';
 import { formatRecordedDuration } from '../utils/taskTimeStats';
+import { btn, ghostBtn, panel } from './strategyUi';
 
 interface HistoryViewProps {
   tasks: PSTask[];
@@ -115,427 +115,236 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
     });
   }, [allHistoryItems, activeSubFilter, searchQuery, tabMap]);
 
-  // Format date helper
+  const uk = lang === 'uk';
+  const pad = (value: number) => value.toString().padStart(2, '0');
   const formatTimestamp = (ms: number) => {
     const date = new Date(ms);
-    const day = date.getDate().toString().padStart(2, '0');
-    const month = (date.getMonth() + 1).toString().padStart(2, '0');
-    const hours = date.getHours().toString().padStart(2, '0');
-    const minutes = date.getMinutes().toString().padStart(2, '0');
-    return `${day}.${month} ${hours}:${minutes}`;
+    return `${pad(date.getDate())}.${pad(date.getMonth() + 1)} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
   };
+  const formatTime = (ms: number) => { const date = new Date(ms); return `${pad(date.getHours())}:${pad(date.getMinutes())}`; };
+
+  // A history log reads by day: «Сьогодні», «Вчора», then calendar dates.
+  const dayGroups = useMemo(() => {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const groups: { key: string; label: string; items: HistoryItem[] }[] = [];
+    for (const item of filteredItems) {
+      const day = new Date(item.timestamp); day.setHours(0, 0, 0, 0);
+      const key = String(day.getTime());
+      let group = groups.at(-1);
+      if (group?.key !== key) {
+        const diff = Math.round((today.getTime() - day.getTime()) / 86_400_000);
+        const label = diff === 0 ? (uk ? 'Сьогодні' : 'Today') : diff === 1 ? (uk ? 'Вчора' : 'Yesterday')
+          : day.toLocaleDateString(uk ? 'uk-UA' : 'en-GB', { day: 'numeric', month: 'long', ...(day.getFullYear() !== today.getFullYear() ? { year: 'numeric' } : {}) });
+        group = { key, label, items: [] };
+        groups.push(group);
+      }
+      group.items.push(item);
+    }
+    return groups;
+  }, [filteredItems, uk]);
+
+  const iconBtn = 'inline-flex min-h-11 min-w-11 sm:min-h-8 sm:min-w-8 items-center justify-center gap-1.5 px-2 text-xs text-neutral-400 transition-colors hover:bg-neutral-900 hover:text-white motion-reduce:transition-none';
+  const segment = (selected: boolean) => `inline-flex min-h-11 sm:min-h-8 items-center gap-2 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider transition-colors motion-reduce:transition-none ${selected ? 'bg-neutral-800 text-white' : 'text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200'}`;
 
   return (
-    <div className="space-y-4 animate-in fade-in duration-200">
-      {/* Top Navigation & Status Bar */}
-      <div className="p-3.5 sm:p-4 bg-[#0a0a0c] border border-neutral-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-3 min-w-0">
-          <button
-            id="history-back-to-tasks-btn"
-            onClick={() => {
-              sound.tick(600);
-              onBackToTasks();
-            }}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-neutral-900 hover:bg-white text-neutral-300 hover:text-black border border-neutral-700 hover:border-white text-xs font-sans font-bold tracking-wider uppercase transition-all cursor-pointer"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span>{hv.backToTasks}</span>
-          </button>
+    <div className="space-y-6 text-sm text-neutral-200 animate-in fade-in duration-200">
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="flex items-center gap-2 text-base font-bold uppercase tracking-wider text-white">
+          <History className="h-[18px] w-[18px]" aria-hidden="true" />{hv.title}
+        </h1>
+        <button
+          id="history-back-to-tasks-btn"
+          type="button"
+          onClick={() => { sound.tick(600); onBackToTasks(); }}
+          className={`${ghostBtn} -mr-2`}
+        >
+          <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />{uk ? 'До завдань' : 'Back to tasks'}
+        </button>
+      </header>
 
-          <div>
-            <div className="flex items-center gap-2">
-              <History className="w-4 h-4 text-white" />
-              <h1 className="text-sm font-sans font-bold tracking-wider uppercase text-white">
-                {hv.title}
-              </h1>
+      <div className="space-y-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div role="group" aria-label={uk ? 'Розділ історії' : 'History section'} className="inline-flex self-start border border-neutral-800 p-0.5 gap-0.5">
+            <button id="history-filter-completed" type="button" aria-pressed={activeSubFilter === 'COMPLETED'}
+              onClick={() => { sound.tick(500); setActiveSubFilter('COMPLETED'); }} className={segment(activeSubFilter === 'COMPLETED')}>
+              {hv.completed}<span className="font-mono font-normal tabular-nums text-neutral-500">{completedTasks.length}</span>
+            </button>
+            <button id="history-filter-deleted" type="button" aria-pressed={activeSubFilter === 'DELETED'}
+              onClick={() => { sound.tick(500); setActiveSubFilter('DELETED'); }} className={segment(activeSubFilter === 'DELETED')}>
+              {hv.deleted}<span className="font-mono font-normal tabular-nums text-neutral-500">{visibleDeletedTasks.length}</span>
+            </button>
+          </div>
+
+          <div className="flex min-w-0 items-center gap-2">
+            <div className="relative min-w-0 flex-1 sm:w-64 sm:flex-none">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-neutral-500" aria-hidden="true" />
+              <input
+                type="search"
+                aria-label={hv.searchPlaceholder}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder={uk ? 'Пошук' : 'Search'}
+                title={hv.searchPlaceholder}
+                className="min-h-11 sm:min-h-9 w-full border border-neutral-800 bg-black/40 py-2 pl-8 pr-9 text-sm text-white outline-none transition-colors placeholder:text-neutral-500 focus:border-neutral-500 [&::-webkit-search-cancel-button]:hidden"
+              />
+              {searchQuery && (
+                <button type="button" aria-label={uk ? 'Скинути пошук' : 'Clear search'} onClick={() => setSearchQuery('')}
+                  className="absolute right-0 top-0 flex h-full w-9 items-center justify-center text-neutral-500 hover:text-white">
+                  <X className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+              )}
             </div>
-            <p className="text-xs text-neutral-400 font-sans mt-2 leading-relaxed">
-              {hv.subtitle}
-            </p>
-          </div>
-        </div>
-
-        {/* Counter Summary Pills */}
-        <div className="flex items-center gap-2 text-xs font-sans flex-wrap">
-          <div className="px-2 py-1 bg-black border border-neutral-800 text-neutral-300 flex items-center gap-1.5">
-            <span className="text-neutral-500">{hv.totalCount}:</span>
-            <span className="font-bold text-white">{completedTasks.length}</span>
-          </div>
-          <div className="px-2 py-1 bg-black border border-neutral-800 text-neutral-300 flex items-center gap-1.5">
-            <CheckCircle2 className="w-3 h-3 text-neutral-300" />
-            <span className="text-neutral-500">{hv.completedCount}:</span>
-            <span className="font-bold text-white">{completedTasks.length}</span>
-          </div>
-          <div className="px-2 py-1 bg-black border border-neutral-800 text-neutral-300 flex items-center gap-1.5">
-            <Trash2 className="w-3 h-3 text-neutral-400" />
-            <span className="text-neutral-500">{hv.deletedCount}:</span>
-            <span className="font-bold text-white">{visibleDeletedTasks.length}</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Control Rail: Sub-filters, Search, and Clear Button */}
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 bg-[#09090b] border border-neutral-800 p-2.5">
-        {/* Filter Switcher */}
-        <div className="flex flex-wrap items-center gap-1">
-          <button
-            id="history-filter-completed"
-            aria-pressed={activeSubFilter === 'COMPLETED'}
-            onClick={() => {
-              sound.tick(500);
-              setActiveSubFilter('COMPLETED');
-            }}
-            className={`min-h-11 flex items-center gap-1 px-3 py-2 text-sm font-sans border uppercase transition-all cursor-pointer ${
-              activeSubFilter === 'COMPLETED'
-                ? 'border-white bg-white text-black font-extrabold'
-                : 'border-neutral-800 bg-black text-neutral-400 hover:text-white hover:border-neutral-700'
-            }`}
-          >
-            <CheckCircle2 className="w-3 h-3" />
-            <span>{hv.completed} ({completedTasks.length})</span>
-          </button>
-
-          <button
-            id="history-filter-deleted"
-            aria-pressed={activeSubFilter === 'DELETED'}
-            onClick={() => {
-              sound.tick(500);
-              setActiveSubFilter('DELETED');
-            }}
-            className={`min-h-11 flex items-center gap-1 px-3 py-2 text-sm font-sans border uppercase transition-all cursor-pointer ${
-              activeSubFilter === 'DELETED'
-                ? 'border-white bg-white text-black font-extrabold'
-                : 'border-neutral-800 bg-black text-neutral-400 hover:text-white hover:border-neutral-700'
-            }`}
-          >
-            <Trash2 className="w-3 h-3" />
-            <span>{hv.deleted} ({visibleDeletedTasks.length})</span>
-          </button>
-        </div>
-
-        {/* Right side: Search & Clear Actions */}
-        <div className="flex flex-wrap items-center gap-2 min-w-0">
-          {/* Instant Search Bar */}
-          <div className="relative flex-1 min-w-[150px] sm:w-56">
-            <Search className="w-3 h-3 text-neutral-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              aria-label={hv.searchPlaceholder}
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder={hv.searchPlaceholder}
-              className="w-full bg-black border border-neutral-800 text-xs font-sans text-white placeholder:text-neutral-400 pl-7 pr-8 py-2.5 outline-none focus:border-neutral-500 transition-colors"
-            />
-            {searchQuery && (
+            {activeSubFilter === 'DELETED' && clearableCount > 0 && (
               <button
+                id="clear-deleted-history-btn"
                 type="button"
-                aria-label={lang === 'uk' ? 'Скинути пошук' : 'Clear search'}
-                onClick={() => setSearchQuery('')}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-neutral-500 hover:text-white"
+                onClick={() => { sound.tick(400); setShowClearConfirm(true); }}
+                className={`${iconBtn} shrink-0 hover:text-red-400`}
               >
-                <X className="w-3 h-3" />
+                <Trash2 className="h-3.5 w-3.5" aria-hidden="true" /><span className="hidden sm:inline">{uk ? 'Очистити' : 'Clear'}</span>
+                <span className="sr-only sm:hidden">{hv.clearDeleted}</span>
               </button>
             )}
           </div>
-
-          {/* Clear Deleted History Button */}
-          {activeSubFilter === 'DELETED' && clearableCount > 0 && (
-            <button
-              id="clear-deleted-history-btn"
-              onClick={() => {
-                sound.tick(400);
-                setShowClearConfirm(true);
-              }}
-              title={hv.clearDeleted}
-              className="min-h-11 px-3 py-2 bg-black border border-neutral-800 hover:border-red-600 hover:text-red-400 text-neutral-400 text-sm font-sans uppercase transition-colors whitespace-nowrap cursor-pointer flex items-center gap-1"
-            >
-              <Trash2 className="w-3 h-3" />
-              <span>{hv.clearDeleted}</span>
-            </button>
-          )}
         </div>
-      </div>
 
-      {activeSubFilter === 'DELETED' && (
-        <p className="text-sm leading-relaxed text-neutral-400 border border-neutral-800 bg-[#09090b] p-3">
-          {lang === 'uk'
-            ? 'Кошик зберігає завдання для відновлення. Додані помилково й незавершені з невідомою причиною не впливають на статистику та AI. Скасовані враховуються окремо.'
-            : 'Trash keeps tasks recoverable. Accidental tasks and unfinished tasks with an unknown removal reason are excluded from statistics and AI. Cancelled tasks are tracked separately.'}
-        </p>
-      )}
-
-      {/* Confirmation Banner for Clearing Deleted Archive */}
-      {showClearConfirm && activeSubFilter === 'DELETED' && clearableCount > 0 && (
-        <div role="alert" className="p-3 bg-red-950/40 border border-red-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-sans animate-in fade-in">
-          <div className="flex items-center gap-2 text-red-300 min-w-0">
-            <AlertTriangle className="w-4 h-4 shrink-0 text-red-400" />
-            <span>{hv.clearConfirm}</span>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
-            <button
-              onClick={() => {
-                onClearDeleted();
-                setShowClearConfirm(false);
-              }}
-              className="min-h-11 px-3 py-2 bg-red-600 hover:bg-red-500 text-white text-sm font-bold uppercase transition-colors cursor-pointer"
-            >
-              {lang === 'uk' ? 'ТАК, ОЧИСТИТИ' : 'YES, CLEAR'}
-            </button>
-            <button
-              onClick={() => setShowClearConfirm(false)}
-              className="min-h-11 px-3 py-2 border border-neutral-700 bg-neutral-900 text-neutral-300 hover:text-white text-sm uppercase transition-colors cursor-pointer"
-            >
-              {lang === 'uk' ? 'СКАСУВАТИ' : 'CANCEL'}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* History Items List */}
-      <div className="space-y-2">
-        {filteredItems.length === 0 ? (
-          /* Empty State */
-          <div role="status" className="p-8 sm:p-12 text-center border border-dashed border-neutral-800 bg-[#0a0a0c]">
-            <History className="w-8 h-8 text-neutral-600 mx-auto mb-3" />
-            <h3 className="text-xs sm:text-sm font-sans font-bold tracking-wider text-neutral-300 uppercase">
-              {searchQuery.trim()
-                ? (lang === 'uk' ? 'НІЧОГО НЕ ЗНАЙДЕНО' : 'NO MATCHING TASKS')
-                : activeSubFilter === 'COMPLETED'
-                ? hv.emptyCompleted
-                : activeSubFilter === 'DELETED'
-                ? hv.emptyDeleted
-                : hv.emptyAll}
-            </h3>
-            <p className="text-xs text-neutral-400 font-sans max-w-sm mx-auto mt-1">
-              {searchQuery.trim()
-                ? (lang === 'uk' ? 'Спробуйте інший запит або скиньте пошук.' : 'Try another query or clear the search.')
-                : activeSubFilter === 'COMPLETED'
-                ? hv.emptyCompletedDesc
-                : activeSubFilter === 'DELETED'
-                ? hv.emptyDeletedDesc
-                : hv.emptyAllDesc}
-            </p>
-            {searchQuery && (
-              <button
-                onClick={() => setSearchQuery('')}
-                className="mt-3 text-xs font-sans text-white underline hover:text-neutral-300"
-              >
-                {lang === 'uk' ? 'Скинути пошук' : 'Clear search query'}
-              </button>
-            )}
-          </div>
-        ) : (
-          filteredItems.map(({ type, task, timestamp, archived }) => {
-            const isCompleted = type === 'COMPLETED';
-            const tabObj = tabMap.get(task.phase);
-            const tabName = (t.phases as any)[task.phase] || tabObj?.name || task.phase;
-            const completedSteps = task.stepList
-              ? task.stepList.filter((s) => s.done).length
-              : task.currentStep;
-            const totalSteps = task.steps || 1;
-
-            return (
-              <div
-                key={`${type}-${task.id}`}
-                className={`p-3.5 sm:p-4 border transition-all bg-[#0a0a0c] ${
-                  isCompleted
-                    ? 'border-neutral-800 hover:border-neutral-700'
-                    : 'border-neutral-800/80 hover:border-neutral-700 bg-neutral-950/70'
-                }`}
-              >
-                {/* Header line: Badges & Timestamp */}
-                <div className="flex items-center justify-between gap-2 flex-wrap text-xs font-sans mb-2">
-                  <div className="flex items-center gap-2 flex-wrap min-w-0 max-w-full">
-                    {/* Status Badge */}
-                    {isCompleted ? (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 border border-white bg-white text-black font-extrabold uppercase">
-                        <CheckCircle2 className="w-3 h-3" />
-                        <span>{hv.badgeCompleted}</span>
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 border border-neutral-700 bg-neutral-900 text-neutral-300 font-extrabold uppercase">
-                        <Trash2 className="w-3 h-3 text-neutral-400" />
-                        <span>{'deletionReason' in task && task.deletionReason === 'accidental'
-                          ? (lang === 'uk' ? 'Додано помилково' : 'Added by mistake')
-                          : 'deletionReason' in task && task.deletionReason === 'cancelled' && !task.done
-                          ? (lang === 'uk' ? 'Скасовано' : 'Cancelled')
-                          : task.done ? hv.badgeCompleted
-                          : (lang === 'uk' ? 'Причину не уточнено' : 'Reason unknown')}</span>
-                      </span>
-                    )}
-
-                    {/* Tab Badge */}
-                    <span className="inline-flex max-w-full min-w-0 items-center gap-1 px-2 py-0.5 border border-neutral-800 bg-black text-neutral-300 uppercase">
-                      {tabObj?.color && (
-                        <span
-                          className="w-1.5 h-1.5 shrink-0 rounded-full"
-                          style={{ backgroundColor: tabObj.color }}
-                        />
-                      )}
-                      <span className="min-w-0 break-words">{tabName}</span>
-                    </span>
-
-                    {/* Priority Badge */}
-                    <span
-                      className={`px-1.5 py-0.5 border text-xs uppercase font-bold ${
-                        task.priority === 1
-                          ? 'border-red-800 text-red-400 bg-red-950/20'
-                          : task.priority === 2
-                          ? 'border-yellow-800 text-yellow-400 bg-yellow-950/20'
-                          : 'border-neutral-800 text-neutral-400 bg-black'
-                      }`}
-                    >
-                      P{task.priority}
-                    </span>
-
-                    {/* Progress tag if multi-step */}
-                    {totalSteps > 1 && (
-                      <span className="text-neutral-500 font-sans">
-                        [{completedSteps}/{totalSteps} {hv.stepsCompleted}]
-                      </span>
-                    )}
-
-                    {/* Time spent duration pill */}
-                    {task.timeSpentSeconds && task.timeSpentSeconds > 0 ? (
-                      <span
-                        className="inline-flex items-center gap-1 px-1.5 py-0.5 border border-neutral-800 bg-black text-xs font-sans text-neutral-300"
-                        title={lang === 'uk' ? 'Витрачено часу на завдання' : 'Time spent on task'}
-                      >
-                        <Timer className="w-2.5 h-2.5 text-neutral-400" />
-                        <span>
-                          {formatRecordedDuration(task.timeSpentSeconds, lang)}
-                        </span>
-                      </span>
-                    ) : null}
-                  </div>
-
-                  {/* Timestamp */}
-                  <div className="flex items-center gap-1 text-neutral-400">
-                    <Calendar className="w-3 h-3 text-neutral-400" />
-                    <span>
-                      {isCompleted ? hv.completedAtPrefix : hv.deletedAtPrefix}:{' '}
-                      {formatTimestamp(timestamp)}
-                    </span>
-                  </div>
-                </div>
-
-                {!isCompleted && (
-                  <label className="mb-3 flex flex-wrap items-center gap-2 text-sm text-neutral-400">
-                    <span>{lang === 'uk' ? 'Причина видалення' : 'Removal reason'}</span>
-                    <select
-                      aria-label={`${lang === 'uk' ? 'Причина видалення' : 'Removal reason'}: ${task.title}`}
-                      value={(task as DeletedTask).deletionReason === 'accidental' ? 'accidental' : task.done ? 'completed' : (task as DeletedTask).deletionReason || 'unknown'}
-                      onChange={event => {
-                        const value = event.target.value;
-                        onClassifyDeleted(task.id, value === 'accidental' || value === 'cancelled' ? value : undefined);
-                      }}
-                      className="min-h-11 max-w-full border border-neutral-700 bg-black text-white px-3 py-2 text-sm focus:border-white outline-none"
-                    >
-                      <option value={task.done ? 'completed' : 'unknown'}>{task.done ? hv.badgeCompleted : (lang === 'uk' ? 'Причину не уточнено' : 'Reason unknown')}</option>
-                      <option value="accidental">{lang === 'uk' ? 'Додано помилково — не враховувати' : 'Added by mistake — exclude'}</option>
-                      {!task.done && <option value="cancelled">{lang === 'uk' ? 'Скасовано — враховувати окремо' : 'Cancelled — track separately'}</option>}
-                    </select>
-                  </label>
-                )}
-
-                {/* Task Title */}
-                <div className="mb-2">
-                  <h3
-                    className={`text-sm sm:text-base font-sans font-medium leading-snug break-words ${
-                      isCompleted
-                        ? 'text-neutral-400 line-through'
-                        : 'text-neutral-300'
-                    }`}
-                  >
-                    {task.title}
-                  </h3>
-
-                  {/* Optional Note */}
-                  {task.note && (
-                    <p title={task.note} className="text-xs font-sans text-neutral-400 mt-1 line-clamp-2 break-words">
-                      {task.note}
-                    </p>
-                  )}
-                </div>
-
-                {/* Sub-steps Preview (if any) */}
-                {task.stepList && task.stepList.length > 0 && (
-                  <div className="mb-3 pt-2 border-t border-neutral-900 space-y-1">
-                    {task.stepList.map((st, idx) => (
-                      <div
-                        key={st.id || idx}
-                        className="flex items-center gap-2 text-xs font-sans text-neutral-400"
-                      >
-                        <span
-                          className={`w-1.5 h-1.5 shrink-0 ${
-                            st.done ? 'bg-white' : 'border border-neutral-600'
-                          }`}
-                        />
-                        <span className={`min-w-0 break-words ${st.done ? 'line-through text-neutral-400' : 'text-neutral-300'}`}>
-                          {st.title}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* Bottom Action Buttons */}
-                <div className="pt-2 border-t border-neutral-900/80 flex items-center justify-between flex-wrap gap-2 text-xs font-sans">
-                  <div className="text-xs text-neutral-400">
-                    <span>{hv.createdAtPrefix}: {formatTimestamp(task.createdAt)}</span>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    {isCompleted ? (
-                      /* Restore Completed Task to Active Queue */
-                      <button
-                        id={`restore-completed-task-${task.id}`}
-                        onClick={() => {
-                          sound.activate();
-                          if (archived) onRestoreDeleted(task as DeletedTask);
-                          else onToggleDone(task.id);
-                        }}
-                        className="min-h-11 flex items-center gap-1.5 px-3 py-2 bg-white hover:bg-neutral-200 text-black border border-white text-sm font-sans font-bold uppercase transition-colors cursor-pointer"
-                      >
-                        <RotateCcw className="w-3 h-3" />
-                        <span>{hv.restoreToActive}</span>
-                      </button>
-                    ) : (
-                      /* Restore Deleted Task & Permanent Delete */
-                      <>
-                        <button
-                          id={`restore-deleted-task-${task.id}`}
-                          onClick={() => {
-                            sound.activate();
-                            onRestoreDeleted(task as DeletedTask);
-                          }}
-                          className="min-h-11 flex items-center gap-1.5 px-3 py-2 bg-white hover:bg-neutral-200 text-black border border-white text-sm font-sans font-bold uppercase transition-colors cursor-pointer"
-                        >
-                          <RotateCcw className="w-3 h-3" />
-                          <span>{hv.restoreDeleted}</span>
-                        </button>
-
-                        <button
-                          id={`permanent-delete-task-${task.id}`}
-                          onClick={() => {
-                            sound.tick(300);
-                            onPermanentDelete(task.id);
-                          }}
-                          title={hv.permanentDelete}
-                          aria-label={`${hv.permanentDelete}: ${task.title}`}
-                          className="min-h-11 min-w-11 flex items-center justify-center border border-neutral-800 hover:border-red-600 text-neutral-500 hover:text-red-400 bg-black transition-colors cursor-pointer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
-            );
-          })
+        {activeSubFilter === 'DELETED' && (
+          <p className="max-w-prose text-xs leading-relaxed text-neutral-500">
+            {uk ? 'Додані помилково та видалені без причини не враховуються в статистиці й AI. Скасовані рахуються окремо.'
+              : 'Accidental tasks and tasks removed without a reason are excluded from statistics and AI. Cancelled ones are counted separately.'}
+          </p>
         )}
       </div>
+
+      {showClearConfirm && activeSubFilter === 'DELETED' && clearableCount > 0 && (
+        <div role="alert" className="flex flex-col gap-4 border border-red-900/70 bg-red-950/25 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <p className="flex min-w-0 items-start gap-2.5 text-[13px] leading-relaxed text-red-200">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" aria-hidden="true" />{hv.clearConfirm}
+          </p>
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            <button type="button" onClick={() => { onClearDeleted(); setShowClearConfirm(false); }}
+              className="min-h-11 sm:min-h-8 bg-red-600 px-3 py-1.5 text-xs font-bold text-white transition-colors hover:bg-red-500">
+              {uk ? 'Так, очистити' : 'Yes, clear'}
+            </button>
+            <button type="button" onClick={() => setShowClearConfirm(false)} className={btn}>{uk ? 'Скасувати' : 'Cancel'}</button>
+          </div>
+        </div>
+      )}
+
+      {dayGroups.length === 0 ? (
+        <div role="status" className={`${panel} py-12 text-center`}>
+          <History className="mx-auto h-7 w-7 text-neutral-700" aria-hidden="true" />
+          <h3 className="mt-4 text-[11px] font-bold uppercase tracking-wider text-neutral-300">
+            {searchQuery.trim()
+              ? (uk ? 'Нічого не знайдено' : 'No matching tasks')
+              : activeSubFilter === 'COMPLETED' ? hv.emptyCompleted : hv.emptyDeleted}
+          </h3>
+          <p className="mx-auto mt-2 max-w-sm text-[13px] leading-relaxed text-neutral-500">
+            {searchQuery.trim()
+              ? (uk ? 'Спробуйте інший запит.' : 'Try another query.')
+              : activeSubFilter === 'COMPLETED' ? hv.emptyCompletedDesc : hv.emptyDeletedDesc}
+          </p>
+          {searchQuery && (
+            <button type="button" onClick={() => setSearchQuery('')} className={`${btn} mt-5`}>{uk ? 'Скинути пошук' : 'Clear search'}</button>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-6">
+          {dayGroups.map(group => (
+            <section key={group.key} aria-label={group.label}>
+              <h2 className="mb-2 flex items-baseline justify-between gap-2 px-1">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-neutral-400">{group.label}</span>
+                <span className="font-mono text-[11px] tabular-nums text-neutral-600">{group.items.length}</span>
+              </h2>
+              <ul className="divide-y divide-neutral-800/80 border border-neutral-800 bg-[#09090b]/95 px-4 sm:px-5">
+                {group.items.map(({ type, task, timestamp, archived }) => {
+                  const isCompleted = type === 'COMPLETED';
+                  const tabObj = tabMap.get(task.phase);
+                  const tabName = (t.phases as Record<string, string>)[task.phase] || tabObj?.name || task.phase;
+                  const completedSteps = task.stepList ? task.stepList.filter((s) => s.done).length : task.currentStep;
+                  const totalSteps = task.steps || 1;
+                  const reasonValue = (task as DeletedTask).deletionReason === 'accidental' ? 'accidental' : task.done ? 'completed' : (task as DeletedTask).deletionReason || 'unknown';
+                  const restoreLabel = isCompleted ? hv.restoreToActive : hv.restoreDeleted;
+
+                  return (
+                    <li key={`${type}-${task.id}`} className="flex items-start gap-3 py-4 sm:gap-4">
+                      {isCompleted
+                        ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400/80" aria-hidden="true" />
+                        : <Trash2 className="mt-0.5 h-4 w-4 shrink-0 text-neutral-600" aria-hidden="true" />}
+
+                      <div className="min-w-0 flex-1">
+                        <h3 className={`break-words leading-snug ${isCompleted ? 'text-neutral-200' : 'text-neutral-300'}`}>{task.title}</h3>
+                        {task.note && <p title={task.note} className="mt-1 line-clamp-1 break-words text-xs text-neutral-500">{task.note}</p>}
+                        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-neutral-500">
+                          <span className="inline-flex min-w-0 items-center gap-1.5">
+                            {tabObj?.color && <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: tabObj.color }} />}
+                            <span className="min-w-0 break-words">{tabName}</span>
+                          </span>
+                          {task.priority === 1 && <span className="font-mono font-bold text-red-400" title={uk ? 'Пріоритет P1' : 'Priority P1'}>P1</span>}
+                          {totalSteps > 1 && <span className="font-mono tabular-nums">{completedSteps}/{totalSteps} {uk ? 'кроків' : 'steps'}</span>}
+                          {task.timeSpentSeconds && task.timeSpentSeconds > 0 ? (
+                            <span className="inline-flex items-center gap-1" title={uk ? 'Витрачено часу на завдання' : 'Time spent on task'}>
+                              <Timer className="h-3 w-3" aria-hidden="true" />{formatRecordedDuration(task.timeSpentSeconds, lang)}
+                            </span>
+                          ) : null}
+                        </div>
+                        {!isCompleted && (
+                          <select
+                            aria-label={`${uk ? 'Причина видалення' : 'Removal reason'}: ${task.title}`}
+                            value={reasonValue}
+                            onChange={event => {
+                              const value = event.target.value;
+                              onClassifyDeleted(task.id, value === 'accidental' || value === 'cancelled' ? value : undefined);
+                            }}
+                            className="mt-2.5 min-h-11 sm:min-h-8 max-w-full border border-neutral-800 bg-black px-2 py-1 text-xs text-neutral-300 outline-none transition-colors hover:border-neutral-600 focus:border-white"
+                          >
+                            <option value={task.done ? 'completed' : 'unknown'}>{task.done ? (uk ? 'Виконано' : 'Completed') : (uk ? 'Причину не уточнено' : 'Reason unknown')}</option>
+                            <option value="accidental">{uk ? 'Додано помилково — не враховувати' : 'Added by mistake — exclude'}</option>
+                            {!task.done && <option value="cancelled">{uk ? 'Скасовано — враховувати окремо' : 'Cancelled — track separately'}</option>}
+                          </select>
+                        )}
+                      </div>
+
+                      <div className="-mr-2 flex shrink-0 items-center gap-1 sm:-my-1">
+                        <time dateTime={new Date(timestamp).toISOString()} className="mr-1 font-mono text-[11px] tabular-nums text-neutral-500"
+                          title={`${isCompleted ? hv.completedAtPrefix : hv.deletedAtPrefix}: ${formatTimestamp(timestamp)} · ${hv.createdAtPrefix}: ${formatTimestamp(task.createdAt)}`}>
+                          {formatTime(timestamp)}
+                        </time>
+                        <button
+                          id={isCompleted ? `restore-completed-task-${task.id}` : `restore-deleted-task-${task.id}`}
+                          type="button"
+                          onClick={() => {
+                            sound.activate();
+                            if (isCompleted && !archived) onToggleDone(task.id);
+                            else onRestoreDeleted(task as DeletedTask);
+                          }}
+                          title={restoreLabel}
+                          aria-label={`${restoreLabel}: ${task.title}`}
+                          className={iconBtn}
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" /><span className="hidden sm:inline">{uk ? 'Відновити' : 'Restore'}</span>
+                        </button>
+                        {!isCompleted && (
+                          <button
+                            id={`permanent-delete-task-${task.id}`}
+                            type="button"
+                            onClick={() => { sound.tick(300); onPermanentDelete(task.id); }}
+                            title={hv.permanentDelete}
+                            aria-label={`${hv.permanentDelete}: ${task.title}`}
+                            className={`${iconBtn} hover:text-red-400`}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                          </button>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          ))}
+        </div>
+      )}
     </div>
   );
 };

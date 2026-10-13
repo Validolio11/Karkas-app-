@@ -21,6 +21,7 @@ import { guardOperationlessReply, guardTemporalResponse, guardUnappliedClaims, h
 
 import { MAX_AUTONOMOUS_STRATEGY_ACTIONS } from './src/utils/strategyLimits';
 import { parseAIRecommendation } from './src/utils/aiRecommendations';
+import { hasTabSuggestionContext, MAX_SUGGESTED_TABS, MIN_SUGGESTED_TABS, normalizeTabSuggestion, readTabSuggestionInput, TAB_SUGGESTION_PALETTE } from './server/tabSuggestions';
 
 dotenv.config();
 
@@ -1581,6 +1582,79 @@ APP CONTEXT:
 }
 app.post("/api/ai/breakdown-task", breakdownTaskHandler);
 
+// AI-proposed tab set for the person's actual activities; applied only after the user confirms.
+export async function suggestTabsHandler(req: any, res: any) {
+  const isUk = req.body?.lang !== 'en';
+  try {
+    const validationError = requestValidationError(req.body);
+    if (validationError) return res.status(400).json({ error: validationError });
+    const input = readTabSuggestionInput(req.body);
+    if (!hasTabSuggestionContext(input)) {
+      return res.status(400).json({ code: 'INVALID_REQUEST', error: isUk ? 'Опишіть, чим ви займаєтесь.' : 'Describe what you do.' });
+    }
+    const { customApiKey, selectedModel } = req.body;
+    const ai = customApiKey && typeof customApiKey === 'string' ? geminiClientFor(customApiKey) : getGeminiClient();
+
+    const systemInstruction = `${KARKAS_ASSISTANT_PERSONA}
+
+MODE: tab set suggestion. Tabs are the task categories of a personal task manager.
+Propose ${MIN_SUGGESTED_TABS} to ${MAX_SUGGESTED_TABS} tabs that fit this person's real activities, using the request data only.
+Rules:
+1. Names: 1-2 words, at most 20 characters, in the LANGUAGE of the request, no emoji, no numbering. Prefer the person's own words.
+2. Give each distinct activity the person names its own tab (e.g. "student, freelance design" means separate study and design tabs), and give each goal area its own tab (e.g. a running goal means a sport or health tab). Tabs must not overlap; add home or errands only when the data suggests them.
+3. "color": a distinct hex value from PALETTE for each tab.
+4. "fromTabIds": ids of CURRENT TABS whose tasks should move into this tab. Every current tab that has tasks must appear in exactly one suggested tab; keep the meaning of a current tab when it still fits.
+5. "explanation": one short sentence in the request LANGUAGE on why this set fits the person.
+Return valid JSON adhering to schema.`;
+
+    const response = await generateGeminiContentWithFallback({
+      contents: `LANGUAGE: ${isUk ? 'Ukrainian' : 'English'}.
+ACTIVITY (person's own words): ${JSON.stringify(input.activity)}
+GOALS: ${JSON.stringify(input.goals)}
+KNOWN FACTS: ${JSON.stringify(input.facts)}
+ACTIVE TASK TITLES: ${JSON.stringify(input.taskTitles)}
+CURRENT TABS: ${JSON.stringify(input.currentTabs)}
+PALETTE: ${JSON.stringify(TAB_SUGGESTION_PALETTE)}`,
+      config: {
+        systemInstruction,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            tabs: {
+              type: Type.ARRAY,
+              minItems: String(MIN_SUGGESTED_TABS),
+              maxItems: String(MAX_SUGGESTED_TABS),
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  name: { type: Type.STRING },
+                  color: { type: Type.STRING },
+                  fromTabIds: { type: Type.ARRAY, items: { type: Type.STRING } },
+                },
+                required: ["name", "color", "fromTabIds"],
+              },
+            },
+            explanation: { type: Type.STRING },
+          },
+          required: ["tabs", "explanation"],
+        },
+      },
+      customAi: ai,
+      selectedModel,
+      thinking: thinkingFor('generate'),
+    });
+
+    const suggestion = normalizeTabSuggestion(cleanAndParseJson(response?.text || '{}'), input.currentTabs.map(tab => tab.id));
+    if (!suggestion) throw new AIRequestError('INVALID_AI_RESPONSE');
+    logAIMetrics('suggest-tabs', response.metrics);
+    return res.json({ ...suggestion, source: 'gemini', usedModel: response.usedModel, fallbackUsed: response.fallbackUsed });
+  } catch (err) {
+    return sendAIRequestFailure(res, classifyAIRequestError(err), isUk);
+  }
+}
+app.post("/api/ai/suggest-tabs", suggestTabsHandler);
+
 // AI Dashboard Recommendations & Period Productivity Analysis Endpoint
 export async function recommendationsHandler(req: any, res: any) {
   try {
@@ -2041,6 +2115,7 @@ const desktopHandlers: Record<string, (req: any, res: any) => Promise<any>> = {
   assist: assistHandler,
   breakdown: breakdownTaskHandler,
   recommendations: recommendationsHandler,
+  suggestTabs: suggestTabsHandler,
   voiceToken: voiceTokenHandler,
   transcribeAudio: transcribeAudioHandler,
 };

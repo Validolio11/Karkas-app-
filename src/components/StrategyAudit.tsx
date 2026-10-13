@@ -8,7 +8,7 @@ import { getPeriodBounds, selectPeriodTasks } from './workflowViewModel';
 import { parseAIRecommendation } from '../utils/aiRecommendations';
 import { formatRecordedDuration } from '../utils/taskTimeStats';
 import { periodAuditStats } from './strategyViewModel';
-import { btn, Chip, heading, Meter, monoLabel, panel, SectionTitle } from './strategyUi';
+import { btn, Chip, heading, monoLabel, panel, SectionTitle } from './strategyUi';
 
 const PERIODS: AnalyticsPeriod[] = ['THIS_MONTH', 'LAST_30_DAYS', 'THIS_YEAR', 'LAST_YEAR', 'ALL_TIME'];
 function fingerprint(value: unknown) {
@@ -69,7 +69,8 @@ export const StrategyAudit: React.FC<{
   const labels = TRANSLATIONS[lang].dashboardAnalytics.periods;
   const stale = !!audit && audit.context !== context;
   const tiles: { label: string; value: string; tone: string; hint?: string }[] = [
-    { label: uk ? 'Завершено' : 'Completed', value: String(stats.completed), tone: stats.completed ? 'text-emerald-300' : 'text-white' },
+    { label: uk ? 'Завершено' : 'Completed', value: String(stats.completed), tone: stats.completed ? 'text-emerald-300' : 'text-white',
+      hint: stats.completed ? `${stats.completionPercent}% ${uk ? 'завдань періоду' : 'of period tasks'}` : undefined },
     { label: uk ? 'Активні' : 'Active', value: String(stats.active), tone: 'text-white' },
     { label: uk ? 'Прострочені' : 'Overdue', value: String(stats.overdue), tone: stats.overdue ? 'text-red-400' : 'text-neutral-400' },
     { label: uk ? 'Витрачено часу' : 'Time spent', value: stats.trackedSeconds === null ? '—' : formatRecordedDuration(stats.trackedSeconds, lang), tone: 'text-white',
@@ -79,35 +80,28 @@ export const StrategyAudit: React.FC<{
   return <section aria-labelledby="strategy-audit-title" className={panel}>
     <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
       <SectionTitle id="strategy-audit-title">{uk ? 'ШІ-аудит періоду' : 'AI period review'}</SectionTitle>
-      <button type="button" className={btn} disabled={loading} aria-busy={loading} onClick={refreshAudit}>
+      <button type="button" className={btn} disabled={loading} aria-busy={loading} onClick={refreshAudit}
+        title={uk ? 'Цифри рахуються локально. ШІ-огляд запускається лише за вашим запитом.' : 'The numbers are local. The AI review runs only when you ask.'}>
         <RefreshCw aria-hidden="true" className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />{loading ? (uk ? 'Аналізуємо…' : 'Analyzing…') : audit ? (uk ? 'Оновити аналіз' : 'Refresh analysis') : (uk ? 'Запустити аналіз' : 'Run analysis')}
       </button>
     </div>
 
-    <div role="group" aria-label={uk ? 'Період' : 'Period'} className="mt-3 grid grid-cols-2 gap-1 sm:flex sm:flex-wrap sm:items-center">
+    <div role="group" aria-label={uk ? 'Період' : 'Period'} className="mt-5 grid grid-cols-2 gap-0.5 border border-neutral-800 p-0.5 sm:inline-flex sm:flex-wrap sm:items-center">
       {PERIODS.map((id, index) => <button key={id} type="button" aria-pressed={period === id} onClick={() => setPeriod(id)}
-        className={`min-h-11 sm:min-h-8 min-w-0 border px-2.5 py-1.5 text-center text-[11px] font-bold uppercase leading-tight tracking-wider transition-colors motion-reduce:transition-none sm:whitespace-nowrap ${index === PERIODS.length - 1 ? 'col-span-2' : ''} ${period === id ? 'border-white bg-white text-black' : 'border-neutral-800 text-neutral-400 hover:border-neutral-600 hover:bg-neutral-900 hover:text-neutral-200'}`}>
+        className={`min-h-11 sm:min-h-8 min-w-0 px-3 py-1.5 text-center text-[11px] font-bold uppercase leading-tight tracking-wider transition-colors motion-reduce:transition-none sm:whitespace-nowrap ${index === PERIODS.length - 1 ? 'col-span-2' : ''} ${period === id ? 'bg-neutral-800 text-white' : 'text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200'}`}>
         {labels[id]}
       </button>)}
     </div>
 
-    <dl className="mt-3 grid grid-cols-2 gap-px overflow-hidden border border-neutral-800 bg-neutral-800 md:grid-cols-4">
-      {tiles.map(tile => <div key={tile.label} className="min-w-0 bg-[#09090b] p-3">
+    <dl className="mt-5 grid grid-cols-2 gap-px overflow-hidden border border-neutral-800 bg-neutral-800 md:grid-cols-4">
+      {tiles.map(tile => <div key={tile.label} className="min-w-0 bg-[#0b0b0d] p-3 sm:p-4">
         <dt className={monoLabel}>{tile.label}</dt>
-        <dd className={`mt-1 break-words text-xl font-bold tabular-nums ${tile.tone}`}>{tile.value}</dd>
-        {tile.hint && <dd className="mt-0.5 text-[11px] text-neutral-500">{tile.hint}</dd>}
+        <dd className={`mt-1.5 break-words text-2xl font-bold leading-tight tabular-nums ${tile.tone}`}>{tile.value}</dd>
+        {tile.hint && <dd className="mt-1 text-[11px] text-neutral-500">{tile.hint}</dd>}
       </div>)}
     </dl>
-    <div className="mt-3">
-      <div className="mb-1.5 flex items-baseline justify-between gap-2 text-[11px] text-neutral-400">
-        <span>{uk ? 'Частка завершених завдань періоду' : 'Share of period tasks completed'}</span>
-        <span className="font-mono font-bold text-neutral-300">{stats.completionPercent}%</span>
-      </div>
-      <Meter value={stats.completionPercent} label={uk ? 'Частка завершених завдань періоду' : 'Share of period tasks completed'} />
-    </div>
-
-    {error && <p role="alert" className="mt-3 text-xs text-amber-300">{error}</p>}
-    {audit ? <div className="mt-4 space-y-3 border-t border-neutral-800 pt-3 text-[13px] leading-relaxed">
+    {error && <p role="alert" className="mt-4 text-xs text-amber-300">{error}</p>}
+    {audit ? <div className="mt-6 space-y-5 border-t border-neutral-800 pt-5 text-sm leading-relaxed">
       <p className="flex flex-wrap items-center gap-2 text-[11px] text-neutral-500">
         <span>{new Date(audit.at).toLocaleString(uk ? 'uk-UA' : 'en-GB')} · {audit.value.source === 'gemini' ? 'AI' : (uk ? 'Локальний аналіз' : 'Local analysis')}</span>
         {stale && <Chip tone="amber">{uk ? 'Дані змінилися — оновіть аналіз' : 'Data changed — refresh the analysis'}</Chip>}
@@ -131,6 +125,6 @@ export const StrategyAudit: React.FC<{
           </li>)}
         </ul>
       </div>}
-    </div> : !error && <p className="mt-3 text-[11px] text-neutral-500">{uk ? 'Цифри вище рахуються локально. ШІ-огляд запускається лише за вашим запитом.' : 'The numbers above are local. The AI review runs only when you ask.'}</p>}
+    </div> : null}
   </section>;
 };

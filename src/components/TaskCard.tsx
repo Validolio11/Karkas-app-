@@ -71,7 +71,6 @@ const KNOWN_PHASE_COLORS: Record<string, { bg: string; text: string; border: str
 
 const TaskCardComponent: React.FC<TaskCardProps> = ({
   task,
-  index,
   lang,
   tabs = [],
   onToggleDone,
@@ -240,6 +239,9 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
     setIsAddingStep(false);
   };
 
+  const primaryAction = 'inline-flex min-h-11 sm:min-h-9 items-center justify-center gap-2 border border-white bg-white px-3 py-1.5 text-sm font-bold text-black transition-colors hover:bg-neutral-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white disabled:opacity-40';
+  const iconAction = 'inline-flex h-11 w-11 sm:h-9 sm:w-9 items-center justify-center text-neutral-500 transition-colors hover:bg-neutral-900 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white';
+
   return (
     <div id={`task-wrapper-${task.id}`} className="relative group select-none touch-pan-y">
       {/* Background Gesture Layer - Left: Slice to Complete */}
@@ -292,7 +294,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
         }}
         style={{ x, rotate: x.get() < 0 ? rotateLeft : rotateRight }}
         whileTap={{ cursor: 'grabbing' }}
-        className={`relative z-10 bg-[#0c0c0d] border transition-all duration-200 p-4 cursor-grab ${
+        className={`relative z-10 bg-[#0c0c0d] border transition-all duration-200 p-4 sm:p-5 cursor-grab ${
           task.timerRunning
             ? 'border-emerald-500/90 task-timer-glow'
             : task.done
@@ -313,246 +315,109 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
         )}
 
         <div className="flex flex-col gap-4">
-          {/* Top Meta Row */}
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-              {/* Sequential Index */}
-              <span className="text-xs font-bold tracking-widest text-neutral-500 font-mono">
-                #{String(index + 1).padStart(2, '0')}
-              </span>
-
-              {/* Phase / Category Tag (Clickable to cycle through active tabs) */}
-              <button
-                id={`task-phase-btn-${task.id}`}
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  sound.tick(700);
-                  onCyclePhase(task.id);
-                }}
-                title={lang === 'uk' ? 'Натисніть для зміни вкладки/категорії' : 'Tap to cycle category'}
-                aria-label={lang === 'uk' ? `Категорія ${phaseLabel}, натисніть для зміни` : `Category ${phaseLabel}, press to change`}
-                className="inline-flex min-h-11 min-w-11 items-center justify-center transition-transform active:scale-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
-              >
-                <span
-                  style={matchedTab?.color ? {
-                    borderColor: `${matchedTab.color}66`,
-                    backgroundColor: `${matchedTab.color}18`,
-                    color: matchedTab.color,
-                  } : undefined}
-                  className={`flex items-center gap-1.5 border px-2 py-1 text-xs uppercase font-extrabold tracking-wider ${
-                    !matchedTab?.color ? `${phaseStyle.border} ${phaseStyle.bg} ${phaseStyle.text}` : ''
-                  }`}
-                >
-                  {matchedTab?.color && (
-                    <span
-                      className="w-1.5 h-1.5 rounded-full shrink-0 shadow-sm"
-                      style={{ backgroundColor: matchedTab.color }}
-                    />
-                  )}
-                  <span>[{phaseLabel}]</span>
-                </span>
-              </button>
-
-              {/* Priority Bar Indicator (Clickable to cycle: Green -> Yellow -> Red) */}
-              <button
-                id={`task-priority-btn-${task.id}`}
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  sound.tick(400 + task.priority * 150);
-                  onCyclePriority(task.id);
-                }}
-                title={
-                  lang === 'uk'
-                    ? `Пріоритет: P${task.priority} (${
-                        task.priority === 1
-                          ? 'Червоний / Терміново'
-                          : task.priority === 2
-                          ? 'Жовтий / Стандарт'
-                          : 'Зелений / Низький'
-                      }) — клік для зміни`
-                    : `Priority: P${task.priority} (${
-                        task.priority === 1
-                          ? 'Red / Urgent'
-                          : task.priority === 2
-                          ? 'Yellow / Standard'
-                          : 'Green / Low'
-                      }) — tap to cycle`
-                }
-                aria-label={lang === 'uk' ? `Пріоритет P${task.priority}, натисніть для зміни` : `Priority P${task.priority}, press to change`}
-                className="group/priority inline-flex min-h-11 min-w-11 items-center justify-center focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
-              >
-                <span
-                  className={`flex items-center gap-1 px-1.5 py-1 bg-[#0a0a0c] border transition-colors ${
-                    task.priority === 1
-                      ? 'border-red-900/70 group-hover/priority:border-red-500 bg-red-950/20'
-                      : task.priority === 2
-                      ? 'border-amber-900/70 group-hover/priority:border-amber-500 bg-amber-950/20'
-                      : 'border-emerald-900/70 group-hover/priority:border-emerald-500 bg-emerald-950/20'
-                  }`}
+          {/* Content first: meta and title on the left, a compact timer readout on the right. */}
+          <div className={`grid min-w-0 gap-x-6 gap-y-3 ${showTimerWidget ? 'sm:grid-cols-[minmax(0,1fr)_auto]' : ''}`}>
+            <div className="min-w-0">
+              <div className="-ml-1.5 -mt-1.5 flex flex-wrap items-center gap-x-0.5">
+                <button
+                  id={`task-phase-btn-${task.id}`}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    sound.tick(700);
+                    onCyclePhase(task.id);
+                  }}
+                  title={lang === 'uk' ? 'Натисніть для зміни вкладки/категорії' : 'Tap to cycle category'}
+                  aria-label={lang === 'uk' ? `Категорія ${phaseLabel}, натисніть для зміни` : `Category ${phaseLabel}, press to change`}
+                  className="inline-flex min-h-11 min-w-11 sm:min-h-8 items-center justify-center px-1.5 transition-transform active:scale-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
                 >
                   <span
-                    className={`text-xs font-mono font-bold mr-0.5 ${
-                      task.priority === 1
-                        ? 'text-red-400'
-                        : task.priority === 2
-                        ? 'text-amber-400'
-                        : 'text-emerald-400'
+                    style={matchedTab?.color ? {
+                      borderColor: `${matchedTab.color}55`,
+                      backgroundColor: `${matchedTab.color}14`,
+                      color: matchedTab.color,
+                    } : undefined}
+                    className={`flex items-center gap-1.5 border px-1.5 py-0.5 text-[11px] uppercase font-bold tracking-wider ${
+                      !matchedTab?.color ? `${phaseStyle.border} ${phaseStyle.bg} ${phaseStyle.text}` : ''
                     }`}
                   >
-                    PRI
+                    {matchedTab?.color && (
+                      <span
+                        className="w-1.5 h-1.5 rounded-full shrink-0"
+                        style={{ backgroundColor: matchedTab.color }}
+                      />
+                    )}
+                    <span>{phaseLabel}</span>
                   </span>
-                  <span className="flex items-center gap-0.5 h-2.5" aria-hidden="true">
-                    <span
-                      className={`w-1 h-2.5 transition-all ${
-                        task.priority <= 3
-                          ? 'bg-emerald-400 shadow-[0_0_5px_rgba(52,211,153,0.8)]'
-                          : 'bg-neutral-800'
-                      }`}
-                    />
-                    <span
-                      className={`w-1 h-2.5 transition-all ${
-                        task.priority <= 2
-                          ? 'bg-amber-400 shadow-[0_0_5px_rgba(251,191,36,0.8)]'
-                          : 'bg-neutral-800'
-                      }`}
-                    />
-                    <span
-                      className={`w-1 h-2.5 transition-all ${
-                        task.priority === 1
-                          ? 'bg-red-500 shadow-[0_0_7px_rgba(239,68,68,0.9)]'
-                          : 'bg-neutral-800'
-                      }`}
-                    />
+                </button>
+
+                <button
+                  id={`task-priority-btn-${task.id}`}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    sound.tick(400 + task.priority * 150);
+                    onCyclePriority(task.id);
+                  }}
+                  title={
+                    lang === 'uk'
+                      ? `Пріоритет: P${task.priority} (${
+                          task.priority === 1
+                            ? 'Червоний / Терміново'
+                            : task.priority === 2
+                            ? 'Жовтий / Стандарт'
+                            : 'Зелений / Низький'
+                        }) — клік для зміни`
+                      : `Priority: P${task.priority} (${
+                          task.priority === 1
+                            ? 'Red / Urgent'
+                            : task.priority === 2
+                            ? 'Yellow / Standard'
+                            : 'Green / Low'
+                        }) — tap to cycle`
+                  }
+                  aria-label={lang === 'uk' ? `Пріоритет P${task.priority}, натисніть для зміни` : `Priority P${task.priority}, press to change`}
+                  className="group/priority inline-flex min-h-11 min-w-11 sm:min-h-8 items-center justify-center px-1.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+                >
+                  <span className={`flex items-center gap-1.5 border border-transparent px-1 py-0.5 transition-colors ${
+                    task.priority === 1 ? 'group-hover/priority:border-red-900/70' : task.priority === 2 ? 'group-hover/priority:border-amber-900/70' : 'group-hover/priority:border-emerald-900/70'
+                  }`}>
+                    <span className={`font-mono text-[11px] font-bold ${task.priority === 1 ? 'text-red-400' : task.priority === 2 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                      P{task.priority}
+                    </span>
+                    <span className="flex items-center gap-0.5 h-2.5" aria-hidden="true">
+                      <span className="w-1 h-2.5 bg-emerald-400" />
+                      <span className={`w-1 h-2.5 ${task.priority <= 2 ? 'bg-amber-400' : 'bg-neutral-800'}`} />
+                      <span className={`w-1 h-2.5 ${task.priority === 1 ? 'bg-red-500' : 'bg-neutral-800'}`} />
+                    </span>
                   </span>
-                </span>
-              </button>
+                </button>
 
-              {(task.plannedDate || task.deadlineDate) && (
-                <div className="flex flex-wrap items-center gap-2">
-                  {task.plannedDate && <span className="inline-flex items-center gap-1.5 border border-neutral-700 bg-[#0a0a0c] px-2 py-1 text-xs font-mono font-bold text-neutral-300">
-                    {lang === 'uk' ? 'НА' : 'ON'} {formatTaskDate(task.plannedDate, lang, now)}
-                  </span>}
-                  {task.deadlineDate && (() => {
-                    const progress = Math.round(getDeadlineProgress(task, now));
-                    const end = taskDateEnd(task.deadlineDate);
-                    const overdue = !task.done && end !== null && now > end;
-                    const color = task.done ? 'text-neutral-400 border-neutral-700' : overdue || progress >= 85 ? 'text-red-400 border-red-900/70' : progress >= 60 ? 'text-amber-400 border-amber-900/70' : 'text-emerald-400 border-emerald-900/70';
-                    return <span title={lang === 'uk' ? `${overdue ? 'Термін минув. ' : ''}Минуло ${progress}% часу від створення до кінця дедлайну` : `${overdue ? 'Overdue. ' : ''}${progress}% of time from creation to deadline elapsed`} className={`inline-flex flex-wrap items-center gap-2 border bg-[#0a0a0c] px-2 py-1 text-xs font-mono font-bold ${color}`}>
-                      <span>{lang === 'uk' ? 'ДО' : 'BY'} {formatTaskDate(task.deadlineDate, lang, now)}{overdue && ' !'}</span>
-                      <span role="progressbar" aria-label={lang === 'uk' ? 'Час до дедлайну, що минув' : 'Elapsed deadline time'} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress} className="h-2.5 w-16 bg-neutral-800">
-                        <span className="block h-full bg-current shadow-[0_0_5px_currentColor]" style={{ width: `${progress}%` }} />
-                      </span>
-                      <span>{progress}%</span>
-                    </span>;
-                  })()}
-                </div>
-              )}
+                {task.plannedDate && <span className="mx-1.5 inline-flex items-center font-mono text-[11px] font-bold text-neutral-400">
+                  {lang === 'uk' ? 'НА' : 'ON'} {formatTaskDate(task.plannedDate, lang, now)}
+                </span>}
+                {task.deadlineDate && (() => {
+                  const progress = Math.round(getDeadlineProgress(task, now));
+                  const end = taskDateEnd(task.deadlineDate);
+                  const overdue = !task.done && end !== null && now > end;
+                  const color = task.done ? 'text-neutral-400' : overdue || progress >= 85 ? 'text-red-400' : progress >= 60 ? 'text-amber-400' : 'text-emerald-400';
+                  return <span title={lang === 'uk' ? `${overdue ? 'Термін минув. ' : ''}Минуло ${progress}% часу від створення до кінця дедлайну` : `${overdue ? 'Overdue. ' : ''}${progress}% of time from creation to deadline elapsed`} className={`mx-1.5 inline-flex items-center gap-2 font-mono text-[11px] font-bold ${color}`}>
+                    <span>{lang === 'uk' ? 'ДО' : 'BY'} {formatTaskDate(task.deadlineDate, lang, now)}{overdue && ' !'}</span>
+                    <span role="progressbar" aria-label={lang === 'uk' ? 'Час до дедлайну, що минув' : 'Elapsed deadline time'} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress} className="h-1 w-10 bg-neutral-800">
+                      <span className="block h-full bg-current" style={{ width: `${progress}%` }} />
+                    </span>
+                  </span>;
+                })()}
 
-              {task.pinned && (
-                <span className="flex items-center text-xs font-sans text-neutral-400">
-                  <Pin className="w-2.5 h-2.5 fill-neutral-400 mr-1" />
-                  PIN
-                </span>
-              )}
-            </div>
+                {task.pinned && (
+                  <span className="mx-1.5 inline-flex items-center text-neutral-400" title={lang === 'uk' ? 'Закріплено' : 'Pinned'}>
+                    <Pin className="w-3 h-3 fill-neutral-400" aria-hidden="true" />
+                    <span className="sr-only">{lang === 'uk' ? 'Закріплено' : 'Pinned'}</span>
+                  </span>
+                )}
+              </div>
 
-            {/* Quick task actions */}
-            <div className="ml-auto flex shrink-0 items-center gap-2">
-              {/* Edit Task Text */}
-              <button
-                id={`task-edit-btn-${task.id}`}
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  sound.tick(500);
-                  if (isEditingTask) setIsEditingTask(false);
-                  else beginEditingTask();
-                }}
-                title={lang === 'uk' ? 'Редагувати текст завдання (або ПКМ)' : 'Edit task text (or right-click)'}
-                aria-label={lang === 'uk' ? 'Редагувати текст завдання' : 'Edit task text'}
-                className="inline-flex h-11 w-11 items-center justify-center text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
-              >
-                <Pencil className="h-5 w-5" aria-hidden="true" />
-              </button>
-
-              {/* Delete */}
-              <button
-                id={`task-delete-btn-${task.id}`}
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  sound.tick(300);
-                  onDelete(task.id);
-                }}
-                title={lang === 'uk' ? 'Видалити завдання' : 'Delete task'}
-                aria-label={lang === 'uk' ? 'Видалити завдання' : 'Delete task'}
-                className="inline-flex h-11 w-11 items-center justify-center text-neutral-400 hover:text-rose-400 hover:bg-neutral-800 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
-              >
-                <Trash2 className="h-5 w-5" aria-hidden="true" />
-              </button>
-
-              {/* Ask AI about this task */}
-              <button
-                id={`task-ai-btn-${task.id}`}
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  sound.activate();
-                  onAskAIAboutTask(task.title);
-                }}
-                title={t.askAI}
-                aria-label={t.askAI}
-                className="inline-flex h-11 w-11 items-center justify-center text-neutral-400 hover:text-emerald-400 hover:bg-neutral-800 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
-              >
-                <AIIcon className="h-5 w-5" />
-              </button>
-            </div>
-          </div>
-
-          {/* Time focus: timer rail beside the task text on wider cards. */}
-          <div className={`grid min-w-0 gap-4 ${showTimerWidget ? 'sm:grid-cols-[208px_minmax(0,1fr)] sm:gap-5' : ''}`}>
-            {showTimerWidget && (
-              <section
-                id={`task-timer-widget-${task.id}`}
-                aria-label={lang === 'uk' ? 'Час завдання' : 'Task time'}
-                className="min-w-0 border-b border-neutral-800/70 pb-3 font-sans sm:border-b-0 sm:border-r sm:pb-0 sm:pr-3"
-              >
-                <div className="min-w-0">
-                  <p className="text-xs leading-relaxed text-neutral-400">
-                    {hasCountdown
-                      ? (lang === 'uk' ? 'ЗАЛИШИЛОСЬ' : 'REMAINING')
-                      : (lang === 'uk' ? 'ВИТРАЧЕНО' : 'TIME SPENT')}
-                  </p>
-                  <p role="status" className={`mt-1 text-[13px] font-medium leading-relaxed ${task.timerRunning ? 'text-emerald-300' : countdownFinished ? 'text-amber-300' : 'text-neutral-400'}`}>
-                    {task.timerRunning ? (lang === 'uk' ? 'Таймер працює' : 'Timer running')
-                      : task.done ? (lang === 'uk' ? 'Завершено' : 'Completed')
-                      : countdownFinished ? (lang === 'uk' ? 'Час вийшов · завершіть завдання, коли будете готові' : 'Time is up · complete the task when ready')
-                      : hasStarted ? (lang === 'uk' ? 'На паузі' : 'Paused') : (lang === 'uk' ? 'Готовий до початку' : 'Ready to start')}
-                  </p>
-                  <button
-                    type="button" id={`task-time-settings-${task.id}`}
-                    aria-haspopup="dialog" aria-controls={`task-time-dialog-${task.id}`}
-                    aria-label={`${lang === 'uk' ? 'Налаштувати час' : 'Configure time'}: ${formatDurationFull(hasCountdown ? remainingSeconds : currentElapsedSeconds, lang)}`}
-                    onClick={event => { event.stopPropagation(); openTimeSettings(event.currentTarget); }}
-                    className={`mt-1 block min-h-11 w-full whitespace-nowrap text-left font-semibold leading-tight tabular-nums tracking-tight focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white ${timerValue.length > 5 ? 'text-[36px]' : 'text-[52px]'} ${task.timerRunning ? 'text-emerald-300' : countdownFinished ? 'text-amber-300' : 'text-neutral-100'}`}>
-                    {timerValue}
-                  </button>
-                  <p className="mt-1 text-xs leading-relaxed text-neutral-400">{lang === 'uk' ? 'Натисніть, щоб налаштувати час' : 'Click to configure time'}</p>
-                  {hasCountdown && <div role="progressbar"
-                    aria-label={lang === 'uk' ? 'Прогрес зворотного відліку' : 'Countdown progress'}
-                    aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(countdownProgress)}
-                    aria-valuetext={lang === 'uk' ? `Залишилось ${formatDurationFull(remainingSeconds, lang)}` : `${formatDurationFull(remainingSeconds, lang)} remaining`}
-                    className="mt-3 h-1 overflow-hidden bg-neutral-800">
-                    <div style={{ width: `${countdownProgress}%` }} className={`h-full transition-[width] duration-500 ${countdownFinished ? 'bg-amber-400' : 'bg-emerald-400'}`} />
-                  </div>}
-                </div>
-              </section>
-            )}
-
-            {/* Task Title & Notes */}
-            <div className="relative min-w-0">
+              <div className="relative mt-1.5 min-w-0">
               {isEditingTask ? (
                 <form
                   onSubmit={(e) => {
@@ -622,7 +487,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
               ) : (
                 <>
                   <h3
-                    className={`text-lg font-semibold leading-[27px] break-words [overflow-wrap:anywhere] transition-all ${
+                    className={`text-base sm:text-[17px] font-semibold leading-snug break-words [overflow-wrap:anywhere] transition-all ${
                       task.done
                         ? 'line-through text-neutral-400 decoration-neutral-600 decoration-2'
                         : 'text-neutral-100 hover:text-white'
@@ -633,7 +498,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   {Number.isFinite(task.scheduledFor) && <p className="mt-1 text-sm leading-relaxed text-emerald-300">{lang === 'uk' ? 'Заплановано на' : 'Planned for'} {new Intl.DateTimeFormat(lang === 'uk' ? 'uk-UA' : 'en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(task.scheduledFor)}</p>}
 
                   {task.note && (
-                    <div className="mt-2 text-[15px] leading-[1.6] break-words [overflow-wrap:anywhere] font-sans text-neutral-300">
+                    <div className="mt-1.5 max-w-prose text-sm leading-relaxed break-words [overflow-wrap:anywhere] font-sans text-neutral-400">
                       <span>{task.note}</span>
                     </div>
                   )}
@@ -656,53 +521,50 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   <span className="text-xs underline underline-offset-2 text-amber-200">{t.timer.editTime}</span>
                 </button>
               )}
-              {showTimerWidget && (
-                <div className="mt-3 flex flex-col gap-3 font-sans">
-                  {hasCountdown && <p className="text-xs leading-relaxed text-neutral-400">
-                    {lang === 'uk' ? 'Тривалість' : 'Duration'}: {formatDurationFull(task.countdownDurationSeconds!, lang)}
-                    {' · '}{lang === 'uk' ? 'Всього витрачено' : 'Total spent'}: {formatTime(currentElapsedSeconds)}
-                  </p>}
-                  <div className="flex flex-wrap items-center gap-2">
-                    {!task.done && !hasStarted && <button
-                      type="button" id={`task-start-action-${task.id}`} disabled={!onStartTask}
-                      onClick={(e) => { e.stopPropagation(); sound.activate(); onStartTask?.(task.id); }}
-                      className="inline-flex min-h-11 items-center justify-center gap-2 border border-white bg-white px-3 py-2 text-sm font-bold text-black hover:bg-neutral-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white disabled:opacity-40">
-                      <Play className="h-5 w-5" aria-hidden="true" />
-                      {lang === 'uk' ? 'Почати' : 'Start'}
-                    </button>}
-                    {task.timerRunning && onStopTimer && <button
-                      type="button" id={`task-timer-stop-${task.id}`}
-                      title={lang === 'uk'
-                        ? 'Зупинити зі збереженням витраченого часу й залишку. Можна продовжити пізніше.'
-                        : 'Stop and keep time spent and remaining time. You can resume later.'}
-                      onClick={(e) => { e.stopPropagation(); onStopTimer(task.id); }}
-                      className="inline-flex min-h-11 items-center justify-center gap-2 border border-white bg-white px-3 py-2 text-sm font-bold text-black transition-colors hover:bg-neutral-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
-                      <Square className="h-5 w-5" aria-hidden="true" />
-                      {lang === 'uk' ? 'Зупинити' : 'Stop'}
-                    </button>}
-                    {(task.timerRunning || (hasStarted && !task.done)) && onToggleTimer && !(task.timerRunning && onStopTimer) && <button
-                      type="button" id={`task-timer-toggle-${task.id}`}
-                      onClick={(e) => { e.stopPropagation(); onToggleTimer(task.id); }}
-                      className="inline-flex min-h-11 items-center justify-center gap-2 border border-white bg-white px-3 py-2 text-sm font-bold text-black transition-colors hover:bg-neutral-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
-                      {task.timerRunning ? <Pause className="h-5 w-5" aria-hidden="true" /> : <Play className="h-5 w-5" aria-hidden="true" />}
-                      {timerToggleLabel}
-                    </button>}
-                    {!hasCountdown && currentElapsedSeconds > 0 && !task.timerRunning && !task.done && onResetTimer && <button
-                      type="button" id={`task-timer-reset-${task.id}`}
-                      onClick={(e) => { e.stopPropagation(); onResetTimer(task.id); }}
-                      className="inline-flex min-h-11 items-center justify-center gap-2 px-3 py-2 text-xs text-neutral-400 transition-colors hover:text-rose-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
-                      <RotateCcw className="h-5 w-5" aria-hidden="true" />{t.timer.reset}
-                    </button>}
-                  </div>
-                </div>
-              )}
+              </div>
             </div>
+
+            {showTimerWidget && (
+              <section
+                id={`task-timer-widget-${task.id}`}
+                aria-label={lang === 'uk' ? 'Час завдання' : 'Task time'}
+                className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1 sm:block sm:text-right"
+              >
+                <p role="status" className={`inline-flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-wider sm:flex sm:justify-end ${task.timerRunning ? 'text-emerald-300' : countdownFinished ? 'text-amber-300' : hasStarted ? 'text-neutral-400' : 'text-neutral-500'}`}>
+                  <span aria-hidden="true" className={`h-1.5 w-1.5 ${task.timerRunning ? 'bg-emerald-400' : countdownFinished ? 'bg-amber-400' : hasStarted ? 'bg-neutral-400' : 'bg-neutral-700'}`} />
+                  {task.timerRunning ? (lang === 'uk' ? 'Таймер іде' : 'Timer running')
+                    : task.done ? (lang === 'uk' ? 'Завершено' : 'Completed')
+                    : countdownFinished ? (lang === 'uk' ? 'Час вийшов' : 'Time is up')
+                    : hasStarted ? (lang === 'uk' ? 'На паузі' : 'Paused')
+                    : hasCountdown ? (lang === 'uk' ? 'Відлік' : 'Countdown')
+                    : (lang === 'uk' ? 'Не розпочато' : 'Not started')}
+                </p>
+                <button
+                  type="button" id={`task-time-settings-${task.id}`}
+                  aria-haspopup="dialog" aria-controls={`task-time-dialog-${task.id}`}
+                  aria-label={`${lang === 'uk' ? 'Налаштувати час' : 'Configure time'}: ${formatDurationFull(hasCountdown ? remainingSeconds : currentElapsedSeconds, lang)}`}
+                  title={[
+                    lang === 'uk' ? 'Натисніть, щоб налаштувати час' : 'Click to configure time',
+                    hasCountdown ? `${lang === 'uk' ? 'Тривалість' : 'Duration'}: ${formatDurationFull(task.countdownDurationSeconds!, lang)} · ${lang === 'uk' ? 'Всього витрачено' : 'Total spent'}: ${formatTime(currentElapsedSeconds)}` : '',
+                  ].filter(Boolean).join('\n')}
+                  onClick={event => { event.stopPropagation(); openTimeSettings(event.currentTarget); }}
+                  className={`min-h-11 sm:mt-1.5 sm:min-h-0 whitespace-nowrap font-mono text-2xl font-semibold leading-none tabular-nums tracking-tight decoration-dotted underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white sm:text-[28px] ${task.timerRunning ? 'text-emerald-300' : countdownFinished ? 'text-amber-300' : hasStarted || hasCountdown ? 'text-neutral-100' : 'text-neutral-600 hover:text-neutral-300'}`}>
+                  {timerValue}
+                </button>
+                {hasCountdown && <div role="progressbar"
+                  aria-label={lang === 'uk' ? 'Прогрес зворотного відліку' : 'Countdown progress'}
+                  aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(countdownProgress)}
+                  aria-valuetext={lang === 'uk' ? `Залишилось ${formatDurationFull(remainingSeconds, lang)}` : `${formatDurationFull(remainingSeconds, lang)} remaining`}
+                  className="h-1 w-full basis-full overflow-hidden bg-neutral-800 sm:mt-2.5 sm:ml-auto sm:w-36">
+                  <div style={{ width: `${countdownProgress}%` }} className={`h-full transition-[width] duration-500 ${countdownFinished ? 'bg-amber-400' : 'bg-emerald-400'}`} />
+                </div>}
+              </section>
+            )}
           </div>
 
-          {/* Task progress and explicit work actions */}
-          <div className="pt-3 flex flex-wrap items-center justify-between gap-4 border-t border-neutral-800/70">
-            {/* Scrubber & Active Step Description */}
-            <div className="flex min-w-0 basis-full flex-wrap items-center gap-x-3 gap-y-1 md:basis-auto md:flex-1">
+          {/* One action row: steps on the left, work actions and tools on the right. */}
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-neutral-800/60 pt-3">
+            <div className="-ml-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
               <button
                 type="button"
                 id={`task-toggle-steps-${task.id}`}
@@ -714,23 +576,23 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   if (!isExpanded && effectiveStepList.length === 0) setIsAddingStep(true);
                   setIsExpanded(!isExpanded);
                 }}
-                className={`flex min-h-11 items-center gap-2 text-xs font-sans uppercase font-bold tracking-wider px-3 py-2 border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white ${
+                className={`flex min-h-11 sm:min-h-8 items-center gap-1.5 px-2 py-1 text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white ${
                   isExpanded
-                    ? 'border-white bg-neutral-900 text-white'
+                    ? 'bg-neutral-900 text-white'
                     : effectiveStepList.length > 0
-                    ? 'border-neutral-700 text-neutral-300 hover:border-neutral-500 hover:text-white bg-neutral-950'
-                    : 'border-neutral-800 text-neutral-400 hover:border-neutral-700 hover:text-neutral-300'
+                    ? 'text-neutral-300 hover:bg-neutral-900 hover:text-white'
+                    : 'text-neutral-500 hover:bg-neutral-900 hover:text-neutral-200'
                 }`}
                 title={isExpanded ? t.stepsSection.collapse : effectiveStepList.length > 0 ? t.stepsSection.expand : t.stepsSection.addStepBtn}
               >
-                {isExpanded ? <ChevronUp className="h-5 w-5" aria-hidden="true" />
-                  : effectiveStepList.length > 0 ? <ChevronDown className="h-5 w-5" aria-hidden="true" />
-                  : <Plus className="h-5 w-5" aria-hidden="true" />}
+                {isExpanded ? <ChevronUp className="h-4 w-4" aria-hidden="true" />
+                  : effectiveStepList.length > 0 ? <ChevronDown className="h-4 w-4" aria-hidden="true" />
+                  : <Plus className="h-4 w-4" aria-hidden="true" />}
                 <span>{isExpanded ? t.stepsSection.collapse : effectiveStepList.length > 0
-                  ? `${t.step} ${completedStepCount}/${effectiveStepList.length}`
-                  : (lang === 'uk' ? 'Додати підзавдання' : 'Add subtask')}</span>
+                  ? <>{lang === 'uk' ? 'Кроки' : 'Steps'} <span className="font-mono tabular-nums">{completedStepCount}/{effectiveStepList.length}</span></>
+                  : (lang === 'uk' ? 'Підзавдання' : 'Subtasks')}</span>
               </button>
-              
+
               {/* Bars */}
               {effectiveStepList.length > 0 && <div className="flex max-w-full flex-wrap items-center gap-1">
                 {effectiveStepList.map((step, i) => {
@@ -751,52 +613,112 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                       aria-pressed={isFilled}
                       className="flex h-11 w-11 min-h-11 min-w-11 shrink-0 items-center focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white md:[@media(pointer:fine)]:h-7 md:[@media(pointer:fine)]:w-3 md:[@media(pointer:fine)]:min-h-7 md:[@media(pointer:fine)]:min-w-3"
                     >
-                      <span aria-hidden="true" className={`h-3 w-full transition-all ${isFilled
-                        ? 'bg-neutral-100 shadow-[0_0_6px_rgba(255,255,255,0.2)]' : 'bg-neutral-800 hover:bg-neutral-700'}`} />
+                      <span aria-hidden="true" className={`h-1.5 w-full transition-colors ${isFilled
+                        ? 'bg-neutral-100' : 'bg-neutral-800 hover:bg-neutral-600'}`} />
                     </button>
                   );
                 })}
               </div>}
-
             </div>
 
-            {/* Work status and completion are separate from timer controls. */}
-            <div className="flex flex-wrap items-center gap-2">
-              {!showTimerWidget && !task.done && !hasStarted && <button
-                type="button" id={`task-start-action-${task.id}`} disabled={!onStartTask}
-                onClick={(e) => { e.stopPropagation(); sound.activate(); onStartTask?.(task.id); }}
-                className="inline-flex min-h-11 items-center justify-center gap-2 border border-white bg-white px-3 py-2 text-sm font-sans font-bold text-black hover:bg-neutral-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white disabled:opacity-40">
-                <Play className="h-5 w-5" aria-hidden="true" />
-                {lang === 'uk' ? 'Почати' : 'Start'}
-              </button>}
-              {!task.done && hasStarted && <span className="inline-flex min-h-11 items-center px-2 text-xs font-sans text-emerald-300">
-                {lang === 'uk' ? 'У роботі' : 'In progress'}
-              </span>}
-              {task.done && <span className="inline-flex min-h-11 items-center px-2 text-xs font-sans text-neutral-400">
-                {lang === 'uk' ? 'Завершено' : 'Completed'}
-              </span>}
-              {showTimerWidget && !task.done && !hasStarted && <span className="inline-flex min-h-11 items-center px-2 text-xs font-sans text-neutral-400">
-                {lang === 'uk' ? 'Не розпочато' : 'Not started'}
-              </span>}
+            <div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-2">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {!task.done && !hasStarted && <button
+                  type="button" id={`task-start-action-${task.id}`} disabled={!onStartTask}
+                  onClick={(e) => { e.stopPropagation(); sound.activate(); onStartTask?.(task.id); }}
+                  className={primaryAction}>
+                  <Play className="h-4 w-4" aria-hidden="true" />
+                  {lang === 'uk' ? 'Почати' : 'Start'}
+                </button>}
+                {task.timerRunning && onStopTimer && <button
+                  type="button" id={`task-timer-stop-${task.id}`}
+                  title={lang === 'uk'
+                    ? 'Зупинити зі збереженням витраченого часу й залишку. Можна продовжити пізніше.'
+                    : 'Stop and keep time spent and remaining time. You can resume later.'}
+                  onClick={(e) => { e.stopPropagation(); onStopTimer(task.id); }}
+                  className={primaryAction}>
+                  <Square className="h-4 w-4" aria-hidden="true" />
+                  {lang === 'uk' ? 'Зупинити' : 'Stop'}
+                </button>}
+                {(task.timerRunning || (hasStarted && !task.done)) && onToggleTimer && !(task.timerRunning && onStopTimer) && <button
+                  type="button" id={`task-timer-toggle-${task.id}`}
+                  onClick={(e) => { e.stopPropagation(); onToggleTimer(task.id); }}
+                  className={primaryAction}>
+                  {task.timerRunning ? <Pause className="h-4 w-4" aria-hidden="true" /> : <Play className="h-4 w-4" aria-hidden="true" />}
+                  {timerToggleLabel}
+                </button>}
+                {!hasCountdown && currentElapsedSeconds > 0 && !task.timerRunning && !task.done && onResetTimer && <button
+                  type="button" id={`task-timer-reset-${task.id}`}
+                  title={t.timer.reset}
+                  aria-label={t.timer.reset}
+                  onClick={(e) => { e.stopPropagation(); onResetTimer(task.id); }}
+                  className={`${iconAction} hover:text-rose-300`}>
+                  <RotateCcw className="h-4 w-4" aria-hidden="true" />
+                </button>}
 
-              {/* Explicit completion preserves subtask progress and recorded time */}
-              <button
-                type="button"
-                id={`task-toggle-action-${task.id}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  sound.slice();
-                  onToggleDone(task.id);
-                }}
-                className={`inline-flex min-h-11 items-center justify-center gap-2 text-sm font-sans font-bold px-3 py-2 border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white ${
-                  task.done
-                    ? 'border-neutral-700 text-neutral-400 hover:border-neutral-500 hover:text-white'
-                    : 'border-neutral-700 text-neutral-300 hover:border-white hover:text-white'
-                }`}
-              >
-                {task.done ? <RotateCcw className="h-5 w-5" aria-hidden="true" /> : <Check className="h-5 w-5" aria-hidden="true" />}
-                {task.done ? (lang === 'uk' ? 'Відновити' : 'Reopen') : (lang === 'uk' ? 'Завершити' : 'Complete')}
-              </button>
+                <button
+                  type="button"
+                  id={`task-toggle-action-${task.id}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    sound.slice();
+                    onToggleDone(task.id);
+                  }}
+                  className="inline-flex min-h-11 sm:min-h-9 items-center justify-center gap-2 border border-neutral-700 px-3 py-1.5 text-sm font-semibold text-neutral-300 transition-colors hover:border-white hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+                >
+                  {task.done ? <RotateCcw className="h-4 w-4" aria-hidden="true" /> : <Check className="h-4 w-4" aria-hidden="true" />}
+                  {task.done ? (lang === 'uk' ? 'Відновити' : 'Reopen') : (lang === 'uk' ? 'Завершити' : 'Complete')}
+                </button>
+
+              </div>
+
+              {/* Tools stay together so they wrap as one group on narrow screens. */}
+              <div className="flex items-center sm:border-l sm:border-neutral-800 sm:pl-2">
+
+                <button
+                  id={`task-edit-btn-${task.id}`}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    sound.tick(500);
+                    if (isEditingTask) setIsEditingTask(false);
+                    else beginEditingTask();
+                  }}
+                  title={lang === 'uk' ? 'Редагувати текст завдання (або ПКМ)' : 'Edit task text (or right-click)'}
+                  aria-label={lang === 'uk' ? 'Редагувати текст завдання' : 'Edit task text'}
+                  className={iconAction}
+                >
+                  <Pencil className="h-4 w-4" aria-hidden="true" />
+                </button>
+                <button
+                  id={`task-delete-btn-${task.id}`}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    sound.tick(300);
+                    onDelete(task.id);
+                  }}
+                  title={lang === 'uk' ? 'Видалити завдання' : 'Delete task'}
+                  aria-label={lang === 'uk' ? 'Видалити завдання' : 'Delete task'}
+                  className={`${iconAction} hover:text-rose-400`}
+                >
+                  <Trash2 className="h-4 w-4" aria-hidden="true" />
+                </button>
+                <button
+                  id={`task-ai-btn-${task.id}`}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    sound.activate();
+                    onAskAIAboutTask(task.title);
+                  }}
+                  title={t.askAI}
+                  aria-label={t.askAI}
+                  className={`${iconAction} hover:text-emerald-400`}
+                >
+                  <AIIcon className="h-4 w-4" />
+                </button>
+              </div>
             </div>
           </div>
         </div>

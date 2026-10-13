@@ -67,6 +67,7 @@ contextBridge.exposeInMainWorld('karkasDesktop', {
     onStreamDelta: (callback) => subscribe('karkas:ai:stream-delta', callback),
     breakdown: (input) => invoke('karkas:ai:breakdown', input),
     recommendations: (input) => invoke('karkas:ai:recommendations', input),
+    suggestTabs: (input) => invoke('karkas:ai:suggest-tabs', input),
     voiceToken: (input) => invoke('karkas:ai:voice-token', input),
     transcribeAudio: (input) => invoke('karkas:ai:transcribe-audio', input),
     cancelRequest: (requestId) => invoke('karkas:ai:cancel-request', { requestId }),

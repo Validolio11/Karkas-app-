@@ -419,6 +419,7 @@ function registerIpc() {
   });
   handle('karkas:ai:breakdown', (input) => invokeService('breakdown', input || {}, true));
   handle('karkas:ai:recommendations', (input) => invokeService('recommendations', input || {}, true));
+  handle('karkas:ai:suggest-tabs', (input) => invokeService('suggestTabs', input || {}, true));
   handle('karkas:ai:voice-token', (input) => invokeService('voiceToken', input || {}, true));
   handle('karkas:ai:transcribe-audio', (input, event) => invokeCancellableAi('transcribeAudio', input, event));
   handle('karkas:ai:cancel-request', ({ requestId }, event) => {

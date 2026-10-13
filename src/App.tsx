@@ -1755,12 +1755,18 @@ export default function App() {
     setTabToDeleteConfirm(null);
   };
 
-  const handleSetPresetTabs = (preset: TaskTab[]) => {
+  const handleUpdateTabColor = (tabId: string, color: string) => {
+    setTabs((prev) => prev.map((tab) => (tab.id === tabId ? { ...tab, color } : tab)));
+  };
+
+  /** `moveTo` maps old tab ids to tabs of the new set; unmapped tasks go to its first tab. */
+  const handleSetPresetTabs = (preset: TaskTab[], moveTo: Record<string, string> = {}) => {
     setTabs(preset);
     const validTabIds = new Set(preset.map((t) => t.id));
     const fallbackTabId = preset[0]?.id || 'focus';
     setTasks((prev) =>
-      prev.map((t) => (validTabIds.has(t.phase) ? t : { ...t, phase: fallbackTabId }))
+      prev.map((t) => (validTabIds.has(t.phase) ? t
+        : { ...t, phase: validTabIds.has(moveTo[t.phase]) ? moveTo[t.phase] : fallbackTabId }))
     );
     if (
       !isSystemView(selectedPhase) &&
@@ -2659,7 +2665,13 @@ export default function App() {
         onAddTab={handleAddTab}
         onDeleteTab={handleDeleteTab}
         onSetPresetTabs={handleSetPresetTabs}
+        onUpdateTabColor={handleUpdateTabColor}
         tabCounts={stats.phaseCounts}
+        aiContext={{
+          goals: personalProfile.goals.map((goal) => goal.title).filter(Boolean),
+          facts: [...personalProfile.facts, ...personalProfile.preferences].map((entry) => entry.text).filter(Boolean),
+          taskTitles: tasks.filter((task) => !task.done && !task.scheduledPending).map((task) => task.title),
+        }}
       />
 
       {/* Google Account & Cloud Backup Modal */}

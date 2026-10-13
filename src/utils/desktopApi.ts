@@ -5,6 +5,7 @@ const routeMap = {
   '/api/ai/assist': 'assist',
   '/api/ai/breakdown-task': 'breakdown',
   '/api/ai/recommendations': 'recommendations',
+  '/api/ai/suggest-tabs': 'suggestTabs',
   '/api/ai/voice-token': 'voiceToken',
   '/api/ai/transcribe-audio': 'transcribeAudio',
   '/api/check-update': 'checkLatest',
@@ -52,12 +53,18 @@ export async function karkasApiFetch(input: string, init?: RequestInit): Promise
     return responseFromDesktop(result.value.status, result.value.body);
   }
 
+  if (operation === 'suggestTabs' && typeof desktop.ai.suggestTabs !== 'function') {
+    return responseFromDesktop(503, { code: 'DESKTOP_ERROR', error: 'Tab suggestions need an app update' });
+  }
+
   const result = await awaitDesktop(() => operation === 'checkLatest'
     ? desktop.updates.checkLatest()
     : operation === 'breakdown'
         ? desktop.ai.breakdown(body)
         : operation === 'voiceToken'
           ? desktop.ai.voiceToken(body)
+        : operation === 'suggestTabs'
+          ? desktop.ai.suggestTabs!(body)
         : desktop.ai.recommendations(body), init?.signal);
 
   if ('error' in result) return responseFromDesktop(503, { code: result.error.code, error: result.error.message });

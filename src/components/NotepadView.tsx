@@ -17,8 +17,6 @@ import {
   Mic,
   Square,
   Loader2,
-  Calendar,
-  Clock,
   ArrowUpDown,
   X,
   Palette,
@@ -750,10 +748,11 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
 
   const formatDate = (timestamp: number): string => {
     const d = new Date(timestamp);
+    // The year is noise for this year's notes; older notes keep it.
     return d.toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-US', {
       day: 'numeric',
       month: 'short',
-      year: 'numeric',
+      ...(d.getFullYear() !== new Date().getFullYear() ? { year: 'numeric' as const } : {}),
       hour: '2-digit',
       minute: '2-digit',
     });
@@ -800,8 +799,11 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
   const pinnedCount = useMemo(() => notes.filter((n) => n.pinned).length, [notes]);
   const hasFilters = Boolean(searchQuery.trim()) || selectedColorFilter !== 'ALL';
 
+  const segment = (selected: boolean) => `inline-flex min-h-11 sm:min-h-8 items-center gap-2 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider transition-colors ${selected ? 'bg-neutral-800 text-white' : 'text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200'}`;
+  const noteAction = 'inline-flex h-11 w-11 sm:h-8 sm:w-8 items-center justify-center text-neutral-500 transition-colors hover:bg-neutral-900 hover:text-neutral-200';
+
   return (
-    <div className="w-full space-y-4">
+    <div className="w-full space-y-5">
       {storageError && (
         <p role="alert" className="border border-rose-800 bg-rose-950/20 p-3 text-xs text-rose-200">
           {lang === 'uk' ? 'Не вдалося зберегти нотатки на пристрої. Скопіюйте важливий текст перед закриттям додатка.' : 'Notes could not be saved on this device. Copy important text before closing the app.'}
@@ -878,105 +880,96 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
         </button>
       </div>
 
-      {/* 2. Secondary Hierarchy: Sleek Meta & Sorting Rail (No bloated wide card wrapper) */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 pt-0.5">
-        {/* Left: Quick Color / Category Filter pills */}
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <button
-            type="button"
-            onClick={() => {
-              sound.tick(500);
-              setSelectedColorFilter('ALL');
-            }}
-            className={`px-2 py-1 text-[11px] font-sans tracking-wider uppercase border transition-all cursor-pointer ${
-              selectedColorFilter === 'ALL'
-                ? 'border-neutral-600 bg-neutral-800 text-white font-bold'
-                : 'border-neutral-800 bg-[#0a0a0d] text-neutral-400 hover:text-neutral-200 hover:border-neutral-700'
-            }`}
-          >
-            {nv.allColors} ({notes.length})
-          </button>
-
-          <div className="flex items-center gap-1 bg-[#0a0a0d] border border-neutral-800 p-1">
+      {/* 2. Filters, sorting and view: one quiet rail of segmented controls. */}
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <div role="group" aria-label={lang === 'uk' ? 'Фільтр за кольором' : 'Filter by color'} className="inline-flex flex-wrap items-center gap-0.5 border border-neutral-800 p-0.5">
+            <button
+              type="button"
+              aria-pressed={selectedColorFilter === 'ALL'}
+              onClick={() => {
+                sound.tick(500);
+                setSelectedColorFilter('ALL');
+              }}
+              className={segment(selectedColorFilter === 'ALL')}
+            >
+              <span className="sm:hidden">{lang === 'uk' ? 'Всі' : 'All'}</span>
+              <span className="hidden sm:inline">{nv.allColors}</span>
+              <span className="font-mono font-normal tabular-nums text-neutral-500">{notes.length}</span>
+            </button>
             {NOTE_COLOR_PRESETS.map((c) => {
               const isSelected = selectedColorFilter === c.hex;
               return (
                 <button
                   key={c.hex}
                   type="button"
+                  aria-pressed={isSelected}
+                  aria-label={c.label}
+                  title={c.label}
                   onClick={() => {
                     sound.tick(400);
                     setSelectedColorFilter(isSelected ? 'ALL' : c.hex);
                   }}
-                  title={c.label}
-                  className={`w-3.5 h-3.5 transition-all cursor-pointer flex items-center justify-center ${
-                    isSelected ? 'ring-1.5 ring-white scale-110 shadow-sm' : 'opacity-65 hover:opacity-100'
-                  }`}
-                  style={{ backgroundColor: c.hex }}
-                />
+                  className={`inline-flex h-11 w-7 sm:h-8 items-center justify-center transition-colors ${isSelected ? 'bg-neutral-800' : 'hover:bg-neutral-900'}`}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={`h-3 w-3 transition-opacity ${isSelected ? 'ring-1 ring-white ring-offset-2 ring-offset-neutral-800' : 'opacity-70'}`}
+                    style={{ backgroundColor: c.hex }}
+                  />
+                </button>
               );
             })}
           </div>
 
           {pinnedCount > 0 && (
-            <span className="text-[10px] font-sans px-2 py-0.5 bg-neutral-900 border border-neutral-800 text-amber-300 flex items-center gap-1">
-              <Pin className="w-2.5 h-2.5" />
-              <span>{pinnedCount}</span>
+            <span title={lang === 'uk' ? 'Закріплені нотатки' : 'Pinned notes'} className="hidden sm:inline-flex items-center gap-1.5 font-mono text-[11px] tabular-nums text-neutral-500">
+              <Pin className="h-3 w-3" aria-hidden="true" />
+              {pinnedCount}
             </span>
           )}
         </div>
 
-        {/* Right: Compact Sorting Controls + Grid/List Toggle */}
-        <div className="flex items-center gap-2 self-end sm:self-auto">
-          <div className="flex items-center gap-1 bg-[#0a0a0d] border border-neutral-800 p-0.5">
-            <span className="text-[10px] font-sans text-neutral-500 px-1.5 uppercase tracking-wider flex items-center gap-1">
-              <ArrowUpDown className="w-2.5 h-2.5" />
-              <span className="hidden md:inline">{nv.sortLabel}</span>
-            </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <div role="group" aria-label={nv.sortLabel.replace(':', '')} className="inline-flex items-center gap-0.5 border border-neutral-800 p-0.5">
+            <ArrowUpDown className="mx-1.5 h-3.5 w-3.5 text-neutral-500" aria-hidden="true" />
             {(['NEWEST', 'OLDEST', 'DATE'] as NoteSortOption[]).map((opt) => (
               <button
                 key={opt}
                 type="button"
+                aria-pressed={sortOption === opt}
                 onClick={() => {
                   sound.tick(500);
                   setSortOption(opt);
                 }}
-                className={`px-2 py-0.5 text-[10px] font-sans uppercase tracking-wider transition-all cursor-pointer ${
-                  sortOption === opt
-                    ? 'bg-neutral-200 text-black font-extrabold'
-                    : 'text-neutral-400 hover:text-white'
-                }`}
+                className={segment(sortOption === opt)}
               >
-                {opt === 'NEWEST'
-                  ? nv.sortNewest
-                  : opt === 'OLDEST'
-                  ? nv.sortOldest
-                  : nv.sortDate}
+                {opt === 'NEWEST' ? nv.sortNewest : opt === 'OLDEST' ? nv.sortOldest : nv.sortDate}
               </button>
             ))}
           </div>
 
-          {/* View Mode Toggle */}
-          <div className="flex items-center border border-neutral-800 bg-[#0a0a0d] p-0.5">
+          {/* On phones the grid is one column anyway, so the view switch only appears from sm. */}
+          <div role="group" aria-label={lang === 'uk' ? 'Вигляд' : 'View'} className="hidden sm:inline-flex items-center gap-0.5 border border-neutral-800 p-0.5">
             <button
               type="button"
+              aria-pressed={viewMode === 'grid'}
               onClick={() => setViewMode('grid')}
-              title="Grid view"
-              className={`p-1 transition-colors cursor-pointer ${
-                viewMode === 'grid' ? 'bg-neutral-800 text-white' : 'text-neutral-500 hover:text-white'
-              }`}
+              aria-label={lang === 'uk' ? 'Сіткою' : 'Grid view'}
+              title={lang === 'uk' ? 'Сіткою' : 'Grid view'}
+              className={`${segment(viewMode === 'grid')} px-2`}
             >
-              <LayoutGrid className="w-3.5 h-3.5" />
+              <LayoutGrid className="h-4 w-4" aria-hidden="true" />
             </button>
             <button
               type="button"
+              aria-pressed={viewMode === 'list'}
               onClick={() => setViewMode('list')}
-              title="List view"
-              className={`p-1 transition-colors cursor-pointer ${
-                viewMode === 'list' ? 'bg-neutral-800 text-white' : 'text-neutral-500 hover:text-white'
-              }`}
+              aria-label={lang === 'uk' ? 'Списком' : 'List view'}
+              title={lang === 'uk' ? 'Списком' : 'List view'}
+              className={`${segment(viewMode === 'list')} px-2`}
             >
-              <List className="w-3.5 h-3.5" />
+              <List className="h-4 w-4" aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -1249,7 +1242,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
         </div>
       ) : (
         <div
-          className={`grid gap-3 ${
+          className={`grid gap-4 ${
             viewMode === 'grid'
               ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
               : 'grid-cols-1'
@@ -1348,82 +1341,25 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
             }
 
             return (
-              <div
+              <article
                 key={note.id}
-                className={`group relative bg-[#09090d] border border-neutral-800 hover:border-neutral-700 transition-all p-3.5 flex flex-col justify-between ${
-                  viewMode === 'list' ? 'sm:flex-row sm:items-center sm:gap-4' : ''
+                className={`group relative flex min-w-0 flex-col border border-neutral-800 bg-[#09090d] p-4 sm:p-5 transition-colors hover:border-neutral-700 ${
+                  viewMode === 'list' ? 'sm:flex-row sm:items-start sm:gap-6' : ''
                 }`}
-                style={{
-                  borderLeftColor: noteColor,
-                  borderLeftWidth: '3px',
-                }}
               >
-                {/* Note Top Bar: Title, Dot, Micro Actions */}
-                <div className={viewMode === 'list' ? 'flex-1 min-w-0' : ''}>
-                  <div className="flex items-start justify-between gap-2 mb-2">
-                    <div className="flex items-baseline gap-1.5 min-w-0 flex-1">
-                      <span
-                        className="w-1.5 h-1.5 rounded-full shrink-0 self-center"
-                        style={{ backgroundColor: noteColor }}
-                      />
-                      <h3
-                        className="text-base font-sans font-bold tracking-tight break-words line-clamp-2"
-                        style={{ color: noteColor }}
-                      >
-                        {note.title}
-                      </h3>
-                    </div>
-
-                    <div className="flex items-center gap-1 shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          sound.tick(500);
-                          onUpdateNote(note.id, { pinned: !note.pinned });
-                        }}
-                        title={note.pinned ? nv.unpinNote : nv.pinNote}
-                        className={`p-1 hover:bg-neutral-800 transition-colors cursor-pointer ${
-                          note.pinned ? 'text-amber-400' : 'text-neutral-500 hover:text-neutral-200'
-                        }`}
-                      >
-                        {note.pinned ? <PinOff className="w-3 h-3" /> : <Pin className="w-3 h-3" />}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleCopyNote(note)}
-                        title={nv.copyNote}
-                        className="p-1 text-neutral-500 hover:text-neutral-200 hover:bg-neutral-800 transition-colors cursor-pointer"
-                      >
-                        {copiedId === note.id ? (
-                          <Check className="w-3 h-3 text-emerald-400" />
-                        ) : (
-                          <Copy className="w-3 h-3" />
-                        )}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleStartEdit(note)}
-                        title={nv.editNote}
-                        className="p-1 text-neutral-500 hover:text-neutral-200 hover:bg-neutral-800 transition-colors cursor-pointer"
-                      >
-                        <Edit3 className="w-3 h-3" />
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setPendingDelete(note)}
-                        title={nv.deleteNote}
-                        className="p-1 text-neutral-500 hover:text-rose-400 hover:bg-neutral-800 transition-colors cursor-pointer"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-start justify-between gap-3">
+                    {/* The note colour appears once, as a small swatch; the title stays readable white. */}
+                    <h3 className="flex min-w-0 items-baseline gap-2.5 text-base font-semibold leading-snug text-neutral-100">
+                      <span aria-hidden="true" className="h-2 w-2 shrink-0 -translate-y-px" style={{ backgroundColor: noteColor }} />
+                      <span className="min-w-0 break-words line-clamp-2">{note.title}</span>
+                    </h3>
+                    {note.pinned && (
+                      <Pin className="mt-1 h-3.5 w-3.5 shrink-0 fill-amber-400 text-amber-400" aria-label={lang === 'uk' ? 'Закріплено' : 'Pinned'} />
+                    )}
                   </div>
 
-                  {/* Note Body Text */}
-                  <div className="text-neutral-300 text-[15px] font-sans whitespace-pre-wrap break-words leading-[1.6] py-0.5">
+                  <div className="mt-2.5 whitespace-pre-wrap break-words text-sm leading-relaxed text-neutral-300">
                     {note.content || (
                       <span className="italic text-neutral-600">
                         {lang === 'uk' ? '(Порожній вміст)' : '(No content)'}
@@ -1432,27 +1368,57 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
                   </div>
                 </div>
 
-                {/* Footer: Crisp Timestamp and Edit Tag */}
-                <div
-                  className={`border-t border-neutral-800/60 flex items-center justify-between text-[10px] font-sans text-neutral-500 ${
-                    viewMode === 'list'
-                      ? 'sm:border-t-0 sm:border-l sm:pl-4 sm:ml-2 sm:flex-col sm:items-end sm:justify-center sm:gap-1 mt-2 sm:mt-0 pt-2 sm:pt-0 shrink-0'
-                      : 'mt-3 pt-2.5'
-                  }`}
-                >
-                  <div className="flex items-center gap-1">
-                    <Calendar className="w-2.5 h-2.5 text-neutral-500" />
-                    <span>{formatDate(note.createdAt)}</span>
-                  </div>
+                <div className={`flex items-center justify-between gap-2 ${
+                  viewMode === 'list' ? 'mt-4 sm:mt-0 sm:shrink-0 sm:flex-col sm:items-end' : 'mt-auto pt-4'
+                }`}>
+                  <span className="whitespace-nowrap text-[11px] tabular-nums text-neutral-500">
+                    {formatDate(note.createdAt)}{note.updatedAt ? ` · ${lang === 'uk' ? 'ред.' : 'edited'}` : ''}
+                  </span>
 
-                  {note.updatedAt && (
-                    <div className="flex items-center gap-1 text-[9px] text-neutral-600">
-                      <Clock className="w-2 h-2" />
-                      <span>{lang === 'uk' ? 'Ред.' : 'Edited'}</span>
-                    </div>
-                  )}
+                  {/* Tools appear on hover or keyboard focus where hover exists; touch screens always show them. */}
+                  <div className="-mr-2 flex items-center transition-opacity [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        sound.tick(500);
+                        onUpdateNote(note.id, { pinned: !note.pinned });
+                      }}
+                      title={note.pinned ? nv.unpinNote : nv.pinNote}
+                      aria-label={note.pinned ? nv.unpinNote : nv.pinNote}
+                      className={`${noteAction} ${note.pinned ? 'text-amber-400' : ''}`}
+                    >
+                      {note.pinned ? <PinOff className="h-3.5 w-3.5" aria-hidden="true" /> : <Pin className="h-3.5 w-3.5" aria-hidden="true" />}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleCopyNote(note)}
+                      title={nv.copyNote}
+                      aria-label={nv.copyNote}
+                      className={noteAction}
+                    >
+                      {copiedId === note.id ? <Check className="h-3.5 w-3.5 text-emerald-400" aria-hidden="true" /> : <Copy className="h-3.5 w-3.5" aria-hidden="true" />}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleStartEdit(note)}
+                      title={nv.editNote}
+                      aria-label={nv.editNote}
+                      className={noteAction}
+                    >
+                      <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPendingDelete(note)}
+                      title={nv.deleteNote}
+                      aria-label={nv.deleteNote}
+                      className={`${noteAction} hover:text-rose-400`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                  </div>
                 </div>
-              </div>
+              </article>
             );
           })}
         </div>

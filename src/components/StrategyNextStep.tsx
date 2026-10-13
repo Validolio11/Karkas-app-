@@ -1,12 +1,13 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useId, useState } from 'react';
 import { ArrowRight, Pause, Play, Plus, Shuffle } from 'lucide-react';
+import { AIIcon } from './AIIconTemplates';
 import type { TaskTab } from '../types';
 import { TRANSLATIONS } from '../utils/i18n';
 import { sound } from '../utils/audio';
 import { getTaskRemainingSeconds, getTaskTimerMode, getTaskTotalSeconds } from '../utils/taskTimer';
 import { formatDigitalDuration } from '../utils/taskTimeStats';
 import { taskStepProgress, type NextStepCandidate, type NextStepReason } from './strategyViewModel';
-import { btn, CategoryChip, Chip, chipBtn, DeadlineChip, ghostBtn, monoLabel, primaryBtn, PriorityBadge, SectionTitle, SegmentBar } from './strategyUi';
+import { btn, CategoryChip, Chip, chipBtn, DeadlineChip, ghostBtn, heroPanel, monoLabel, primaryBtn, PriorityBadge, Reveal, SectionTitle, SegmentBar } from './strategyUi';
 
 const REASONS: Record<NextStepReason, { uk: string; en: string; tone: 'green' | 'amber' | 'red' | 'white' | 'neutral' }> = {
   focus: { uk: 'Фокус від ШІ', en: 'AI focus', tone: 'white' },
@@ -33,6 +34,8 @@ export const StrategyNextStep: React.FC<{
   const current = candidates[index];
   const task = current?.task;
   const [tick, setTick] = useState(now);
+  const [stuckOpen, setStuckOpen] = useState(false);
+  const stuckId = useId();
   useEffect(() => {
     setTick(Date.now());
     if (!task?.timerRunning) return;
@@ -48,25 +51,33 @@ export const StrategyNextStep: React.FC<{
         : `Help me start the task "${task.title}"${stepText ? ` — next up: "${stepText}"` : ''}. First understand what makes starting difficult.`;
     })()
     : (uk ? 'Допоможи мені почати рух до поточної узгодженої цілі. Спершу зрозумій, що робить початок складним.' : 'Help me start working towards my agreed goal. First understand what makes starting difficult.');
-  const stuckRow = <div className="mt-4 flex flex-wrap items-center gap-1.5 border-t border-neutral-800/70 pt-3">
-    <span className={`${monoLabel} mr-1`}>{uk ? 'Застряг?' : 'Stuck?'}</span>
-    {STUCK.map(item => <button key={item.uk} type="button" className={chipBtn}
-      onClick={() => onChat(uk ? `${item.uk}${task ? `: «${task.title}»` : ''}. Запитай, що сталося, перш ніж перебудовувати план.` : `${item.prompt}${task ? `: ${task.title}` : ''}. Ask what happened before changing my plan.`)}>
-      {uk ? item.uk : item.en}
-    </button>)}
-  </div>;
-  const advice = nextAction && <p className="mt-3 border-l-2 border-neutral-600 pl-3 text-[13px] leading-relaxed text-neutral-300">
-    <span className={`${monoLabel} mb-0.5 block`}>{uk ? 'Порада ШІ' : 'AI advice'}</span>
-    <span className="whitespace-pre-wrap break-words">{nextAction}</span>
+  // «Застряг?» stays one quiet button; its three options appear only on demand.
+  const stuckToggle = <button type="button" id={`${stuckId}-toggle`} className={`${ghostBtn} ${stuckOpen ? 'text-white' : ''}`}
+    aria-expanded={stuckOpen} aria-controls={`${stuckId}-options`} onClick={() => setStuckOpen(value => !value)}>
+    {uk ? 'Застряг?' : 'Stuck?'}
+  </button>;
+  const stuckRow = <Reveal open={stuckOpen} id={`${stuckId}-options`} labelledBy={`${stuckId}-toggle`}>
+    <div className="flex flex-wrap gap-2 pt-4">
+      {STUCK.map(item => <button key={item.uk} type="button" className={chipBtn}
+        onClick={() => onChat(uk ? `${item.uk}${task ? `: «${task.title}»` : ''}. Запитай, що сталося, перш ніж перебудовувати план.` : `${item.prompt}${task ? `: ${task.title}` : ''}. Ask what happened before changing my plan.`)}>
+        {uk ? item.uk : item.en}
+      </button>)}
+    </div>
+  </Reveal>;
+  const advice = nextAction && <p className="mt-6 flex max-w-prose gap-2.5 text-sm leading-relaxed text-neutral-300">
+    <AIIcon className="mt-[3px] h-4 w-4 text-neutral-400" />
+    <span className="min-w-0 whitespace-pre-wrap break-words"><span className="sr-only">{uk ? 'Порада ШІ: ' : 'AI advice: '}</span>{nextAction}</span>
   </p>;
+  const title = <SectionTitle id="strategy-next-step-title">{uk ? 'Наступний крок' : 'Next step'}</SectionTitle>;
 
-  if (!task) return <section aria-labelledby="strategy-next-step-title" className={`min-w-0 border border-neutral-700 bg-[#0c0c0d] p-4 sm:p-5`}>
-    <SectionTitle id="strategy-next-step-title">{uk ? 'Наступний крок' : 'Next step'}</SectionTitle>
+  if (!task) return <section aria-labelledby="strategy-next-step-title" className={`${heroPanel} border-neutral-600`}>
+    {title}
     {advice}
-    <p className="mt-3 text-[13px] leading-relaxed text-neutral-400">{uk ? 'Активних завдань немає. Додайте одне — і тут з’явиться конкретний крок із таймером.' : 'No active tasks. Add one and a concrete step with a timer will appear here.'}</p>
-    <div className="mt-4 flex flex-wrap gap-2">
+    <p className="mt-5 max-w-prose text-sm leading-relaxed text-neutral-400">{uk ? 'Активних завдань немає. Додайте одне — і тут з’явиться конкретний крок із таймером.' : 'No active tasks. Add one and a concrete step with a timer will appear here.'}</p>
+    <div className="mt-6 flex flex-wrap items-center gap-2">
       <button type="button" className={primaryBtn} onClick={onOpenAdd}><Plus className="h-4 w-4" aria-hidden="true" />{uk ? 'Додати завдання' : 'Add task'}</button>
       <button type="button" className={btn} onClick={() => onChat(helpPrompt)}>{uk ? 'Допоможи почати' : 'Help me start'}</button>
+      {stuckToggle}
     </div>
     {stuckRow}
   </section>;
@@ -83,55 +94,59 @@ export const StrategyNextStep: React.FC<{
   const running = !!task.timerRunning;
 
   return <section aria-labelledby="strategy-next-step-title"
-    className={`relative min-w-0 border bg-[#0c0c0d] p-4 transition-colors sm:p-5 motion-reduce:transition-none ${running ? 'border-emerald-500/90 task-timer-glow' : 'border-neutral-700'}`}>
+    className={`${heroPanel} ${running ? 'border-emerald-500/90 task-timer-glow' : 'border-neutral-600'}`}>
     <div className="flex flex-wrap items-center justify-between gap-2">
       <div className="flex flex-wrap items-center gap-2">
-        <SectionTitle id="strategy-next-step-title">{uk ? 'Наступний крок' : 'Next step'}</SectionTitle>
+        {title}
         <Chip tone={reason.tone}>{uk ? reason.uk : reason.en}</Chip>
       </div>
-      {candidates.length > 1 && <button type="button" className={ghostBtn}
+      {candidates.length > 1 && <button type="button" className={`${ghostBtn} -mr-2`}
         aria-label={uk ? `Показати інше завдання (${index + 1} з ${candidates.length})` : `Show another task (${index + 1} of ${candidates.length})`}
         onClick={() => setPickedId(candidates[(index + 1) % candidates.length].task.id)}>
         <Shuffle className="h-3.5 w-3.5" aria-hidden="true" />{uk ? 'Інше завдання' : 'Another task'}
         <span className="font-mono text-neutral-500">{index + 1}/{candidates.length}</span>
       </button>}
     </div>
-    {advice}
 
-    <div className="mt-4 flex flex-wrap items-center gap-2">
+    <div className="mt-6 flex flex-wrap items-center gap-2">
       <CategoryChip name={phaseName} color={tab?.color} />
       <PriorityBadge priority={task.priority} lang={lang} />
       <DeadlineChip task={task} lang={lang} now={now} />
     </div>
     <button type="button" onClick={() => onOpenTask(task.id)} title={uk ? 'Відкрити завдання у списку' : 'Open the task in the list'}
-      className="group mt-2 flex max-w-full items-start gap-2 text-left text-lg font-bold leading-snug text-white">
+      className="group mt-4 flex max-w-full items-start gap-2 text-left text-xl font-bold leading-tight text-white sm:text-2xl">
       <span className="min-w-0 break-words underline-offset-4 group-hover:underline">{task.title}</span>
-      <ArrowRight aria-hidden="true" className="mt-1.5 h-4 w-4 shrink-0 text-neutral-500 transition-transform group-hover:translate-x-0.5 group-hover:text-white motion-reduce:transition-none" />
+      <ArrowRight aria-hidden="true" className="mt-1 h-5 w-5 shrink-0 text-neutral-500 transition-transform group-hover:translate-x-0.5 group-hover:text-white motion-reduce:transition-none sm:mt-1.5" />
     </button>
 
-    <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+    <div className="mt-6 grid gap-5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end sm:gap-8">
       <div className="min-w-0">
         {step.total > 0 ? <>
-          <p className="flex flex-wrap items-baseline gap-x-2 text-[13px]">
+          <p className="flex flex-wrap items-baseline gap-x-2 text-sm">
             <span className={monoLabel}>{step.nextIndex >= 0 ? `${uk ? 'Крок' : 'Step'} ${step.nextIndex + 1}/${step.total}` : `${step.total}/${step.total}`}</span>
             <span className="min-w-0 break-words text-neutral-200">{step.nextIndex >= 0 ? (step.nextTitle || `${uk ? 'Крок' : 'Step'} ${step.nextIndex + 1}`) : (uk ? 'Усі кроки виконано — можна завершувати' : 'All steps done — ready to complete')}</span>
           </p>
-          <SegmentBar className="mt-2" segments={segments} label={uk ? 'Прогрес кроків' : 'Step progress'} valueText={`${step.done}/${step.total}`} />
+          <SegmentBar thick className="mt-3" segments={segments} label={uk ? 'Прогрес кроків' : 'Step progress'} valueText={`${step.done}/${step.total}`} />
         </> : <p className={monoLabel}>{uk ? 'Без підкроків' : 'No substeps'}</p>}
       </div>
-      <p role="status" className={`flex items-center gap-2 font-mono text-[11px] uppercase tracking-wider ${running ? 'text-emerald-300' : started ? 'text-neutral-300' : 'text-neutral-500'}`}>
-        <span aria-hidden="true" className={`h-1.5 w-1.5 ${running ? 'bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.8)]' : started ? 'bg-neutral-400' : 'bg-neutral-700'}`} />
-        {running ? (uk ? 'Таймер іде' : 'Timer running') : started ? (uk ? 'На паузі' : 'Paused') : (uk ? 'Не розпочато' : 'Not started')}
-        {(started || hasCountdown) && <span className="tabular-nums text-neutral-200">{hasCountdown ? (uk ? 'ЗАЛИШИЛОСЬ ' : 'LEFT ') : ''}{formatDigitalDuration(seconds)}</span>}
-      </p>
+      <div role="status" className="min-w-0 sm:text-right">
+        <p className={`flex items-center gap-2 font-mono text-[11px] uppercase tracking-wider sm:justify-end ${running ? 'text-emerald-300' : started ? 'text-neutral-300' : 'text-neutral-500'}`}>
+          <span aria-hidden="true" className={`h-1.5 w-1.5 ${running ? 'bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.8)]' : started ? 'bg-neutral-400' : 'bg-neutral-700'}`} />
+          {running ? (uk ? 'Таймер іде' : 'Timer running') : started ? (uk ? 'На паузі' : 'Paused') : (uk ? 'Не розпочато' : 'Not started')}
+          {hasCountdown && <span className="text-neutral-500">· {uk ? 'залишилось' : 'left'}</span>}
+        </p>
+        <p className={`mt-1.5 font-mono text-2xl font-bold leading-none tabular-nums sm:text-3xl ${running ? 'text-white' : started || hasCountdown ? 'text-neutral-200' : 'text-neutral-600'}`}>{formatDigitalDuration(seconds)}</p>
+      </div>
     </div>
 
-    <div className="mt-4 flex flex-wrap items-center gap-2">
+    {advice}
+
+    <div className="mt-6 flex flex-wrap items-center gap-2">
       {running
         ? <button type="button" className={primaryBtn} onClick={() => { sound.tick(500); onPause(task.id); }}><Pause className="h-4 w-4" aria-hidden="true" />{uk ? 'Пауза' : 'Pause'}</button>
         : <button type="button" className={primaryBtn} onClick={() => { sound.activate(); onStart(task.id); }}><Play className="h-4 w-4" aria-hidden="true" />{started ? (uk ? 'Продовжити' : 'Resume') : (uk ? 'Почати' : 'Start')}</button>}
       <button type="button" className={btn} onClick={() => onChat(helpPrompt)}>{uk ? 'Допоможи почати' : 'Help me start'}</button>
-      <button type="button" className={ghostBtn} onClick={() => onOpenTask(task.id)}>{uk ? 'До завдання' : 'Go to task'}<ArrowRight className="h-3.5 w-3.5" aria-hidden="true" /></button>
+      {stuckToggle}
     </div>
     {stuckRow}
   </section>;

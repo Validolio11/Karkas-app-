@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Compass, MessageSquare, Sparkles } from 'lucide-react';
+import { Compass, MessageSquare } from 'lucide-react';
+import { AIIcon } from './AIIconTemplates';
 import type { DeletedTask, PersonalStrategyProfile, PSTask, TaskTab } from '../types';
 import type { WorkInsights } from '../utils/workInsights';
 import { readDiscoveryMode } from './aiDiscoveryMode';
@@ -55,10 +56,11 @@ export const StrategyView: React.FC<StrategyViewProps> = (props: StrategyViewPro
   const ctaLabel = cta === 'continue' ? (uk ? 'Продовжити знайомство' : 'Continue introduction') : (uk ? 'Поглибити знайомство' : 'Get to know me better');
   const candidates = useMemo(() => rankNextStepCandidates(tasks, profile.latestStrategy?.focusTaskId, clock), [tasks, profile.latestStrategy?.focusTaskId, clock]);
   const changeGoal = (id: string, patch: Partial<PersonalStrategyProfile['goals'][number]>) => onProfileChange({ ...profile, goals: profile.goals.map(goal => goal.id === id ? { ...goal, ...patch } : goal) });
-  const discoveryBar = <div className="flex items-center gap-2">
-    <SegmentBar className="w-24" segments={progress.statuses.map(status => status === 'answered' ? 'on' : status === 'deferred' ? 'partial' : 'off')}
+  const discoveryBar = <div className="flex items-center gap-3">
+    <span className="text-xs text-neutral-400">{uk ? 'Знайомство' : 'Introduction'}</span>
+    <SegmentBar className="w-28" segments={progress.statuses.map(status => status === 'answered' ? 'on' : status === 'deferred' ? 'partial' : 'off')}
       label={uk ? 'Теми знайомства' : 'Introduction topics'} valueText={`${progress.answered}/${progress.total}`} />
-    <span className={monoLabel}>{progress.answered}/{progress.total} {uk ? 'тем' : 'topics'}</span>
+    <span className={`${monoLabel} tabular-nums`}>{progress.answered}/{progress.total}</span>
   </div>;
   const planPrompt = uk ? '@plan Переглянь наші узгоджені цілі, мої обставини й результати попередніх спроб. Запропонуй посильний наступний план.' : '@plan Review my agreed goals, circumstances and previous attempts. Adapt my next plan.';
   const narrative = profile.latestStrategy?.narrative;
@@ -70,49 +72,48 @@ export const StrategyView: React.FC<StrategyViewProps> = (props: StrategyViewPro
         <SectionTitle id="strategy-onboarding-title">{uk ? 'Стратегія під вас' : 'A strategy that fits you'}</SectionTitle>
         {cta === 'continue' ? <Chip tone="green">{uk ? 'Режим знайомства' : 'Getting to know you'}</Chip> : <Chip>{uk ? 'Почніть тут' : 'Start here'}</Chip>}
       </div>
-      <p className="mt-3 text-[13px] leading-relaxed text-neutral-200">{uk ? 'Коротка розмова з помічником — і Karkas підлаштує план під ваші цілі, ритм і обмеження.' : 'A short talk with the assistant lets Karkas fit your plan to your goals, pace and limits.'}</p>
-      <ol className="mt-3 space-y-2">
+      <p className="mt-5 max-w-prose text-sm leading-relaxed text-neutral-200">{uk ? 'Коротка розмова з помічником — і Karkas підлаштує план під ваші цілі, ритм і обмеження.' : 'A short talk with the assistant lets Karkas fit your plan to your goals, pace and limits.'}</p>
+      <ul className="mt-5 space-y-2.5">
         {(uk ? ['Цілі, до яких справді хочеться рухатися', 'Реалістичний темп без перевантаження', 'Конкретний наступний крок щодня']
-          : ['Goals you actually want to move towards', 'A realistic pace without overload', 'A concrete next step every day']).map((text, index) =>
-          <li key={text} className="flex items-baseline gap-3 text-xs text-neutral-300"><span className="w-5 shrink-0 font-mono text-neutral-500">{String(index + 1).padStart(2, '0')}</span>{text}</li>)}
-      </ol>
-      {progress.answered > 0 && <div className="mt-3">{discoveryBar}</div>}
-      <div className="mt-4 pt-1 sm:mt-auto">
+          : ['Goals you actually want to move towards', 'A realistic pace without overload', 'A concrete next step every day']).map(text =>
+          <li key={text} className="flex items-start gap-2.5 text-xs leading-relaxed text-neutral-300"><span aria-hidden="true" className="mt-[0.45rem] h-1.5 w-1.5 shrink-0 bg-neutral-500" />{text}</li>)}
+      </ul>
+      {progress.answered > 0 && <div className="mt-5">{discoveryBar}</div>}
+      <div className="mt-6 sm:mt-auto sm:pt-6">
         <button type="button" className={`${primaryBtn} w-full sm:w-auto`} onClick={runDiscovery}><MessageSquare className="h-4 w-4" aria-hidden="true" />{ctaLabel}</button>
-        <p className="mt-2 text-[11px] leading-relaxed text-neutral-500">{uk ? 'У зручному темпі; можна зупинитися будь-коли. Відповіді зберігаються на цьому пристрої.' : 'At your own pace; stop any time. Answers stay on this device.'}</p>
+        <p className="mt-3 text-[11px] leading-relaxed text-neutral-500">{uk ? 'У зручному темпі; можна зупинитися будь-коли. Відповіді зберігаються на цьому пристрої.' : 'At your own pace; stop any time. Answers stay on this device.'}</p>
       </div>
     </section>
     : <section aria-labelledby="strategy-plan-title" className={`${panel} flex flex-col`}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <SectionTitle id="strategy-plan-title">{uk ? 'Стратегія від ШІ' : 'AI strategy'}</SectionTitle>
-        {profile.latestStrategy && <span className={monoLabel}>{profile.latestStrategy.source === 'rule-engine' ? (uk ? 'Локально' : 'Local') : 'AI'}</span>}
+        {profile.latestStrategy && <span className={`${monoLabel} tabular-nums`}>{profile.latestStrategy.source === 'rule-engine' ? (uk ? 'Локально' : 'Local') : 'AI'}
+          {' · '}{new Date(profile.latestStrategy.updatedAt).toLocaleString(uk ? 'uk-UA' : 'en-GB', { dateStyle: 'short', timeStyle: 'short' })}</span>}
       </div>
       {narrative ? <>
-        <p id="strategy-narrative" className={`mt-3 whitespace-pre-wrap break-words text-[13px] leading-relaxed text-neutral-200 ${longNarrative && !narrativeOpen ? 'line-clamp-6' : ''}`}>{narrative}</p>
+        <p id="strategy-narrative" className={`mt-5 max-w-prose whitespace-pre-wrap break-words text-sm leading-7 text-neutral-200 ${longNarrative && !narrativeOpen ? 'line-clamp-6' : ''}`}>{narrative}</p>
         {longNarrative && <button type="button" className={`${ghostBtn} self-start px-0`} aria-expanded={narrativeOpen} aria-controls="strategy-narrative" onClick={() => setNarrativeOpen(value => !value)}>
           {narrativeOpen ? (uk ? 'Згорнути' : 'Show less') : (uk ? 'Читати повністю' : 'Read more')}</button>}
-      </> : <p className="mt-3 text-[13px] leading-relaxed text-neutral-400">{uk ? 'Цілі вже є, а план ще не сформовано. Попросіть помічника скласти посильний план.' : 'You have goals but no plan yet. Ask the assistant to draft a manageable plan.'}</p>}
-      {profile.latestStrategy && <p className="mt-2 font-mono text-[11px] text-neutral-500">{new Date(profile.latestStrategy.updatedAt).toLocaleString(uk ? 'uk-UA' : 'en-GB')}</p>}
-      <div className="mt-4 sm:mt-auto sm:pt-3">
-        <button type="button" className={btn} onClick={() => onChat(planPrompt)}><Sparkles className="h-3.5 w-3.5" aria-hidden="true" />{narrative ? (uk ? 'Обговорити план' : 'Discuss plan') : (uk ? 'Сформувати план' : 'Draft a plan')}</button>
+      </> : <p className="mt-5 max-w-prose text-sm leading-relaxed text-neutral-400">{uk ? 'Цілі вже є, а план ще не сформовано. Попросіть помічника скласти посильний план.' : 'You have goals but no plan yet. Ask the assistant to draft a manageable plan.'}</p>}
+      <div className="mt-6 sm:mt-auto sm:pt-6">
+        <button type="button" className={btn} onClick={() => onChat(planPrompt)}><AIIcon className="h-3.5 w-3.5" />{narrative ? (uk ? 'Обговорити план' : 'Discuss plan') : (uk ? 'Сформувати план' : 'Draft a plan')}</button>
       </div>
     </section>;
 
-  return <div className="space-y-4 text-[13px] text-neutral-200">
-    <header className="flex flex-wrap items-end justify-between gap-3 border-b border-neutral-800/80 pb-3">
+  return <div className="space-y-8 text-sm text-neutral-200">
+    <header className="flex flex-wrap items-end justify-between gap-3">
       <div className="min-w-0">
-        <h1 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-white"><Compass className="h-4 w-4" aria-hidden="true" />{uk ? 'Моя стратегія' : 'My strategy'}</h1>
-        {!onboarding && <div className="mt-2 flex flex-wrap items-center gap-2">
-          {ready ? <Chip tone="green">{uk ? 'Знайомство завершено' : 'Introduction complete'}</Chip>
-            : cta === 'continue' ? <Chip tone="green">{uk ? 'Режим знайомства' : 'Getting to know you'}</Chip>
-            : <Chip tone="amber">{uk ? 'Знайомство не завершено' : 'Introduction unfinished'}</Chip>}
-          {discoveryBar}
+        <h1 className="flex items-center gap-2 text-base font-bold uppercase tracking-wider text-white"><Compass className="h-[18px] w-[18px]" aria-hidden="true" />{uk ? 'Моя стратегія' : 'My strategy'}</h1>
+        {!onboarding && <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+          {/* The segment bar already shows progress; a chip appears only for a state the bar cannot show. */}
+          {ready ? <Chip tone="green">{uk ? 'Знайомство завершено' : 'Introduction complete'}</Chip> : discoveryBar}
+          {!ready && cta === 'continue' && <Chip tone="green">{uk ? 'Режим знайомства' : 'Getting to know you'}</Chip>}
         </div>}
       </div>
       {!onboarding && <button type="button" className={cta === 'continue' ? primaryBtn : btn} onClick={runDiscovery}><MessageSquare className="h-4 w-4" aria-hidden="true" />{ctaLabel}</button>}
     </header>
 
-    <div className="grid items-stretch gap-3 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+    <div className="grid items-stretch gap-5 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
       <StrategyNextStep candidates={candidates} nextAction={profile.latestStrategy?.nextAction} tabs={tabs} lang={lang} now={clock}
         onStart={props.onStart} onPause={props.onPauseTimer} onChat={onChat} onOpenTask={props.onOpenTask} onOpenAdd={props.onOpenAdd} />
       {sideCard}

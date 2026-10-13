@@ -400,6 +400,8 @@ declare global {
         onStreamDelta?: (callback: (event: { requestId: string; text: string }) => void) => () => void;
         breakdown: (input: unknown) => Promise<DesktopResult<{ status: number; body: any }>>;
         recommendations: (input: unknown) => Promise<DesktopResult<{ status: number; body: any }>>;
+        /** Missing in builds older than the tab suggestion feature. */
+        suggestTabs?: (input: unknown) => Promise<DesktopResult<{ status: number; body: any }>>;
         voiceToken: (input: unknown) => Promise<DesktopResult<{ status: number; body: any }>>;
         transcribeAudio: (input: unknown) => Promise<DesktopResult<{ status: number; body: any }>>;
         cancelRequest: (requestId: string) => Promise<DesktopResult<{ cancelled: boolean }>>;

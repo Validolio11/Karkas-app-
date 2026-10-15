@@ -1146,6 +1146,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       setChatPlanningRequest(isPlanningResponse ? planningSourceRef.current || currentRequest : null);
       setChatPlanningResponse(isPlanningResponse ? data : null);
       pendingChatConfirmed.current = false;
+      // Bind the proposal to the account that requested it before enabling Apply.
+      pendingProposalOwnerRef.current = hasPendingChatActions ? requestOwner : undefined;
       setChatProposalReadiness(hasPendingChatActions);
       setPendingChatTasks(data.tasks || []);
       setPendingChatTabs((data.tabs || []).map(tb => ({ id: tb.id, name: tb.name, color: tb.color || '#6366f1' })));

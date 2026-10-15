@@ -1,0 +1,40 @@
+{
+  "passed": true,
+  "syntheticOnly": true,
+  "realAiCalls": 0,
+  "note": "Actual production UI with deterministic assist mocks. Guest account only; no real Firebase login or cloud writes.",
+  "results": [
+    {
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "passed": true,
+      "account": "guest",
+      "assistRequests": 1,
+      "taskId": "task-1792046753431-0-384v",
+      "scenarios": [
+        "Proposal awaits explicit Apply",
+        "Apply creates one task",
+        "Three immediate clicks create no duplicates",
+        "Applied status survives close/reopen and reload"
+      ]
+    },
+    {
+      "viewport": {
+        "width": 375,
+        "height": 812
+      },
+      "passed": true,
+      "account": "guest",
+      "assistRequests": 1,
+      "taskId": "task-1792046758305-0-6enk",
+      "scenarios": [
+        "Proposal awaits explicit Apply",
+        "Apply creates one task",
+        "Three immediate clicks create no duplicates",
+        "Applied status survives close/reopen and reload"
+      ]
+    }
+  ]
+}

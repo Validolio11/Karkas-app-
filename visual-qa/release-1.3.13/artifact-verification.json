@@ -1,0 +1,173 @@
+{
+  "passed": true,
+  "version": "1.3.13",
+  "packagedFileCount": 37,
+  "verifiedFiles": [
+    {
+      "file": "dist/assets/app-B0X8U10S.css",
+      "sha256": "54f07495a1c593aace139ad6bfa9c35c13f7c51fc5380679a38764af7c9f8618"
+    },
+    {
+      "file": "dist/assets/app-DeO_qysk.js",
+      "sha256": "f60eddf100b05e9566d72cb9fcd8a68750360aa34ee75d7884a48fc20b2fb598"
+    },
+    {
+      "file": "dist/assets/desktopAuth-CwMREUTD.js",
+      "sha256": "ad29eb5c1d6b4efbb1d1280aaeb1f54d4e32eda1bb5f6435b80d61c52b3ee189"
+    },
+    {
+      "file": "dist/assets/index-8llDBll0.js",
+      "sha256": "551a663275c2d384227d45a92257219560092207f9fbd18a0e9fdecd51c1d4bb"
+    },
+    {
+      "file": "dist/assets/index-BhgvFW9t.css",
+      "sha256": "1e9724fe028a9e97352d909dfbfec8d0cc96fd7afdc4d99136bcce94361e7768"
+    },
+    {
+      "file": "dist/assets/manrope-cyrillic-wght-normal-Dvxsihut.woff2",
+      "sha256": "c268b459a9329e59fecf39a17618efd44c71735532048d60b12aab76a8c14914"
+    },
+    {
+      "file": "dist/assets/manrope-latin-ext-wght-normal-Ch3YOpNY.woff2",
+      "sha256": "3911b66d9f2e005a4b989223405d0e5032619c668597ba467cc76a23c8fffcfb"
+    },
+    {
+      "file": "dist/assets/manrope-latin-wght-normal-DHIcAJRg.woff2",
+      "sha256": "a30ddcd349703aff7464c34bef3fffdff405ee50c113440d7c8693c02d210972"
+    },
+    {
+      "file": "dist/desktop-auth.html",
+      "sha256": "d759ad5167d750759918a4165a79286dfd26a5d80c5a6e2beaad8b4eeef73bff"
+    },
+    {
+      "file": "dist/icon.png",
+      "sha256": "3534e012918d1bb5b214f3c7294490d84da2a19340508272001256a177f42a38"
+    },
+    {
+      "file": "dist/icon.svg",
+      "sha256": "5279880f50fe3ce6e54c4d3d99d0b748102dc36cd294a74349ced385666b24b5"
+    },
+    {
+      "file": "dist/icons-ai.png",
+      "sha256": "6cbdb0c52588d0788c137a8ab05923be78be3910f94dc6098fe49ca8964217b3"
+    },
+    {
+      "file": "dist/icons-ai.svg",
+      "sha256": "78f4a196500f3ac0fd81d80cd98a8d5361aa846bb3d80b4a25c0b7bf8ad35ef2"
+    },
+    {
+      "file": "dist/index.html",
+      "sha256": "dc68e85b89668e7dd6b513f07cc742c51b0bb2ade9a99dc870cf76be50f56f54"
+    },
+    {
+      "file": "dist/licenses/Manrope-OFL.txt",
+      "sha256": "d826ab6583b12c26807d8716a545bdbbb672df04f48608a364ba9efdbe501c30"
+    },
+    {
+      "file": "dist/server.cjs",
+      "sha256": "021a347fea294ff360006aa3cc4960265bec8df75d65dbc973ad48dcaf957489"
+    },
+    {
+      "file": "dist/server.cjs.map",
+      "sha256": "6c35e2b78685c3c5db9a560595a4fcb91437de61adbcc1472762c1b7b23e6b65"
+    },
+    {
+      "file": "dist/voice-capture.js",
+      "sha256": "3a3022bc94b7ad36343dca1393e43c53eca6fb3ddb62638001798312a34ba3c8"
+    },
+    {
+      "file": "electron/app-icons.cjs",
+      "sha256": "6d4edc9c0116e877a95869b5b3093334c593eb485aa046b1ae6f765f1685bd79"
+    },
+    {
+      "file": "electron/app-icons.test.cjs",
+      "sha256": "e58d71e0bbb7f654c6c19d341d91f30f17f3aaa50625cdd0d76145b197ea83e3"
+    },
+    {
+      "file": "electron/browser-auth.cjs",
+      "sha256": "11c263db9b35e11dbb5425afe57c341f1bbda354af348c0f683d8b294e4c70dd"
+    },
+    {
+      "file": "electron/browser-auth.test.cjs",
+      "sha256": "4b3602737b1496b1546325a14e8470db626e864531d56a11871252962dc5f366"
+    },
+    {
+      "file": "electron/main.cjs",
+      "sha256": "e58d7ede9e05aa87117c8e03c17455ca43a99b759451fbd312459d818974ee9b"
+    },
+    {
+      "file": "electron/notification-preload.test.cjs",
+      "sha256": "37213e0c3bd0a3dd19c9b548b4c5c2c9e136a982ee476744f77bc59298cb2aec"
+    },
+    {
+      "file": "electron/preload.cjs",
+      "sha256": "266ea23a69156d1bf7829842d2328ff6d65955ad39addef818fab3f68a0e3da9"
+    },
+    {
+      "file": "electron/preload.test.cjs",
+      "sha256": "fb0bb4b9d85f5d61a28cb2587e10885e277263c92b8f11e08bef905004128415"
+    },
+    {
+      "file": "electron/secrets.cjs",
+      "sha256": "3035e7faf532990d25dd448ac8c43934cfb3b6a1a3277c46e3a84dfb03ef7b55"
+    },
+    {
+      "file": "electron/secrets.test.cjs",
+      "sha256": "f325992967db83cfb2c6ad881600b4f65b91ea54db0fa3bf9634c8f9e2f737a9"
+    },
+    {
+      "file": "electron/server-runtime.test.cjs",
+      "sha256": "c3fbad14f6064a7287df510598f95a93979d17383719e310ff557b0ffa2cd3c0"
+    },
+    {
+      "file": "electron/storage.cjs",
+      "sha256": "0c05c7aa2cfbd5ca38bb40302c2345cc85f7b0bf048e3e1add58e67e476b7769"
+    },
+    {
+      "file": "electron/storage.test.cjs",
+      "sha256": "be91662454b4064c51186607ecbf88c5111b584820d7e2341e76c1cf9a69fe6d"
+    },
+    {
+      "file": "electron/update-download.cjs",
+      "sha256": "0d3fdd83832a5ab7e79acfd3bcbfc1c9e9b16134493cbe2fcc1789966aa59194"
+    },
+    {
+      "file": "electron/update-installer.cjs",
+      "sha256": "9424f7c18bc50aead25a2863b49ac8285274c5c5acb988915162add2f8f1f587"
+    },
+    {
+      "file": "electron/update-installer.test.cjs",
+      "sha256": "5ccc7b24aaed62d3627e922e512ced556e86e6e07d4fcba0177fb1f83acf2bbe"
+    },
+    {
+      "file": "electron/update-trust.cjs",
+      "sha256": "4ecc0d9e035707c770e0ccb49b879d7550b48093f5f96430c1a8fbbf52957295"
+    },
+    {
+      "file": "electron/update-trust.test.cjs",
+      "sha256": "2aa83f994264cb7c5dec85cf43a214f8df2491a33321d56b43d1f9991cc7f6c3"
+    },
+    {
+      "file": "electron/workspace-validation.mjs",
+      "sha256": "1a2d35fab1de995c84e4c7ae65aaa99c6c4f0a80660926755f5d71c749456c93"
+    }
+  ],
+  "assets": [
+    {
+      "name": "Karkas-Setup-1.3.13.exe",
+      "size": 139218581,
+      "sha256": "7e99a299e67abeec0a7a94f5f4b720c4591b3bc3ac901f7d71feefa3e9c1d186"
+    },
+    {
+      "name": "Karkas-Setup-1.3.13.exe.blockmap",
+      "size": 146173,
+      "sha256": "94b2eebabf75b1dbc850ed0dde8387d32d602431f84aa9830b90dc31e0d7d722"
+    },
+    {
+      "name": "latest.yml",
+      "size": 344,
+      "sha256": "cdabbf3ef5867007775a088f6bfad1187f0e8dbe6714522ed9337af631bdd36a"
+    }
+  ],
+  "installerSha512": "I4a8Vhy2GWzOy7LfJvoRv7P61GxfQgfVT87mxb9BZqgQ3jxOK5lnrZBdunuveMIRljH9oob6dtremzAxtA98PA=="
+}

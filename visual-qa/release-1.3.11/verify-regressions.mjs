@@ -1,0 +1,75 @@
+import { createRequire } from 'node:module';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+const require = createRequire(import.meta.url);
+const { chromium } = require('C:/Users/Ivan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright');
+const output = path.dirname(fileURLToPath(import.meta.url));
+const url = process.env.QA_URL || 'http://127.0.0.1:54837';
+assert.ok(['127.0.0.1', 'localhost'].includes(new URL(url).hostname), 'Synthetic QA must use an isolated local server');
+const results = [];
+const browser = await chromium.launch({ headless: true, channel: 'chrome' });
+try {
+  for (const viewport of [{ width: 1440, height: 1000 }, { width: 375, height: 812 }]) {
+    const context = await browser.newContext({ viewport });
+    const errors = [];
+    await context.route(request => new URL(request).origin !== new URL(url).origin, route => route.abort('blockedbyclient'));
+    await context.route('**/api/**', route => route.fulfill({ json: { ok: true } }));
+    await context.addInitScript(() => {
+      window.qaTaskWrites = 0;
+      const originalSet = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (key, value) {
+        if (this === localStorage && key === 'life_todo_tasks_v2') window.qaTaskWrites++;
+        return originalSet.call(this, key, value);
+      };
+      if (localStorage.getItem('qa-release-seeded')) return;
+      localStorage.setItem('qa-release-seeded', '1');
+      localStorage.setItem('todo_app_lang', 'uk');
+      localStorage.setItem('life_todo_tabs_v2', JSON.stringify([{ id: 'work', name: 'Робота', color: '#fff' }]));
+      localStorage.setItem('life_todo_tasks_v2', JSON.stringify([{ id: 'synthetic-no-time', title: 'Регресія без таймера', phase: 'work', priority: 2, steps: 0, currentStep: 0, done: false, pinned: false, createdAt: Date.now(), timerMode: 'none', timeSpentSeconds: 0 }]));
+      localStorage.setItem('karkas_deleted_tasks_v2', '[]');
+      localStorage.setItem('karkas_notepad_notes_v1:migration-owner', 'guest');
+      localStorage.setItem('karkas_notepad_notes_v1:guest', '[]');
+    });
+    const page = await context.newPage();
+    page.on('pageerror', error => errors.push(error.message));
+    await page.goto(url);
+    await page.locator('#task-start-action-synthetic-no-time').click();
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('life_todo_tasks_v2'))[0]?.startedAt > 0);
+    const started = await page.evaluate(() => JSON.parse(localStorage.getItem('life_todo_tasks_v2'))[0]);
+    assert.equal(started.timerMode, 'none');
+    assert.ok(!started.timerRunning);
+    await page.waitForTimeout(500);
+    const idle = await page.evaluate(() => ({ writes: window.qaTaskWrites, tasks: localStorage.getItem('life_todo_tasks_v2') }));
+    await page.waitForTimeout(2300);
+    assert.deepEqual(await page.evaluate(() => ({ writes: window.qaTaskWrites, tasks: localStorage.getItem('life_todo_tasks_v2') })), idle, 'Idle no-timer task does not trigger repeated writes');
+    await page.locator('#task-toggle-action-synthetic-no-time').click();
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('life_todo_tasks_v2'))[0]?.done);
+    const completed = await page.evaluate(() => JSON.parse(localStorage.getItem('life_todo_tasks_v2'))[0]);
+    assert.ok(completed.completedAt > 0);
+    page.once('dialog', dialog => dialog.dismiss());
+    await page.locator('#clear-completed-bottom-btn').click();
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('life_todo_tasks_v2')).length), 1, 'Cancel keeps completed task');
+    page.once('dialog', dialog => dialog.accept());
+    await page.locator('#clear-completed-bottom-btn').click();
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('life_todo_tasks_v2')).length === 0);
+    const archived = await page.evaluate(() => JSON.parse(localStorage.getItem('karkas_deleted_tasks_v2')).find(task => task.id === 'synthetic-no-time'));
+    assert.equal(archived.done, true);
+    assert.equal(archived.completedAt, completed.completedAt);
+    assert.equal(archived.startedAt, completed.startedAt);
+    await page.locator('#phase-filter-notepad').click();
+    const otherTab = await context.newPage();
+    otherTab.on('pageerror', error => errors.push(error.message));
+    await otherTab.goto(url);
+    await otherTab.evaluate(() => localStorage.setItem('karkas_notepad_notes_v1:guest', JSON.stringify([{ id: 'synthetic-other-tab', title: 'Нотатка з іншої вкладки', content: 'Синтетичний текст', createdAt: Date.now(), updatedAt: Date.now() }])));
+    await page.getByRole('heading', { name: 'Нотатка з іншої вкладки', exact: true }).waitFor();
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'No horizontal overflow');
+    await page.screenshot({ path: path.join(output, viewport.width > 500 ? 'regression-desktop.png' : 'regression-mobile.png'), fullPage: true });
+    assert.deepEqual(errors, [], 'No uncaught browser errors');
+    results.push({ viewport, passed: true, scenarios: ['Start without timer', 'Idle task storage remains unchanged', 'Cancel/confirm archive preserves completed state and dates', 'Notes update from another browser tab', 'No horizontal overflow or uncaught browser errors'] });
+    await context.close();
+  }
+  fs.writeFileSync(path.join(output, 'regression-results.json'), JSON.stringify({ passed: true, syntheticOnly: true, realAiCalls: 0, results }, null, 2));
+  console.log(`PASS ${results.length} desktop/mobile regression groups`);
+} finally { await browser.close(); }

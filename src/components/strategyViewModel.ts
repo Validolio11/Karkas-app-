@@ -1,4 +1,5 @@
-import type { PersonalStrategyProfile, PSTask, StrategyDiscoveryTopicState, StrategyGoal } from '../types';
+import type { DeletedTask, PersonalStrategyProfile, PSTask, StrategyDiscoveryTopicState, StrategyGoal } from '../types';
+import { isCompletedArchivedTask, selectRelevantArchivedTasks } from '../utils/taskArchive';
 import { taskDateEnd } from '../utils/taskDates';
 import { recordedTaskSeconds } from '../utils/taskTimeStats';
 import { isPersonalStrategyReady, normalizeStrategyDiscovery, STRATEGY_DISCOVERY_TOPICS } from '../utils/strategyDiscovery';
@@ -59,9 +60,10 @@ export function taskStepProgress(task: Pick<PSTask, 'steps' | 'currentStep' | 's
 export interface GoalTaskStats { active: PSTask[]; done: number; total: number; percent: number }
 
 /** Tasks linked to a goal directly or through one of its categories. */
-export function goalTaskStats(goal: Pick<StrategyGoal, 'taskIds' | 'categoryIds'>, tasks: readonly PSTask[]): GoalTaskStats {
+export function goalTaskStats(goal: Pick<StrategyGoal, 'taskIds' | 'categoryIds'>, tasks: readonly PSTask[], archive: readonly DeletedTask[] = []): GoalTaskStats {
   const ids = new Set(goal.taskIds), categories = new Set(goal.categoryIds);
-  const linked = tasks.filter(task => !task.scheduledPending && (ids.has(task.id) || categories.has(task.phase)));
+  const tracked = [...tasks, ...selectRelevantArchivedTasks(tasks, archive).filter(isCompletedArchivedTask)];
+  const linked = tracked.filter(task => !task.scheduledPending && (ids.has(task.id) || categories.has(task.phase)));
   const done = linked.filter(task => task.done).length;
   return { active: linked.filter(task => !task.done), done, total: linked.length, percent: linked.length ? Math.round(done / linked.length * 100) : 0 };
 }

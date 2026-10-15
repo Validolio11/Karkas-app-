@@ -26,6 +26,7 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { readWebApiKey } from '../utils/webApiKey';
 
 interface NotepadViewProps {
   ownerId?: string | null;
@@ -33,8 +34,8 @@ interface NotepadViewProps {
   notes: NotepadNote[];
   onAddNote: (note: Omit<NotepadNote, 'id' | 'createdAt'>) => boolean;
   onUpdateNote: (id: string, updates: Partial<NotepadNote>) => boolean;
-  onDeleteNote: (id: string) => void;
-  onRestoreNote: (note: NotepadNote) => void;
+  onDeleteNote: (id: string) => boolean;
+  onRestoreNote: (note: NotepadNote) => boolean;
   storageError?: boolean;
 }
 
@@ -107,6 +108,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
 
   // Undo delete safety state
   const [recentlyDeletedNote, setRecentlyDeletedNote] = useState<NotepadNote | null>(null);
+  const [restoreFailed, setRestoreFailed] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<NotepadNote | null>(null);
   const deleteDialogRef = useRef<HTMLDialogElement | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(() => initialDrafts.recovered
@@ -188,12 +190,12 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
 
   // Auto-dismiss undo note toast after 8 seconds
   useEffect(() => {
-    if (!recentlyDeletedNote) return;
+    if (!recentlyDeletedNote || restoreFailed) return;
     const timer = setTimeout(() => {
       setRecentlyDeletedNote(null);
     }, 8000);
     return () => clearTimeout(timer);
-  }, [recentlyDeletedNote]);
+  }, [recentlyDeletedNote, restoreFailed]);
 
   // Voice recording duration timer
   useEffect(() => {
@@ -331,7 +333,7 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
       if (!isCurrentVoiceSession(session)) return;
 
       const rawBase64 = audioBase64.includes(',') ? audioBase64.split(',')[1] : audioBase64;
-      const customApiKey = localStorage.getItem('karkas_custom_api_key') || undefined;
+      const customApiKey = readWebApiKey() || undefined;
       const customModel = localStorage.getItem('karkas_custom_model') || undefined;
       const res = await karkasApiFetch('/api/ai/transcribe-audio', {
         method: 'POST',
@@ -714,18 +716,36 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
 
   const handleConfirmDelete = () => {
     if (!pendingDelete) return;
+    if (restoreFailed && recentlyDeletedNote) {
+      setPendingDelete(null);
+      setActionNotice(lang === 'uk' ? 'Спочатку повторіть відновлення попередньої нотатки або закрийте її підказку.' : 'Retry restoring the previous note first, or dismiss its Undo notice.');
+      return;
+    }
     const note = notes.find((item) => item.id === pendingDelete.id);
     setPendingDelete(null);
     if (!note) return;
+    let deleted = false;
+    try { deleted = onDeleteNote(note.id); } catch { /* Keep the stored note on failure. */ }
+    if (!deleted) {
+      setActionNotice(lang === 'uk' ? 'Не вдалося видалити нотатку. Вона збережена; спробуйте ще раз.' : 'The note could not be deleted. It is retained; try again.');
+      return;
+    }
     sound.tick(400);
+    setRestoreFailed(false);
     setRecentlyDeletedNote(note);
-    onDeleteNote(note.id);
   };
 
   const handleRestoreDeletedNote = () => {
     if (!recentlyDeletedNote) return;
     sound.tick(700);
-    onRestoreNote(recentlyDeletedNote);
+    let restored = false;
+    try { restored = onRestoreNote(recentlyDeletedNote); } catch { /* Keep Undo available on failure. */ }
+    if (!restored) {
+      setRestoreFailed(true);
+      setActionNotice(lang === 'uk' ? 'Не вдалося відновити нотатку. Кнопка «Скасувати» залишиться доступною для повторної спроби.' : 'The note could not be restored. Undo will stay available so you can retry.');
+      return;
+    }
+    setRestoreFailed(false);
     setRecentlyDeletedNote(null);
   };
 
@@ -1048,6 +1068,8 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
                         setSelectedColor(preset.hex);
                       }}
                       title={preset.label}
+                      aria-label={preset.label}
+                      aria-pressed={selectedColor === preset.hex}
                       style={{ backgroundColor: preset.hex }}
                       className={`w-3.5 h-3.5 transition-all cursor-pointer ${
                         selectedColor === preset.hex
@@ -1268,6 +1290,8 @@ export const NotepadView: React.FC<NotepadViewProps> = ({
                           key={preset.hex}
                           type="button"
                           onClick={() => setEditColor(preset.hex)}
+                          aria-label={preset.label}
+                          aria-pressed={editColor === preset.hex}
                           style={{ backgroundColor: preset.hex }}
                           className={`w-3.5 h-3.5 transition-transform cursor-pointer ${
                             editColor === preset.hex ? 'scale-125 ring-1.5 ring-white' : 'opacity-60'

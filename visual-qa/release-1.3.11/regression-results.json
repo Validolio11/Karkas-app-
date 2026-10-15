@@ -1,0 +1,35 @@
+{
+  "passed": true,
+  "syntheticOnly": true,
+  "realAiCalls": 0,
+  "results": [
+    {
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "passed": true,
+      "scenarios": [
+        "Start without timer",
+        "Idle task storage remains unchanged",
+        "Cancel/confirm archive preserves completed state and dates",
+        "Notes update from another browser tab",
+        "No horizontal overflow or uncaught browser errors"
+      ]
+    },
+    {
+      "viewport": {
+        "width": 375,
+        "height": 812
+      },
+      "passed": true,
+      "scenarios": [
+        "Start without timer",
+        "Idle task storage remains unchanged",
+        "Cancel/confirm archive preserves completed state and dates",
+        "Notes update from another browser tab",
+        "No horizontal overflow or uncaught browser errors"
+      ]
+    }
+  ]
+}

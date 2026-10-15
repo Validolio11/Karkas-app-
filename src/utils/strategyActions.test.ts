@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { PSTask, StrategyAction } from '../types';
-import { applyStrategyActions, undoStrategyAction } from './strategyActions';
+import { applyStrategyActions, undoStrategyAction, undoStrategyTurn } from './strategyActions';
 import { createPersonalStrategyProfile } from './personalStrategy';
 import { confirmedProfile } from './strategyDiscovery.testHelpers';
 import { isPersonalStrategyReady } from './strategyDiscovery';
@@ -11,6 +11,25 @@ const task: PSTask = { id: 't', title: 'Study', phase: 'work', priority: 2, step
 const profile = () => confirmedProfile([{ id: 'g', title: 'Learn', motive: 'Freedom', agreed: false, taskIds: ['t'], categoryIds: ['work'] }]);
 const options = (actions: StrategyAction[]) => ({ tasks: [task], profile: profile(), actions, ownerId: 'a', currentOwnerId: 'a', turnId: 'turn', tabs: [{ id: 'work', name: 'Work' }], now: 100 });
 const action = (changes: StrategyAction['changes']): StrategyAction => ({ id: 'action', goalId: 'g', type: 'update', taskId: 't', expectedTask: task, reason: 'Reduce friction', changes });
+
+test('chat undo reverses all three actions and rejects the whole turn after a newer edit', () => {
+  const actions: StrategyAction[] = Array.from({ length: 3 }, (_, index) => ({
+    id: `next-${index}`, goalId: 'g', reason: 'A manageable step', type: 'create',
+    changes: { title: `Next ${index}`, phase: 'work' },
+  }));
+  const result = applyStrategyActions(options(actions));
+  const input = { tasks: result.tasks, profile: result.profile, actionId: result.applied[2].id,
+    ownerId: 'a', currentOwnerId: 'a', now: 200 };
+  const undo = undoStrategyTurn(input);
+  assert.equal(undo.undone, true);
+  assert.deepEqual(undo.tasks, [task]);
+  assert.equal(undo.profile.actionHistory.filter(entry => entry.undoneAt === 200).length, 3);
+  const edited = result.tasks.map(item => item.id === result.applied[0].taskId ? { ...item, note: 'Newer manual edit' } : item);
+  const blocked = undoStrategyTurn({ ...input, tasks: edited });
+  assert.equal(blocked.undone, false);
+  assert.equal(blocked.tasks, edited);
+  assert.equal(blocked.profile, result.profile);
+});
 
 test('autonomous dates preserve recorded progress and can be undone; invalid ranges cannot apply', () => {
   const result = applyStrategyActions(options([action({ plannedDate: '2026-10-12', deadlineDate: '2026-10-15' })]));

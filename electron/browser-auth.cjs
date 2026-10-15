@@ -42,7 +42,7 @@ function beginBrowserGoogleLogin({ openExternal, assetDir, signal, timeoutMs = 1
         return reply(res, 400, { error: 'Invalid path' });
       }
 
-      if (pathname === '/callback') {
+      if (pathname === '/callback' || pathname === '/cancel') {
         if (req.method !== 'POST') return reply(res, 405, { error: 'POST required' });
         if (req.headers.origin !== origin) return reply(res, 403, { error: 'Invalid origin' });
         if (req.headers['content-type']?.split(';')[0].trim() !== 'application/json') {
@@ -63,6 +63,14 @@ function beginBrowserGoogleLogin({ openExternal, assetDir, signal, timeoutMs = 1
           if (typeof body.state !== 'string' || body.state.length !== state.length ||
               !timingSafeEqual(Buffer.from(body.state), Buffer.from(state))) {
             return reply(res, 403, { error: 'Invalid state' });
+          }
+          // Another callback may have completed while this request body arrived.
+          if (accepted || finished) return reply(res, 410, { error: 'Login already completed' });
+          if (pathname === '/cancel') {
+            accepted = true;
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: true }), abort);
+            return;
           }
           const validToken = (value) => typeof value === 'string' && value.length > 0 && value.length <= 12000;
           if ((!validToken(body.idToken) && !validToken(body.accessToken)) ||

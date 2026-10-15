@@ -137,22 +137,61 @@ export function hasProposedOperations(response: Response): boolean {
     || Array.isArray(response.strategy?.actions) && response.strategy.actions.length > 0;
 }
 
+function refersToApplyControl(text: string): boolean {
+  // Quoted history is data. Inspect only instructions voiced by this reply.
+  const instructions = text.split('\n').filter(line => !/^\s*(?:>|["«“])/.test(line)).join('\n');
+  const directive = /натисн\p{L}*|клацн\p{L}*|клікн\p{L}*|обер\p{L}*|вибер\p{L}*|скорист\p{L}*|\b(?:click|press|tap|select|use)\b/iu;
+  const control = /кнопк\p{L}*|\bbutton\b|["«“][^"»”\n]{0,80}(?:застос\p{L}*|підтверд\p{L}*|apply|confirm)[^"»”\n]{0,80}["»”]/iu;
+  const apply = /застос\p{L}*|підтверд\p{L}*|\b(?:apply|confirm|confirmation)\b/iu;
+  return instructions.split(/[.!?\n]+/u).some(clause => {
+    // App help may describe what to do IF a prepared card exists; that does
+    // not assert that this answer has created one. A generic "if you want" is not enough.
+    const prefix = clause.split(/[,;:—]/u, 1)[0];
+    const directiveAt = prefix.search(directive);
+    const condition = directiveAt < 0 ? prefix : prefix.slice(0, directiveAt);
+    const conditional = /^\s*(?:якщо|коли|після того як|when|if|once)(?![\p{L}\p{N}_])/iu.test(condition);
+    const prepared = /(?:підготовлен\p{L}*|запропонован\p{L}*)\s+(?:змін\p{L}*|пропозиц\p{L}*)|картк\p{L}*\s+(?:змін\p{L}*|пропозиц\p{L}*)|\b(?:prepared|valid|proposed)\s+(?:changes|proposal)|\bproposal\s+card\b/iu.test(condition);
+    const exists = /(?<![\p{L}\p{N}_])(?:є|буде|бачите|маєте|існу\p{L}*|з['’ʼ]яв\p{L}*|підготовлено|створено)(?![\p{L}\p{N}_])|\b(?:there\s+(?:is|are)|you\s+(?:have|see)|exists|has\s+been\s+prepared)\b/iu.test(condition);
+    const absent = /(?:немає|нема|відсутн\p{L}*|без)\s+(?:підготовлен\p{L}*\s+)?(?:змін\p{L}*|пропозиц\p{L}*|картк\p{L}*)|\b(?:no|without)\s+(?:prepared\s+)?(?:changes|proposal|card)\b/iu.test(condition);
+    if (conditional && prepared && exists && !absent) return false;
+    return directive.test(clause) && control.test(clause) && apply.test(clause);
+  });
+}
+
 /** At this boundary every returned mutation is still a proposal, including autonomous actions. */
 export function guardUnappliedClaims<T extends Response>(response: T, isUk: boolean, address: Address = 'vy'): T {
   const safe: Response = { ...response };
+  const hasPendingActions = ['tasks', 'taskUpdates', 'taskDeletions', 'tabs'].some(field => Array.isArray(response[field]) && response[field].length > 0);
+  const hasActions = hasPendingActions || Array.isArray(response.strategy?.actions) && response.strategy.actions.length > 0;
   let misleading = false;
+  let phantomApplyControl = false;
   for (const field of ['reply', 'summary']) {
     if (typeof safe[field] !== 'string') continue;
     const result = unappliedClaimText(safe[field]);
     misleading ||= result.changed;
+    phantomApplyControl ||= !hasPendingActions && refersToApplyControl(safe[field]);
     safe[field] = result.text;
   }
-  if (!misleading) return response;
+  if (!hasPendingActions) {
+    const otherText = [...(Array.isArray(response.insights) ? response.insights : []), response.strategy?.narrative, response.strategy?.nextAction];
+    phantomApplyControl ||= otherText.some(text => typeof text === 'string' && refersToApplyControl(text));
+    if (!hasActions) misleading ||= otherText.some(text => typeof text === 'string' && unappliedClaimText(text).changed);
+  }
+  if (!misleading && !phantomApplyControl) return response;
   if (hasProposedOperations(response)) {
+    if (phantomApplyControl) {
+      const message = isUk ? 'Підготовлено зміни в межах узгодженої стратегії. Результат їх застосування буде показано в чаті.'
+        : 'Changes were prepared within the agreed strategy. Their application result will be shown in chat.';
+      safe.reply = message;
+      safe.summary = message;
+      safe.insights = [];
+    }
     if (response.strategy) {
       safe.strategy = { ...response.strategy };
       for (const field of ['narrative', 'nextAction']) {
-        if (typeof safe.strategy[field] === 'string') safe.strategy[field] = unappliedClaimText(safe.strategy[field]).text;
+        if (typeof safe.strategy[field] !== 'string') continue;
+        if (phantomApplyControl && refersToApplyControl(safe.strategy[field])) delete safe.strategy[field];
+        else safe.strategy[field] = unappliedClaimText(safe.strategy[field]).text;
       }
     }
     return safe as T;

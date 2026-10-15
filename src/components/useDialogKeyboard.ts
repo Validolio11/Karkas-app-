@@ -21,6 +21,7 @@ export function useDialogKeyboard(isOpen: boolean, onClose: () => void, dialogId
     const handleKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
+        event.stopPropagation();
         closeRef.current();
       } else if (event.key === 'Tab') {
         const elements = focusable();

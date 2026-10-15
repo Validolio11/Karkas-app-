@@ -59,9 +59,9 @@ import { applyTaskWorkPlan, type WorkPlanEdit } from './utils/taskWorkPlan';
 import { useWorkReminders } from './components/useWorkReminders';
 import { StrategyView } from './components/StrategyView';
 import { useStrategyReminders } from './components/useStrategyReminders';
-import { createPersonalStrategyProfile, readPersonalStrategy, savePersonalStrategy, clearPersonalStrategy, applyStrategyResponse } from './utils/personalStrategy';
-import { continueStrategyDiscovery, normalizeStrategyDiscovery, preparePersonalDiscoveryRequest } from './utils/strategyDiscovery';
-import { applyStrategyActions, undoStrategyAction } from './utils/strategyActions';
+import { createPersonalStrategyProfile, readPersonalStrategy, savePersonalStrategy, clearPersonalStrategy, applyStrategyResponse, personalStrategyKey, intactStoredStrategy } from './utils/personalStrategy';
+import { continueStrategyDiscovery, normalizeStrategyDiscovery, preparePersonalDiscoveryRequest, preserveDiscoveryAfterUserGoalEdit, preserveDiscoveryAfterTabMigration } from './utils/strategyDiscovery';
+import { applyStrategyActions, undoStrategyTurn } from './utils/strategyActions';
 import { claimPlanningNotice } from './utils/planningNotices';
 import { stageStrategyTransaction, recoverStrategyTransaction, clearStrategyTransaction, completeStrategyTransaction, strategyTransactionKey, readStrategyTransaction, markStrategyTransactionConflict } from './utils/strategyTransaction';
 import type { PersonalStrategyProfile, AIResponse, AIIntent } from './types';
@@ -69,6 +69,10 @@ import { isSystemView, migrateSystemCategories } from './utils/systemViews';
 import { writeRecoverableJson, preserveRawStorage } from './utils/recoverableLocalStorage';
 import { readLocalWorkspace, parseAccountRecord, readAccountRecovery } from './utils/localWorkspace';
 import { parseWorkspace } from './utils/workspaceValidation';
+import { remapWorkspaceTabs } from './utils/workspaceTabs';
+import { claimGuestWorkspaceImport } from './utils/guestWorkspaceImport';
+import { readWebApiKey } from './utils/webApiKey';
+import { workspaceTabTransactionKey, stageWorkspaceTabTransaction, recoverWorkspaceTabTransaction, completeWorkspaceTabTransaction } from './utils/workspaceTabTransaction';
 
 const STORAGE_KEY = 'life_todo_tasks_v2';
 const DELETED_STORAGE_KEY = 'karkas_deleted_tasks_v2';
@@ -161,6 +165,9 @@ export default function App() {
     { tasks: STORAGE_KEY, tabs: TABS_KEY, deletedTasks: DELETED_STORAGE_KEY },
     { soundEnabled: true, fireEnabled: true, lang, aiIconVariant: 'quantum' }));
   const canPersistWorkspaceRef = React.useRef(initialWorkspace.canPersist);
+  const [workspaceStorageError, setWorkspaceStorageError] = useState(false);
+  const [workspaceReloadToken, setWorkspaceReloadToken] = useState(0);
+  const tabMigrationBusyRef = React.useRef(false);
   const t = TRANSLATIONS[lang];
   const [actionNotice, setActionNotice] = useState<string | null>(initialWorkspace.recovered
     ? (initialWorkspace.backupPreserved
@@ -544,7 +551,7 @@ export default function App() {
       const activeTasks = tasks.filter((t) => !t.done && !t.scheduledPending);
       const completedTasks = tasks.filter((t) => t.done);
 
-      const customKey = localStorage.getItem('karkas_custom_api_key') || '';
+      const customKey = readWebApiKey();
       const customModel = localStorage.getItem('karkas_custom_model') || '';
       const customEnabled = localStorage.getItem('karkas_custom_ai_enabled') === 'true';
 
@@ -601,9 +608,7 @@ export default function App() {
           if (!key || titles.has(key)) return false;
           titles.add(key); return true;
         });
-        return { ...setTaskSteps(task, [...existing, ...additions], Date.now()),
-          note: task.note || data.note,
-          priority: [1, 2, 3].includes(data.suggestedPriority) ? data.suggestedPriority : task.priority };
+        return setTaskSteps(task, [...existing, ...additions], Date.now());
       }));
       if (data.source === 'engine' || data.source === 'heuristic-engine') setActionNotice(lang === 'uk' ? 'Кроки запропоновано за локальними правилами; перевірте їх.' : 'Steps use local rules; review them.');
       sound.activate();
@@ -742,6 +747,7 @@ export default function App() {
       writeRecoverableJson(localStorage, STORAGE_KEY, JSON.stringify(tasks));
     } catch (e) {
       console.error('Failed to save tasks to localStorage', e);
+      setWorkspaceStorageError(true);
     }
   }, [tasks]);
 
@@ -752,6 +758,7 @@ export default function App() {
       writeRecoverableJson(localStorage, DELETED_STORAGE_KEY, JSON.stringify(deletedTasks));
     } catch (e) {
       console.error('Failed to save deleted tasks to localStorage', e);
+      setWorkspaceStorageError(true);
     }
   }, [deletedTasks]);
 
@@ -762,6 +769,7 @@ export default function App() {
       writeRecoverableJson(localStorage, TABS_KEY, JSON.stringify(tabs));
     } catch (e) {
       console.error('Failed to save tabs to localStorage', e);
+      setWorkspaceStorageError(true);
     }
   }, [tabs]);
 
@@ -877,7 +885,10 @@ export default function App() {
     writeRecoverableJson(localStorage, TABS_KEY, JSON.stringify(value.tabs));
     writeRecoverableJson(localStorage, DELETED_STORAGE_KEY, JSON.stringify(value.deletedTasks));
     localStorage.setItem(AI_ICON_KEY, value.settings.aiIconVariant);
-    persistWorkspace();
+    const owner = workspaceOwnerRef.current;
+    void persistWorkspace().then(saved => {
+      if (owner === workspaceOwnerRef.current) setWorkspaceStorageError(!saved || localStorage.getItem(workspaceTabTransactionKey(owner)) !== null);
+    });
   };
 
   const recoveryCandidate = useMemo(() => {
@@ -909,10 +920,68 @@ export default function App() {
 
   React.useLayoutEffect(() => {
     if (!timerWorkspaceReadyRef.current) return;
-    try { persistWorkspace(); } catch (error) {
+    const owner = workspaceOwnerRef.current;
+    let cancelled = false;
+    try {
+      void persistWorkspace().then(saved => {
+        if (!cancelled && owner === workspaceOwnerRef.current) setWorkspaceStorageError(!saved || localStorage.getItem(workspaceTabTransactionKey(owner)) !== null);
+      });
+    } catch (error) {
       console.error('Local account backup failed:', error);
+      setWorkspaceStorageError(true);
     }
+    return () => { cancelled = true; };
   }, [tasks, tabs, deletedTasks, soundEnabled, fireEnabled, lang, aiIconVariant]);
+
+  useEffect(() => {
+    if (!workspaceStorageError) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [workspaceStorageError]);
+
+  const retryWorkspaceSave = async () => {
+    try {
+      if (!canPersistWorkspaceRef.current || tabMigrationBusyRef.current) return;
+      const owner = workspaceOwnerRef.current;
+      const generation = authGenerationRef.current;
+      const journal = localStorage.getItem(workspaceTabTransactionKey(owner));
+      const recovery = recoverTabMigration(owner, readWorkspace(), personalProfileRef.current);
+      if (recovery.status === 'invalid' || recovery.status === 'conflict') {
+        setActionNotice(lang === 'uk' ? 'Перенесення вкладок конфліктує з новішими даними. Поточні дані та журнал збережено для окремого відновлення.' : 'The tab migration conflicts with newer data. Current data and the journal were retained for separate recovery.');
+        return;
+      }
+      if (recovery.status === 'recovered') {
+        if (!savePersonalStrategy(localStorage, owner, recovery.profile)) throw new Error('Goal recovery could not be saved');
+        personalProfileRef.current = recovery.profile;
+        setPersonalProfile(recovery.profile);
+        applyWorkspace(recovery.workspace);
+      }
+      writeRecoverableJson(localStorage, STORAGE_KEY, JSON.stringify(currentTasksRef.current));
+      writeRecoverableJson(localStorage, TABS_KEY, JSON.stringify(currentTabsRef.current));
+      writeRecoverableJson(localStorage, DELETED_STORAGE_KEY, JSON.stringify(currentDeletedTasksRef.current));
+      const saved = await persistWorkspace();
+      if (generation !== authGenerationRef.current || owner !== workspaceOwnerRef.current) return;
+      const completed = journal === null || await completeWorkspaceTabTransaction(localStorage, owner, journal, Promise.resolve(saved),
+        () => generation === authGenerationRef.current && owner === workspaceOwnerRef.current && (auth.currentUser?.uid ?? null) === owner);
+      if (generation === authGenerationRef.current && owner === workspaceOwnerRef.current) {
+        const pending = localStorage.getItem(workspaceTabTransactionKey(owner)) !== null;
+        setWorkspaceStorageError(!saved || !completed || pending);
+        if (saved && completed && !pending && (journal !== null || queuedRemoteRef.current !== null)) setWorkspaceReloadToken(value => value + 1);
+      }
+    } catch { setWorkspaceStorageError(true); }
+  };
+
+  const recoverTabMigration = (owner: string | null, workspace: WorkspaceState, profile: PersonalStrategyProfile) => {
+    const recovery = recoverWorkspaceTabTransaction(localStorage, owner, workspace, profile);
+    if (recovery.status !== 'conflict' || !recovery.conflictParts.includes('profile')) return recovery;
+    // Hydration trims user text; the stored raw profile can still match the exact journal.
+    try {
+      const raw: unknown = JSON.parse(localStorage.getItem(personalStrategyKey(owner)) || 'null');
+      if (intactStoredStrategy(raw)) return recoverWorkspaceTabTransaction(localStorage, owner, workspace, raw as PersonalStrategyProfile);
+    } catch { /* Retain the original conflict without discarding any data. */ }
+    return recovery;
+  };
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -957,7 +1026,8 @@ export default function App() {
               desktopCached.value[field] = parsed;
             }
             // A pending paired commit makes its local snapshot authoritative until recovery finishes.
-            const recoverLocal = cached?.workspace && readStrategyTransaction(localStorage, uid);
+            const recoverLocal = cached?.workspace && (readStrategyTransaction(localStorage, uid)
+              || localStorage.getItem(workspaceTabTransactionKey(uid)) !== null);
             cached = recoverLocal ? { ...desktopCached.value, ...cached } : desktopCached.value;
           }
           const activeOwner = await window.karkasDesktop.workspace.setActiveOwner(uid);
@@ -990,13 +1060,31 @@ export default function App() {
           // but only after every original raw record has a verified backup.
           if (initialWorkspace.backupPreserved) canPersistWorkspaceRef.current = true;
           applyWorkspace(cached.workspace);
-        } else if (previousOwner !== uid && previousOwner !== null) {
+        } else if (previousOwner !== uid && (previousOwner !== null || !uid
+          || !claimGuestWorkspaceImport(localStorage, uid))) {
           applyWorkspace({
             tasks: [], tabs: [], deletedTasks: [],
             settings: { soundEnabled: true, fireEnabled: true, lang: 'uk', aiIconVariant: 'quantum' },
           });
         } else {
           persistWorkspace();
+        }
+        const tabRecovery = recoverTabMigration(uid, readWorkspace(), readPersonalStrategy(localStorage, uid));
+        if (tabRecovery.status === 'recovered') {
+          const journal = localStorage.getItem(workspaceTabTransactionKey(uid));
+          if (!savePersonalStrategy(localStorage, uid, tabRecovery.profile)) throw new Error('Tab goal recovery could not be saved');
+          personalProfileRef.current = tabRecovery.profile;
+          setPersonalProfile(tabRecovery.profile);
+          setProfileOwner(uid);
+          applyWorkspace(tabRecovery.workspace);
+          const completed = await completeWorkspaceTabTransaction(localStorage, uid, journal, persistWorkspace(),
+            () => generation === authGenerationRef.current && workspaceOwnerRef.current === uid && (auth.currentUser?.uid ?? null) === uid);
+          if (generation !== authGenerationRef.current || (auth.currentUser?.uid ?? null) !== uid) return;
+          if (!completed) { setWorkspaceStorageError(true); return; }
+        } else if (tabRecovery.status === 'conflict' || tabRecovery.status === 'invalid') {
+          setActionNotice(lang === 'uk' ? 'Незавершене перенесення вкладок потребує відновлення. Поточні дані й журнал збережено; нові зміни вкладок заблоковано.' : 'A pending tab migration needs recovery. Current data and the journal were retained; new tab changes are blocked.');
+          setWorkspaceStorageError(true);
+          return;
         }
         localAccountLoaded = canPersistWorkspaceRef.current;
         timerWorkspaceReadyRef.current = localAccountLoaded;
@@ -1062,7 +1150,7 @@ export default function App() {
       }
     });
     return () => { ++authGenerationRef.current; unsubscribe(); };
-  }, []);
+  }, [workspaceReloadToken]);
 
   useEffect(() => {
     if (!currentUser || !autoSyncEnabled || !isCloudSyncReady) return;
@@ -1070,7 +1158,7 @@ export default function App() {
     return subscribeToUserCloudData(uid, (remote) => {
       if (auth.currentUser?.uid !== uid || workspaceOwnerRef.current !== uid) return;
       if ((remote.revision || 0) < (baseWorkspaceRef.current?.revision || 0)) return;
-      if (savingRef.current !== null) {
+      if (savingRef.current !== null || tabMigrationBusyRef.current || localStorage.getItem(workspaceTabTransactionKey(uid)) !== null) {
         queuedRemoteRef.current = remote;
         return;
       }
@@ -1128,7 +1216,8 @@ export default function App() {
     const uid = currentUser?.uid;
     const generation = authGenerationRef.current;
     if (!uid || auth.currentUser?.uid !== uid || workspaceOwnerRef.current !== uid ||
-        !cloudSyncReadyRef.current || (!manual && !autoSyncEnabledRef.current) || savingRef.current !== null) {
+        !cloudSyncReadyRef.current || (!manual && !autoSyncEnabledRef.current) || savingRef.current !== null
+        || tabMigrationBusyRef.current || localStorage.getItem(workspaceTabTransactionKey(uid)) !== null) {
       if (manual) throw new Error('Synchronization is not ready or already in progress');
       return false;
     }
@@ -1405,7 +1494,8 @@ export default function App() {
   const strategyReady = profileOwner === strategyOwner && timerWorkspaceReadyRef.current && workspaceOwnerRef.current === strategyOwner;
   const updatePersonalProfile = (next: PersonalStrategyProfile): boolean => {
     if (!strategyReady || workspaceOwnerRef.current !== strategyOwner) return false;
-    if (readStrategyTransaction(localStorage, strategyOwner)) {
+    if (localStorage.getItem(strategyTransactionKey(strategyOwner)) !== null
+      || localStorage.getItem(workspaceTabTransactionKey(strategyOwner)) !== null) {
       setTimerNotice(lang === 'uk' ? 'Спершу потрібно завершити відновлення зміни плану. Нову пам’ять поки не збережено.' : 'Finish recovering the plan change first. New memory has not been saved.'); return false;
     }
     const discovery = normalizeStrategyDiscovery(next);
@@ -1440,12 +1530,16 @@ export default function App() {
     }
     try {
       removeAccountStorage(localStorage, 'karkas_ai_chat_welcome', strategyOwner);
+      removeAccountStorage(localStorage, 'karkas_ai_discovery_mode', strategyOwner);
       const prefix = `karkas_strategy_audit_v1:${encodeURIComponent(strategyOwner === null ? 'guest' : `account:${strategyOwner}`)}:`;
       Object.keys(localStorage).filter(key => key.startsWith(prefix)).forEach(key => localStorage.removeItem(key));
     } catch { /* The new empty profile still replaces the current in-memory view. */ }
     // A fresh paired snapshot also protects existing tasks if an earlier desktop save is still pending.
     const emptyProfile = createPersonalStrategyProfile();
     if (!commitStrategyState(latestTasksRef.current, emptyProfile)) updatePersonalProfile(emptyProfile);
+    setIsAIOpen(false);
+    setAiPromptSeed('');
+    setAiSeedAsDraft(false);
   };
   const handleChatWelcome = (owner: string | null) => {
     if (!strategyReady || owner !== strategyOwner || personalProfileRef.current.onboardingStatus !== 'new') return;
@@ -1453,6 +1547,10 @@ export default function App() {
   };
   const commitStrategyState = (nextTasks: PSTask[], nextProfile: PersonalStrategyProfile): boolean => {
     if (!strategyReady || workspaceOwnerRef.current !== strategyOwner) return false;
+    if (localStorage.getItem(workspaceTabTransactionKey(strategyOwner)) !== null) {
+      setTimerNotice(lang === 'uk' ? 'Спершу завершіть відновлення перенесення вкладок.' : 'Finish recovering the tab migration first.');
+      return false;
+    }
     if (!stageStrategyTransaction(localStorage, strategyOwner, latestTasksRef.current, nextTasks, nextProfile)) {
       setTimerNotice(lang === 'uk' ? 'Не вдалося зберегти зміну плану. Завдання не змінено; перевірте незавершене відновлення.' : 'Could not persist the plan change. Tasks were not changed; check pending recovery.'); return false;
     }
@@ -1480,11 +1578,15 @@ export default function App() {
   const handleStrategyResponse = (response: AIResponse, userText: string, turnId: string, intent: AIIntent, owner: string | null, requestProfile?: PersonalStrategyProfile, discoveryConfirmationId?: string) => {
     if (!strategyReady || owner !== strategyOwner || workspaceOwnerRef.current !== owner) return;
     if (requestProfile && requestProfile !== personalProfileRef.current) return { notice: lang === 'uk' ? 'Профіль змінився під час відповіді. Пораду показано, автоматичних змін немає.' : 'Your profile changed while awaiting the reply. Advice is shown; no automatic changes applied.' };
-    const prepared = preparePersonalDiscoveryRequest(personalProfileRef.current, userText, discoveryConfirmationId);
+    // Ordinary chat and task proposals do not advance or reset the personal interview.
     if (!response.strategy) {
-      if (prepared.profile !== personalProfileRef.current) updatePersonalProfile(prepared.profile);
+      if (discoveryConfirmationId) {
+        const confirmation = preparePersonalDiscoveryRequest(personalProfileRef.current, userText, discoveryConfirmationId);
+        if (confirmation.confirmedSummaryId) updatePersonalProfile(confirmation.profile);
+      }
       return;
     }
+    const prepared = preparePersonalDiscoveryRequest(personalProfileRef.current, userText, discoveryConfirmationId);
     const strategyResponse = intent === 'analysis'
       ? { ...response.strategy, status: 'clarifying' as const, narrative: undefined, nextAction: undefined, focusTaskId: undefined, actions: [] }
       : response.strategy;
@@ -1503,10 +1605,11 @@ export default function App() {
   };
   const handleUndoStrategy = (actionId: string) => {
     if (!strategyReady) return false;
-    const result = undoStrategyAction({ tasks: latestTasksRef.current, profile: personalProfileRef.current, actionId,
+    const result = undoStrategyTurn({ tasks: latestTasksRef.current, profile: personalProfileRef.current, actionId,
       ownerId: strategyOwner, currentOwnerId: workspaceOwnerRef.current });
     if (!result.undone) { setTimerNotice(lang === 'uk' ? 'Завдання вже змінилося після цієї дії. Автоматичне скасування не перезапише ваші нові зміни.' : 'The task changed after this action. Undo will not overwrite your newer changes.'); return false; }
-    if (commitStrategyState(result.tasks, result.profile)) { setTimerNotice(lang === 'uk' ? 'Зміну плану скасовано.' : 'Plan change undone.'); return true; }
+    const profile = preserveDiscoveryAfterTabMigration(personalProfileRef.current, result.profile);
+    if (commitStrategyState(result.tasks, profile)) { setTimerNotice(lang === 'uk' ? 'Усі зміни цього плану скасовано.' : 'All changes from this plan were undone.'); return true; }
     return false;
   };
   useEffect(() => {
@@ -1536,6 +1639,9 @@ export default function App() {
   useEffect(() => {
     if (timerWorkspaceReadyRef.current && tabs.some(tab => isSystemView(tab.id))) applyWorkspace(readWorkspace());
   }, [tabs]);
+  useEffect(() => {
+    if (!isSystemView(selectedPhase) && !tabs.some(tab => tab.id === selectedPhase)) setSelectedPhase('ALL');
+  }, [tabs, selectedPhase]);
   useStrategyReminders(strategyOwner, strategyReady, personalProfile, tasks, lang, setTimerNotice);
   useEffect(() => window.karkasDesktop?.system.onNotificationClick(target => {
     if (target.view !== 'STRATEGY' || target.ownerId !== workspaceOwnerRef.current || target.ownerId !== (auth.currentUser?.uid ?? null) || !timerWorkspaceReadyRef.current) return;
@@ -1716,6 +1822,7 @@ export default function App() {
 
   // Tab management handlers
   const handleAddTab = (name: string, customColor?: string) => {
+    if (!strategyReady || tabMigrationBusyRef.current || localStorage.getItem(workspaceTabTransactionKey(strategyOwner)) !== null) return;
     const trimmed = name.trim();
     if (!trimmed) return;
     const baseId = trimmed.toLowerCase().replace(/[^a-zа-яіїєґ0-9]+/gi, '_');
@@ -1735,44 +1842,82 @@ export default function App() {
     }
   };
 
-  const handleConfirmDeleteTab = () => {
+  const handleConfirmDeleteTab = async () => {
     if (!tabToDeleteConfirm || tabs.length <= 1) return;
     const tabId = tabToDeleteConfirm.id;
     const remaining = tabs.filter((tb) => tb.id !== tabId);
-    setTabs(remaining);
-
-    if (selectedPhase === tabId) {
-      setSelectedPhase('ALL');
-    }
-
-    // Safely migrate tasks from deleted tab to the first remaining tab
-    const fallbackTabId = remaining[0]?.id || 'focus';
-    setTasks((prev) =>
-      prev.map((t) => (t.phase === tabId ? { ...t, phase: fallbackTabId } : t))
-    );
+    if (!await applyTabSet(remaining)) return;
 
     sound.tick(300);
     setTabToDeleteConfirm(null);
   };
 
   const handleUpdateTabColor = (tabId: string, color: string) => {
+    if (!strategyReady || tabMigrationBusyRef.current || localStorage.getItem(workspaceTabTransactionKey(strategyOwner)) !== null) return;
     setTabs((prev) => prev.map((tab) => (tab.id === tabId ? { ...tab, color } : tab)));
   };
 
   /** `moveTo` maps old tab ids to tabs of the new set; unmapped tasks go to its first tab. */
   const handleSetPresetTabs = (preset: TaskTab[], moveTo: Record<string, string> = {}) => {
-    setTabs(preset);
-    const validTabIds = new Set(preset.map((t) => t.id));
-    const fallbackTabId = preset[0]?.id || 'focus';
-    setTasks((prev) =>
-      prev.map((t) => (validTabIds.has(t.phase) ? t
-        : { ...t, phase: validTabIds.has(moveTo[t.phase]) ? moveTo[t.phase] : fallbackTabId }))
-    );
-    if (
-      !isSystemView(selectedPhase) &&
-      !validTabIds.has(selectedPhase)
-    ) {
-      setSelectedPhase('ALL');
+    void applyTabSet(preset, moveTo);
+  };
+
+  const applyTabSet = async (nextTabs: TaskTab[], moveTo: Record<string, string> = {}): Promise<boolean> => {
+    if (!strategyReady || tabMigrationBusyRef.current || savingRef.current !== null
+      || localStorage.getItem(strategyTransactionKey(strategyOwner)) !== null
+      || localStorage.getItem(workspaceTabTransactionKey(strategyOwner)) !== null) return false;
+    const owner = strategyOwner;
+    const generation = authGenerationRef.current;
+    const isCurrent = () => generation === authGenerationRef.current && owner === workspaceOwnerRef.current && (auth.currentUser?.uid ?? null) === owner;
+    const beforeWorkspace = readWorkspace();
+    const beforeProfile = personalProfileRef.current;
+    const remapped = remapWorkspaceTabs(beforeWorkspace, beforeProfile, nextTabs, moveTo);
+    if (!remapped) return false;
+    remapped.profile = preserveDiscoveryAfterTabMigration(beforeProfile, remapped.profile);
+    const discovery = normalizeStrategyDiscovery(remapped.profile);
+    remapped.profile = { ...remapped.profile, discovery, phase: discovery.phase,
+      onboardingStatus: discovery.phase === 'ready' ? 'complete' : remapped.profile.onboardingStatus === 'new' ? 'new' : 'in_progress' };
+    const now = Date.now();
+    remapped.workspace.tasks = annotateTaskChanges(currentTasksRef.current, remapped.workspace.tasks, now);
+    tabMigrationBusyRef.current = true;
+    timerWorkspaceReadyRef.current = false;
+    setWorkspaceReady(false);
+    let staged = false;
+    try {
+      // Establish a durable baseline, including earlier in-memory profile edits.
+      if (!savePersonalStrategy(localStorage, owner, beforeProfile) || !await persistWorkspace()) throw new Error('Migration baseline could not be saved');
+      if (!isCurrent() || !sameWorkspace(beforeWorkspace, readWorkspace()) || personalProfileRef.current !== beforeProfile) return false;
+      // Retain the complete paired state before changing any of its individual storage slots.
+      if (!stageWorkspaceTabTransaction(localStorage, owner, beforeWorkspace, remapped.workspace, beforeProfile, remapped.profile)) {
+        setActionNotice(lang === 'uk' ? 'Не вдалося зберегти перенесення вкладок або попереднє перенесення ще не завершено. Вкладки не змінено.' : 'Could not save the tab migration or an earlier migration is still pending. Tabs were not changed.');
+        return false;
+      }
+      staged = true;
+      const journal = localStorage.getItem(workspaceTabTransactionKey(owner));
+      if (!savePersonalStrategy(localStorage, owner, remapped.profile)) throw new Error('Goal links could not be saved');
+      personalProfileRef.current = remapped.profile;
+      setPersonalProfile(remapped.profile);
+      applyWorkspace(remapped.workspace);
+      if (!isSystemView(selectedPhase) && !nextTabs.some(tab => tab.id === selectedPhase)) setSelectedPhase('ALL');
+      const completed = await completeWorkspaceTabTransaction(localStorage, owner, journal, persistWorkspace(), isCurrent);
+      if (isCurrent()) setWorkspaceStorageError(!completed);
+      if (!completed || !isCurrent()) return false;
+      return true;
+    } catch {
+      if (isCurrent()) {
+        setWorkspaceStorageError(true);
+        setActionNotice(staged
+          ? (lang === 'uk' ? 'Перенесення вкладок збережено для відновлення. Звільніть місце й натисніть «Повторити збереження».' : 'The tab migration was retained for recovery. Free storage and choose Retry saving.')
+          : (lang === 'uk' ? 'Не вдалося зберегти початкові дані. Вкладки не змінено; звільніть місце й повторіть.' : 'Could not save the original data. Tabs were not changed; free storage and retry.'));
+      }
+      return false;
+    } finally {
+      tabMigrationBusyRef.current = false;
+      if (isCurrent() && localStorage.getItem(workspaceTabTransactionKey(owner)) === null) {
+        timerWorkspaceReadyRef.current = true;
+        setWorkspaceReady(true);
+        if (staged || queuedRemoteRef.current !== null) setWorkspaceReloadToken(value => value + 1);
+      }
     }
   };
 
@@ -1965,10 +2110,10 @@ export default function App() {
     const { deletedAt, deletionReason, ...restTask } = currentArchived;
     const fallbackTab = tabs[0]?.id || 'focus';
     const now = Date.now();
-    const safeTask = annotateTaskChanges([restTask], [reopenTask({
+    const safeTask = annotateTaskChanges([restTask], [{
       ...restTask,
       phase: tabs.some((tb) => tb.id === restTask.phase) ? restTask.phase : fallbackTab,
-    }, now)], now)[0];
+    }], now)[0];
     setTasks((prev) => [safeTask, ...prev.filter(existing => existing.id !== task.id)]);
     setDeletedTasks((prev) => prev.filter((d) => d.id !== task.id));
     setRecentlyDeleted(prev => prev?.id === task.id ? null : prev);
@@ -2023,6 +2168,12 @@ export default function App() {
     taskUpdates: AITaskUpdate[] = [],
     deletedTaskRefs: (string | AIDeletedTaskRef)[] = [],
   ) => {
+    if (!timerWorkspaceReadyRef.current || tabMigrationBusyRef.current
+      || workspaceOwnerRef.current !== (auth.currentUser?.uid ?? null)
+      || localStorage.getItem(workspaceTabTransactionKey(workspaceOwnerRef.current)) !== null) {
+      return { created: 0, updated: 0, deleted: 0, tabs: 0,
+        rejected: newTasks.length + taskUpdates.length + deletedTaskRefs.length + requestedTabs.length };
+    }
     const currentTaskIds = new Set(latestTasksRef.current.map(task => task.id));
     const knownIds = new Set(tabs.map((tab) => tab.id));
     const knownNames = new Set(tabs.map((tab) => tab.name.trim().toLocaleLowerCase()));
@@ -2115,6 +2266,10 @@ export default function App() {
   };
 
   const handleClearCompleted = () => {
+    if (!tasks.some(task => task.done)) return;
+    if (!window.confirm(lang === 'uk'
+      ? 'Перенести виконані завдання до історії? Їхні результати, час і дата завершення збережуться.'
+      : 'Move completed tasks to history? Their results, time and completion date will be preserved.')) return;
     sound.tick(350);
     const completedToArchive: DeletedTask[] = tasks
       .filter((t) => t.done)
@@ -2179,6 +2334,10 @@ export default function App() {
 
       {actionNotice && <div role="status" className="relative z-20 max-w-6xl w-full mx-auto px-4 py-3 text-sm bg-amber-950/40 border border-amber-800 text-amber-100">
         {actionNotice}<button className="underline ml-3" onClick={() => setActionNotice(null)}>{lang === 'uk' ? 'Закрити' : 'Dismiss'}</button>
+      </div>}
+      {workspaceStorageError && <div role="alert" className="relative z-20 max-w-6xl w-full mx-auto px-4 py-3 text-sm bg-amber-950/40 border border-amber-800 text-amber-100">
+        {lang === 'uk' ? 'Не вдалося зберегти останні зміни на пристрої. Вони залишаються у відкритому застосунку. Звільніть місце й повторіть збереження перед виходом.' : 'The latest changes could not be saved on this device. They remain in the open app. Free storage and retry saving before leaving.'}
+        <button type="button" className="min-h-11 underline ml-3" onClick={() => void retryWorkspaceSave()}>{lang === 'uk' ? 'Повторити збереження' : 'Retry saving'}</button>
       </div>}
       {completedNoticeId && tasks.some(task => task.id === completedNoticeId && task.done) && (
         <div role="status" className="relative z-20 w-full px-5 py-3 bg-emerald-950/30 border-b border-emerald-900 text-emerald-100 flex flex-wrap items-center justify-center gap-3 text-sm">
@@ -2272,7 +2431,7 @@ export default function App() {
           strategyReady ? <StrategyView key={strategyOwner || 'guest'} ownerId={strategyOwner} profile={personalProfile}
             tasks={tasks} deletedTasks={deletedTasks} tabs={tabs} lang={lang} insights={workInsights}
             remindersEnabled={workReminders.enabled} onRemindersChange={workReminders.setEnabled}
-            onProfileChange={updatePersonalProfile} onResetMemory={resetPersonalMemory} onChat={openStrategyChat}
+            onProfileChange={next => updatePersonalProfile(preserveDiscoveryAfterUserGoalEdit(personalProfileRef.current, next))} onResetMemory={resetPersonalMemory} onChat={openStrategyChat}
             onDeepenDiscovery={() => deepenPersonalDiscovery()}
             onStart={handleStartTask} onPauseTimer={handleStopTimer} onOpenTask={handleRevealTask} onOpenAdd={() => setIsAddOpen(true)}
             onUndo={handleUndoStrategy} onApplyPriority={applySuggestedPriority} onEditPlan={setWorkPlanTaskId} />

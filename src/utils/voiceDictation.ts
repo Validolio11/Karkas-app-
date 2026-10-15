@@ -1,5 +1,7 @@
 import { GoogleGenAI, type Session, type LiveConnectConfig } from '@google/genai';
 import { karkasApiFetch } from './desktopApi';
+import { readWebApiKey } from './webApiKey';
+import { beginAIUsage } from './aiUsage';
 
 export type VoicePhase = 'starting' | 'connecting' | 'listening' | 'recording' | 'finishing' | 'idle';
 type Callbacks = {
@@ -87,7 +89,7 @@ export function createVoiceDictation(callbacks: Callbacks) {
         const response = await karkasApiFetch('/api/ai/transcribe-audio', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: abort.signal,
           body: JSON.stringify({ audioBase64: btoa(binary), mimeType: blob.type, lang: callbacks.lang,
-            customApiKey: localStorage.getItem('karkas_custom_api_key') || undefined }),
+            customApiKey: readWebApiKey() || undefined }),
         });
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || 'Transcription failed');
@@ -141,7 +143,7 @@ export function createVoiceDictation(callbacks: Callbacks) {
     // Request token and microphone concurrently. Always settle token errors locally.
     const tokenRequest = karkasApiFetch('/api/ai/voice-token', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: abort.signal,
-      body: JSON.stringify({ lang: callbacks.lang, customApiKey: localStorage.getItem('karkas_custom_api_key') || undefined }),
+      body: JSON.stringify({ lang: callbacks.lang, customApiKey: readWebApiKey() || undefined }),
     }).then(async response => {
       if (!response.ok) throw new Error('Live transcription unavailable');
       return response.json() as Promise<{ token: string; model: string; config: LiveConnectConfig }>;
@@ -205,6 +207,7 @@ export function createVoiceDictation(callbacks: Callbacks) {
         if (disposed || stopping || failed) return;
         if (!credentials) { fallback(); return; }
         const ai = new GoogleGenAI({ apiKey: credentials.token, httpOptions: { apiVersion: 'v1alpha' } });
+        const finishLiveUsage = beginAIUsage('liveTranscription');
         const connected = await ai.live.connect({
           model: credentials.model, config: credentials.config,
           callbacks: {
@@ -226,7 +229,7 @@ export function createVoiceDictation(callbacks: Callbacks) {
             onerror: () => fallback(),
             onclose: () => { if (!completed && !disposed) fallback(); },
           },
-        });
+        }).then(connected => { finishLiveUsage({ liveSessionModel: credentials.model }); return connected; }, error => { finishLiveUsage(); throw error; });
         if (disposed || stopping || failed) { connected.close(); return; }
         session = connected;
         clearTimeout(deadline);

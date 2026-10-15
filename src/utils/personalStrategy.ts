@@ -1,6 +1,7 @@
 import type { AIStrategyResponse, PersonalStrategyProfile, StrategyGoal, StrategyMemoryEntry, StrategyMemoryPatch } from '../types';
 import { applyDiscoveryTurn, isPersonalStrategyReady, normalizeStrategyDiscovery } from './strategyDiscovery';
 import { readAccountStorage } from './accountStorage';
+import { preserveRawStorage } from './recoverableLocalStorage';
 
 export type StrategyStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 export const strategyOwnerKey = (owner: string | null) => owner === null ? 'guest' : `account:${owner}`;
@@ -14,6 +15,45 @@ const text = (value: unknown, max = 2000) => typeof value === 'string' ? value.t
 const ids = (value: unknown, limit = 200) => Array.isArray(value) ? [...new Set(value.filter(item => typeof item === 'string' && item.trim()).slice(0, limit))] as string[] : [];
 const matchesUserStatement = (statement: string, source: string) => statement === source.trim()
   || source.split(/[.!?\n]+/u).some(part => part.trim() === statement);
+// Legacy optional fields remain readable, but anything hydration would discard
+// is backed up before the normalized profile can replace its source.
+export function intactStoredStrategy(raw: unknown): boolean {
+  if (!record(raw) || raw.version !== 1) return false;
+  const list = (value: unknown, valid: (entry: any) => boolean, limit = Infinity) => value === undefined
+    || Array.isArray(value) && value.length <= limit && value.every(valid);
+  const stringIds = (value: unknown, limit = 200) => list(value, value => typeof value === 'string' && !!value.trim(), limit)
+    && (value === undefined || new Set(value as string[]).size === (value as string[]).length);
+  const optionalText = (value: unknown, limit: number) => value === undefined || typeof value === 'string' && value.length <= limit;
+  const entry = (value: any) => record(value) && !!text(value.id) && !!text(value.text)
+    && ['user', 'hypothesis'].includes(value.source) && optionalText(value.id, 120)
+    && optionalText(value.text, 2000) && optionalText(value.messageId, 200) && optionalText(value.quote, 8000);
+  return (raw.onboardingStatus === undefined || ['new', 'in_progress', 'complete'].includes(raw.onboardingStatus))
+    && optionalText(raw.phase, 100)
+    && list(raw.goals, value => record(value) && !!text(value.id) && !!text(value.title)
+      && optionalText(value.id, 120) && optionalText(value.title, 2000) && optionalText(value.motive, 2000)
+      && (value.agreed === undefined || typeof value.agreed === 'boolean') && stringIds(value.taskIds) && stringIds(value.categoryIds), 50)
+    && ['facts', 'barriers', 'preferences'].every(key => list(raw[key], entry, 200))
+    && list(raw.feedback, value => record(value) && !!text(value.id) && !!text(value.text) && Number.isFinite(value.createdAt), 200)
+    && list(raw.actionHistory, value => record(value) && !!text(value.id) && record(value.after) && (value.before === null || record(value.before)))
+    && stringIds(raw.processedTurnIds, 100000)
+    && (raw.latestStrategy === undefined || record(raw.latestStrategy) && Number.isFinite(raw.latestStrategy.updatedAt))
+    && (raw.reminders === undefined || record(raw.reminders) && typeof raw.reminders.enabled === 'boolean'
+      && raw.reminders.maxPerDay === 2 && list(raw.reminders.times, value => typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(value), 2))
+    && (raw.discovery === undefined || record(raw.discovery) && raw.discovery.version === 1
+      && record(raw.discovery.topics) && ['direction', 'motivation', 'circumstances', 'barriers', 'capacity', 'attempts'].every(topic => {
+        const value = raw.discovery.topics[topic];
+        return record(value) && ['unknown', 'answered', 'deferred'].includes(value.status)
+          && Array.isArray(value.evidence) && value.evidence.every((item: any) => record(item) && !!text(item.quote) && !!text(item.messageId));
+      }) && ['exploring', 'confirming', 'ready'].includes(raw.discovery.phase)
+      && stringIds(raw.discovery.selectedGoalIds) && stringIds(raw.discovery.processedTurnIds, 100000)
+      && (raw.discovery.pendingQuestion === undefined || record(raw.discovery.pendingQuestion)
+        && !!text(raw.discovery.pendingQuestion.id) && !!text(raw.discovery.pendingQuestion.text)
+        && ['direction', 'motivation', 'circumstances', 'barriers', 'capacity', 'attempts'].includes(raw.discovery.pendingQuestion.topic))
+      && (raw.discovery.pendingSummary === undefined || record(raw.discovery.pendingSummary)
+        && !!text(raw.discovery.pendingSummary.id) && typeof raw.discovery.pendingSummary.text === 'string'
+        && typeof raw.discovery.pendingSummary.fingerprint === 'string' && typeof raw.discovery.pendingSummary.confirmed === 'boolean'
+        && stringIds(raw.discovery.pendingSummary.goalIds)));
+}
 function goals(value: unknown): StrategyGoal[] {
   return Array.isArray(value) ? value.filter(record).filter(item => text(item.id) && text(item.title)).slice(0, 50).map(item => ({
     id: text(item.id, 120), title: text(item.title), motive: text(item.motive), agreed: item.agreed === true,
@@ -28,9 +68,16 @@ function entries(value: unknown): StrategyMemoryEntry[] {
   })) : [];
 }
 export function readPersonalStrategy(storage: StrategyStorage, owner: string | null): PersonalStrategyProfile {
+  const key = personalStrategyKey(owner);
+  let source: string | null = null;
   try {
-    const raw = JSON.parse(storage.getItem(personalStrategyKey(owner)) || 'null');
-    if (!record(raw) || raw.version !== 1) return createPersonalStrategyProfile();
+    source = storage.getItem(key);
+    const raw = JSON.parse(source || 'null');
+    if (!record(raw) || raw.version !== 1) {
+      if (source !== null) preserveRawStorage(storage, key, source);
+      return createPersonalStrategyProfile();
+    }
+    if (!intactStoredStrategy(raw) && source !== null) preserveRawStorage(storage, key, source);
     const profile = createPersonalStrategyProfile();
     const hydrated: PersonalStrategyProfile = { ...profile, onboardingStatus: ['new', 'in_progress', 'complete'].includes(raw.onboardingStatus) ? raw.onboardingStatus : 'new',
       phase: text(raw.phase, 100) || 'goals', goals: goals(raw.goals), facts: entries(raw.facts), barriers: entries(raw.barriers), preferences: entries(raw.preferences),
@@ -58,13 +105,31 @@ export function readPersonalStrategy(storage: StrategyStorage, owner: string | n
     }
     const discovery = normalizeStrategyDiscovery(hydrated);
     return { ...hydrated, discovery, onboardingStatus: discovery.phase === 'ready' ? 'complete' : hydrated.onboardingStatus === 'new' ? 'new' : 'in_progress', phase: discovery.phase };
-  } catch { return createPersonalStrategyProfile(); }
+  } catch {
+    if (source !== null) {
+      try { preserveRawStorage(storage, key, source); } catch { /* Writes independently retry backup and remain blocked on failure. */ }
+    }
+    return createPersonalStrategyProfile();
+  }
+}
+function preserveDamagedStrategy(storage: StrategyStorage, owner: string | null): void {
+  const key = personalStrategyKey(owner);
+  const source = storage.getItem(key);
+  if (source === null) return;
+  let valid = false;
+  try { valid = intactStoredStrategy(JSON.parse(source)); } catch { /* Preserve malformed bytes. */ }
+  if (!valid) preserveRawStorage(storage, key, source);
 }
 export function savePersonalStrategy(storage: StrategyStorage, owner: string | null, profile: PersonalStrategyProfile): boolean {
-  try { storage.setItem(personalStrategyKey(owner), JSON.stringify(profile)); return true; } catch { return false; }
+  try {
+    preserveDamagedStrategy(storage, owner);
+    const serialized = JSON.stringify(profile);
+    storage.setItem(personalStrategyKey(owner), serialized);
+    return storage.getItem(personalStrategyKey(owner)) === serialized;
+  } catch { return false; }
 }
 export function clearPersonalStrategy(storage: StrategyStorage, owner: string | null): boolean {
-  try { storage.removeItem(personalStrategyKey(owner)); return true; } catch { return false; }
+  try { preserveDamagedStrategy(storage, owner); storage.removeItem(personalStrategyKey(owner)); return true; } catch { return false; }
 }
 /** The ordinary chat greeting: no interview question; the discovery interview starts only from «Поглибити знайомство». */
 export function strategyGreeting(lang: 'uk' | 'en'): string {

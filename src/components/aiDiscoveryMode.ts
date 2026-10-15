@@ -31,6 +31,7 @@ export function saveDiscoveryMode(storage: ModeStorage, accountId: string | null
 
 /** Enter on a fresh «Поглибити знайомство» question; leave once the understanding summary is confirmed. */
 export function nextDiscoveryMode(state: DiscoveryModeState, profile: PersonalStrategyProfile | undefined, now = Date.now()): DiscoveryModeState {
+  if (profile?.onboardingStatus === 'new' && !profile.goals.length) return exitDiscoveryMode(state);
   const discovery = profile?.discovery;
   const id = discovery?.pendingQuestion?.id;
   const pressed = id ? DISCOVERY_MODE_QUESTION_ID.exec(id) : null;

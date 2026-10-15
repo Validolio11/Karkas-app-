@@ -4,6 +4,7 @@ import type { TaskTab, NewTaskInput } from '../types';
 import { sound } from '../utils/audio';
 import { Language, TRANSLATIONS } from '../utils/i18n';
 import { karkasApiFetch } from '../utils/desktopApi';
+import { readWebApiKey } from '../utils/webApiKey';
 import { Plus, X, Timer, ChevronLeft, ChevronRight, Check } from 'lucide-react';
 import { AIIcon } from './AIIconTemplates';
 import { DEFAULT_QUICK_ADD_PRIORITY, buildQuickAddSteps, emptyQuickAddDraft, hasQuickAddDraftContent, mergeQuickAddSuggestions, nextQuickAddWizardStep, previousQuickAddWizardStep, quickAddDraftKey, quickAddWizardSteps, readQuickAddDraft, resolveQuickAddWizardStep, saveQuickAddDraft } from './quickAddDraft';
@@ -217,7 +218,7 @@ const QuickAddDraftSession: React.FC<QuickAddDrawerProps> = ({ ownerId = null, i
       let selectedModel: string | undefined;
       try {
         if (localStorage.getItem('karkas_custom_ai_enabled') === 'true') {
-          customApiKey = localStorage.getItem('karkas_custom_api_key') || undefined;
+          customApiKey = readWebApiKey() || undefined;
           selectedModel = localStorage.getItem('karkas_custom_model') || undefined;
         }
       } catch { /* The basic step generator works without optional settings. */ }

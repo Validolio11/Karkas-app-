@@ -61,6 +61,32 @@ test('timeout shuts down the listener', async () => {
   await assert.rejects(request(url, '/desktop-auth.html'));
 });
 
+test('closing the login tab cancels promptly only with its state and origin', async () => {
+  const { ready, promise } = start();
+  const url = await ready;
+  const state = new URLSearchParams(url.hash.slice(1)).get('state');
+  assert.equal((await request(url, '/cancel', { method: 'POST', body: { state }, origin: 'https://evil.example' })).status, 403);
+  assert.equal((await request(url, '/cancel', { method: 'POST', body: { state: 'x'.repeat(64) } })).status, 403);
+  assert.equal((await request(url, '/cancel', { method: 'POST', body: { state } })).status, 200);
+  await assert.rejects(promise, /browser-login-cancelled/);
+  await assert.rejects(request(url, '/desktop-auth.html'));
+});
+
+test('a slow cancellation body cannot override an accepted credential', async () => {
+  const { ready, promise } = start();
+  const url = await ready;
+  const state = new URLSearchParams(url.hash.slice(1)).get('state');
+  const pending = http.request({ hostname: '127.0.0.1', port: url.port, path: '/cancel', method: 'POST',
+    headers: { Host: url.host, Origin: url.origin, 'Content-Type': 'application/json' } });
+  // Closing the listener after a successful callback can reset this slow socket.
+  pending.on('error', () => {});
+  pending.write('{"state":');
+  assert.equal((await request(url, '/callback', { method: 'POST', body: { state, idToken: 'test-token' } })).status, 200);
+  pending.end(JSON.stringify(state) + '}');
+  assert.deepEqual(await promise, { idToken: 'test-token' });
+  pending.destroy();
+});
+
 test('abort closes an active browser login', async () => {
   const controller = new AbortController();
   const { ready, promise } = start({ signal: controller.signal });

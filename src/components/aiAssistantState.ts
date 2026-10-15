@@ -152,22 +152,59 @@ export function appendChatRequest<T extends { role: 'user' | 'assistant'; conten
   return last?.role === 'user' && last.content === text ? messages : [...messages, { role: 'user', content: text }];
 }
 
-export type AIRequestErrorCode = 'INVALID_API_KEY' | 'ACCESS_DENIED' | 'QUOTA_EXCEEDED' | 'MODEL_UNAVAILABLE' | 'MODEL_TIER_UNAVAILABLE' | 'INVALID_REQUEST' | 'INVALID_AI_REQUEST' | 'NETWORK_ERROR' | 'TIMEOUT' | 'CLIENT_TIMEOUT' | 'PROVIDER_ERROR' | 'PROVIDER_UNAVAILABLE' | 'INTERNAL_ERROR' | 'MISSING_API_KEY' | 'INVALID_RESPONSE' | 'CANCELLED';
-const knownCodes: AIRequestErrorCode[] = ['INVALID_API_KEY', 'ACCESS_DENIED', 'QUOTA_EXCEEDED', 'MODEL_UNAVAILABLE', 'MODEL_TIER_UNAVAILABLE', 'INVALID_REQUEST', 'INVALID_AI_REQUEST', 'NETWORK_ERROR', 'TIMEOUT', 'CLIENT_TIMEOUT', 'PROVIDER_ERROR', 'PROVIDER_UNAVAILABLE', 'INTERNAL_ERROR', 'MISSING_API_KEY', 'INVALID_RESPONSE', 'CANCELLED'];
+export type AIRequestErrorCode = 'INVALID_API_KEY' | 'ACCESS_DENIED' | 'QUOTA_EXCEEDED' | 'MODEL_UNAVAILABLE' | 'MODEL_TIER_UNAVAILABLE' | 'INVALID_REQUEST' | 'INVALID_AI_REQUEST' | 'NETWORK_ERROR' | 'TIMEOUT' | 'CLIENT_TIMEOUT' | 'PROVIDER_ERROR' | 'PROVIDER_UNAVAILABLE' | 'INTERNAL_ERROR' | 'MISSING_API_KEY' | 'INVALID_RESPONSE' | 'CANCELLED' | 'CONTEXT_TOO_LARGE';
+const knownCodes: AIRequestErrorCode[] = ['INVALID_API_KEY', 'ACCESS_DENIED', 'QUOTA_EXCEEDED', 'MODEL_UNAVAILABLE', 'MODEL_TIER_UNAVAILABLE', 'INVALID_REQUEST', 'INVALID_AI_REQUEST', 'NETWORK_ERROR', 'TIMEOUT', 'CLIENT_TIMEOUT', 'PROVIDER_ERROR', 'PROVIDER_UNAVAILABLE', 'INTERNAL_ERROR', 'MISSING_API_KEY', 'INVALID_RESPONSE', 'CANCELLED', 'CONTEXT_TOO_LARGE'];
+export type AIProviderUnavailableReason = 'HIGH_DEMAND' | 'OVERLOADED' | 'TEMPORARILY_UNAVAILABLE';
+const unavailableReasons: AIProviderUnavailableReason[] = ['HIGH_DEMAND', 'OVERLOADED', 'TEMPORARILY_UNAVAILABLE'];
+export interface AIRequestDiagnostics {
+  attempts: { model: string; code: AIRequestErrorCode; elapsedMs: number; reason?: AIProviderUnavailableReason }[];
+  elapsedMs: number;
+}
+
+/** Provider messages and arbitrary model labels must never enter the error card. */
+function readAIRequestDiagnostics(value: unknown): AIRequestDiagnostics | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const safeDuration = (duration: unknown): duration is number => typeof duration === 'number'
+    && Number.isFinite(duration) && duration >= 0 && duration <= 600_000;
+  if (!safeDuration(record.elapsedMs) || !Array.isArray(record.attempts)) return undefined;
+  const attempts: AIRequestDiagnostics['attempts'] = [];
+  for (const value of record.attempts.slice(0, 8)) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+    const attempt = value as Record<string, unknown>;
+    if (typeof attempt.model !== 'string' || attempt.model.length > 100
+      || /(?:AIza|AQ\.)[\w.-]{20,}/i.test(attempt.model) || !safeDuration(attempt.elapsedMs)) continue;
+    const model = attempt.model.replace(/^models\//, '').toLowerCase();
+    if (!/^gemini-(?:\d+(?:\.\d+)*-(?:flash|pro)|(?:flash(?:-lite)?|pro)-latest)(?:-[a-z0-9]+)*$/.test(model)) continue;
+    const code = attempt.code === 'INVALID_AI_RESPONSE' ? 'INVALID_RESPONSE' : attempt.code;
+    if (!knownCodes.includes(code as AIRequestErrorCode)) continue;
+    const reason = code === 'PROVIDER_UNAVAILABLE' && unavailableReasons.includes(attempt.reason as AIProviderUnavailableReason)
+      ? attempt.reason as AIProviderUnavailableReason : undefined;
+    attempts.push({ model, code: code as AIRequestErrorCode, elapsedMs: Math.round(attempt.elapsedMs), ...(reason ? { reason } : {}) });
+  }
+  return attempts.length ? { attempts, elapsedMs: Math.round(record.elapsedMs) } : undefined;
+}
+
 export class AIRequestError extends Error {
-  constructor(public readonly code: AIRequestErrorCode) { super(code); this.name = 'AIRequestError'; }
+  readonly diagnostics?: AIRequestDiagnostics;
+  constructor(public readonly code: AIRequestErrorCode, diagnostics?: unknown) {
+    super(code);
+    this.name = 'AIRequestError';
+    this.diagnostics = readAIRequestDiagnostics(diagnostics);
+  }
 }
 
 export function responseRequestError(data: unknown, status: number): AIRequestError {
   const code = data && typeof data === 'object' && 'code' in data ? data.code : null;
-  if (code === 'INVALID_AI_RESPONSE') return new AIRequestError('INVALID_RESPONSE');
-  if (knownCodes.includes(code as AIRequestErrorCode)) return new AIRequestError(code as AIRequestErrorCode);
+  const diagnostics = data && typeof data === 'object' && 'diagnostics' in data ? data.diagnostics : undefined;
+  if (code === 'INVALID_AI_RESPONSE') return new AIRequestError('INVALID_RESPONSE', diagnostics);
+  if (knownCodes.includes(code as AIRequestErrorCode)) return new AIRequestError(code as AIRequestErrorCode, diagnostics);
   // Native transport failures are not evidence that Google is unavailable.
   if (code === 'DESKTOP_ERROR' || code === 'UNTRUSTED_SENDER') return new AIRequestError('INTERNAL_ERROR');
   return new AIRequestError(status === 429 ? 'QUOTA_EXCEEDED' : status === 401 ? 'INVALID_API_KEY'
     : status === 403 ? 'ACCESS_DENIED' : status === 408 || status === 504 ? 'TIMEOUT'
       : status === 400 || status === 413 || status === 422 ? 'INVALID_REQUEST'
-        : status === 503 ? 'PROVIDER_UNAVAILABLE' : status >= 500 ? 'PROVIDER_ERROR' : 'INTERNAL_ERROR');
+        : status === 503 ? 'PROVIDER_UNAVAILABLE' : status >= 500 ? 'PROVIDER_ERROR' : 'INTERNAL_ERROR', diagnostics);
 }
 
 export function readAIResponse(value: unknown, mode: AIMode): AIResponse & { usedModel?: string; fallbackUsed?: boolean; aiMetrics?: unknown } {
@@ -241,6 +278,7 @@ export function readAIResponse(value: unknown, mode: AIMode): AIResponse & { use
 }
 
 const errorMessages: Record<AIRequestErrorCode, { uk: string; en: string }> = {
+  CONTEXT_TOO_LARGE: { uk: 'Контекст запиту завеликий. Зменште кількість завдань або текст і повторіть запит.', en: 'The request context is too large. Reduce the task scope or text and retry.' },
   INVALID_API_KEY: { uk: 'Google відхилив API-ключ. Введіть правильний ключ і повторіть запит.', en: 'Google rejected the API key. Enter a valid key and retry.' },
   MISSING_API_KEY: { uk: 'Для цього запиту потрібен Gemini API-ключ. Вставте його нижче, щоб продовжити.', en: 'This request needs a Gemini API key. Paste it below to continue.' },
   ACCESS_DENIED: { uk: 'Google заборонив доступ до AI. Перевірте дозволи ключа та доступ до Gemini API.', en: 'Google denied AI access. Check key permissions and Gemini API access.' },
@@ -258,6 +296,35 @@ const errorMessages: Record<AIRequestErrorCode, { uk: string; en: string }> = {
   INVALID_RESPONSE: { uk: 'AI не зміг підготувати коректну відповідь. Повторіть запит або виберіть іншу модель.', en: 'AI could not prepare a valid response. Retry the request or select another model.' },
   CANCELLED: { uk: 'Запит перервано. Його збережено, щоб ви могли продовжити.', en: 'The request was interrupted and saved so you can continue.' },
 };
+const diagnosticReasons: Record<AIRequestErrorCode, { uk: string; en: string }> = {
+  MODEL_TIER_UNAVAILABLE: { uk: 'модель недоступна на цьому тарифі', en: 'model unavailable on this tier' },
+  CONTEXT_TOO_LARGE: { uk: 'контекст завеликий', en: 'context too large' },
+  INVALID_API_KEY: { uk: 'ключ відхилено', en: 'key rejected' },
+  MISSING_API_KEY: { uk: 'немає API-ключа', en: 'API key missing' },
+  ACCESS_DENIED: { uk: 'доступ заборонено', en: 'access denied' },
+  QUOTA_EXCEEDED: { uk: 'ліміт запитів вичерпано', en: 'quota exhausted' },
+  MODEL_UNAVAILABLE: { uk: 'модель недоступна', en: 'model unavailable' },
+  INVALID_REQUEST: { uk: 'запит відхилено', en: 'request rejected' },
+  INVALID_AI_REQUEST: { uk: 'запит додатка відхилено', en: 'app request rejected' },
+  NETWORK_ERROR: { uk: 'не вдалося з’єднатися', en: 'connection failed' },
+  TIMEOUT: { uk: 'перевищено час очікування', en: 'response timed out' },
+  CLIENT_TIMEOUT: { uk: 'додаток припинив очікування', en: 'app stopped waiting' },
+  PROVIDER_ERROR: { uk: 'помилка обробки запиту', en: 'request processing failed' },
+  PROVIDER_UNAVAILABLE: { uk: 'сервіс тимчасово недоступний', en: 'service temporarily unavailable' },
+  INTERNAL_ERROR: { uk: 'помилка обробки в додатку', en: 'app processing error' },
+  INVALID_RESPONSE: { uk: 'некоректна відповідь', en: 'invalid response' },
+  CANCELLED: { uk: 'запит перервано', en: 'request cancelled' },
+};
+const unavailableReasonLabels: Record<AIProviderUnavailableReason, { uk: string; en: string }> = {
+  HIGH_DEMAND: { uk: 'високий попит на модель', en: 'high demand for the model' },
+  OVERLOADED: { uk: 'модель перевантажена', en: 'model overloaded' },
+  TEMPORARILY_UNAVAILABLE: { uk: 'сервіс тимчасово недоступний', en: 'service temporarily unavailable' },
+};
+export const aiRequestDiagnosticReason = (code: AIRequestErrorCode, lang: 'uk' | 'en', reason?: AIProviderUnavailableReason): string =>
+  code === 'PROVIDER_UNAVAILABLE' && reason ? unavailableReasonLabels[reason][lang] : diagnosticReasons[code][lang];
+export const formatAIRequestDuration = (elapsedMs: number, lang: 'uk' | 'en'): string =>
+  `${new Intl.NumberFormat(lang === 'uk' ? 'uk-UA' : 'en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(elapsedMs / 1000)} ${lang === 'uk' ? 'с' : 's'}`;
+
 export function aiRequestErrorMessage(error: unknown, lang: 'uk' | 'en'): string {
   const name = error instanceof Error ? error.name : '';
   const message = error instanceof Error ? error.message : '';
@@ -265,7 +332,14 @@ export function aiRequestErrorMessage(error: unknown, lang: 'uk' | 'en'): string
     : name === 'AbortError' ? 'CANCELLED' : name === 'TimeoutError' ? 'TIMEOUT'
       : name === 'NetworkError' || /failed to fetch|fetch failed|network(?:error| error| request failed)|load failed|ENOTFOUND|ECONNRESET|ECONNREFUSED|EAI_AGAIN/i.test(message)
         ? 'NETWORK_ERROR' : 'INTERNAL_ERROR';
-  return `${errorMessages[code][lang]} ${lang === 'uk' ? 'Зміни до завдань не застосовано.' : 'No task changes were applied.'}`;
+  const reasons = error instanceof AIRequestError && !['CANCELLED', 'CLIENT_TIMEOUT'].includes(code)
+    ? [...new Set(error.diagnostics?.attempts.map(attempt => attempt.code))] : [];
+  const messageText = reasons.length > 1
+    ? (lang === 'uk'
+      ? `Не вдалося отримати відповідь. Причини спроб: ${reasons.map(reason => aiRequestDiagnosticReason(reason, lang)).join('; ')}. Повторіть запит або виберіть іншу модель.`
+      : `Could not obtain a response. Attempt results: ${reasons.map(reason => aiRequestDiagnosticReason(reason, lang)).join('; ')}. Retry or select another model.`)
+    : errorMessages[code][lang];
+  return `${messageText} ${lang === 'uk' ? 'Зміни до завдань не застосовано.' : 'No task changes were applied.'}`;
 }
 
 export function restoredAIRequestNotice(request: AIRequest | null | undefined, lang: 'uk' | 'en'): string | null {

@@ -315,6 +315,7 @@ export async function saveUserCloudData(
   const merged = snapshot.exists()
     ? mergeWorkspace(base, data, existing!)
     : data;
+  parseWorkspace(merged);
   const syncClients = mutation
     ? recordSyncMutation(existing?.syncClients, mutation)
     : { ...(existing?.syncClients || {}) };
@@ -346,6 +347,7 @@ export async function saveUserCloudData(
   };
 
   const cleanPayload = sanitizeForFirestore(rawPayload) as UserCloudState;
+  parseWorkspace(cleanPayload);
   let shadowPlan: CloudShadowPlan | null = null;
   try {
     // Plan from the exact normalized payload written to v1, so shadow values

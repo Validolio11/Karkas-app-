@@ -9,6 +9,18 @@ const now = new Date(2026, 9, 13, 12).getTime();
 const task = (id: string, fields: Partial<PSTask> = {}): PSTask => ({
   id, title: id, phase: 'focus', priority: 2, steps: 0, currentStep: 0, done: false, pinned: false, createdAt: now - 10 * 86_400_000, ...fields,
 });
+
+test('goal progress survives moving completed work to history and does not double count snapshots', () => {
+  const goal = { taskIds: ['done', 'active'], categoryIds: ['focus'] };
+  const done = task('done', { done: true, completedAt: now });
+  const active = task('active');
+  const before = goalTaskStats(goal, [active, done]);
+  const archived = { ...done, deletedAt: now + 1 };
+  const after = goalTaskStats(goal, [active], [archived]);
+  assert.deepEqual(after, before);
+  assert.deepEqual(goalTaskStats(goal, [active, done], [archived]), before);
+  assert.equal(goalTaskStats(goal, [active], [{ ...archived, deletionReason: 'accidental' }]).done, 0);
+});
 const withTopics = (statuses: Partial<Record<StrategyDiscoveryTopic, 'answered' | 'deferred'>>): PersonalStrategyProfile => {
   const profile = createPersonalStrategyProfile();
   const topics = Object.fromEntries(STRATEGY_DISCOVERY_TOPICS.map(topic => [topic, statuses[topic]

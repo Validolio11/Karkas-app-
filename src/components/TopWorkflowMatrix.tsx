@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { TaskTab, FilterMode, WorkflowStats } from '../types';
 import { sound } from '../utils/audio';
 import { Language, TRANSLATIONS } from '../utils/i18n';
@@ -72,6 +72,8 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
   const t = TRANSLATIONS[lang];
   const [isInlineAdding, setIsInlineAdding] = useState(false);
   const [inlineTabName, setInlineTabName] = useState('');
+  const pullStart = useRef<{ id: number; x: number; y: number } | null>(null);
+  const suppressPullClickUntil = useRef(0);
 
   const handleInlineAdd = (e: React.FormEvent) => {
     e.preventDefault();
@@ -558,9 +560,27 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
         </div>
 
         {/* Pull-down Gesture Indicator (Clickable as well) */}
-        <div
+        <button type="button"
           id="pull-down-indicator"
+          style={{ touchAction: 'none' }}
+          onPointerDown={event => {
+            if (event.button !== 0) return;
+            pullStart.current = { id: event.pointerId, x: event.clientX, y: event.clientY };
+            event.currentTarget.setPointerCapture(event.pointerId);
+          }}
+          onPointerCancel={() => { pullStart.current = null; }}
+          onPointerUp={event => {
+            const start = pullStart.current;
+            pullStart.current = null;
+            if (!start || start.id !== event.pointerId) return;
+            const down = event.clientY - start.y;
+            if (down >= 35 && down > Math.abs(event.clientX - start.x) * 1.5) {
+              suppressPullClickUntil.current = Date.now() + 500;
+              if (!isAddOpen) { sound.tick(500); onToggleAdd(); }
+            }
+          }}
           onClick={() => {
+            if (Date.now() < suppressPullClickUntil.current) return;
             sound.tick(500);
             onToggleAdd();
           }}
@@ -570,7 +590,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
             <ChevronDown className={`w-3 h-3 transition-transform ${isAddOpen ? 'rotate-180' : ''}`} />
             <span>{isAddOpen ? t.collapseInput : t.pullDownToInject}</span>
           </span>
-        </div>
+        </button>
       </div>
     </header>
   );

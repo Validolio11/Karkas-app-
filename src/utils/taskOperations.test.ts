@@ -9,6 +9,12 @@ const task = (overrides: Partial<PSTask> = {}): PSTask => ({
   currentStep: 0, done: false, pinned: false, createdAt: 1, ...overrides,
 });
 
+test('a remote timer slightly ahead of the local clock stays running without counting negative time', () => {
+  const running = task({ timerMode: 'stopwatch', timerRunning: true, timerStartedAt: 105_000, timeSpentSeconds: 20 });
+  assert.equal(sanitizeTasksTimerSafeguard([running], 100_000)[0], running);
+  assert.equal(sanitizeTasksTimerSafeguard([running], 106_000)[0], running);
+});
+
 test('creating a dated task preserves calendar values and atomically rejects invalid dates or ordering', () => {
   const input = { title: 'Task', phase: 'focus', priority: 2 as const, steps: 0,
     plannedDate: '2026-10-12', deadlineDate: '2026-10-15' };

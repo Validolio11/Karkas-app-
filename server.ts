@@ -1,10 +1,11 @@
+import { isExplicitAIProposalApplyRequest } from './src/utils/aiProposalConfirmation';
 import express from "express";
 import { taskMutationProperties, taskTimerProperties, taskActionInstructions, validateTaskMutations, validatedTimerFields, normalizeAIOptionalFields, taskScheduleProperties, taskDateProperties, validatedDateFields, validatedScheduleFields, schedulingClockContext, newTaskItemSchema, newTabItemSchema, distinctTaskNote, withoutTitleEchoNotes } from "./server/aiActions";
 import path from "path";
 import dotenv from "dotenv";
 import { type GoogleGenAI, Modality, Type } from "@google/genai";
 import { verifyGeminiKey } from "./server/geminiKeyVerification";
-import { AIRequestError, AIStreamInterruptedError, AIToolsRejectedError, aiRequestFailure, classifyAIRequestError, generateGeminiWithFallback, streamGeminiWithFallback, createGeminiClient, type AIFunctionCall, type AIThinkingEffort } from "./server/geminiGeneration";
+import { AIRequestError, AIStreamInterruptedError, AIToolsRejectedError, aiRequestFailure, classifyAIRequestError, generateGeminiWithFallback, streamGeminiWithFallback, createGeminiClient, rememberAvailableGeminiModels, type AIFunctionCall, type AIThinkingEffort, type AIRequestDiagnostics } from "./server/geminiGeneration";
 import { aiToolsEnabled, proposalFromFunctionCalls, proposalSummaryReply, TASK_COMMAND_TOOLS_CONFIG } from "./server/aiTools";
 import { createAssistEventStream } from './server/chatEventStream';
 import { isCompletedArchivedTask, isCancelledArchivedTask, selectRelevantArchivedTasks } from "./src/utils/taskArchive";
@@ -13,7 +14,7 @@ import { buildWorkInsights } from "./src/utils/workInsights";
 import type { AIStrategyResponse } from './src/types';
 import { normalizeStrategyDiscovery, isPersonalStrategyReady, preparePersonalDiscoveryRequest, STRATEGY_DISCOVERY_TOPICS } from './src/utils/strategyDiscovery';
 import { classifyPersonalChatRequest, constrainOrdinaryChatResponse, constrainReadyPersonalResponse, discoveryAddressContext, discoveryAddressFor, personalGuidanceSystemPolicy, personalProfileForRequest, sanitizeDiscoveryResponse, type PersonalChatRoute } from './server/strategyDiscovery';
-import { AI_CHAT_MODEL_TIMEOUT_MS, AI_CHAT_TOTAL_TIMEOUT_MS, AI_CHAT_FALLBACK_MODELS, AI_CHAT_MAX_ATTEMPTS, AI_CHAT_STREAM_IDLE_TIMEOUT_MS } from './src/utils/aiChatTiming';
+import { AI_CHAT_FALLBACK_TIMEOUT_MS, AI_CHAT_MODEL_TIMEOUT_MS, AI_CHAT_TOTAL_TIMEOUT_MS, AI_CHAT_FALLBACK_MODELS, AI_CHAT_MAX_ATTEMPTS, AI_CHAT_STREAM_IDLE_TIMEOUT_MS } from './src/utils/aiChatTiming';
 import { boundedPersonalPromptContext, chatHistoryContents, compactTaskPromptContext, KARKAS_ASSISTANT_PERSONA, mergeTemporalTaskContext, priorityLabel } from './server/aiPromptContext';
 import { buildTaskTemporalContext, temporalAwarenessSystemPolicy } from './src/utils/taskTemporalContext';
 import { currentClockReply } from './server/clockReply';
@@ -28,12 +29,14 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
-// The packaged app accepts API writes only from its own local window.
+// Local HTTP APIs accept browser writes only from their own local origin.
 app.use('/api', (req, res, next) => {
-  if (process.versions.electron && !['GET', 'HEAD'].includes(req.method)) {
+  if (!['GET', 'HEAD'].includes(req.method)) {
     const origin = req.headers.origin;
     const port = req.socket.localPort;
-    if (origin !== `http://localhost:${port}` && origin !== `http://127.0.0.1:${port}`) {
+    const localOrigins = [`http://localhost:${port}`, `http://127.0.0.1:${port}`];
+    if ((origin !== undefined && !localOrigins.includes(origin))
+      || ![`localhost:${port}`, `127.0.0.1:${port}`].includes(req.headers.host || '')) {
       return res.status(403).json({ code: 'ACCESS_DENIED', error: 'Request origin is not allowed' });
     }
   }
@@ -58,6 +61,8 @@ function requestValidationError(body: unknown): string | undefined {
   if (body.discoveryMode !== undefined && typeof body.discoveryMode !== 'boolean') return 'Invalid discoveryMode';
   if (body.lastAssistantProposalStatus !== undefined && !['pending', 'stale', 'applied'].includes(body.lastAssistantProposalStatus)) return 'Invalid lastAssistantProposalStatus';
   if (body.lastAssistantMessageId !== undefined && (typeof body.lastAssistantMessageId !== 'string' || body.lastAssistantMessageId.length > 200)) return 'Invalid lastAssistantMessageId';
+  if (body.availableModels !== undefined && (!Array.isArray(body.availableModels) || body.availableModels.length > 200
+    || !body.availableModels.every((model: unknown) => typeof model === 'string' && model.length <= 100))) return 'Invalid availableModels';
   if (body.taskSnapshots !== undefined && (!Array.isArray(body.taskSnapshots) || !body.taskSnapshots.every((task: unknown) => isRecord(task) && nonEmptyText(task.id) && nonEmptyText(task.title)) || new Set(body.taskSnapshots.map((task: any) => task.id)).size !== body.taskSnapshots.length)) return 'Invalid taskSnapshots';
   try { if (body.clientClock !== undefined) schedulingClockContext(body.clientClock); } catch { return 'Invalid clientClock'; }
   const contexts = [body];
@@ -268,11 +273,8 @@ ADAPTIVE WORK ANALYSIS:
 - workingPattern and reminderCandidates describe observed local start/completion times and explicit schedules, not attention, mood, context switching or a detected flow state. Prefer actual task boundaries and pauses for reminders; avoid interrupting a running timer. Describe low-confidence timing as a suggestion. Do not claim a reminder was enabled or sent; the application controls reminders and must remain running (including in the tray).
 `;
 
-// Gemini implicit caching reuses an identical request prefix of at least ~4096
-// tokens on Gemini 3.x Flash/Pro (likely 3.1 Flash-Lite too) and 2048 on 2.5.
-// Every systemInstruction below is therefore static and byte-identical per
-// route/action; per-request values (route data, clock, memory, workspace,
-// proposal, the message) go into the final user turn after the history.
+// Keep instructions static per route/action so repeated prefixes can be cached.
+// Request values (clock, memory, workspace, proposal and message) follow history.
 const CHAT_TIME_ANALYSIS_RULES = `TIME ANALYSIS: timeStatistics counts only completed tasks with positive recorded work. Report measurement coverage. Missing readings are unknown, never zero. Recorded time excludes pauses and may omit untracked work; do not infer effort from creation/completion times. Countdown duration is the current timer budget, may include extensions, and is not necessarily the original estimate. Recommend time blocks and buffers with uncertainty.`;
 
 const CHAT_CORE_RULES = `CHAT RULES:
@@ -355,7 +357,9 @@ function chatSystemInstruction(route: PersonalChatRoute, output: 'json' | 'prose
   const analytics = route === 'workspace_analysis' || route === 'personal';
   const coaching = route === 'general' || route === 'workspace_analysis';
   return [
-    KARKAS_ASSISTANT_PERSONA, personalGuidanceSystemPolicy, temporalAwarenessSystemPolicy,
+    KARKAS_ASSISTANT_PERSONA,
+    personalGuidanceSystemPolicy,
+    temporalAwarenessSystemPolicy,
     ...(operations ? [taskActionInstructions.trim()] : []),
     `${CHAT_CORE_RULES}
 ${prose ? CHAT_PROSE_OUTPUT_RULE : tools ? CHAT_TOOLS_OUTPUT_RULE : CHAT_JSON_OUTPUT_RULE}`,
@@ -385,11 +389,12 @@ function getGeminiClient(): GoogleGenAI | null {
 // requests (free-tier limits are per project and per model).
 const customGeminiClients = new Map<string, GoogleGenAI>();
 function geminiClientFor(customApiKey: string): GoogleGenAI {
-  let client = customGeminiClients.get(customApiKey);
+  const key = customApiKey.trim();
+  let client = customGeminiClients.get(key);
   if (!client) {
-    client = createGeminiClient(customApiKey);
+    client = createGeminiClient(key);
     if (customGeminiClients.size >= 4) customGeminiClients.delete(customGeminiClients.keys().next().value!);
-    customGeminiClients.set(customApiKey, client);
+    customGeminiClients.set(key, client);
   }
   return client;
 }
@@ -410,6 +415,39 @@ function logAIMetrics(kind: string, metrics: unknown) {
   if (metrics) console.info(`[karkas-ai] ${kind} ${JSON.stringify(metrics)}`);
 }
 
+/** Measure payload size without exposing prompts, personal memory or credentials. */
+function logAIRequestSize(transport: 'json' | 'stream', contents: unknown, config: any) {
+  if (process.env.KARKAS_AI_DIAGNOSTICS !== '1') return;
+  const turns = Array.isArray(contents) ? contents : [];
+  const inputChars = typeof contents === 'string' ? contents.length : turns.reduce((sum, turn) =>
+    sum + (Array.isArray(turn?.parts) ? turn.parts.reduce((partSum: number, part: any) =>
+      partSum + (typeof part?.text === 'string' ? part.text.length : 0), 0) : 0), 0);
+  console.info(`[karkas-ai] request-size ${JSON.stringify({ transport, inputChars,
+    systemChars: typeof config?.systemInstruction === 'string' ? config.systemInstruction.length : 0,
+    turns: turns.length, structuredOutput: config?.responseMimeType === 'application/json',
+  })}`);
+}
+
+/** Reject oversized inputs as a whole; never cut a task identity, user quote or negation. */
+function assertBoundedProviderContext(contents: unknown, config: unknown) {
+  if (JSON.stringify({ contents, config }).length > 120_000) throw new AIRequestError('CONTEXT_TOO_LARGE');
+}
+
+function requestCancellation(req: any, res: any) {
+  const controller = new AbortController();
+  const cancel = () => controller.abort(req.signal?.reason);
+  const closed = () => { if (!res.writableEnded) cancel(); };
+  req.signal?.addEventListener('abort', cancel, { once: true });
+  req.on?.('aborted', cancel);
+  res.on?.('close', closed);
+  if (req.signal?.aborted || req.aborted) cancel();
+  return { signal: controller.signal, dispose: () => {
+    req.signal?.removeEventListener('abort', cancel);
+    req.removeListener?.('aborted', cancel);
+    res.removeListener?.('close', closed);
+  } };
+}
+
 // Shared bounded generation path for HTTP and the native desktop bridge.
 async function generateGeminiContentWithFallback(params: {
   // A prompt string or Gemini multi-turn contents ({ role, parts }[]).
@@ -419,14 +457,18 @@ async function generateGeminiContentWithFallback(params: {
   selectedModel?: string;
   validateResponse?: (text: string, output: { text: string; functionCalls: AIFunctionCall[] }) => unknown;
   timeoutMs?: number;
+  fallbackTimeoutMs?: number;
   totalTimeoutMs?: number;
   fallbackModels?: string[];
+  availableModels?: string[];
   maxAttempts?: number;
   thinking?: AIThinkingEffort;
   signal?: AbortSignal;
 }): Promise<any> {
   const ai = params.customAi || getGeminiClient();
   if (!ai) throw new AIRequestError('MISSING_API_KEY');
+  assertBoundedProviderContext(params.contents, params.config);
+  logAIRequestSize('json', params.contents, params.config);
   return generateGeminiWithFallback({ ai, ...params });
 }
 
@@ -435,11 +477,19 @@ async function streamGeminiContentWithFallback(params: Omit<Parameters<typeof st
   const { customAi, ...rest } = params;
   const ai = customAi || getGeminiClient();
   if (!ai) throw new AIRequestError('MISSING_API_KEY');
+  assertBoundedProviderContext(rest.contents, rest.config);
+  logAIRequestSize('stream', rest.contents, rest.config);
   return streamGeminiWithFallback({ ai, ...rest });
 }
 
 function sendAIRequestFailure(res: any, error: unknown, isUk: boolean) {
   const failure = aiRequestFailure(error instanceof AIRequestError ? error : new AIRequestError('INVALID_AI_RESPONSE'), isUk);
+  // Opt-in local diagnosis: never log the request, raw provider error or credentials.
+  if (process.env.KARKAS_AI_DIAGNOSTICS === '1') {
+    console.warn(`[karkas-ai] failure ${JSON.stringify({
+      code: failure.body.code, status: failure.status, diagnostics: failure.body.diagnostics,
+    })}`);
+  }
   // A stream that failed after delivering text: the client keeps that text as interrupted.
   return res.status(failure.status).json(error instanceof AIStreamInterruptedError ? { ...failure.body, partial: true } : failure.body);
 }
@@ -447,6 +497,9 @@ function sendAIRequestFailure(res: any, error: unknown, isUk: boolean) {
 // Endpoint to validate custom Gemini API key and automatically fetch available models
 export async function verifyKeyHandler(req: any, res: any) {
   const result = await verifyGeminiKey(req.body?.apiKey);
+  if (result.body.success && typeof req.body?.apiKey === 'string') {
+    rememberAvailableGeminiModels(geminiClientFor(req.body.apiKey.trim()), result.body.models, true);
+  }
   return res.status(result.status).json(result.body);
 }
 app.post("/api/ai/verify-key", verifyKeyHandler);
@@ -545,6 +598,7 @@ function selectClientPeriodTasks(tasks: any[], archive: any[], period: string, c
 
 // Smart AI Assistant & Full App Context Analyzer Endpoint
 export async function assistHandler(req: any, rawRes: any) {
+  const assistStartedAt = performance.now();
   // `stream: true`: every final status().json() becomes one SSE `done`/`error` event
   // (canned replies and structured routes included); only prose routes emit deltas.
   const eventStream = req.body?.stream === true ? createAssistEventStream(rawRes) : null;
@@ -571,6 +625,7 @@ export async function assistHandler(req: any, rawRes: any) {
       lang = "uk",
       customApiKey,
       selectedModel,
+      availableModels,
       conversation = [],
       pendingChanges,
       fullAppContext,
@@ -605,6 +660,7 @@ export async function assistHandler(req: any, rawRes: any) {
     if (customApiKey && typeof customApiKey === "string") {
       ai = geminiClientFor(customApiKey);
     }
+    if (ai) rememberAvailableGeminiModels(ai, availableModels);
 
     // The client sends the complete state as fullAppContext. Accept both formats.
     const suppliedContext = fullAppContext && typeof fullAppContext === 'object' ? fullAppContext : {};
@@ -645,11 +701,31 @@ export async function assistHandler(req: any, rawRes: any) {
     const isTabCreationRequested = allowNewTabs || /(?:вкладк|категорі|розділ|напрямок|проєкт|проект|секці|tab|category|section|project)/iu.test(prompt);
     const isScheduleRequest = /(?:tomorrow|today|daily|every day|every evening|schedule|deadline|due\s+date|planned\s+date|\d{1,2}:\d{2}|\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}\.\d{2,4}|завтра|щодн|кожн|сьогодні|дедлайн|термін|дат[ауи]|на\s+\d{1,2}\s*(?:год|веч))/iu.test(prompt);
     const isTimerRequest = /(?:таймер|секундомір|відлік|timer|stopwatch|countdown)/iu.test(prompt);
+    const hasPendingOperations = isRecord(pendingChanges) && ['tasks', 'tabs', 'taskUpdates', 'taskDeletions'].some(key => Array.isArray(pendingChanges[key]) && pendingChanges[key].length > 0);
+    if (action === 'chat' && intent === 'auto' && isExplicitAIProposalApplyRequest(prompt)) {
+      let validPending: Record<string, any> | undefined;
+      if (hasPendingOperations && req.body.lastAssistantProposalStatus !== 'stale') {
+        try {
+          const prepared = validateAssistProposal(JSON.stringify({ ...pendingChanges, reply: 'Pending proposal' }), 'chat', mutationTargets, req.body.taskSnapshots);
+          validPending = { tasks: prepared.tasks ?? [], tabs: prepared.tabs ?? [], ...validateTaskMutations(prepared, mutationTargets) };
+        } catch { /* An old/invalid payload is not a prepared proposal; never infer one from prose. */ }
+      }
+      const reply = validPending
+        ? (isUk ? 'Підготовлені зміни ще не застосовано. Підтвердьте їх у картці пропозиції.' : 'The prepared changes have not been applied yet. Confirm them in the proposal card.')
+        : req.body.lastAssistantProposalStatus === 'stale'
+          ? (isUk ? 'Попередня пропозиція вже неактуальна. Напишіть, які завдання та що потрібно змінити, щоб підготувати актуальну пропозицію.' : 'The earlier proposal is no longer current. Specify which tasks and what to change to prepare a current proposal.')
+          : (isUk ? 'Немає підготовлених змін для застосування. Попередня текстова відповідь не містить картки змін. Напишіть, які завдання та що потрібно змінити.' : 'There are no prepared changes to apply. The earlier text reply contains no change proposal. Specify which tasks and what to change.');
+      return res.json({ reply, summary: reply, ...(validPending ?? { tasks: [], tabs: [], taskUpdates: [], taskDeletions: [] }), source: validPending ? 'pending-proposal-confirmation' : req.body.lastAssistantProposalStatus === 'stale' ? 'stale-proposal-clarification' : 'proposal-apply-clarification' });
+    }
     const personalRequest = preparePersonalDiscoveryRequest(personalProfileForRequest(strategyContext), prompt, discoveryConfirmationId);
     const personalProfile = personalRequest.profile;
     const pendingQuestion = personalProfile ? normalizeStrategyDiscovery(personalProfile).pendingQuestion : undefined;
-    const respondsToCurrentQuestion = pendingQuestion?.turnId && req.body.lastAssistantMessageId === `reply-${pendingQuestion.turnId}`;
-    const hasPendingOperations = isRecord(pendingChanges) && ['tasks', 'tabs', 'taskUpdates', 'taskDeletions'].some(key => Array.isArray(pendingChanges[key]) && pendingChanges[key].length > 0);
+    const resumedQuestionId = pendingQuestion ? `discovery-resume-${pendingQuestion.id}` : '';
+    const lastAssistantMessageId = typeof req.body.lastAssistantMessageId === 'string' ? req.body.lastAssistantMessageId : '';
+    const respondsToCurrentQuestion = !!pendingQuestion && (
+      (pendingQuestion.turnId && lastAssistantMessageId === `reply-${pendingQuestion.turnId}`)
+      || (req.body.currentDiscoveryQuestionId === pendingQuestion.id &&
+        (lastAssistantMessageId === resumedQuestionId || lastAssistantMessageId.startsWith(`${resumedQuestionId}:after:`))));
     if (action === 'chat' && intent === 'auto' && /^(?:так|гаразд|добре|погоджуюсь|погоджуюся|підтверджую|підтверджено|ок|окей|застосувати|застосуй|зберегти|збережи|yes|ok|okay|agreed|confirm|i agree)[.!\s]*$/iu.test(prompt.trim())
       && req.body.lastAssistantProposalStatus === 'stale' && !hasPendingOperations && !discoveryConfirmationId && !respondsToCurrentQuestion) {
       // A bare yes shows no form of address; the recent conversation decides.
@@ -677,7 +753,7 @@ export async function assistHandler(req: any, rawRes: any) {
     const chatRoute = classifyPersonalChatRequest(prompt, intent, mutationTargets, personalProfile, isRecord(pendingChanges) ? pendingChanges : undefined,
       { answeringDiscovery, discoveryMode, previousAssistantText, previousUserText, previousUserTexts });
     if (action === 'chat' && chatRoute.route === 'task_command' && chatRoute.scope?.operation === 'update' && !chatRoute.scope.taskIds.length
-      && /(?:розкладай|розклади|розплануй|сплануй|перенеси|заплануй|reschedule|schedule|move)/iu.test(prompt)
+      && /(?:розкладай|розклади|розплануй|сплануй|перенеси|перекинь|заплануй|reschedule|schedule|move)/iu.test(prompt)
       && /(?:сьогодні|завтра|today|tomorrow|\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}\.\d{2,4})/iu.test(prompt)) {
       const reply = taskScopeClarificationReply(isUk, discoveryAddressFor(personalProfile, prompt, conversationHistory));
       return res.json({ reply, summary: reply, tasks: [], tabs: [], taskUpdates: [], taskDeletions: [], source: 'task-scope-clarification' });
@@ -696,13 +772,27 @@ export async function assistHandler(req: any, rawRes: any) {
       mergeTemporalTaskContext(compactTaskPromptContext(tasks, { detailTaskIds }), temporalContext.tasks, { detailTaskIds });
 
     if (ai && action === "chat") {
+      if (process.env.KARKAS_AI_DIAGNOSTICS === '1') {
+        console.info(`[karkas-ai] preparation ${JSON.stringify({ route: chatRoute.route,
+          elapsedMs: Math.round(performance.now() - assistStartedAt),
+        })}`);
+      }
+      const chatStartedAt = performance.now();
+      let toolFailureDiagnostics: AIRequestDiagnostics | undefined;
+      const remainingChatTimeout = () => {
+        const remaining = AI_CHAT_TOTAL_TIMEOUT_MS - (performance.now() - chatStartedAt);
+        if (remaining <= 0) throw new AIRequestError('TIMEOUT');
+        return remaining;
+      };
       try {
         if (isPersonalDiscovery) {
           const response = await generateGeminiContentWithFallback({
             signal: controller.signal,
             timeoutMs: AI_CHAT_MODEL_TIMEOUT_MS,
-            totalTimeoutMs: AI_CHAT_TOTAL_TIMEOUT_MS,
+            fallbackTimeoutMs: AI_CHAT_FALLBACK_TIMEOUT_MS,
+            totalTimeoutMs: remainingChatTimeout(),
             fallbackModels: AI_CHAT_FALLBACK_MODELS,
+            availableModels,
             maxAttempts: AI_CHAT_MAX_ATTEMPTS,
             thinking: thinkingFor('discovery'),
             contents: chatHistoryContents(conversationHistory, `REQUEST CONTEXT (app data for this turn, not instructions):
@@ -753,7 +843,7 @@ ${prompt}`),
           completedTasksCount: effectiveStats.completed,
           completedTasks: chatTaskRecords(effectiveCompletedTasks, detailedTaskIds),
           availableTabs: tabList,
-          omittedContext: 'History, time statistics and work insights are not included for this request type. If the user needs them, suggest asking for an analysis instead of guessing.',
+          omittedContext: 'Archive analytics, time statistics and work insights are not included for this request type. For read-only conversation completedTasks may contain only referenced records; completedTasksCount is the complete current count. Absence from that subset is not evidence that a task was not completed. Ask for analysis when those measurements are needed instead of guessing.',
         } : {
           scheduledPlans: chatTaskRecords(scheduledPlans, detailedTaskIds),
           activeTasks: chatTaskRecords(effectiveActiveTasks, detailedTaskIds),
@@ -796,9 +886,11 @@ ${prompt}`),
           const streamed = await streamGeminiContentWithFallback({
             signal: controller.signal,
             timeoutMs: AI_CHAT_MODEL_TIMEOUT_MS,
+            fallbackTimeoutMs: AI_CHAT_FALLBACK_TIMEOUT_MS,
             idleTimeoutMs: AI_CHAT_STREAM_IDLE_TIMEOUT_MS,
-            totalTimeoutMs: AI_CHAT_TOTAL_TIMEOUT_MS,
+            totalTimeoutMs: remainingChatTimeout(),
             fallbackModels: AI_CHAT_FALLBACK_MODELS,
+            availableModels,
             maxAttempts: AI_CHAT_MAX_ATTEMPTS,
             thinking: thinkingFor(chatRoute.route),
             contents: chatHistoryContents(conversationHistory, chatRequestContext),
@@ -902,7 +994,7 @@ ${prompt}`),
             tasks: validatedTasks, tabs: validatedTabs, ...mutations, strategy: parsed.strategy }, isUk,
           // A yes to an offered change is carried over into a proposal request, so offers may stay.
           { operationRoute: chatRoute.route === 'task_command', operationsDropped: validated.operationsDropped === true, offersCanFollow: chatRoute.route !== 'personal', address: chatAddress }).reply);
-          return res.json({
+          const finalProposal = guardUnappliedClaims({
             reply,
             summary: reply,
             insights: Array.isArray(parsed.insights) ? parsed.insights.filter(nonEmptyText).slice(0, 10) : [],
@@ -915,8 +1007,11 @@ ${prompt}`),
             workInsights,
             strategy: parsed.strategy,
             aiMetrics: generation.metrics,
+          }, isUk);
+          return res.json({
+            ...finalProposal,
             // Streamed text was shown live; the `done` reply is authoritative and replaces it.
-            ...(streamedReply && reply !== streamedReply ? { replyReplaced: true } : {}),
+            ...(streamedReply && finalProposal.reply !== streamedReply ? { replyReplaced: true } : {}),
           });
         };
 
@@ -924,8 +1019,10 @@ ${prompt}`),
         const generateJsonChatResponse = () => generateGeminiContentWithFallback({
           signal: controller.signal,
           timeoutMs: AI_CHAT_MODEL_TIMEOUT_MS,
-          totalTimeoutMs: AI_CHAT_TOTAL_TIMEOUT_MS,
+          fallbackTimeoutMs: AI_CHAT_FALLBACK_TIMEOUT_MS,
+          totalTimeoutMs: remainingChatTimeout(),
           fallbackModels: AI_CHAT_FALLBACK_MODELS,
+          availableModels,
           maxAttempts: AI_CHAT_MAX_ATTEMPTS,
           thinking: thinkingFor(chatRoute.route),
           // History as real alternating turns; the dynamic request context is the final user turn.
@@ -972,8 +1069,10 @@ ${prompt}`),
           const toolRequest = {
             signal: controller.signal,
             timeoutMs: AI_CHAT_MODEL_TIMEOUT_MS,
-            totalTimeoutMs: AI_CHAT_TOTAL_TIMEOUT_MS,
+            fallbackTimeoutMs: AI_CHAT_FALLBACK_TIMEOUT_MS,
+            totalTimeoutMs: remainingChatTimeout(),
             fallbackModels: AI_CHAT_FALLBACK_MODELS,
+            availableModels,
             maxAttempts: AI_CHAT_MAX_ATTEMPTS,
             thinking: thinkingFor(chatRoute.route),
             contents: chatHistoryContents(conversationHistory, chatRequestContext),
@@ -1007,11 +1106,26 @@ ${prompt}`),
 
         const chatResponse = await generateJsonChatResponse();
         if (chatResponse?.text) {
+          if (toolFailureDiagnostics && chatResponse.metrics) {
+            chatResponse.metrics = { ...chatResponse.metrics,
+              attempts: chatResponse.metrics.attempts + toolFailureDiagnostics.attempts.length,
+              attemptModels: [...toolFailureDiagnostics.attempts.map(attempt => attempt.model), ...(chatResponse.metrics.attemptModels ?? [chatResponse.metrics.model])],
+              failedAttempts: [...toolFailureDiagnostics.attempts, ...(chatResponse.metrics.failedAttempts ?? [])],
+              elapsedMs: Math.round(performance.now() - chatStartedAt),
+            };
+          }
           logAIMetrics(`chat:${chatRoute.route}`, chatResponse.metrics);
           return sendChatProposal(chatResponse.validatedResponse, chatResponse);
         }
       } catch (chatError) {
         if (controller.signal.aborted) return;
+        if (chatError instanceof AIRequestError && toolFailureDiagnostics) {
+          chatError.diagnostics = {
+            attempts: [...toolFailureDiagnostics.attempts, ...(chatError.diagnostics?.attempts ?? [])],
+            elapsedMs: Math.round(performance.now() - chatStartedAt),
+            ...(chatError.diagnostics?.keyId || toolFailureDiagnostics.keyId ? { keyId: chatError.diagnostics?.keyId || toolFailureDiagnostics.keyId } : {}),
+          };
+        }
         return sendAIRequestFailure(res, chatError, isUk);
       }
     }
@@ -1425,7 +1539,9 @@ app.post("/api/ai/assist", assistHandler);
 
 // Dedicated Single-Task AI Breakdown into Sub-steps Endpoint
 export async function breakdownTaskHandler(req: any, res: any) {
+  const cancellation = requestCancellation(req, res);
   try {
+    cancellation.signal.throwIfAborted();
     const validationError = requestValidationError(req.body);
     if (validationError) return res.status(400).json({ error: validationError });
     const rawTask = req.body.task || (req.body.title ? {
@@ -1527,6 +1643,7 @@ APP CONTEXT:
           customAi: ai,
           selectedModel: selectedModel,
           thinking: thinkingFor('breakdown'),
+          signal: cancellation.signal,
         });
 
         if (response && response.text) {
@@ -1578,6 +1695,8 @@ APP CONTEXT:
     });
   } catch (err: any) {
     return sendAIRequestFailure(res, classifyAIRequestError(err), req.body?.lang !== 'en');
+  } finally {
+    cancellation.dispose();
   }
 }
 app.post("/api/ai/breakdown-task", breakdownTaskHandler);
@@ -1657,7 +1776,9 @@ app.post("/api/ai/suggest-tabs", suggestTabsHandler);
 
 // AI Dashboard Recommendations & Period Productivity Analysis Endpoint
 export async function recommendationsHandler(req: any, res: any) {
+  const cancellation = requestCancellation(req, res);
   try {
+    cancellation.signal.throwIfAborted();
     const validationError = requestValidationError(req.body);
     if (validationError) return res.status(400).json({ error: validationError });
     const {
@@ -1831,6 +1952,7 @@ Language: ${isUk ? "Ukrainian" : "English"}.`,
           customAi: ai,
           selectedModel: selectedModel,
           thinking: thinkingFor('recommendations'),
+          signal: cancellation.signal,
         });
 
         if (response && response.text) {
@@ -1966,6 +2088,8 @@ Language: ${isUk ? "Ukrainian" : "English"}.`,
     });
   } catch (err: any) {
     return sendAIRequestFailure(res, classifyAIRequestError(err), req.body?.lang !== 'en');
+  } finally {
+    cancellation.dispose();
   }
 }
 app.post("/api/ai/recommendations", recommendationsHandler);
@@ -2087,7 +2211,7 @@ export async function transcribeAudioHandler(req: any, res: any) {
     // Batch transcription deliberately uses fast, broadly available models and
     // does not inherit the chat model selected by the user.
     const response = await generateGeminiWithFallback({
-      ai, selectedModel: 'gemini-3.1-flash-lite', fallbackModels: ['gemini-flash-latest', 'gemini-2.5-flash'],
+      ai, selectedModel: 'gemini-3.1-flash-lite', fallbackModels: ['gemini-flash-latest'],
       allowEmptyText: true, timeoutMs: 15_000, totalTimeoutMs: 30_000, signal: controller.signal,
       thinking: thinkingFor('transcription'),
       contents: [{ role: 'user', parts: [
@@ -2162,7 +2286,7 @@ export async function startServer(options: { port?: number; host?: string; distP
   }
 
   return new Promise<import('node:http').Server>((resolve, reject) => {
-    const server = app.listen(options.port ?? PORT, options.host || "0.0.0.0", () => resolve(server));
+    const server = app.listen(options.port ?? PORT, options.host || "127.0.0.1", () => resolve(server));
     server.once('error', reject);
   });
 }

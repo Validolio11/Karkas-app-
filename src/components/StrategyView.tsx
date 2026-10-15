@@ -119,7 +119,7 @@ export const StrategyView: React.FC<StrategyViewProps> = (props: StrategyViewPro
       {sideCard}
     </div>
 
-    <StrategyGoals goals={profile.goals} tasks={tasks} tabs={tabs} lang={lang} onChangeGoal={changeGoal} onOpenTask={props.onOpenTask} onChat={onChat} />
+    <StrategyGoals deletedTasks={props.deletedTasks} goals={profile.goals} tasks={tasks} tabs={tabs} lang={lang} onChangeGoal={changeGoal} onOpenTask={props.onOpenTask} onChat={onChat} />
 
     <StrategyAudit ownerId={ownerId} profile={profile} tasks={tasks} deletedTasks={props.deletedTasks} tabs={tabs} lang={lang} clock={clock} onChat={onChat} />
 

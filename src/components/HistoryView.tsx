@@ -264,7 +264,7 @@ const HistoryViewComponent: React.FC<HistoryViewProps> = ({
                   const completedSteps = task.stepList ? task.stepList.filter((s) => s.done).length : task.currentStep;
                   const totalSteps = task.steps || 1;
                   const reasonValue = (task as DeletedTask).deletionReason === 'accidental' ? 'accidental' : task.done ? 'completed' : (task as DeletedTask).deletionReason || 'unknown';
-                  const restoreLabel = isCompleted ? hv.restoreToActive : hv.restoreDeleted;
+                  const restoreLabel = isCompleted ? (archived ? (uk ? 'Повернути з архіву' : 'Restore from archive') : hv.restoreToActive) : hv.restoreDeleted;
 
                   return (
                     <li key={`${type}-${task.id}`} className="flex items-start gap-3 py-4 sm:gap-4">

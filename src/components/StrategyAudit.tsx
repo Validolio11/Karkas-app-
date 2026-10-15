@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { MessageSquare, RefreshCw } from 'lucide-react';
 import type { AIRecommendation, AnalyticsPeriod, DeletedTask, PersonalStrategyProfile, PSTask, TaskTab } from '../types';
+import { readWebApiKey } from '../utils/webApiKey';
 import { karkasApiFetch } from '../utils/desktopApi';
 import { aiRequestErrorMessage } from './aiAssistantState';
 import { TRANSLATIONS } from '../utils/i18n';
@@ -53,7 +54,7 @@ export const StrategyAudit: React.FC<{
       const response = await karkasApiFetch('/api/ai/recommendations', { method: 'POST', signal: request.signal,
         headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tasks, deletedTasks, tabs, lang, period,
           strategyContext: profile, clientClock: { now: new Date().toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Kyiv' },
-          customApiKey: custom ? localStorage.getItem('karkas_custom_api_key') || undefined : undefined,
+          customApiKey: custom ? readWebApiKey() || undefined : undefined,
           selectedModel: custom ? model : undefined }) });
       if (!response.ok) throw new Error(uk ? 'Не вдалося оновити аналіз. Спробуйте ще раз.' : 'Could not refresh the analysis. Try again.');
       let value: AIRecommendation;
@@ -100,7 +101,8 @@ export const StrategyAudit: React.FC<{
         {tile.hint && <dd className="mt-1 text-[11px] text-neutral-500">{tile.hint}</dd>}
       </div>)}
     </dl>
-    {error && <p role="alert" className="mt-4 text-xs text-amber-300">{error}</p>}
+    {loading && <button type="button" className={`${btn} mt-4`} onClick={() => { controller.current?.abort(); setLoading(false); }}>{uk ? 'Скасувати запит' : 'Cancel request'}</button>}
+    {error && <div role="alert" className="mt-4 text-xs text-amber-300"><p>{error}</p><button type="button" className={`${btn} mt-2`} disabled={loading} onClick={refreshAudit}>{uk ? 'Повторити запит' : 'Retry request'}</button></div>}
     {audit ? <div className="mt-6 space-y-5 border-t border-neutral-800 pt-5 text-sm leading-relaxed">
       <p className="flex flex-wrap items-center gap-2 text-[11px] text-neutral-500">
         <span>{new Date(audit.at).toLocaleString(uk ? 'uk-UA' : 'en-GB')} · {audit.value.source === 'gemini' ? 'AI' : (uk ? 'Локальний аналіз' : 'Local analysis')}</span>

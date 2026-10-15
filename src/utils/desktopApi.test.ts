@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { karkasApiFetch, desktopHasAiKey } from './desktopApi.ts';
+import { readAIUsageLedger } from './aiModelUsage';
 import { verifyApiKey } from './verifyApiKey.ts';
 
 const installWindow = (desktop: unknown) => {
@@ -77,4 +78,45 @@ test('credential-check failure is not misreported as a missing key', async () =>
   const restore = installWindow({ ai: { hasKey: async () => ({ ok:false, error:{code:'DESKTOP_ERROR'} }) } });
   try { await assert.rejects(desktopHasAiKey(), /Unable to check/); }
   finally { restore(); }
+});
+
+
+test('tab suggestions cancel the native generation with the same request id', async () => {
+  let requestId = '';
+  let cancelledId = '';
+  const restore = installWindow({ ai: {
+    suggestTabs: (body: { desktopRequestId: string }) => { requestId = body.desktopRequestId; return new Promise(() => {}); },
+    cancelRequest: async (id: string) => { cancelledId = id; return { ok: true }; },
+  } });
+  try {
+    const controller = new AbortController();
+    const pending = karkasApiFetch('/api/ai/suggest-tabs', { signal: controller.signal, body: '{}' });
+    await Promise.resolve();
+    assert.match(requestId, /^[a-zA-Z0-9_-]{8,128}$/);
+    controller.abort();
+    await assert.rejects(pending, { name: 'AbortError' });
+    assert.equal(cancelledId, requestId);
+  } finally { restore(); }
+});
+
+
+test('secondary AI operations update the existing per-key model ledger once', async () => {
+  const values = new Map<string, string>();
+  const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); } };
+  const previousStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage });
+  const restore = installWindow({ ai: { recommendations: async () => ({ ok: true, value: { status: 200,
+    body: { aiMetrics: { keyId: 'abcd1234', model: 'gemini-3.5-flash-lite', attempts: 1, promptTokens: 12, outputTokens: 4 } },
+  } }) } });
+  try {
+    await karkasApiFetch('/api/ai/recommendations', { body: '{}' });
+    const ledger = readAIUsageLedger(storage, Date.now(), 'abcd1234');
+    assert.equal(ledger.models['gemini-3.5-flash-lite'].requests, 1);
+    assert.equal(ledger.models['gemini-3.5-flash-lite'].inputTokens, 12);
+    assert.equal(ledger.models['gemini-3.5-flash-lite'].outputTokens, 4);
+  } finally {
+    restore();
+    if (previousStorage) Object.defineProperty(globalThis, 'localStorage', previousStorage);
+    else Reflect.deleteProperty(globalThis, 'localStorage');
+  }
 });

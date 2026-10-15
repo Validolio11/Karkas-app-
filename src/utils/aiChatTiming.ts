@@ -1,9 +1,9 @@
-// Give each distinct chat model a usable share of the bounded operation budget.
-// A stalled primary must not consume the time reserved for both fallbacks.
+// Keep slow or stalled model attempts bounded and reserve time for healthy alternatives.
 // The client deadline also leaves time to receive the server's final response,
 // so it must stay above the server total.
 export const AI_CHAT_MODEL_TIMEOUT_MS = 15_000;
-export const AI_CHAT_TOTAL_TIMEOUT_MS = 45_000;
+export const AI_CHAT_FALLBACK_TIMEOUT_MS = 10_000;
+export const AI_CHAT_TOTAL_TIMEOUT_MS = 35_000;
 export const AI_CHAT_CLIENT_TIMEOUT_MS = AI_CHAT_TOTAL_TIMEOUT_MS + 10_000;
 // Quota-cheap models first: on the free tier Flash-Lite allows about 500 requests
 // per day, Flash only about 20, so a fallback must not burn the scarce Flash quota.

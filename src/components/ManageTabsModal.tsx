@@ -13,6 +13,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { useDialogKeyboard } from './useDialogKeyboard';
 import { AIIcon } from './AIIconTemplates';
 import { karkasApiFetch } from '../utils/desktopApi';
+import { readWebApiKey } from '../utils/webApiKey';
 import { AIRequestError, aiRequestErrorMessage, responseRequestError } from './aiAssistantState';
 
 interface ManageTabsModalProps {
@@ -189,7 +190,7 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
           facts: aiContext?.facts.slice(0, 12) || [],
           taskTitles: aiContext?.taskTitles.slice(0, 25) || [],
           currentTabs: tabs.map(tab => ({ id: tab.id, name: tabName(tab.id), taskCount: tabCounts[tab.id] || 0 })),
-          customApiKey: custom ? localStorage.getItem('karkas_custom_api_key') || undefined : undefined,
+          customApiKey: custom ? readWebApiKey() || undefined : undefined,
           selectedModel: custom ? localStorage.getItem('karkas_custom_model') || undefined : undefined,
         }),
       });

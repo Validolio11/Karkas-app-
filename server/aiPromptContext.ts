@@ -64,6 +64,25 @@ export function boundedPersonalPromptContext(profile: PersonalStrategyProfile) {
   };
 }
 
+/** Read-only conversation needs useful memory, without repeating the discovery evidence journal. */
+export function briefPersonalPromptContext(profile: PersonalStrategyProfile) {
+  const goals = recentWholeItems(profile.goals, 8, 6000);
+  const facts = recentWholeItems(profile.facts, 4, 2000);
+  const barriers = recentWholeItems(profile.barriers, 3, 1500);
+  const preferences = recentWholeItems(profile.preferences, 4, 1500);
+  const nextAction = profile.latestStrategy?.nextAction;
+  return {
+    goals: goals.items.map(goal => ({ id: goal.id, title: goal.title, motive: goal.motive,
+      agreed: goal.agreed, taskIds: goal.taskIds, categoryIds: goal.categoryIds })),
+    facts: facts.items, barriers: barriers.items, preferences: preferences.items,
+    ...(typeof nextAction === 'string' && nextAction.length <= 2000 ? { nextAction } : {}),
+    ...(profile.latestStrategy?.focusTaskId ? { focusTaskId: profile.latestStrategy.focusTaskId } : {}),
+    omittedMemoryCounts: { goals: goals.omittedCount, facts: facts.omittedCount,
+      barriers: barriers.omittedCount, preferences: preferences.omittedCount },
+    evidenceLimits: 'Read-only memory projection, not permission to plan or change tasks. Complete account memory remains stored. Whole statements retain their source and negation; omitted information is unknown here. Ask when needed rather than infer motives or diagnoses.',
+  };
+}
+
 type PromptTask = Partial<PSTask> & { deletedAt?: number; deletionReason?: string };
 
 /**
@@ -199,7 +218,8 @@ export function chatHistoryContents(history: unknown, finalUserText: string): Ch
     if (last?.role === role) last.parts.push({ text });
     else turns.push({ role, parts: [{ text }] });
   };
-  for (const message of Array.isArray(history) ? history as any[] : []) {
+  const boundedHistory = recentWholeItems(Array.isArray(history) ? history as any[] : [], 10, 20_000).items;
+  for (const message of boundedHistory) {
     if (!message || typeof message !== 'object' || typeof message.content !== 'string' || !message.content.trim()) continue;
     const role = message.role === 'user' ? 'user' : message.role === 'assistant' || message.role === 'model' ? 'model' : undefined;
     if (!role) continue;

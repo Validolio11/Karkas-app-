@@ -39,6 +39,7 @@ import { loadAIChatHistory, saveAIChatHistory, ensureAIChatWelcome, recentAIChat
 import type { PersistedAIChatMessage } from '../services/chatHistory';
 import { AICommandMenu } from './AICommandMenu';
 import { proposalTargetsUnchanged } from './aiProposalGuard';
+import { isExplicitAIProposalApplyRequest } from '../utils/aiProposalConfirmation';
 import { AI_COMMANDS, intentMode, migrateAIComposer, modeIntent, parseAICommand } from './aiCommands';
 import { strategyGreeting } from '../utils/personalStrategy';
 import { addressedDiscoveryQuestion, detectDiscoveryAddress, discoveryQuestionForState, practicalHelpRequested } from '../utils/strategyDiscovery';
@@ -47,8 +48,9 @@ import { useDialogKeyboard } from './useDialogKeyboard';
 import { aiApplyOutcome, describeAIApplyResult, describeAITimer, getAITimerContext, prepareAITask, type AIApplyResult } from './aiTaskProposal';
 import { describeSchedule } from '../utils/schedulePresentation';
 import { formatTaskDate } from '../utils/taskDates';
-import { AIRequestError, adoptedAIModel, aiRequestErrorMessage, appendChatRequest, createStreamedReplyBuffer, readAIAssistantDraft, readAIResponse, responseRequestError, restoredAIRequestNotice, saveAIAssistantDraft, selectAIModel, visibleChatModels, type AIMode, type AIRequest } from './aiAssistantState';
-import { readAIUsageLedger, saveAIUsage, unavailableModels, usageView, type AIUsageLedger } from '../utils/aiModelUsage';
+import { readWebApiKey, storeWebApiKey } from '../utils/webApiKey';
+import { AIRequestError, aiRequestDiagnosticReason, formatAIRequestDuration, adoptedAIModel, aiRequestErrorMessage, appendChatRequest, createStreamedReplyBuffer, readAIAssistantDraft, readAIResponse, responseRequestError, restoredAIRequestNotice, saveAIAssistantDraft, selectAIModel, visibleChatModels, type AIMode, type AIRequest, type AIRequestDiagnostics } from './aiAssistantState';
+import { readAIUsageLedger, unavailableModels, usageView, type AIUsageLedger } from '../utils/aiModelUsage';
 
 interface AIAssistantSheetProps {
   isOpen: boolean;
@@ -128,6 +130,20 @@ const isChatModel = (model: string) => {
   return name.includes('gemini') && !/(embedding|image|tts|transcrib|robotics|computer-use)/.test(name);
 };
 
+const RequestErrorDetails: React.FC<{ diagnostics: AIRequestDiagnostics; lang: Language }> = ({ diagnostics, lang }) => (
+  <details className="mt-2 text-sm text-neutral-400">
+    <summary className="cursor-pointer hover:text-neutral-200 focus-visible:outline focus-visible:outline-1 focus-visible:outline-neutral-400">
+      {lang === 'uk' ? 'Деталі запиту' : 'Request details'} · {formatAIRequestDuration(diagnostics.elapsedMs, lang)}
+    </summary>
+    <ol className="mt-2 space-y-1">
+      {diagnostics.attempts.map((attempt, index) => <li key={`${attempt.model}:${index}`} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+        <span className="break-all text-neutral-300">{attempt.model}</span>
+        <span>{aiRequestDiagnosticReason(attempt.code, lang, attempt.reason)} · {formatAIRequestDuration(attempt.elapsedMs, lang)}</span>
+      </li>)}
+    </ol>
+  </details>
+);
+
 const DateProposal: React.FC<{ settings: { plannedDate?: string | null; deadlineDate?: string | null }; lang: Language }> = ({ settings, lang }) => <>
   {settings.plannedDate !== undefined && <p className="text-sm text-neutral-300">{lang === 'uk' ? 'Заплановано на' : 'Planned for'}: {settings.plannedDate ? formatTaskDate(settings.plannedDate, lang) : (lang === 'uk' ? 'прибрати дату' : 'clear date')}</p>}
   {settings.deadlineDate !== undefined && <p className="text-sm text-neutral-300">{lang === 'uk' ? 'Завершити до' : 'Complete by'}: {settings.deadlineDate ? formatTaskDate(settings.deadlineDate, lang) : (lang === 'uk' ? 'прибрати дедлайн' : 'clear deadline')}</p>}
@@ -144,6 +160,14 @@ const deletionReasonLabel = (reason: AIDeletedTaskRef['deletionReason'], lang: L
   : (lang === 'uk' ? 'Прибрано без уточненої причини' : 'Removed without a specified reason');
 
 const normalizedProposalText = (text: string | undefined) => (text || '').trim().replace(/\s+/g, ' ').toLowerCase();
+
+/** A short yes applies tasks only when it answers an explicit proposal-apply question. */
+const isProposalApplyAcknowledgement = (text: string, reply?: string): boolean => {
+  if (!/^(?:так|підтверджую|підтверджено|yes|confirm|ок|okay)[.!\s]*$/iu.test(text.trim()) || !reply) return false;
+  const lastSentence = reply.replace(/[*_`]/gu, '').split(/[\n.!]/u).filter(part => part.trim()).at(-1)?.trim() || '';
+  return /^(?:(?:чи|можна|хочете|хочеш|готові|готовий|готова|давайте)\s+)?(?:застосувати|застосуємо|підтвердити|зберегти)\s+(?:(?:ці|запропоновані|підготовлені)\s+)?(?:зміни|пропозицію|план)\s*\?$/iu.test(lastSentence)
+    || /^(?:(?:should|can|may|shall)\s+(?:i|we)\s+|do you want (?:me|us) to\s+)?(?:apply|confirm|save)\s+(?:(?:the|these|proposed|prepared)\s+)?(?:changes|proposal|plan)\s*\?$/iu.test(lastSentence);
+};
 
 const ProposalSteps: React.FC<{ steps: (string | { id?: string; title: string; done?: boolean })[]; lang: Language }> = ({ steps, lang }) => (
   <ol className="space-y-2">
@@ -234,7 +258,9 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
   const [mode, setMode] = useState<AIMode>(migrateAIComposer(initialDraft?.prompt || '', initialDraft?.mode || 'chat').mode);
   const [recoverableRequest, setRecoverableRequest] = useState<AIRequest | null>(initialDraft?.recoverableRequest || null);
-  const [requestError, setRequestError] = useState<string | null>(restoredAIRequestNotice(initialDraft?.recoverableRequest, lang));
+  const [requestFailure, setRequestFailure] = useState<{ message: string | null; diagnostics?: AIRequestDiagnostics }>(() => ({ message: restoredAIRequestNotice(initialDraft?.recoverableRequest, lang) }));
+  const requestError = requestFailure.message;
+  const setRequestError = (message: string | null, diagnostics?: AIRequestDiagnostics) => setRequestFailure({ message, diagnostics });
   const activeRequest = useRef<AIRequest | null>(null);
   const draftAccountRef = useRef(accountId);
   const skipDraftPersistRef = useRef(false);
@@ -291,6 +317,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   };
   const requestGeneration = useRef(0);
   const latestProposalMessageId = useRef<string | null>(null);
+  const pendingProposalOwnerRef = useRef<string | null | undefined>(undefined);
+  const resumedDiscoveryQuestionRef = useRef<{ ownerId: string | null; id: string; text: string } | null>(null);
   const welcomeScrollRef = useRef(false);
   const welcomeAccountRef = useRef(accountId);
   const pendingTaskSnapshotRef = useRef<PSTask[]>([]);
@@ -305,7 +333,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       setRequestError(aiRequestErrorMessage(new AIRequestError('CANCELLED'), lang));
       setChatProposalReadiness(false);
     }
-    if (!isOpen) { preservedRequestDraftRef.current = null; setIntroductionId(null); }
+    if (!isOpen) { preservedRequestDraftRef.current = null; setIntroductionId(null); resumedDiscoveryQuestionRef.current = null; }
     activeRequest.current = null;
     requestGeneration.current += 1;
     assistController.current?.abort();
@@ -324,7 +352,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     };
   }, [isOpen, accountId]);
 
-  const [availableModels, setAvailableModels] = useState<string[]>(() => {
+  const [availableModels, setAvailableModelsState] = useState<string[]>(() => {
     try {
       const stored = localStorage.getItem('karkas_available_models');
       const models = stored ? JSON.parse(stored) : [];
@@ -333,6 +361,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       return [];
     }
   });
+  const availableModelsRef = useRef(availableModels);
+  const setAvailableModels = (models: string[]) => { availableModelsRef.current = models; setAvailableModelsState(models); };
   // Locally observed per-model usage of the current key (see aiModelUsage.ts).
   const [usageLedger, setUsageLedger] = useState<AIUsageLedger>(() => {
     try { return readAIUsageLedger(localStorage, Date.now()); } catch { return { day: '', models: {} }; }
@@ -390,8 +420,9 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       try { setUsageLedger(readAIUsageLedger(localStorage, Date.now())); } catch { /* keep the last ledger */ }
     };
     refresh();
+    window.addEventListener('karkas-ai-model-usage-changed', refresh);
     const interval = window.setInterval(refresh, 60_000);
-    return () => window.clearInterval(interval);
+    return () => { window.clearInterval(interval); window.removeEventListener('karkas-ai-model-usage-changed', refresh); };
   }, [isOpen]);
 
   // Each dictation owns its microphone, socket, buffered audio and cancellation.
@@ -489,6 +520,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     planningSourceRef.current = null;
     preservedRequestDraftRef.current = null;
     latestProposalMessageId.current = null;
+    pendingProposalOwnerRef.current = undefined;
+    resumedDiscoveryQuestionRef.current = null;
     setApplyNotice(null);
   }, [accountId]);
 
@@ -591,9 +624,19 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       ? { ...storedQuestion, text: addressedDiscoveryQuestion(discovery, storedQuestion, lang, discoveryAddress()) }
       : discovery?.pendingSummary && !discovery.pendingSummary.confirmed ? discovery.pendingSummary : undefined;
     if (!isOpen || hydratedAccountRef.current !== accountId || !question?.text) return;
+    const normalizedQuestion = normalizedProposalText(question.text);
+    const resumed = resumedDiscoveryQuestionRef.current;
+    // During this opening, unchanged questions stay in history instead of being
+    // appended after unrelated turns. Reopening and explicit discovery restarts still resume.
+    if (resumed?.ownerId === accountId && resumed.text === normalizedQuestion
+      && (!question.id.startsWith('continue:') || resumed.id === question.id)) return;
+    resumedDiscoveryQuestionRef.current = { ownerId: accountId, id: question.id, text: normalizedQuestion };
     setChatMessages(previous => {
       const resumeId = `discovery-resume-${question.id}`;
       const latest = [...previous].reverse().find(message => message.role === 'assistant');
+      // Keep a current proposal as the latest message until the user applies or revises it.
+      if (latest?.id === latestProposalMessageId.current && latest.proposalStatus === 'pending'
+        && chatProposalReadyRef.current && pendingProposalOwnerRef.current === accountId) return previous;
       const turnId = discovery?.pendingQuestion?.turnId || (question.id.startsWith('summary:') ? question.id.slice('summary:'.length) : undefined);
       const alreadyVisible = latest && [latest.content, latest.response?.strategy?.question, latest.response?.strategy?.memoryPatch?.discovery?.summary]
         .some(text => normalizedProposalText(text).includes(normalizedProposalText(question.text)));
@@ -641,7 +684,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
         const storedModels = preferences.karkas_available_models;
         let parsedModels: unknown = storedModels;
         if (typeof storedModels === 'string') { try { parsedModels = JSON.parse(storedModels); } catch { parsedModels = null; } }
-        const models = Array.isArray(parsedModels) ? parsedModels.filter((m): m is string => typeof m === 'string' && isChatModel(m)) : availableModels;
+        const models = Array.isArray(parsedModels) ? parsedModels.filter((m): m is string => typeof m === 'string' && isChatModel(m)) : availableModelsRef.current;
         const preferred = typeof preferences.karkas_custom_model === 'string'
           ? preferences.karkas_custom_model : customModel;
         if (models.length) {
@@ -657,7 +700,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       }).catch(() => undefined);
       return () => { active = false; };
     }
-    const apiKey = localStorage.getItem('karkas_custom_api_key') || '';
+    const apiKey = readWebApiKey();
     if (!apiKey) return;
 
     const controller = new AbortController();
@@ -686,8 +729,11 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     (pendingChatUpdates?.length || 0) +
     (pendingChatDeletions?.length || 0);
 
-  const confirmChatChanges = () => {
-    if (!chatProposalReadyRef.current || requestInFlight.current || requestError || pendingChangeCount === 0 || pendingChatConfirmed.current) return;
+  const confirmChatChanges = (): AIApplyResult | undefined => {
+    const proposal = chatMessages.find(message => message.id === latestProposalMessageId.current);
+    if (!chatProposalReadyRef.current || requestInFlight.current || requestError || pendingChangeCount === 0 || pendingChatConfirmed.current
+      || proposal?.proposalStatus !== 'pending' || pendingProposalOwnerRef.current !== accountId
+      || hydratedAccountRef.current !== accountId || draftAccountRef.current !== accountId) return;
     const targets = [...pendingChatUpdates.map(update => update.id), ...pendingChatDeletions.map(deletion => deletion.id)];
     if (!proposalTargetsUnchanged(pendingTaskSnapshotRef.current, currentTasks, targets)) {
       setChatProposalReadiness(false);
@@ -716,6 +762,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     setChatPlanningResponse(null);
 
     sound.activate();
+    return result;
   };
 
   const activeCount = currentTasks.filter((t) => !t.done && !t.scheduledPending).length;
@@ -731,6 +778,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   }, [initialPrompt, isOpen]);
 
   const handleGenerate = async (queryText?: string, selectedMode?: AIMode, resuming = false, preserveInput = false, planningSource?: AIRequest, internalAlternative = false) => {
+    // Keep the dictation session and draft intact until its final transcript arrives.
+    if (voiceRef.current || isListening || isTranscribing) return;
     voiceRef.current?.cancel();
     voiceRef.current = null;
     voiceDraftRef.current = null;
@@ -787,18 +836,46 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     if (currentSummary?.text && !currentSummary.confirmed && summaryIsCurrent && !discoveryHelpTurn) {
       currentRequest.discoveryConfirmationId = currentSummary.id;
     }
-    if (parsedCommand.intent === 'auto' && pendingChangeCount > 0 && !discoveryHasQuestion && !discoveryNeedsConfirmation
-      && latestAssistantMessage?.id === latestProposalMessageId.current
-      && /^(так|підтверджую|підтверджено|yes|confirm|ок|застосувати|зберегти)$/i.test(textToQuery.trim())) {
-      if (!chatProposalReadyRef.current || requestError) {
-        setRequestError(lang === 'uk'
-          ? 'Спочатку повторіть останній запит, щоб підготувати актуальну пропозицію. Зміни до завдань не застосовано.'
-          : 'Retry the last request first to prepare an up-to-date proposal. No task changes were applied.');
-        return;
+    const discoveryQuestionIsVisible = !!currentQuestion && !!latestAssistantMessage && [latestAssistantMessage.content, latestAssistantMessage.response?.strategy?.question]
+      .some(text => normalizedProposalText(text).includes(normalizedProposalText(currentQuestion.text)));
+    const scopedAcknowledgement = !discoveryQuestionIsVisible && !summaryIsCurrent
+      && latestAssistantMessage?.id === latestProposalMessageId.current && latestAssistantMessage?.proposalStatus === 'pending'
+      && isProposalApplyAcknowledgement(requestText, latestAssistantMessage.content);
+    if (parsedCommand.intent === 'auto' && (isExplicitAIProposalApplyRequest(requestText) || scopedAcknowledgement)) {
+      const currentProposal = latestAssistantMessage?.id === latestProposalMessageId.current
+        && latestAssistantMessage?.proposalStatus === 'pending' && chatProposalReadyRef.current
+        && pendingChangeCount > 0 && !pendingChatConfirmed.current && !requestError
+        && pendingProposalOwnerRef.current === accountId;
+      const targets = [...pendingChatUpdates.map(update => update.id), ...pendingChatDeletions.map(deletion => deletion.id)];
+      const unchanged = currentProposal && proposalTargetsUnchanged(pendingTaskSnapshotRef.current, currentTasks, targets);
+      const result = unchanged ? confirmChatChanges() : undefined;
+      if (currentProposal && !unchanged) {
+        setChatProposalReadiness(false);
+        const staleProposalId = latestProposalMessageId.current;
+        setChatMessages(previous => previous.map(message => message.id === staleProposalId ? { ...message, proposalStatus: 'stale' } : message));
       }
-      setPrompt('');
-      setChatMessages(previous => appendChatRequest(previous, textToQuery.trim()));
-      confirmChatChanges();
+      const content = result ? describeAIApplyResult(result, lang) : currentProposal && !unchanged
+        ? (lang === 'uk'
+          ? 'Завдання змінилися після підготовки пропозиції. Зміни не застосовано. Повторіть запит, щоб підготувати актуальну пропозицію.'
+          : 'Tasks changed after the proposal was prepared. No changes were applied. Repeat the request to prepare a current proposal.')
+        : (lang === 'uk'
+          ? 'Зараз немає підготовленої актуальної пропозиції для застосування. Зміни не застосовано. Опишіть, які завдання та як потрібно змінити.'
+          : 'There is no current prepared proposal to apply. No changes were applied. Describe which tasks to change and how.');
+      if (!keepDraft) { setPrompt(''); setMode('chat'); }
+      setRequestError(null);
+      setRecoverableRequest(null);
+      setKeyStatus(null);
+      setChatMessages(previous => {
+        const messages = [...previous];
+        if (!messages.some(message => message.id === currentRequest.turnId)) messages.push({
+          id: currentRequest.turnId, role: 'user', sentAt: Date.now(), content: requestText,
+        });
+        const replyId = `reply-${currentRequest.turnId}`;
+        if (!messages.some(message => message.id === replyId)) messages.push({
+          id: replyId, role: 'assistant', sentAt: Date.now(), content,
+        });
+        return messages;
+      });
       return;
     }
     setChatProposalReadiness(false);
@@ -816,7 +893,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     requestInFlight.current = true;
     setLoading(true);
 
-    const savedApiKey = localStorage.getItem('karkas_custom_api_key') || '';
+    const savedApiKey = readWebApiKey();
     let desktopKeyAvailable = false;
     try { desktopKeyAvailable = window.karkasDesktop ? await desktopHasAiKey() : false; }
     catch {
@@ -847,7 +924,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
         const models = await verifyApiKey(requestText, { signal: controller.signal });
         if (controller.signal.aborted) return;
         const nextModel = selectAIModel(models, customModelRef.current, storedHiddenModels());
-        if (!window.karkasDesktop) localStorage.setItem('karkas_custom_api_key', requestText.trim());
+        if (!window.karkasDesktop) storeWebApiKey(requestText.trim());
         localStorage.setItem('karkas_custom_ai_enabled', 'true');
         localStorage.setItem('karkas_custom_model', nextModel);
         localStorage.setItem('karkas_available_models', JSON.stringify(models));
@@ -936,7 +1013,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     const streamBuffer = createStreamedReplyBuffer(text => { if (assistController.current === controller) setStreamingReply(text); });
     streamBufferRef.current = streamBuffer;
     try {
-      const customKey = localStorage.getItem('karkas_custom_api_key') || '';
+      const customKey = readWebApiKey();
       const customEnabled = localStorage.getItem('karkas_custom_ai_enabled') === 'true';
 
       requestTimeout = window.setTimeout(() => { timedOut = true; controller.abort(); }, AI_CHAT_CLIENT_TIMEOUT_MS);
@@ -958,6 +1035,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
           discoveryMode: inDiscoveryMode && !discoveryHelpTurn,
           lastAssistantProposalStatus: latestAssistantMessage?.proposalStatus,
           lastAssistantMessageId: latestAssistantMessage?.id,
+          currentDiscoveryQuestionId: discoveryQuestionIsVisible ? currentQuestion?.id : undefined,
           turnId: currentRequest.turnId,
           lang,
           tabs: tabs.map((tb) => tb.id),
@@ -972,6 +1050,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
           },
           allowNewTabs: isTabMutation,
           customApiKey: customEnabled ? customKey : undefined,
+          availableModels: window.karkasDesktop || customEnabled ? availableModelsRef.current.filter(isChatModel) : undefined,
           selectedModel: requestedModel || undefined,
           fullAppContext: {
             scheduledPlans: currentTasks.filter(task => task.scheduledPending),
@@ -1032,7 +1111,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       const rawData: unknown = await res.json().catch(() => { throw new AIRequestError('INVALID_RESPONSE'); });
       // Every attempt Google answered counts, including failed fallbacks and superseded requests.
       try {
-        const ledger = saveAIUsage(localStorage, rawData, Date.now());
+        const ledger = readAIUsageLedger(localStorage, Date.now());
         if (ledger) { setUsageLedger(ledger); setUsageNow(Date.now()); }
       } catch { /* Usage display is best-effort. */ }
       if (assistController.current !== controller) return;
@@ -1089,7 +1168,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       if (assistController.current !== controller) return;
       if (streamBufferRef.current === streamBuffer) settleStreamedReply(true);
       const error = controller.signal.aborted ? new AIRequestError(timedOut ? 'CLIENT_TIMEOUT' : 'CANCELLED') : err;
-      setRequestError(aiRequestErrorMessage(error, lang));
+      setRequestError(aiRequestErrorMessage(error, lang), error instanceof AIRequestError ? error.diagnostics : undefined);
       setRecoverableRequest(currentRequest);
       setPrompt(previous => preservedRequestDraftRef.current ?? previous);
       activeRequest.current = null;
@@ -1169,7 +1248,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   const composerKeyDown = (event: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) {
       event.preventDefault();
-      if ((prompt.trim() || (!awaitingApiKey && mode !== 'chat')) && !requestInFlight.current && !isTranscribing) void handleGenerate();
+      if ((prompt.trim() || (!awaitingApiKey && mode !== 'chat')) && !requestInFlight.current && !isListening && !isTranscribing) void handleGenerate();
     }
   };
   const insertEmoji = (emoji: string) => {
@@ -1304,6 +1383,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
               {requestError && !awaitingApiKey && (
                 <div id="ai-request-error" role="alert" className="border border-neutral-700 bg-[#111116] p-3 text-[15px] leading-[1.6] text-neutral-200">
                   <p>{requestError}</p>
+                  {requestFailure.diagnostics && <RequestErrorDetails diagnostics={requestFailure.diagnostics} lang={lang} />}
                   {recoverableRequest && <button id="ai-retry-request-btn" type="button" disabled={loading} onClick={() => { setMode(recoverableRequest.mode); void handleGenerate(recoverableRequest.text, recoverableRequest.mode, false, !!prompt.trim() && prompt.trim() !== recoverableRequest.text.trim()); }} className="mt-3 min-h-11 border border-neutral-700 px-3 py-2 hover:border-white disabled:opacity-40">
                     {lang === 'uk' ? 'Повторити запит' : 'Retry request'}
                   </button>}
@@ -1473,7 +1553,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                   id="ai-generate-submit-btn"
                   type="button"
                   onClick={() => handleGenerate()}
-                  disabled={loading || isTranscribing || (!prompt.trim() && (awaitingApiKey || mode === 'chat'))}
+                  disabled={loading || isListening || isTranscribing || (!prompt.trim() && (awaitingApiKey || mode === 'chat'))}
                   title={t.aiSheet.execute}
                   aria-label={t.aiSheet.execute}
                   className="karkas-ai-send shrink-0"

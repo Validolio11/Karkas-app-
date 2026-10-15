@@ -1,4 +1,5 @@
 import type { NotepadNote } from '../types';
+import { canonical } from './canonical';
 
 type NoteStorage = Pick<Storage, 'getItem' | 'setItem'>;
 
@@ -108,3 +109,57 @@ export const loadNotepadNotes = (
 
 export const restoreNotepadNote = (notes: NotepadNote[], note: NotepadNote): NotepadNote[] =>
   notes.some((current) => current.id === note.id) ? notes : [note, ...notes];
+
+// Each tab appends its own atomic record instead of replacing a shared snapshot.
+export type NoteOperation = { id: string; clock: number; noteId: string; before: NotepadNote | null; after: NotepadNote | null };
+export const notesOperationPrefix = (owner: string | null) => `${ownedNotesKey(owner)}:operation:`;
+type JournalStorage = NoteStorage & Pick<Storage, 'key' | 'length'>;
+const sameNote = (a: NotepadNote | null | undefined, b: NotepadNote | null | undefined) => canonical(a ?? null) === canonical(b ?? null);
+
+export function loadNotepadJournal(storage: JournalStorage, owner: string | null, fallback: NotepadNote[]): NotepadLoadResult & { clock: number } {
+  const base = loadOwnedNotepadNotes(storage, owner, fallback);
+  const operations: NoteOperation[] = [];
+  try {
+    if (base.canPersist && storage.getItem(ownedNotesKey(owner)) === null) {
+      const raw = JSON.stringify(base.notes);
+      storage.setItem(ownedNotesKey(owner), raw);
+      if (storage.getItem(ownedNotesKey(owner)) !== raw) throw new Error('Notes baseline could not be saved');
+    }
+    const prefix = notesOperationPrefix(owner);
+    for (let index = 0; index < storage.length; index++) {
+      const key = storage.key(index);
+      if (!key?.startsWith(prefix)) continue;
+      const raw = storage.getItem(key);
+      if (raw === null) continue;
+      const op = JSON.parse(raw) as NoteOperation;
+      if (!op || typeof op.id !== 'string' || key !== prefix + op.id || !Number.isSafeInteger(op.clock)
+        || op.clock < 0 || typeof op.noteId !== 'string' || !op.noteId
+        || (op.before !== null && (!isNote(op.before) || op.before.id !== op.noteId))
+        || (op.after !== null && (!isNote(op.after) || op.after.id !== op.noteId))) throw new Error('Invalid note operation');
+      operations.push(op);
+    }
+    operations.sort((a, b) => a.clock - b.clock || a.id.localeCompare(b.id));
+    const notes = new Map(base.notes.map(note => [note.id, note]));
+    for (const op of operations) {
+      const current = notes.get(op.noteId);
+      if (sameNote(current, op.before)) {
+        if (op.after) notes.set(op.noteId, op.after);
+        else notes.delete(op.noteId);
+      } else if (op.after && !sameNote(current, op.after)) {
+        // Preserve both concurrent edits. Stale deletions leave the newer note intact.
+        const conflictId = `${op.noteId}:conflict:${op.id}`;
+        notes.set(conflictId, { ...op.after, id: conflictId });
+      }
+    }
+    return { ...base, notes: [...notes.values()].sort((a, b) => b.createdAt - a.createdAt), clock: operations.length ? operations[operations.length - 1].clock : 0 };
+  } catch {
+    return { ...base, canPersist: false, error: 'Notes journal could not be read. Saving is disabled to preserve the data.', clock: 0 };
+  }
+}
+
+export function appendNotepadOperation(storage: JournalStorage, owner: string | null, operation: NoteOperation): void {
+  const key = notesOperationPrefix(owner) + operation.id;
+  const raw = JSON.stringify(operation);
+  storage.setItem(key, raw);
+  if (storage.getItem(key) !== raw) throw new Error('Note operation could not be saved');
+}

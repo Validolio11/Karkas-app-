@@ -7,7 +7,8 @@ const clean = (value: unknown, max = 8000): string => typeof value === 'string' 
 const uniqueIds = (value: unknown, limit = 200): string[] => Array.isArray(value) ? [...new Set(value.filter((id): id is string => typeof id === 'string' && !!id.trim()).map(id => id.trim()).slice(0, limit))] : [];
 const isTopic = (value: unknown): value is StrategyDiscoveryTopic => STRATEGY_DISCOVERY_TOPICS.includes(value as StrategyDiscoveryTopic);
 const strictYes = (value: string) => /^(?:так|погоджуюсь|погоджуюся|підтверджую|узгоджую|yes|agreed|confirm|i agree)[.!\s]*$/iu.test(value.trim());
-const uncertain = (value: string) => /^(?:не знаю|не впевнен[аий]*|важко сказати|i don['’]?t know|not sure|maybe|можливо)[.!\s]*$/iu.test(value.trim());
+const uncertain = (value: string) => /^(?:(?:я\s+)?(?:ще\s+|поки\s+)?(?:не знаю|не впевнен[аий]*|важко сказати)|(?:i\s+)?(?:don['’]?t know|do not know|not sure)|maybe|можливо)(?:[.!?,\s]|$)/iu.test(value.trim())
+  && !/(?:не знаю.*(?:з чого|як)\s+почати|don['’]?t know.*(?:how|where).*start)/iu.test(value);
 const decline = (value: string) => /(?:не хочу (?:про це|розповідати|обговорювати|відповідати|ділитися)|не готов[аий]* (?:обговорювати|ділитися|розповідати)|особисте|приватн|пропуст(?:имо|ити)|skip (?:this|that)|prefer not|rather not|private|don['’]?t want to (?:share|discuss|answer))/iu.test(value);
 /**
  * How the app addresses the person in Ukrainian: "ти" only when they write with "ти", otherwise "ви".
@@ -163,6 +164,7 @@ function meaningful(topic: StrategyDiscoveryTopic, quote: string, asked: Strateg
   return asked === topic && quote.split(/\s+/u).length >= 4 && !wish;
 }
 function groundedAnswer(topic: StrategyDiscoveryTopic, quote: string, fullText: string, asked: StrategyDiscoveryTopic | undefined): boolean {
+  if (uncertain(fullText)) return false;
   // Validate the containing clause, not an isolated word supplied by the model. Negation stays attached.
   if (/^(?:я\s+)?(?:можливо|мабуть|припускаю|може бути|perhaps|maybe)(?:\s|,|$)/iu.test(fullText)) return false;
   const clauses = fullText.split(/[.!?;\n]+|\s+(?:але|бо|тому,? що|тому що|but|because)\s+/iu).map(item => item.trim()).filter(Boolean);
@@ -196,6 +198,33 @@ function fingerprint(profile: PersonalStrategyProfile, state: StrategyDiscoveryS
   let hash = 2166136261;
   for (let index = 0; index < payload.length; index++) hash = Math.imul(hash ^ payload.charCodeAt(index), 16777619);
   return `discovery-v1:${(hash >>> 0).toString(16)}`;
+}
+
+/** A manual spelling/title edit preserves the completed interview, without authorizing a model goal revision. */
+export function preserveDiscoveryAfterUserGoalEdit(previous: PersonalStrategyProfile, next: PersonalStrategyProfile): PersonalStrategyProfile {
+  const state = normalizeStrategyDiscovery(previous);
+  if (state.phase !== 'ready' || !state.pendingSummary || previous.goals.length !== next.goals.length) return next;
+  const withoutTitle = (goal: PersonalStrategyProfile['goals'][number]) => {
+    const { title, ...scope } = goal;
+    return JSON.stringify(scope);
+  };
+  if (!next.goals.every((goal, index) => goal.title.trim() && withoutTitle(goal) === withoutTitle(previous.goals[index]))) return next;
+  if (!next.goals.some((goal, index) => goal.title !== previous.goals[index].title)) return next;
+  // Only the UI invokes this helper. All model-authored patches retain the original consent checks.
+  const discovery = { ...state, pendingSummary: { ...state.pendingSummary, fingerprint: fingerprint(next, state) } };
+  return { ...next, discovery, onboardingStatus: 'complete', phase: 'ready' };
+}
+
+/** App-owned tab remapping and undo may rebase a confirmed scope without changing the user's goal. */
+export function preserveDiscoveryAfterTabMigration(previous: PersonalStrategyProfile, next: PersonalStrategyProfile): PersonalStrategyProfile {
+  const state = normalizeStrategyDiscovery(previous);
+  if (state.phase !== 'ready' || !state.pendingSummary) return next;
+  // Callers must supply only an explicit operational migration. Never use for AI goal patches.
+  if (previous.goals.length !== next.goals.length || !next.goals.every((goal, index) => {
+    const prior = previous.goals[index];
+    return prior.id === goal.id && prior.title === goal.title && prior.motive === goal.motive && prior.agreed === goal.agreed;
+  })) return next;
+  return { ...next, discovery: { ...state, pendingSummary: { ...state.pendingSummary, fingerprint: fingerprint(next, state) } }, onboardingStatus: 'complete', phase: 'ready' };
 }
 export function normalizeStrategyDiscovery(profile: PersonalStrategyProfile): StrategyDiscoveryState {
   const raw = profile.discovery;

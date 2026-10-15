@@ -208,6 +208,12 @@ export function applyWorkspaceMutation(remote: WorkspaceState, mutation: Workspa
     }
     const current = tasks.get(operation.id);
     if (!current && !operation.lifecycle) continue;
+    // A lifecycle-only edit from an offline client cannot recreate a purged task.
+    // New tasks carry their complete record; deletes/restores only carry a delta.
+    if (!current && (!operation.patch || typeof operation.patch.title !== 'string'
+      || typeof operation.patch.phase !== 'string' || ![1, 2, 3].includes(operation.patch.priority!)
+      || !Number.isInteger(operation.patch.steps) || !Number.isInteger(operation.patch.currentStep)
+      || typeof operation.patch.done !== 'boolean' || typeof operation.patch.createdAt !== 'number')) continue;
     const lifecycle = operation.lifecycle ?? current?.lifecycle;
     if (!lifecycle) continue;
     const fallback = { id: operation.id } as DeletedTask;

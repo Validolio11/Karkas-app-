@@ -1,0 +1,35 @@
+{
+  "passed": true,
+  "syntheticOnly": true,
+  "realAiCalls": 0,
+  "results": [
+    {
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "passed": true,
+      "scenarios": [
+        "Nested Escape preserves tab manager",
+        "Delete migrates active task + completed archive + goal categoryIds",
+        "Paired journal staged and removed only after durable slots saved",
+        "Reload retains migrated categories",
+        "No browser errors or overflow"
+      ]
+    },
+    {
+      "viewport": {
+        "width": 375,
+        "height": 812
+      },
+      "passed": true,
+      "scenarios": [
+        "Nested Escape preserves tab manager",
+        "Delete migrates active task + completed archive + goal categoryIds",
+        "Paired journal staged and removed only after durable slots saved",
+        "Reload retains migrated categories",
+        "No browser errors or overflow"
+      ]
+    }
+  ]
+}

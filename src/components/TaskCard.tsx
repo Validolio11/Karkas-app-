@@ -98,6 +98,15 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
   const t = TRANSLATIONS[lang];
   const [isSlashing, setIsSlashing] = useState(false);
   const completionTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Keep the guard across rerenders, including the stop button becoming resume
+  // and a removed step being replaced by the next step at the same index.
+  const lastAction = useRef<Record<string, number>>({});
+  const allowAction = (group: 'timer' | 'delete-step') => {
+    const now = Date.now();
+    if (now - (lastAction.current[group] || 0) < 500) return false;
+    lastAction.current[group] = now;
+    return true;
+  };
   const [isExpanded, setIsExpanded] = useState(false);
   const [isAddingStep, setIsAddingStep] = useState(false);
   const [newStepText, setNewStepText] = useState('');
@@ -625,7 +634,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
               <div className="flex flex-wrap items-center gap-1.5">
                 {!task.done && !hasStarted && <button
                   type="button" id={`task-start-action-${task.id}`} disabled={!onStartTask}
-                  onClick={(e) => { e.stopPropagation(); sound.activate(); onStartTask?.(task.id); }}
+                  onClick={(e) => { e.stopPropagation(); if (!allowAction('timer')) return; sound.activate(); onStartTask?.(task.id); }}
                   className={primaryAction}>
                   <Play className="h-4 w-4" aria-hidden="true" />
                   {lang === 'uk' ? 'Почати' : 'Start'}
@@ -635,14 +644,14 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   title={lang === 'uk'
                     ? 'Зупинити зі збереженням витраченого часу й залишку. Можна продовжити пізніше.'
                     : 'Stop and keep time spent and remaining time. You can resume later.'}
-                  onClick={(e) => { e.stopPropagation(); onStopTimer(task.id); }}
+                  onClick={(e) => { e.stopPropagation(); if (allowAction('timer')) onStopTimer(task.id); }}
                   className={primaryAction}>
                   <Square className="h-4 w-4" aria-hidden="true" />
                   {lang === 'uk' ? 'Зупинити' : 'Stop'}
                 </button>}
                 {(task.timerRunning || (hasStarted && !task.done)) && onToggleTimer && !(task.timerRunning && onStopTimer) && <button
                   type="button" id={`task-timer-toggle-${task.id}`}
-                  onClick={(e) => { e.stopPropagation(); onToggleTimer(task.id); }}
+                  onClick={(e) => { e.stopPropagation(); if (allowAction('timer')) onToggleTimer(task.id); }}
                   className={primaryAction}>
                   {task.timerRunning ? <Pause className="h-4 w-4" aria-hidden="true" /> : <Play className="h-4 w-4" aria-hidden="true" />}
                   {timerToggleLabel}
@@ -651,7 +660,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   type="button" id={`task-timer-reset-${task.id}`}
                   title={t.timer.reset}
                   aria-label={t.timer.reset}
-                  onClick={(e) => { e.stopPropagation(); onResetTimer(task.id); }}
+                  onClick={(e) => { e.stopPropagation(); if (allowAction('timer')) onResetTimer(task.id); }}
                   className={`${iconAction} hover:text-rose-300`}>
                   <RotateCcw className="h-4 w-4" aria-hidden="true" />
                 </button>}
@@ -849,7 +858,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                         </button>
                         {onDeleteStepItem && hasStepList && (
                           <button type="button"
-                            onClick={() => { sound.tick(300); onDeleteStepItem(task.id, sIdx); }}
+                            onClick={() => { if (!allowAction('delete-step')) return; sound.tick(300); onDeleteStepItem(task.id, sIdx); }}
                             aria-label={`${lang === 'uk' ? '\u0412\u0438\u0434\u0430\u043b\u0438\u0442\u0438 \u043a\u0440\u043e\u043a' : 'Delete step'}: ${step.title}`}
                             className="mr-2 flex h-9 w-9 shrink-0 items-center justify-center text-neutral-500 transition-colors hover:bg-rose-950/30 hover:text-rose-400 focus-visible:outline-2 focus-visible:outline-white sm:mr-3">
                             <X className="h-3.5 w-3.5" />

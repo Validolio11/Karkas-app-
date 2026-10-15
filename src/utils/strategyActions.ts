@@ -136,3 +136,24 @@ export function undoStrategyAction(options: { tasks: PSTask[]; profile: Personal
       : index === previousActionIndex && restoredSnapshot ? { ...item, after: clone(restoredSnapshot) } : item),
       goals: journal.before ? profile.goals : profile.goals.map(goal => ({ ...goal, taskIds: goal.taskIds.filter(id => id !== journal.taskId) })) }, undone: true };
 }
+
+/** A chat's Undo reverses its complete turn atomically, preserving all newer edits. */
+export function undoStrategyTurn(options: Parameters<typeof undoStrategyAction>[0]) {
+  const anchor = options.profile.actionHistory.find(item => item.id === options.actionId);
+  if (!anchor || options.ownerId !== options.currentOwnerId || anchor.ownerId !== strategyOwnerKey(options.ownerId)) {
+    return { tasks: options.tasks, profile: options.profile, undone: false };
+  }
+  const entries = options.profile.actionHistory.filter(item => item.turnId === anchor.turnId
+    && item.ownerId === anchor.ownerId && !item.undoneAt).reverse();
+  if (!entries.length) return { tasks: options.tasks, profile: options.profile, undone: false };
+  let tasks = options.tasks;
+  let profile = options.profile;
+  const now = options.now ?? Date.now();
+  for (const entry of entries) {
+    const result = undoStrategyAction({ ...options, tasks, profile, actionId: entry.id, now });
+    if (!result.undone) return { tasks: options.tasks, profile: options.profile, undone: false };
+    tasks = result.tasks;
+    profile = result.profile;
+  }
+  return { tasks, profile, undone: true };
+}

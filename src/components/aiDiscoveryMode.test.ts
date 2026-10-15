@@ -10,6 +10,10 @@ function storage() {
   return { values, getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); }, removeItem: (key: string) => { values.delete(key); } };
 }
 
+test('clearing personal memory exits an active discovery session', () => {
+  assert.equal(nextDiscoveryMode({ active: true, continueId: 'old-question' }, createPersonalStrategyProfile()).active, false);
+});
+
 test('discovery mode starts only from a fresh «Поглибити знайомство» press and stays off after exit', () => {
   const now = 1_800_000_000_000;
   const fresh = { ...createPersonalStrategyProfile(), onboardingStatus: 'in_progress' as const };

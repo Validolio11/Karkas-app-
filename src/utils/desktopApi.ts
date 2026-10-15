@@ -1,4 +1,12 @@
 import { readAIEventStream } from './aiEventStream';
+import { beginAIUsage } from './aiUsage';
+import { saveAIUsage } from './aiModelUsage';
+
+function observeUsage(body: unknown) {
+  try {
+    if (saveAIUsage(localStorage, body, Date.now())) window.dispatchEvent(new Event('karkas-ai-model-usage-changed'));
+  } catch { /* Usage never blocks the operation. */ }
+}
 
 const routeMap = {
   '/api/ai/verify-key': 'verifyKey',
@@ -32,7 +40,7 @@ function awaitDesktop<T>(operation: () => Promise<T>, signal?: AbortSignal | nul
   });
 }
 
-export async function karkasApiFetch(input: string, init?: RequestInit): Promise<Response> {
+async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
   const desktop = window.karkasDesktop;
   if (!desktop) return fetch(input, init);
 
@@ -45,7 +53,9 @@ export async function karkasApiFetch(input: string, init?: RequestInit): Promise
     return verifyAndStoreDesktopApiKey(typeof body.apiKey === 'string' ? body.apiKey : '', init?.signal);
   }
 
-  if (operation === 'transcribeAudio' || operation === 'assist') {
+  if (operation === 'suggestTabs' && typeof desktop.ai.suggestTabs !== 'function') return responseFromDesktop(503, { code: 'DESKTOP_ERROR', error: 'Tab suggestions need an app update' });
+
+  if (operation === 'suggestTabs' || operation === 'transcribeAudio' || operation === 'assist' || operation === 'breakdown' || operation === 'recommendations') {
     const requestId = crypto.randomUUID();
     const result = await awaitDesktop(() => desktop.ai[operation]({ ...body, desktopRequestId: requestId }), init?.signal,
       () => { if (typeof desktop.ai.cancelRequest === 'function') void desktop.ai.cancelRequest(requestId).catch(() => {}); });
@@ -53,22 +63,21 @@ export async function karkasApiFetch(input: string, init?: RequestInit): Promise
     return responseFromDesktop(result.value.status, result.value.body);
   }
 
-  if (operation === 'suggestTabs' && typeof desktop.ai.suggestTabs !== 'function') {
-    return responseFromDesktop(503, { code: 'DESKTOP_ERROR', error: 'Tab suggestions need an app update' });
-  }
-
   const result = await awaitDesktop(() => operation === 'checkLatest'
-    ? desktop.updates.checkLatest()
-    : operation === 'breakdown'
-        ? desktop.ai.breakdown(body)
-        : operation === 'voiceToken'
-          ? desktop.ai.voiceToken(body)
-        : operation === 'suggestTabs'
-          ? desktop.ai.suggestTabs!(body)
-        : desktop.ai.recommendations(body), init?.signal);
+    ? desktop.updates.checkLatest() : desktop.ai.voiceToken(body), init?.signal);
 
   if ('error' in result) return responseFromDesktop(503, { code: result.error.code, error: result.error.message });
   return responseFromDesktop(result.value.status, result.value.body);
+}
+
+export async function karkasApiFetch(input: string, init?: RequestInit): Promise<Response> {
+  const operation = routeMap[input as keyof typeof routeMap];
+  const finish = operation && ['assist', 'suggestTabs', 'breakdown', 'recommendations', 'transcribeAudio', 'voiceToken', 'verifyKey'].includes(operation) ? beginAIUsage(operation) : undefined;
+  try {
+    const response = await apiFetch(input, init);
+    if (finish) { try { const body = await response.clone().json(); finish(body); observeUsage(body); } catch { finish(); } }
+    return response;
+  } catch (error) { finish?.(); throw error; }
 }
 
 /**
@@ -77,7 +86,7 @@ export async function karkasApiFetch(input: string, init?: RequestInit): Promise
  * non-streaming request returns, whose reply replaces the streamed text) or the
  * error body. The request body must already contain `stream: true`.
  */
-export async function karkasApiStream(input: '/api/ai/assist', init: RequestInit, onDelta: (text: string) => void): Promise<Response> {
+async function apiStream(input: '/api/ai/assist', init: RequestInit, onDelta: (text: string) => void): Promise<Response> {
   const desktop = window.karkasDesktop;
   const signal = init.signal;
   const deliver = (text: string) => { if (!signal?.aborted && text) onDelta(text); };
@@ -87,7 +96,7 @@ export async function karkasApiStream(input: '/api/ai/assist', init: RequestInit
     return readAIEventStream(response.body, deliver);
   }
   // Older desktop bridges cannot stream; they still return the final body.
-  if (typeof desktop.ai.assistStream !== 'function' || typeof desktop.ai.onStreamDelta !== 'function') return karkasApiFetch(input, init);
+  if (typeof desktop.ai.assistStream !== 'function' || typeof desktop.ai.onStreamDelta !== 'function') return apiFetch(input, init);
   const body = typeof init.body === 'string' && init.body ? JSON.parse(init.body) : {};
   const requestId = crypto.randomUUID();
   const unsubscribe = desktop.ai.onStreamDelta(event => {
@@ -101,6 +110,15 @@ export async function karkasApiStream(input: '/api/ai/assist', init: RequestInit
   } finally {
     unsubscribe();
   }
+}
+
+export async function karkasApiStream(input: '/api/ai/assist', init: RequestInit, onDelta: (text: string) => void): Promise<Response> {
+  const finish = beginAIUsage('assist');
+  try {
+    const response = await apiStream(input, init, onDelta);
+    try { const body = await response.clone().json(); finish(body); observeUsage(body); } catch { finish(); }
+    return response;
+  } catch (error) { finish(); throw error; }
 }
 
 export async function desktopHasAiKey(options: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<boolean> {

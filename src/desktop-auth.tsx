@@ -14,6 +14,21 @@ const provider = new GoogleAuthProvider();
 provider.setCustomParameters({ prompt: 'select_account' });
 const state = new URLSearchParams(window.location.hash.slice(1)).get('state');
 window.history.replaceState(null, '', window.location.pathname);
+let loginDelivered = false;
+let callbackSubmitted = false;
+let pageClosing = false;
+// keepalive completes the authenticated cancellation even as this tab closes.
+const cancelLogin = () => {
+  if (!state || loginDelivered || callbackSubmitted) return;
+  void fetch('/cancel', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ state }), keepalive: true,
+  }).catch(() => undefined);
+};
+window.addEventListener('pagehide', () => {
+  pageClosing = true;
+  cancelLogin();
+});
 
 function DesktopLogin() {
   const [busy, setBusy] = useState(false);
@@ -29,15 +44,20 @@ function DesktopLogin() {
       const result = await signInWithPopup(browserAuth, provider);
       const credential = GoogleAuthProvider.credentialFromResult(result);
       if (!credential?.idToken && !credential?.accessToken) throw new Error('missing-credential');
+      callbackSubmitted = true;
       const response = await fetch('/callback', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ state, idToken: credential.idToken, accessToken: credential.accessToken }),
+        keepalive: true,
         signal: AbortSignal.timeout(15000),
       });
       if (!response.ok) throw new Error('callback-expired');
+      loginDelivered = true;
       setDone(true);
     } catch (failure: any) {
+      callbackSubmitted = false;
+      if (pageClosing) cancelLogin();
       const code = failure?.code || failure?.message;
       setError(code === 'auth/unauthorized-domain'
         ? 'Для входу потрібно додати localhost до Authorized domains у Firebase Authentication.'
@@ -47,6 +67,7 @@ function DesktopLogin() {
         ? 'Браузер заблокував вікно Google. Дозвольте спливне вікно для цієї сторінки та спробуйте ще раз.'
         : 'Не вдалося завершити вхід. Перевірте інтернет або почніть вхід заново в застосунку Karkas.');
     } finally {
+      callbackSubmitted = false;
       await signOut(browserAuth).catch(() => undefined);
       setBusy(false);
     }

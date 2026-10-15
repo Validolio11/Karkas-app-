@@ -5,13 +5,15 @@ import { getTaskRemainingSeconds, getTaskTimerMode, pauseTaskTimer, startTaskTim
 import { activeTaskStepId, discardTaskStepAttribution, initialTaskPlanSeconds } from './taskWorkTelemetry';
 
 const MAX_RUNNING_SESSION_SECONDS = 2 * 60 * 60;
+// Device clocks are not synchronized; a small future start is a valid remote session.
+const MAX_CLOCK_SKEW_MS = 60_000;
 
 /** Repairs timers left running across a restart and caps the recovered session. */
 export function sanitizeTasksTimerSafeguard(taskList: PSTask[], now = Date.now()): PSTask[] {
   return taskList.map((task) => {
     if (!task.timerRunning) return task;
     if (getTaskTimerMode(task) === 'none' || task.done) return pauseTaskTimer(task, now);
-    if (!Number.isFinite(task.timerStartedAt) || task.timerStartedAt! > now) {
+    if (!Number.isFinite(task.timerStartedAt) || task.timerStartedAt! > now + MAX_CLOCK_SKEW_MS) {
       return { ...pauseTaskTimer(task, now), autoPausedOverdue: true };
     }
     const remaining = getTaskRemainingSeconds(task, now);

@@ -1,18 +1,18 @@
 import React, { useId, useState } from 'react';
 import { MessageSquare, Settings2 } from 'lucide-react';
-import type { PSTask, StrategyGoal, TaskTab } from '../types';
+import type { DeletedTask, PSTask, StrategyGoal, TaskTab } from '../types';
 import { TRANSLATIONS } from '../utils/i18n';
 import { goalTaskStats } from './strategyViewModel';
 import { Chip, field, Meter, monoLabel, panel, Reveal, SectionTitle } from './strategyUi';
 
 const GoalRow: React.FC<{
-  goal: StrategyGoal; tasks: PSTask[]; tabs: TaskTab[]; lang: 'uk' | 'en';
+  goal: StrategyGoal; tasks: PSTask[]; deletedTasks: DeletedTask[]; tabs: TaskTab[]; lang: 'uk' | 'en';
   onChange: (patch: Partial<StrategyGoal>) => void; onOpenTask: (id: string) => void; onChat: (text: string) => void;
-}> = ({ goal, tasks, tabs, lang, onChange, onChat }) => {
+}> = ({ goal, tasks, deletedTasks, tabs, lang, onChange, onChat }) => {
   const uk = lang === 'uk';
   const [editing, setEditing] = useState(false);
   const id = useId();
-  const stats = goalTaskStats(goal, tasks);
+  const stats = goalTaskStats(goal, tasks, deletedTasks);
   const phases = TRANSLATIONS[lang].phases as Record<string, string>;
   const iconBtn = 'inline-flex h-11 w-11 sm:h-8 sm:w-8 items-center justify-center text-neutral-500 transition-colors hover:bg-neutral-900 hover:text-white motion-reduce:transition-none';
   return <li className="min-w-0 py-5 first:pt-0 last:pb-0">
@@ -74,9 +74,9 @@ const GoalRow: React.FC<{
 };
 
 export const StrategyGoals: React.FC<{
-  goals: StrategyGoal[]; tasks: PSTask[]; tabs: TaskTab[]; lang: 'uk' | 'en';
+  goals: StrategyGoal[]; tasks: PSTask[]; deletedTasks?: DeletedTask[]; tabs: TaskTab[]; lang: 'uk' | 'en';
   onChangeGoal: (id: string, patch: Partial<StrategyGoal>) => void; onOpenTask: (id: string) => void; onChat: (text: string) => void;
-}> = ({ goals, tasks, tabs, lang, onChangeGoal, onOpenTask, onChat }) => {
+}> = ({ goals, tasks, deletedTasks = [], tabs, lang, onChangeGoal, onOpenTask, onChat }) => {
   if (!goals.length) return null;
   const agreed = goals.filter(goal => goal.agreed).length;
   return <section aria-labelledby="strategy-goals-title" className={panel}>
@@ -85,7 +85,7 @@ export const StrategyGoals: React.FC<{
       <span className={monoLabel}>{agreed}/{goals.length} {lang === 'uk' ? 'узгоджено' : 'agreed'}</span>
     </div>
     <ul className="mt-6 divide-y divide-neutral-800/80">
-      {goals.map(goal => <GoalRow key={goal.id} goal={goal} tasks={tasks} tabs={tabs} lang={lang}
+      {goals.map(goal => <GoalRow key={goal.id} goal={goal} tasks={tasks} deletedTasks={deletedTasks} tabs={tabs} lang={lang}
         onChange={patch => onChangeGoal(goal.id, patch)} onOpenTask={onOpenTask} onChat={onChat} />)}
     </ul>
   </section>;

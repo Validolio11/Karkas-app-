@@ -39,6 +39,7 @@ let tray = null;
 let storage = null;
 let secrets = null;
 let loginController = null;
+let legacyMigrationError = null;
 let isQuitting = false;
 let persistWindowTimer = null;
 let updateInProgress = false;
@@ -258,12 +259,18 @@ async function collectLegacyLocalStorage() {
     if (Object.keys(preferenceChanges).length) await storage.updatePreferences(preferenceChanges);
     // Commit the workspace last: its verified file marks the migration complete.
     await storage.importLegacySnapshot(snapshot);
+    try { fs.unlinkSync(path.join(app.getPath('userData'), 'legacy-migration-error.json')); } catch { /* no previous failure */ }
     return snapshot;
   } catch (error) {
     console.error('Legacy localStorage migration failed:', error);
-    const migrationError = new Error('Не вдалося безпечно перенести дані попередньої версії. Закрийте іншу копію Karkas і запустіть застосунок знову.');
-    migrationError.code = 'LEGACY_MIGRATION_FAILED';
-    throw migrationError;
+    legacyMigrationError = 'Не вдалося перенести дані попередньої версії. Старі дані збережено у сховищі localhost:14141. Karkas відкриється; не видаляйте дані застосунку. Якщо новий простір ще не збережено, наступний запуск повторить перенесення. Після створення нового простору старі дані можна відновити окремо, не перезаписуючи нові.';
+    try {
+      fs.writeFileSync(path.join(app.getPath('userData'), 'legacy-migration-error.json'), JSON.stringify({
+        code: 'LEGACY_MIGRATION_FAILED', at: new Date().toISOString(), legacyOrigin: `http://localhost:${LEGACY_PORT}`,
+        message: legacyMigrationError,
+      }, null, 2), { mode: 0o600 });
+    } catch (recordError) { console.error('Could not record legacy migration recovery information:', recordError); }
+    return null;
   } finally {
     if (migrationWindow && !migrationWindow.isDestroyed()) migrationWindow.destroy();
     if (interceptInstalled) protocol.uninterceptProtocol('http');
@@ -417,9 +424,9 @@ function registerIpc() {
       },
     });
   });
-  handle('karkas:ai:breakdown', (input) => invokeService('breakdown', input || {}, true));
-  handle('karkas:ai:recommendations', (input) => invokeService('recommendations', input || {}, true));
-  handle('karkas:ai:suggest-tabs', (input) => invokeService('suggestTabs', input || {}, true));
+  handle('karkas:ai:breakdown', (input, event) => invokeCancellableAi('breakdown', input, event));
+  handle('karkas:ai:recommendations', (input, event) => invokeCancellableAi('recommendations', input, event));
+  handle('karkas:ai:suggest-tabs', (input, event) => invokeCancellableAi('suggestTabs', input, event));
   handle('karkas:ai:voice-token', (input) => invokeService('voiceToken', input || {}, true));
   handle('karkas:ai:transcribe-audio', (input, event) => invokeCancellableAi('transcribeAudio', input, event));
   handle('karkas:ai:cancel-request', ({ requestId }, event) => {
@@ -620,6 +627,9 @@ app.whenReady().then(async () => {
   registerIpc();
   createTray();
   await createWindow();
+  if (legacyMigrationError) {
+    void dialog.showMessageBox(mainWindow, { type: 'warning', title: 'Перенесення даних Karkas', message: legacyMigrationError, buttons: ['Зрозуміло'] }).catch(console.error);
+  }
   app.on('activate', () => mainWindow ? showAndFocusWindow() : createWindow().catch(console.error));
 }).catch((error) => {
   console.error(error);

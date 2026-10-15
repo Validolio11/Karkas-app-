@@ -13,10 +13,10 @@ export const createGeminiClient = (apiKey: string) => {
 
 export type AIRequestCode = 'MISSING_API_KEY' | 'INVALID_API_KEY' | 'ACCESS_DENIED'
   | 'QUOTA_EXCEEDED' | 'NETWORK_ERROR' | 'TIMEOUT' | 'MODEL_UNAVAILABLE' | 'MODEL_TIER_UNAVAILABLE'
-  | 'PROVIDER_ERROR' | 'PROVIDER_UNAVAILABLE' | 'INTERNAL_ERROR' | 'INVALID_AI_RESPONSE' | 'INVALID_AI_REQUEST';
+  | 'PROVIDER_ERROR' | 'PROVIDER_UNAVAILABLE' | 'INTERNAL_ERROR' | 'INVALID_AI_RESPONSE' | 'INVALID_AI_REQUEST' | 'CONTEXT_TOO_LARGE';
 
 const statusByCode: Record<AIRequestCode, number> = {
-  MISSING_API_KEY: 503, INVALID_API_KEY: 401, ACCESS_DENIED: 403,
+  CONTEXT_TOO_LARGE: 413, MISSING_API_KEY: 503, INVALID_API_KEY: 401, ACCESS_DENIED: 403,
   QUOTA_EXCEEDED: 429, NETWORK_ERROR: 503, TIMEOUT: 504,
   MODEL_UNAVAILABLE: 503, MODEL_TIER_UNAVAILABLE: 503, PROVIDER_ERROR: 502, PROVIDER_UNAVAILABLE: 503, INTERNAL_ERROR: 500,
   INVALID_AI_RESPONSE: 502, INVALID_AI_REQUEST: 502,
@@ -26,7 +26,10 @@ const statusByCode: Record<AIRequestCode, number> = {
 export interface AIQuotaViolation { unit: 'requests' | 'input_tokens' | 'other'; window: 'day' | 'minute' | 'other'; limit?: number }
 export interface AIQuotaInfo { violations: AIQuotaViolation[]; retryAfterMs?: number }
 
+export type AIProviderUnavailableReason = 'HIGH_DEMAND' | 'OVERLOADED' | 'TEMPORARILY_UNAVAILABLE';
+
 export interface AIAttemptRecord {
+  reason?: AIProviderUnavailableReason;
   model: string; code: AIRequestCode; elapsedMs: number;
   /** Google returned a model response (HTTP 200 / a streamed chunk) that the app then rejected. */
   responded?: true;
@@ -108,11 +111,13 @@ export function classifyAIRequestError(error: any): AIRequestError {
   if (status === 404 || providerStatus === 'NOT_FOUND') return new AIRequestError('MODEL_UNAVAILABLE');
   if (status === 400 || providerStatus === 'INVALID_ARGUMENT') return new AIRequestError('INVALID_AI_REQUEST');
   const networkCode = String(error?.cause?.code ?? error?.code ?? '');
-  if (error?.name === 'AbortError' || error?.name === 'TimeoutError' || status === 408 || status === 504 || /timed? ?out|timeout/i.test(message)
+  if (error?.name === 'AbortError' || error?.name === 'TimeoutError' || status === 408 || status === 504) return new AIRequestError('TIMEOUT');
+  // The provider's explicit 503 wins over timeout/network words in its message.
+  if (status === 503 || providerStatus === 'UNAVAILABLE') return new AIRequestError('PROVIDER_UNAVAILABLE');
+  if (/timed? ?out|timeout/i.test(message)
       || /^(ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT)$/.test(networkCode)) return new AIRequestError('TIMEOUT');
   if (/fetch failed|failed to fetch|network|ENOTFOUND|ECONNRESET|ECONNREFUSED|EAI_AGAIN/i.test(message)
       || /^(ENOTFOUND|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH)$/.test(networkCode)) return new AIRequestError('NETWORK_ERROR');
-  if (status === 503 || providerStatus === 'UNAVAILABLE') return new AIRequestError('PROVIDER_UNAVAILABLE');
   if (status >= 400 && status < 600 || providerStatus === 'INTERNAL' || providerStatus === 'UNKNOWN') return new AIRequestError('PROVIDER_ERROR');
   // A programmer error (including TypeError) is not evidence that Google is down.
   return new AIRequestError('INTERNAL_ERROR');
@@ -120,6 +125,7 @@ export function classifyAIRequestError(error: any): AIRequestError {
 
 export function aiRequestFailure(error: AIRequestError, isUk: boolean) {
   const messages: Record<AIRequestCode, [string, string]> = {
+    CONTEXT_TOO_LARGE: ['Контекст запиту завеликий. Зменште кількість завдань або текст і повторіть запит.', 'The request context is too large. Reduce the task scope or text and retry.'],
     MISSING_API_KEY: ['Додайте Gemini API key у налаштуваннях AI, щоб чат працював.', 'Add a Gemini API key in AI settings to use chat.'],
     INVALID_API_KEY: ['Google відхилив ключ API. Перевірте або замініть його в налаштуваннях AI.', 'Google rejected the API key. Check or replace it in AI settings.'],
     ACCESS_DENIED: ['Ключ не має доступу до Gemini. Перевірте дозволи й обмеження ключа в Google AI Studio.', 'This key has no Gemini access. Check its permissions and restrictions in Google AI Studio.'],
@@ -180,6 +186,7 @@ export interface AIGenerationMetrics {
   model: string;
   elapsedMs: number;
   attempts: number;
+  attemptModels?: string[];
   thinking: string;
   promptTokens?: number;
   cachedTokens?: number;
@@ -201,9 +208,8 @@ export interface AIGenerationMetrics {
   keyId?: string;
 }
 
-// Free-tier quotas are per project and per model. A model that just answered 429
-// (or does not exist for this key) is tried last until its cooldown expires, so
-// later requests do not wait on a request that is known to fail.
+// Quotas are per project and per model. A model that just answered 429 goes last;
+// one that answered 404 is excluded until its cooldown expires.
 const QUOTA_COOLDOWN_MS = 60_000;
 const MAX_QUOTA_COOLDOWN_MS = 15 * 60_000;
 // A 404 for a listed model is a project-level access decision that rarely changes
@@ -213,6 +219,47 @@ const UNAVAILABLE_COOLDOWN_MS = 6 * 60 * 60_000;
 // An overloaded (503) or silent model is likely to stay so for a short while.
 const TRANSIENT_COOLDOWN_MS = 60_000;
 let modelCooldowns = new WeakMap<object, Map<string, { until: number; code: AIRequestCode }>>();
+let availableModelsByClient = new WeakMap<object, { models: string[]; verified: boolean }>();
+
+/** Reuse the list already returned by key verification; never make a model-list request here. */
+export function rememberAvailableGeminiModels(ai: object, value: unknown, verified = false): string[] | undefined {
+  const cached = availableModelsByClient.get(ai);
+  // A stale browser closure or account preference must not replace the list
+  // Google just returned for this key. Only another verification refreshes it.
+  if (cached?.verified && !verified) return cached.models;
+  if (!Array.isArray(value)) return undefined;
+  const models = [...new Set(value.slice(0, 200).flatMap(model => {
+    if (typeof model !== 'string') return [];
+    const id = model.trim().toLowerCase().replace(/^models\//, '');
+    return /^gemini-[a-z0-9._-]{1,95}$/.test(id) ? [id] : [];
+  }))];
+  if (models.length) availableModelsByClient.set(ai, { models, verified });
+  return models.length ? models : undefined;
+}
+
+// Automatic fallback stays in the fast, stable text family. A person's explicit
+// model selection may still be Pro/preview/legacy; it is never a reserve default.
+function isFastStableChatModel(model: string): boolean {
+  return model === 'gemini-flash-latest' || model === 'gemini-flash-lite-latest'
+    || /^gemini-(?:[3-9]|\d{2,})(?:\.\d+)?-flash(?:-lite)?(?:-\d{3})?$/.test(model);
+}
+
+function availableFallbackModels(ai: object, hints: unknown, fallbackModels?: string[]): string[] {
+  if (fallbackModels?.length === 0) return [];
+  const available = rememberAvailableGeminiModels(ai, hints) ?? availableModelsByClient.get(ai)?.models;
+  const defaults = fallbackModels ?? AI_CHAT_FALLBACK_MODELS;
+  if (!available) return defaults;
+  const fastModels = available.filter(isFastStableChatModel);
+  // Prefer Lite, then current Flash aliases/versions. Avoid the provider's list
+  // order deciding cost or silently selecting a Pro/preview/specialized model.
+  const version = (model: string) => {
+    const parts = /^gemini-(\d+)(?:\.(\d+))?/.exec(model);
+    return parts ? Number(parts[1]) * 1000 + Number(parts[2] ?? 0) : Infinity;
+  };
+  fastModels.sort((a, b) => Number(b.includes('flash-lite')) - Number(a.includes('flash-lite'))
+    || version(b) - version(a) || a.localeCompare(b));
+  return [...new Set([...defaults.filter(model => fastModels.includes(model)), ...fastModels])];
+}
 // Model + exact thinking setting combinations that were rejected keep the provider
 // default; other levels/budgets for the same model are still tried.
 const thinkingRejectedModels = new Set<string>();
@@ -271,6 +318,16 @@ function providerMessage(error: any): string {
   return String(details?.message ?? error?.message ?? '');
 }
 
+/** A fixed reason vocabulary, never the provider's raw message or request details. */
+function providerUnavailableReason(code: AIRequestCode, error: unknown): AIProviderUnavailableReason | undefined {
+  if (code !== 'PROVIDER_UNAVAILABLE') return undefined;
+  const message = providerMessage(error);
+  if (/high\s+demand|high\s+traffic/i.test(message)) return 'HIGH_DEMAND';
+  if (/overload|capacity|server\s+(?:is\s+)?busy/i.test(message)) return 'OVERLOADED';
+  if (/unavailable|temporarily\s+(?:unable|cannot)/i.test(message)) return 'TEMPORARILY_UNAVAILABLE';
+  return undefined;
+}
+
 /** Only a 400 about the thinking setting itself justifies a retry without it. */
 function mentionsThinking(error: any): boolean {
   return /thinking/i.test(providerMessage(error));
@@ -291,6 +348,7 @@ function cooldownsFor(ai: object) {
 export function resetModelHealthForTests() {
   thinkingRejectedModels.clear();
   modelCooldowns = new WeakMap();
+  availableModelsByClient = new WeakMap();
 }
 
 type GeminiContents = Parameters<GoogleGenAI['models']['generateContent']>[0]['contents'];
@@ -299,6 +357,7 @@ interface PlannedAttempt { model: string; applyThinking: boolean; thinkingRetry:
 interface FallbackOptions {
   ai: GoogleGenAI; config: any; selectedModel?: string;
   totalTimeoutMs: number; fallbackModels?: string[]; maxAttempts?: number;
+  availableModels?: string[];
   thinking: AIThinkingEffort;
 }
 
@@ -314,9 +373,9 @@ const MODEL_ACCESS_FAILURES: AIRequestCode[] = ['MODEL_UNAVAILABLE', 'MODEL_TIER
  * Shared model queue, cooldown, thinking-retry, deadline and diagnostics logic
  * for the unary and streaming paths. Only the transport differs between them.
  */
-function createFallbackPlan({ ai, config, selectedModel, totalTimeoutMs, fallbackModels, maxAttempts, thinking }: FallbackOptions) {
+function createFallbackPlan({ ai, config, selectedModel, totalTimeoutMs, fallbackModels, availableModels, maxAttempts, thinking }: FallbackOptions) {
   const selected = typeof selectedModel === 'string' ? selectedModel.trim().replace(/^models\//, '') : '';
-  const distinctModels = [...new Set([selected, ...(fallbackModels ?? AI_CHAT_FALLBACK_MODELS)].filter(Boolean))];
+  const distinctModels = [...new Set([selected, ...availableFallbackModels(ai, availableModels, fallbackModels)].filter(Boolean))];
   const attemptLimit = typeof maxAttempts === 'number' && Number.isFinite(maxAttempts) && maxAttempts >= 1
     ? Math.floor(maxAttempts) : distinctModels.length;
   const cooldowns = cooldownsFor(ai);
@@ -342,6 +401,21 @@ function createFallbackPlan({ ai, config, selectedModel, totalTimeoutMs, fallbac
   const attempts: AIRequestDiagnostics['attempts'] = [];
   const keyId = keyFingerprints.get(ai);
   let lastError = new AIRequestError('MODEL_UNAVAILABLE');
+  const recordFailure = (model: string, error: unknown, attemptStartedAt: number) => {
+    const failure = classifyAIRequestError(error);
+    // Model IDs, categories and allowlisted reasons only; never provider prose.
+    const reason = providerUnavailableReason(failure.code, error);
+    attempts.push({ model: diagnosticModelId(model), code: failure.code, elapsedMs: Math.round(performance.now() - attemptStartedAt), ...(reason ? { reason } : {}) });
+    if (failure.code === 'QUOTA_EXCEEDED') {
+      const delay = Math.min(MAX_QUOTA_COOLDOWN_MS, Math.max(QUOTA_COOLDOWN_MS, providerRetryDelayMs(error) ?? 0));
+      cooldowns.set(model, { until: Date.now() + delay, code: 'QUOTA_EXCEEDED' });
+    } else if (failure.code === 'MODEL_UNAVAILABLE') {
+      cooldowns.set(model, { until: Date.now() + UNAVAILABLE_COOLDOWN_MS, code: 'MODEL_UNAVAILABLE' });
+    } else if (failure.code === 'TIMEOUT' || failure.code === 'PROVIDER_UNAVAILABLE') {
+      cooldowns.set(model, { until: Date.now() + TRANSIENT_COOLDOWN_MS, code: failure.code });
+    }
+    return failure;
+  };
   const withDiagnostics = (failure: AIRequestError) => new AIRequestError(failure.code, {
     attempts: attempts.map(attempt => ({ ...attempt })),
     elapsedMs: Math.round(performance.now() - startedAt),
@@ -359,7 +433,11 @@ function createFallbackPlan({ ai, config, selectedModel, totalTimeoutMs, fallbac
       ? new AIRequestError(selectedCode) : failure);
   };
   return {
-    queue, preferredModel, startedAt, deadline, attempts, withDiagnostics, finalFailure,
+    queue, preferredModel, startedAt, deadline, attempts, withDiagnostics, finalFailure, recordFailure,
+    canAttempt(entry: PlannedAttempt) {
+      const cooldown = cooldowns.get(entry.model);
+      return !(cooldown?.code === 'MODEL_UNAVAILABLE' && cooldown.until > Date.now());
+    },
     lastError: () => lastError,
     thinkingConfig: (entry: PlannedAttempt) => entry.applyThinking ? thinkingConfigForModel(entry.model, thinking) : undefined,
     succeeded(entry: PlannedAttempt) {
@@ -372,6 +450,7 @@ function createFallbackPlan({ ai, config, selectedModel, totalTimeoutMs, fallbac
       const selectedModelFailure = selected && entry.model !== selected ? selectedFailure() : undefined;
       return {
         model: entry.model, attempts: attempts.length + 1,
+        attemptModels: [...attempts.map(attempt => attempt.model), entry.model],
         elapsedMs: Math.round(performance.now() - startedAt),
         thinking: thinkingConfig ? String(thinkingConfig.thinkingLevel ?? `budget:${thinkingConfig.thinkingBudget}`) : 'provider-default',
         ...(selectedModelFailure ? { selectedModelFailure } : {}),
@@ -400,6 +479,7 @@ function createFallbackPlan({ ai, config, selectedModel, totalTimeoutMs, fallbac
       attempts.push({
         model: diagnosticModelId(model), code: failure.code, elapsedMs: Math.round(performance.now() - attemptStartedAt),
         ...(responded ? { responded: true as const } : {}), ...(quota ? { quota } : {}),
+        ...(providerUnavailableReason(failure.code, error) ? { reason: providerUnavailableReason(failure.code, error) } : {}),
       });
       if (model === selected) selectedFailureCode = failure.code;
       if (failure.code === 'QUOTA_EXCEEDED') {
@@ -468,23 +548,24 @@ function createAttemptGuard(signal: AbortSignal | undefined, timeoutMs: number) 
 /** Bound the whole operation and cancel transport before trying a distinct fallback. */
 export async function generateGeminiWithFallback({
   ai, contents, config, selectedModel, validateResponse, timeoutMs = 15_000, totalTimeoutMs = 30_000,
-  fallbackModels, maxAttempts, allowEmptyText = false, signal, thinking = 'default',
+  fallbackTimeoutMs, fallbackModels, availableModels, maxAttempts, allowEmptyText = false, signal, thinking = 'default',
 }: {
   ai: GoogleGenAI; contents: GeminiContents; config: any; selectedModel?: string;
   /** Throwing rejects this model's answer (INVALID_AI_RESPONSE) and tries the next model. */
   validateResponse?: (text: string, output: { text: string; functionCalls: AIFunctionCall[] }) => unknown;
-  timeoutMs?: number; totalTimeoutMs?: number;
-  fallbackModels?: string[]; maxAttempts?: number; allowEmptyText?: boolean;
+  timeoutMs?: number; fallbackTimeoutMs?: number; totalTimeoutMs?: number;
+  fallbackModels?: string[]; availableModels?: string[]; maxAttempts?: number; allowEmptyText?: boolean;
   signal?: AbortSignal;
   thinking?: AIThinkingEffort;
 }) {
   signal?.throwIfAborted();
-  const plan = createFallbackPlan({ ai, config, selectedModel, totalTimeoutMs, fallbackModels, maxAttempts, thinking });
+  const plan = createFallbackPlan({ ai, config, selectedModel, totalTimeoutMs, fallbackModels, availableModels, maxAttempts, thinking });
   const { queue } = plan;
   for (let index = 0; index < queue.length; index++) {
     const entry = queue[index];
     const { model } = entry;
     signal?.throwIfAborted();
+    if (!plan.canAttempt(entry)) continue;
     const remaining = plan.deadline - performance.now();
     if (remaining <= 0) throw plan.finalFailure(new AIRequestError('TIMEOUT'));
     const attemptMs = Math.min(timeoutMs, remaining);
@@ -558,26 +639,27 @@ export interface AIStreamResult<T = unknown> {
  */
 export async function streamGeminiWithFallback<T = unknown>({
   ai, contents, config, selectedModel, onText, validate, timeoutMs = 15_000, idleTimeoutMs = 10_000, totalTimeoutMs = 30_000,
-  fallbackModels, maxAttempts, signal, thinking = 'default',
+  fallbackTimeoutMs, fallbackModels, availableModels, maxAttempts, signal, thinking = 'default',
 }: {
   ai: GoogleGenAI; contents: GeminiContents; config: any; selectedModel?: string;
   onText: (delta: string) => void;
   /** Runs on the completed output; throwing rejects it as INVALID_AI_RESPONSE. */
   validate?: (output: { text: string; functionCalls: AIFunctionCall[] }) => T;
-  timeoutMs?: number; idleTimeoutMs?: number; totalTimeoutMs?: number;
-  fallbackModels?: string[]; maxAttempts?: number;
+  timeoutMs?: number; fallbackTimeoutMs?: number; idleTimeoutMs?: number; totalTimeoutMs?: number;
+  fallbackModels?: string[]; availableModels?: string[]; maxAttempts?: number;
   signal?: AbortSignal;
   thinking?: AIThinkingEffort;
 }): Promise<AIStreamResult<T>> {
   signal?.throwIfAborted();
   // Streaming is plain text: structured output would arrive as unreadable JSON fragments.
   const { responseMimeType: _mime, responseSchema: _schema, responseJsonSchema: _jsonSchema, ...textConfig } = config ?? {};
-  const plan = createFallbackPlan({ ai, config: textConfig, selectedModel, totalTimeoutMs, fallbackModels, maxAttempts, thinking });
+  const plan = createFallbackPlan({ ai, config: textConfig, selectedModel, totalTimeoutMs, fallbackModels, availableModels, maxAttempts, thinking });
   const { queue } = plan;
   for (let index = 0; index < queue.length; index++) {
     const entry = queue[index];
     const { model } = entry;
     signal?.throwIfAborted();
+    if (!plan.canAttempt(entry)) continue;
     const remaining = plan.deadline - performance.now();
     if (remaining <= 0) throw plan.finalFailure(new AIRequestError('TIMEOUT'));
     const attemptMs = Math.min(timeoutMs, remaining);

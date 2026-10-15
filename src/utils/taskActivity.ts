@@ -63,6 +63,7 @@ function scheduledStart(task: PSTask): string | null {
 
 /** Pure, idempotent metadata annotation for local changes; cloud hydration must bypass it. */
 export function annotateTaskChanges(previous: PSTask[], next: PSTask[], now: number): PSTask[] {
+  if (next === previous) return previous;
   if (!Number.isFinite(now) || now < 0) return next;
   const beforeById = new Map(previous.map(task => [task.id, task]));
   return next.map(task => {

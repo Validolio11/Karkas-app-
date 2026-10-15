@@ -26,6 +26,13 @@ test('an unanswered trailing user message is merged into the final user turn', (
   assert.deepEqual(chatHistoryContents(undefined, 'Only'), [{ role: 'user', parts: [{ text: 'Only' }] }]);
 });
 
+test('oversized historical messages are omitted whole without removing negation from retained turns', () => {
+  const contents = chatHistoryContents([{ role: 'user', content: `Do not ${'change '.repeat(4000)}my goal` }, { role: 'assistant', content: 'Do not change the goal.' }], 'Current question');
+  assert.doesNotMatch(JSON.stringify(contents), /my goal/);
+  assert.match(JSON.stringify(contents), /Do not change the goal\./);
+  assert.match(JSON.stringify(contents), /Current question/);
+});
+
 test('each task is sent once with client-local temporal fields instead of raw epochs', () => {
   const clock = { now: '2026-10-12T12:00:00Z', timeZone: 'Europe/Kyiv' };
   const task = { id: 't', title: 'Report', phase: 'work', priority: 2, done: false, createdAt: Date.parse('2026-10-10T08:00:00Z'),

@@ -8,6 +8,15 @@ function storage() {
   return { values, getItem: (key: string) => values.get(key) || null, setItem: (key: string, value: string) => { values.set(key, value); }, removeItem: (key: string) => { values.delete(key); } };
 }
 
+test('proposal lifecycle metadata is accepted only without executable changes', () => {
+  for (const proposalDisposition of ['cancelled', 'clarification']) {
+    const reply = { reply: 'Чернетку збережено або скасовано', proposalDisposition, tasks: [] };
+    assert.equal(readAIResponse(reply, 'chat'), reply);
+    assert.throws(() => readAIResponse({ ...reply, taskUpdates: [{ id: 'live-task', title: 'Changed' }] }, 'chat'), AIRequestError);
+  }
+  assert.throws(() => readAIResponse({ reply: 'Невідомий статус', proposalDisposition: 'apply-everything' }, 'chat'), AIRequestError);
+});
+
 test('an unfinished request and a newer typed draft both survive restart for their own account', () => {
   const memory = storage();
   const draft = { prompt: 'Наступне запитання ще дописую', mode: 'chat' as const, recoverableRequest: { text: 'Додай завдання Референси та таймер 25 хвилин', mode: 'chat' as const } };

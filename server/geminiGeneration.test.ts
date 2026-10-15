@@ -203,7 +203,7 @@ test('a refused start asks for its reason before provider changes can adapt a re
 
 test('an ordinary pending proposal can be revised and cancelled during discovery', async () => {
   const pending = { tasks: [{ title: 'References', phase: 'focus', priority: 2, steps: 0, countdownDurationSeconds: 1500 }] };
-  mockProvider(() => success({ reply: 'Updated proposal', tasks: [{ ...pending.tasks[0], countdownDurationSeconds: 600 }] }));
+  mockProvider(() => success({ reply: 'Updated proposal', taskUpdates: [{ id: 'pending-task:0', countdownDurationSeconds: 600 }] }));
   const revision = await chat({ prompt: 'Зменши час у пропозиції до 10 хвилин', pendingChanges: pending, strategyContext: { goals: [] }, tabs: ['focus'] });
   assert.equal(revision.status, 200);
   assert.equal(revision.body.tasks[0].countdownDurationSeconds, 600);
@@ -213,6 +213,8 @@ test('an ordinary pending proposal can be revised and cancelled during discovery
   assert.equal(cancel.status, 200);
   assert.deepEqual(cancel.body.tasks, []);
   assert.equal(cancel.body.strategy, undefined);
+  assert.equal(cancel.body.proposalDisposition, 'cancelled');
+  assert.equal(calls.length, 0, 'explicit cancellation is app-owned');
 });
 
 test('ready personal analysis keeps its reply and observations without replacing the saved plan', async () => {
@@ -939,6 +941,156 @@ test('a rejected thinking level is remembered only for that model and level', as
 });
 
 const turnText = (body: any) => body.contents.flatMap((content: any) => content.parts.map((part: any) => part.text ?? '')).join('\n');
+
+test('missed-start work correction survives the screenshot clarification sequence in JSON and tools', async () => {
+  const cases = [
+    {
+      lang: 'uk', title: 'Робота над анімацією',
+      original: 'зміни таймер на 3 години бо я забув його включити',
+      clarification: 'Про анімацію',
+      assistant: 'Я бачу активне завдання «Робота над анімацією» у вкладці «Фріланс». Ви хочете змінити час у таймері на 3 години чи продовжити роботу над наступними кроками?',
+      repeated: 'зміни таймер на 3 години',
+    },
+    {
+      lang: 'en', title: 'Animation work',
+      original: 'change the timer to 3 hours because I forgot to start the timer',
+      clarification: 'About animation',
+      assistant: 'I see the active task «Animation work» in Freelance. Would you like to change its timer to 3 hours or continue the next steps?',
+      repeated: 'change the timer to 3 hours',
+    },
+  ];
+  for (const tools of [true, false]) {
+    for (const example of cases) {
+      const run = async () => {
+        mockProvider((_model, body) => {
+          const schema = tools
+            ? body.tools[0].functionDeclarations.find((item: any) => item.name === 'propose_update_task').parameters
+            : body.generationConfig.responseSchema.properties.taskUpdates.items;
+          assert.equal(schema.properties.recordedWorkSeconds.minimum, 0);
+          assert.equal(schema.properties.recordedWorkSeconds.maximum, 6000059);
+          assert.match(body.systemInstruction.parts[0].text, /ROUTE task_command/);
+          return success({ reply: 'Proposal: total recorded work is 3 hours.', taskUpdates: [{ id: 'animation', recordedWorkSeconds: 10800 }] });
+        });
+        const result = await chat({
+          lang: example.lang, prompt: example.repeated,
+          conversation: [
+            { role: 'user', content: example.original },
+            { role: 'assistant', content: 'Please specify the task.' },
+            { role: 'user', content: example.clarification },
+            { role: 'assistant', content: example.assistant },
+          ],
+          currentTasks: [
+            { id: 'animation', title: example.title, phase: 'freelance', done: false, timerMode: 'stopwatch', timeSpentSeconds: 600 },
+            { id: 'unrelated', title: 'Read a book', phase: 'personal', done: false },
+          ],
+          tabs: ['freelance', 'personal'],
+        });
+        assert.equal(result.status, 200, `${example.lang}, tools=${tools}`);
+        assert.equal(calls.length, 1, 'the resolved target must not trigger clarification or fallback');
+        assert.deepEqual(result.body.taskUpdates, [{ id: 'animation', recordedWorkSeconds: 10800 }]);
+        assert.deepEqual(result.body.tasks, []);
+        assert.deepEqual(result.body.taskDeletions, []);
+      };
+      if (tools) await run();
+      else await withToolsOff(run);
+    }
+  }
+});
+
+test('ordinary countdown requests cannot authorize provider-invented recorded work', async () => {
+  for (const tools of [true, false]) {
+    const run = async () => {
+      mockProvider(() => success({ reply: 'Changed recorded work.', taskUpdates: [{ id: 'animation', recordedWorkSeconds: 10800 }] }));
+      const result = await chat({ prompt: 'Зміни таймер для анімації на 3 години', currentTasks: [
+        { id: 'animation', title: 'Робота над анімацією', timerMode: 'stopwatch', done: false },
+      ] });
+      assert.equal(result.status, 200);
+      assert.deepEqual(result.body.taskUpdates, []);
+      assert.deepEqual(result.body.tasks, []);
+    };
+    if (tools) await run();
+    else await withToolsOff(run);
+  }
+});
+
+test('retrospective timer requests cannot silently become future countdown proposals', async () => {
+  for (const tools of [true, false]) {
+    const run = async () => {
+      mockProvider(() => success({ reply: 'Proposed countdown.', taskUpdates: [{ id: 'animation', timerMode: 'countdown', countdownDurationSeconds: 10800 }] }));
+      const result = await chat({ prompt: 'зміни таймер для анімації на 3 години бо я забув його включити', currentTasks: [
+        { id: 'animation', title: 'Робота над анімацією', timerMode: 'stopwatch', done: false },
+      ] });
+      assert.equal(result.status, 200);
+      assert.deepEqual(result.body.taskUpdates, []);
+      assert.deepEqual(result.body.tasks, []);
+    };
+    if (tools) await run();
+    else await withToolsOff(run);
+  }
+});
+
+test('recorded-work proposal boundaries survive both transports as absolute totals', async () => {
+  for (const tools of [true, false]) {
+    for (const recordedWorkSeconds of [0, 6000059]) {
+      const run = async () => {
+        mockProvider(() => success({ reply: 'Proposed corrected total.', taskUpdates: [{ id: 'animation', recordedWorkSeconds }] }));
+        const result = await chat({ prompt: `Correct recorded time for Animation to ${recordedWorkSeconds} seconds`, lang: 'en', currentTasks: [
+          { id: 'animation', title: 'Animation', timerMode: 'stopwatch', timeSpentSeconds: 900, done: false },
+        ] });
+        assert.equal(result.status, 200);
+        assert.deepEqual(result.body.taskUpdates, [{ id: 'animation', recordedWorkSeconds }], 'existing time must not be added to the requested replacement total');
+      };
+      if (tools) await run();
+      else await withToolsOff(run);
+    }
+  }
+});
+
+test('invalid or mixed recorded-work proposals fail atomically in JSON and tools', async () => {
+  const invalidUpdates = [
+    { recordedWorkSeconds: -1 },
+    { recordedWorkSeconds: 6000060 },
+    { recordedWorkSeconds: 1.5 },
+    { recordedWorkSeconds: '10800' },
+    { recordedWorkSeconds: 10800, timerMode: 'stopwatch' },
+    { recordedWorkSeconds: 10800, countdownDurationSeconds: 10800 },
+    { recordedWorkSeconds: 10800, timerAction: 'start' },
+    { recordedWorkSeconds: 10800, schedule: { startAt: '2026-10-20T10:00:00+03:00', recurrence: 'once', timeZone: 'Europe/Kyiv', leadMinutes: 5 } },
+  ];
+  for (const tools of [true, false]) {
+    for (const update of invalidUpdates) {
+      const run = async () => {
+        mockProvider(() => success({ reply: 'Invalid correction.', taskUpdates: [{ id: 'animation', ...update }] }));
+        const result = await chat({ prompt: 'Зарахуй 3 години роботи для анімації', currentTasks: [
+          { id: 'animation', title: 'Робота над анімацією', timerMode: 'stopwatch', done: false },
+        ] });
+        assert.equal(result.status, 502, JSON.stringify(update));
+        assert.equal(result.body.code, 'INVALID_AI_RESPONSE');
+        assert.deepEqual(result.body.taskUpdates, []);
+        assert.deepEqual(result.body.tasks, []);
+      };
+      if (tools) await run();
+      else await withToolsOff(run);
+    }
+  }
+});
+
+test('future scheduled tasks cannot receive retrospective recorded work', async () => {
+  for (const tools of [true, false]) {
+    const run = async () => {
+      mockProvider(() => success({ reply: 'Invalid future correction.', taskUpdates: [{ id: 'animation', recordedWorkSeconds: 10800 }] }));
+      const result = await chat({ prompt: 'Зарахуй 3 години роботи для анімації', currentTasks: [
+        { id: 'animation', title: 'Робота над анімацією', timerMode: 'stopwatch', done: false, scheduledPending: true,
+          scheduledFor: Date.parse('2026-10-20T10:00:00+03:00') },
+      ] });
+      assert.equal(result.status, 502);
+      assert.equal(result.body.code, 'INVALID_AI_RESPONSE');
+      assert.deepEqual(result.body.taskUpdates, []);
+    };
+    if (tools) await run();
+    else await withToolsOff(run);
+  }
+});
 
 test('a free message gets general coaching with proposal-only tools, not a personal interview or a strategy', async () => {
   mockProvider((_model, body) => {

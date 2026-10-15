@@ -135,6 +135,8 @@ export interface SuggestedTask {
 }
 
 export interface AITaskUpdate extends AITimerSettings {
+  /** Explicit replacement of the total recorded work, never a countdown or an added delta. */
+  recordedWorkSeconds?: number;
   plannedDate?: string | null;
   deadlineDate?: string | null;
   schedule?: TaskSchedule;
@@ -155,6 +157,8 @@ export interface AIDeletedTaskRef {
 }
 
 export interface AIResponse {
+  /** Server decision about the current unapplied draft; prose alone cannot cancel it. */
+  proposalDisposition?: 'cancelled' | 'clarification';
   strategy?: AIStrategyResponse;
   summary: string;
   insights?: string[];

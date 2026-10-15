@@ -1,6 +1,6 @@
-import { completeTask, materializeStepList, reopenTask, setTaskSteps } from './taskOperations';
+import { completeTask, materializeStepList, reopenTask, setTaskSteps, setTaskTimeSpent } from './taskOperations';
 import type { AITaskUpdate, PSTask, TaskStepItem } from '../types';
-import { applyAITimerSettings } from './aiTaskTimer';
+import { applyAITimerSettings, isAITimerSettingsValid } from './aiTaskTimer';
 import { normalizeTaskSchedule } from './taskScheduling';
 import { isTaskDate } from './taskDates';
 
@@ -12,6 +12,7 @@ export function applyAITaskUpdate(
   now = Date.now(),
 ): PSTask {
   if (!update || update.id !== task.id) return task;
+  if (!isAITimerSettingsValid({ ...task, done: typeof update.done === 'boolean' ? update.done : task.done }, update)) return task;
   if (update.plannedDate !== undefined && update.plannedDate !== null && !isTaskDate(update.plannedDate) || update.deadlineDate !== undefined && update.deadlineDate !== null && !isTaskDate(update.deadlineDate)) return task;
   if (task.scheduledPending && (update.done === true || update.timerAction === 'start')) return task;
   const next = { ...task };
@@ -83,5 +84,6 @@ export function applyAITaskUpdate(
   }
   const edited = replacement ? setTaskSteps(next, next.stepList!, now) : next;
   const completed = hasDone ? (update.done ? completeTask(edited, now) : reopenTask(edited, now)) : edited;
-  return applyAITimerSettings(completed, update, now);
+  const timed = applyAITimerSettings(completed, update, now);
+  return update.recordedWorkSeconds === undefined ? timed : setTaskTimeSpent(timed, update.recordedWorkSeconds, now);
 }

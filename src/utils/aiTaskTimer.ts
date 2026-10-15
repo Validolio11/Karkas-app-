@@ -1,10 +1,13 @@
-import type { AITimerSettings, PSTask } from '../types';
+import type { AITaskUpdate, AITimerSettings, PSTask } from '../types';
 import { getTaskTimerMode, pauseTaskTimer, startTaskTimer } from './taskTimer';
 import { initialTaskPlanSeconds } from './taskWorkTelemetry';
 
 /** Configure without starting or losing recorded work; only explicit actions run time. */
-export function isAITimerSettingsValid(task: PSTask, settings: AITimerSettings): boolean {
+export function isAITimerSettingsValid(task: PSTask, settings: AITimerSettings & Pick<AITaskUpdate, 'recordedWorkSeconds' | 'schedule'>): boolean {
   const { timerMode, countdownDurationSeconds: duration, timerAction } = settings;
+  if (settings.recordedWorkSeconds !== undefined && (!Number.isInteger(settings.recordedWorkSeconds)
+    || settings.recordedWorkSeconds < 0 || settings.recordedWorkSeconds > 6000059 || task.scheduledPending
+    || timerMode !== undefined || duration !== undefined || timerAction !== undefined || settings.schedule !== undefined)) return false;
   if (task.scheduledPending && timerAction === 'start') return false;
   if (timerMode !== undefined && !['none', 'stopwatch', 'countdown'].includes(timerMode)) return false;
   if (duration !== undefined && (!Number.isInteger(duration) || duration < 60 || duration > 86400)) return false;

@@ -73,6 +73,15 @@ export function describeAITimer(settings: AITimerSettings, lang: 'uk' | 'en'): s
   return parts.length ? parts.join(' · ') : null;
 }
 
+/** A correction replaces measured work; it never configures a future countdown. */
+export function describeAIRecordedWork(seconds: number | undefined, lang: 'uk' | 'en'): string | null {
+  if (seconds === undefined || !Number.isSafeInteger(seconds) || seconds < 0) return null;
+  const time = `${Math.floor(seconds / 3600)}:${String(Math.floor(seconds % 3600 / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+  return lang === 'uk'
+    ? `Усього витрачено: ${time}. Це замінить записаний час роботи.`
+    : `Total worked: ${time}. This replaces the recorded work time.`;
+}
+
 export function getAITimerContext(task: PSTask, now = Date.now()) {
   return {
     timerMode: getTaskTimerMode(task),

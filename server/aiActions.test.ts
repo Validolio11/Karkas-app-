@@ -10,6 +10,29 @@ const parent: PSTask = {
   stepList: [{ id: 'a', title: 'Research', done: true }, { id: 'b', title: 'Draft', done: false }],
 };
 
+test('recorded work correction exposes a bounded total and leaves raw accounting private', () => {
+  const field = taskMutationProperties.taskUpdates.items.properties.recordedWorkSeconds;
+  assert.equal(field.minimum, 0);
+  assert.equal(field.maximum, 6000059);
+  for (const recordedWorkSeconds of [0, 10800, 6000059]) {
+    const update = { id: parent.id, recordedWorkSeconds };
+    assert.deepEqual(validateTaskMutations({ taskUpdates: [update] }, [parent]).taskUpdates, [update]);
+  }
+  assert.throws(() => validateTaskMutations({ taskUpdates: [{ id: parent.id, timeSpentSeconds: 10800 }] }, [parent]));
+  assert.throws(() => validatedTimerFields({ recordedWorkSeconds: 10800 }), /existing task/);
+});
+
+test('recorded work rejects malformed totals, future templates and mixed timer changes', () => {
+  for (const recordedWorkSeconds of [-1, 0.5, NaN, Infinity, '10800', 6000060]) {
+    assert.throws(() => validateTaskMutations({ taskUpdates: [{ id: parent.id, recordedWorkSeconds }] }, [parent]), /recorded work/);
+  }
+  for (const conflict of [{ timerAction: 'start' }, { timerMode: 'stopwatch' }, { countdownDurationSeconds: 600 }, { schedule: {} }]) {
+    assert.throws(() => validateTaskMutations({ taskUpdates: [{ id: parent.id, recordedWorkSeconds: 10800, ...conflict }] }, [parent]), /recorded work/);
+  }
+  assert.throws(() => validateTaskMutations({ taskUpdates: [{ id: parent.id, recordedWorkSeconds: 10800 }] }, [{ ...parent, scheduledPending: true }]), /recorded work/);
+  assert.deepEqual(validateTaskMutations({ taskUpdates: [{ id: parent.id, recordedWorkSeconds: null, note: 'Keep' }] }, [parent]).taskUpdates, [{ id: parent.id, note: 'Keep' }]);
+});
+
 test('date-only updates validate against the unchanged counterpart and preserve explicit clears', () => {
   const dated = { ...parent, plannedDate: '2026-10-12', deadlineDate: '2026-10-15' };
   assert.throws(() => validateTaskMutations({ taskUpdates: [{ id: parent.id, plannedDate: '2026-10-16' }] }, [dated]), /after deadline/);

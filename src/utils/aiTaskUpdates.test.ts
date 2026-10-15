@@ -3,6 +3,8 @@ import { test } from 'node:test';
 import type { AITaskUpdate, PSTask } from '../types';
 import { applyAITaskUpdate } from './aiTaskUpdates';
 import { getTaskTotalSeconds, pauseTaskTimer } from './taskTimer';
+import { setTaskTimeSpent } from './taskOperations';
+import { isAITimerSettingsValid } from './aiTaskTimer';
 
 const tabs = new Set(['focus', 'work']);
 const task = (overrides: Partial<PSTask> = {}): PSTask => ({
@@ -10,6 +12,62 @@ const task = (overrides: Partial<PSTask> = {}): PSTask => ({
   currentStep: 1, done: false, pinned: false, createdAt: 1,
   stepList: [{ id: 'a', title: 'Research', done: true }, { id: 'b', title: 'Build', done: false }],
   ...overrides,
+});
+
+test('forgotten timer work correction replaces the total without configuring a countdown', () => {
+  const original = task({ timerMode: 'stopwatch', timeSpentSeconds: 120,
+    stepList: [{ id: 'b', title: 'Build', done: false, timeSpentSeconds: 120, estimatedDurationSeconds: 600 }] });
+  const result = applyAITaskUpdate(original, { id: original.id, recordedWorkSeconds: 10800 }, tabs, 31000);
+  assert.deepEqual(result, setTaskTimeSpent(original, 10800, 31000));
+  assert.equal(result.timeSpentSeconds, 10800);
+  assert.equal(result.countdownDurationSeconds, undefined);
+  assert.equal(result.stepList?.[0].timeSpentSeconds, undefined);
+  assert.equal(result.stepList?.[0].estimatedDurationSeconds, 600);
+  assert.equal(original.timeSpentSeconds, 120);
+});
+
+test('AI recorded work uses manual correction accounting for a live countdown', () => {
+  const original = task({ timerMode: 'countdown', timerRunning: true, timerStartedAt: 1000,
+    countdownDurationSeconds: 600, countdownRemainingSeconds: 400, timeSpentSeconds: 120, timerSessionId: 'old' });
+  const result = applyAITaskUpdate(original, { id: original.id, recordedWorkSeconds: 10800 }, tabs, 31000);
+  assert.equal(result.timerRunning, true);
+  assert.equal(result.timerStartedAt, 31000);
+  assert.equal(result.timeSpentSeconds, 10800);
+  assert.equal(result.countdownRemainingSeconds, 370);
+  assert.equal(result.countdownDurationSeconds, 600);
+  assert.equal(result.timeResetAt, 31000);
+  assert.notEqual(result.timerSessionId, 'old');
+  assert.equal(getTaskTotalSeconds(result, 41000), 10810);
+});
+
+test('recorded work corrections preserve paused countdown and completion state', () => {
+  for (const done of [false, true]) {
+    const original = task({ done, timerMode: 'countdown', timerRunning: false, timeSpentSeconds: 12000,
+      countdownDurationSeconds: 3600, countdownRemainingSeconds: 1200, completedAt: done ? 20000 : undefined,
+      timeResetAt: 40000 });
+    const corrected = applyAITaskUpdate(original, { id: original.id, recordedWorkSeconds: 10800 }, tabs, 31000);
+    assert.equal(corrected.timeSpentSeconds, 10800);
+    assert.equal(corrected.timeResetAt, 40001);
+    assert.equal(corrected.timerRunning, false);
+    assert.equal(corrected.countdownRemainingSeconds, 1200);
+    assert.equal(corrected.done, done);
+    assert.equal(corrected.completedAt, original.completedAt);
+  }
+});
+
+test('invalid or conflicting recorded work cannot partially edit an AI target', () => {
+  const original = task({ timerMode: 'stopwatch' });
+  for (const recordedWorkSeconds of [-1, 1.5, NaN, Infinity, 6000060]) {
+    const update = { id: original.id, title: 'Must not change', recordedWorkSeconds };
+    assert.equal(isAITimerSettingsValid(original, update), false);
+    assert.equal(applyAITaskUpdate(original, update, tabs), original);
+  }
+  for (const conflict of [{ timerAction: 'start' as const }, { timerMode: 'countdown' as const }, { countdownDurationSeconds: 600 }]) {
+    assert.equal(applyAITaskUpdate(original, { id: original.id, recordedWorkSeconds: 10800, ...conflict }, tabs), original);
+  }
+  const future = task({ scheduledPending: true });
+  assert.equal(applyAITaskUpdate(future, { id: future.id, recordedWorkSeconds: 10800 }, tabs), future);
+  assert.equal(applyAITaskUpdate(original, { id: original.id, recordedWorkSeconds: 0 }, tabs).timeSpentSeconds, 0);
 });
 
 test('AI date changes validate the full range atomically and null clears only its specified date', () => {

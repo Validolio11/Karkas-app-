@@ -39,7 +39,8 @@ export const TASK_COMMAND_FUNCTION_DECLARATIONS = [
   },
   {
     name: 'propose_update_task',
-    description: 'Propose changes to ONE existing task by its exact workspace id; one call per task. Include only requested fields. priority: 1 high, 2 normal, 3 low. Subtask changes send the complete resulting stepList, preserving unchanged items with their ids and done states. Order: done steps first, then new starter/preparatory steps, then existing not-done later steps; other new steps go last. Timer: timerMode/countdownDurationSeconds configure it, timerAction:start only when the person asked or agreed. null plannedDate/deadlineDate clears that date.',
+    description: 'Propose changes to ONE existing task by its exact workspace id, or to a pending draft using its exact request-local id from PENDING REVISION TARGETS; one call per task. Include only requested fields. priority: 1 high, 2 normal, 3 low. Subtask changes send the complete resulting stepList, preserving unchanged items with their ids and done states. Order: done steps first, then new starter/preparatory steps, then existing not-done later steps; other new steps go last. Timer: timerMode/countdownDurationSeconds configure it, timerAction:start only when the person asked or agreed. Already worked time or a forgotten timer uses recordedWorkSeconds as the replacement TOTAL seconds on the existing task; never countdown configuration and never an added delta. Do not combine that correction with timer fields or schedule. A requested clock window also includes schedule.startAt. null plannedDate/deadlineDate clears that date.',
+    // Past work corrections use the same explicit, bounded total field as the JSON path.
     parameters: taskMutationProperties.taskUpdates.items,
   },
   {

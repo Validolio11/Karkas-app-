@@ -18,7 +18,8 @@ import { AI_CHAT_FALLBACK_TIMEOUT_MS, AI_CHAT_MODEL_TIMEOUT_MS, AI_CHAT_TOTAL_TI
 import { boundedPersonalPromptContext, chatHistoryContents, compactTaskPromptContext, KARKAS_ASSISTANT_PERSONA, mergeTemporalTaskContext, priorityLabel } from './server/aiPromptContext';
 import { buildTaskTemporalContext, temporalAwarenessSystemPolicy } from './src/utils/taskTemporalContext';
 import { currentClockReply } from './server/clockReply';
-import { guardOperationlessReply, guardTemporalResponse, guardUnappliedClaims, hasProposedOperations, staleProposalReply, taskScopeClarificationReply } from './server/temporalResponseGuard';
+import { guardOperationlessReply, guardTemporalResponse, guardUnappliedClaims, hasProposedOperations, lastChangeOffer, staleProposalReply, taskScopeClarificationReply } from './server/temporalResponseGuard';
+import { assertRequestedTimeWindow, reconcilePendingProposal, requestedTimeWindow } from './server/pendingProposalRevision';
 
 import { MAX_AUTONOMOUS_STRATEGY_ACTIONS } from './src/utils/strategyLimits';
 import { parseAIRecommendation } from './src/utils/aiRecommendations';
@@ -61,6 +62,8 @@ function requestValidationError(body: unknown): string | undefined {
   if (body.discoveryMode !== undefined && typeof body.discoveryMode !== 'boolean') return 'Invalid discoveryMode';
   if (body.lastAssistantProposalStatus !== undefined && !['pending', 'stale', 'applied'].includes(body.lastAssistantProposalStatus)) return 'Invalid lastAssistantProposalStatus';
   if (body.lastAssistantMessageId !== undefined && (typeof body.lastAssistantMessageId !== 'string' || body.lastAssistantMessageId.length > 200)) return 'Invalid lastAssistantMessageId';
+  if (body.pendingProposalId !== undefined && (typeof body.pendingProposalId !== 'string' || body.pendingProposalId.length > 200)) return 'Invalid pendingProposalId';
+  if (body.pendingProposalStatus !== undefined && !['pending', 'stale'].includes(body.pendingProposalStatus)) return 'Invalid pendingProposalStatus';
   if (body.availableModels !== undefined && (!Array.isArray(body.availableModels) || body.availableModels.length > 200
     || !body.availableModels.every((model: unknown) => typeof model === 'string' && model.length <= 100))) return 'Invalid availableModels';
   if (body.taskSnapshots !== undefined && (!Array.isArray(body.taskSnapshots) || !body.taskSnapshots.every((task: unknown) => isRecord(task) && nonEmptyText(task.id) && nonEmptyText(task.title)) || new Set(body.taskSnapshots.map((task: any) => task.id)).size !== body.taskSnapshots.length)) return 'Invalid taskSnapshots';
@@ -282,7 +285,8 @@ const CHAT_CORE_RULES = `CHAT RULES:
 - TASK TEMPORAL CONTEXT gives the clock and counts; each task's temporal fields (statuses, plannedDay, deadlineDay, scheduledStart, created, lastEdited, started, completed) are on its WORKSPACE CONTEXT record, in client-local time.
 - A history message may begin with [DD.MM HH:MM]: the client-local time it was sent (the most recent such date not after now). Resolve its relative dates against that time.
 - CURRENT USER MESSAGE overrides dates and preferences from earlier conversation or the PENDING UNAPPLIED PROPOSAL; if the person now asks for today, do not keep tomorrow from an earlier proposal.
-- Nothing in this response has been applied. Operations are proposals until the person presses Apply; never say you already moved, saved or updated anything. If the person revises the pending proposal, return the entire revised proposal; if they cancel it, return empty action arrays.
+- Nothing in this response has been applied. Operations are proposals until the person presses Apply; never say you already moved, saved or updated anything. The final revision must retain every untouched pending operation; when PENDING REVISION TARGETS is present the app consolidates your requested patches. If the person cancels the proposal, return empty action arrays.
+- PENDING REVISION TARGETS, when present, are app-derived draft identities. Propose only requested patches using taskUpdates/propose_update_task with those exact ids, including request-local ids for new draft tasks. The app consolidates patches with untouched pending operations. When PENDING DRAFT ADDITION is true, propose only the requested additional new tasks through create calls; the app appends them. Never recreate an unchanged draft task, never redirect a pending new task to a similarly named workspace task, and never repeat unchanged operations. If the target is ambiguous, ask a short clarification with no operations.
 - Only WORKSPACE CONTEXT is the truth about tasks, steps, dates and timers. An [App note: ...] after an earlier reply says whether its proposal was applied; a proposal that was not applied (or only partly) changed nothing it describes, so never speak of it as done (not «ми вже розбили на кроки»); offer it again if it still helps.
 - REQUEST ROUTE, CONCRETE COMMAND SCOPE and PERSONAL READY are app-derived. Plan intent cannot authorize a personal plan without readiness. Operations need an explicit change request or the person's agreement to a concrete change you offered; a wish, question, plan request or analysis alone authorizes none. A clarification returns empty action arrays.`;
 const CHAT_JSON_OUTPUT_RULE = `- Put the answer in "reply": short paragraphs separated by blank lines, lists only for real steps. Return strictly valid JSON matching the schema, with escaped newlines.`;
@@ -296,7 +300,7 @@ When you advise stopping, resting or a break while that task has timerRunning:tr
 If the person asks what to do about their own difficulty, or accepts the assistant's offer of a first small step, give concrete practical help now (one or two small first steps grounded in personal memory and the conversation), without further interview questions.`;
 
 const CHAT_ROUTE_RULES: Record<PersonalChatRoute, string> = {
-  task_command: `ROUTE task_command: populate ONLY the requested structured operations within CONCRETE COMMAND SCOPE; ask about an ambiguous target.`,
+  task_command: `ROUTE task_command: populate ONLY the requested structured operations within CONCRETE COMMAND SCOPE; ask about an ambiguous target. A timer scope with allowRecordedWork:true requests a correction of TOTAL past work through recordedWorkSeconds, not countdown configuration. Without that flag never propose a recordedWorkSeconds replacement.`,
   help: `ROUTE help: answer the question about the app or the topic directly. Return only reply and optional insights.`,
   general: `ROUTE general: a free message, small talk, coaching or general question. Reply naturally in prose; use the workspace only when it is relevant. Return only reply and optional insights, and no personal interview. If a concrete change would help, offer it in one short yes/no question naming the task; the person's yes makes the app prepare it.`,
   workspace_analysis: `ROUTE workspace_analysis: analyse the supplied workspace evidence. Return only reply and optional insights; an analysis request alone does not authorize changes.`,
@@ -325,14 +329,14 @@ const CHAT_PROSE_ROUTE_RULES: Partial<Record<PersonalChatRoute, string>> = {
 // task_command with function calling: prose reply plus one propose_* call per operation.
 // The action contract above keeps its JSON field names; this maps them to the tools.
 const CHAT_TOOLS_OUTPUT_RULE = `- OUTPUT FORMAT: reply to the person as plain text with light Markdown (short paragraphs, lists only for real steps). Never output JSON, field names or code blocks in the text.
-- OPERATIONS ARE TOOL CALLS: propose_create_task (one) and propose_create_tasks (several) are "tasks", propose_update_task is "taskUpdates", propose_delete_task is "taskDeletions" and propose_create_tab is "tabs" in the contract above; "empty action arrays" means no calls and a revised proposal is proposed again in full. Make one call per operation, only for what CURRENT USER MESSAGE explicitly requests, or the ACCEPTED OFFER describes, within CONCRETE COMMAND SCOPE.
+- OPERATIONS ARE TOOL CALLS: propose_create_task (one) and propose_create_tasks (several) are "tasks", propose_update_task is "taskUpdates", propose_delete_task is "taskDeletions" and propose_create_tab is "tabs" in the contract above; "empty action arrays" means no calls. For PENDING REVISION TARGETS propose only requested patches through propose_update_task; the app retains every untouched draft operation. Make one call per operation, only for what CURRENT USER MESSAGE explicitly requests, or the ACCEPTED OFFER describes, within CONCRETE COMMAND SCOPE.
 - SEVERAL NEW TASKS: when the person lists two or more new tasks, propose ALL of them in ONE propose_create_tasks call, in their order; never propose only the first. When they ask for the rest of an earlier list, propose every remaining item.
 - NEW TASK FIELDS: a stated date becomes deadlineDate ("by/до/дедлайн") or plannedDate ("on/на") as YYYY-MM-DD resolved from CURRENT CLIENT CLOCK; stated urgency becomes priority (1 for urgent/терміново, 3 for low). Never put a date or the priority only into note or title.
 - ACCEPTED OFFER, when present, is your own previous reply that the person has just agreed to: propose exactly its change, reusing its steps, their wording, order and durations, instead of inventing a new plan.
 - If the target task, a countdown duration or a date is ambiguous or missing, ask one short clarifying question in text and make no calls; never guess an id or a date.
 - Every call is only a proposal awaiting the person's Apply button. In one or two sentences say what you propose; never say it is done, saved or applied, and do not wait for tool results.`;
 const CHAT_TOOLS_ROUTE_RULES: Partial<Record<PersonalChatRoute, string>> = {
-  task_command: `ROUTE task_command: propose ONLY the requested operations within CONCRETE COMMAND SCOPE through the propose_* tools; ask about an ambiguous target.`,
+  task_command: `ROUTE task_command: propose ONLY the requested operations within CONCRETE COMMAND SCOPE through the propose_* tools; ask about an ambiguous target. A timer scope with allowRecordedWork:true requests a correction of TOTAL past work through recordedWorkSeconds, not countdown configuration. Without that flag never propose a recordedWorkSeconds replacement.`,
   general: `ROUTE general: a free message, coaching or general question; reply naturally and use the workspace when relevant. Call propose_* tools ONLY when CURRENT USER MESSAGE explicitly asks for a change, agrees to a concrete change you offered or reports finishing a step (see COACHING); otherwise just answer with no calls. Calls may target only the taskIds in CONCRETE COMMAND SCOPE; with none, only new tasks. If a change would help but was not asked for, offer it in one short yes/no question naming the task. You can propose changes: never say you are read-only.`,
   workspace_analysis: `ROUTE workspace_analysis: analyse the supplied workspace evidence. An analysis request alone does not authorize changes: call propose_* tools ONLY when CURRENT USER MESSAGE explicitly asks for a change or agrees to one you offered, and only for the taskIds in CONCRETE COMMAND SCOPE (with none, only new tasks). Otherwise offer a useful change in one short yes/no question.`,
 };
@@ -342,7 +346,7 @@ const PROPOSAL_TOOL_CHAT_ROUTES = new Set<PersonalChatRoute>(['general', 'worksp
 const CHAT_OPERATION_FIELDS = `OPERATION FIELDS:
 - "tasks": new tasks only. Each has "title" (actionable, concise), "phase" (one of AVAILABLE TAB IDS or a newly defined tab id), "priority" 1 (high), 2 (normal) or 3 (low), "steps" 0-5 (0 when no subtasks were requested or needed), "stepList" (sequential sub-steps with "title") and "note" (short practical note).
 - "tabs": only when explicitly requested; each with "id" (lowercase ASCII slug) and "name".
-- "taskUpdates": edits to existing tasks by exact "id" (e.g. title, priority, phase, note, done, stepList, timerMode, countdownDurationSeconds, timerAction, dates).
+- "taskUpdates": edits to existing tasks by exact "id" (e.g. title, priority, phase, note, done, stepList, timerMode, countdownDurationSeconds, timerAction, recordedWorkSeconds for an explicitly requested correction of total work time, dates).
 - "taskDeletions": tasks to archive by "id".`;
 
 /**
@@ -702,12 +706,19 @@ export async function assistHandler(req: any, rawRes: any) {
     const isTabCreationRequested = allowNewTabs || /(?:вкладк|категорі|розділ|напрямок|проєкт|проект|секці|tab|category|section|project)/iu.test(prompt);
     const isScheduleRequest = /(?:tomorrow|today|daily|every day|every evening|schedule|deadline|due\s+date|planned\s+date|\d{1,2}:\d{2}|\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}\.\d{2,4}|завтра|щодн|кожн|сьогодні|дедлайн|термін|дат[ауи]|на\s+\d{1,2}\s*(?:год|веч))/iu.test(prompt);
     const isTimerRequest = /(?:таймер|секундомір|відлік|timer|stopwatch|countdown)/iu.test(prompt);
-    const hasPendingOperations = isRecord(pendingChanges) && ['tasks', 'tabs', 'taskUpdates', 'taskDeletions'].some(key => Array.isArray(pendingChanges[key]) && pendingChanges[key].length > 0);
-    if (action === 'chat' && intent === 'auto' && isExplicitAIProposalApplyRequest(prompt)) {
+    let validPendingChanges: Record<string, any> | undefined;
+    if (isRecord(pendingChanges) && hasProposedOperations(pendingChanges)) {
+      try { validPendingChanges = validateAssistProposal(JSON.stringify({ ...pendingChanges, reply: 'Pending proposal' }), 'chat', mutationTargets, req.body.taskSnapshots); }
+      catch { /* Invalid drafts cannot supply mutation identities or be applied. */ }
+    }
+    const hasPendingOperations = !!validPendingChanges && hasProposedOperations(validPendingChanges);
+    const lastConversationMessage = Array.isArray(conversation) ? conversation.at(-1) : undefined;
+    const recentActionableOffer = lastConversationMessage?.role === 'assistant' && lastChangeOffer(lastConversationMessage.content);
+    if (action === 'chat' && intent === 'auto' && isExplicitAIProposalApplyRequest(prompt) && (hasPendingOperations || !recentActionableOffer)) {
       let validPending: Record<string, any> | undefined;
-      if (hasPendingOperations && req.body.lastAssistantProposalStatus !== 'stale') {
+      if (hasPendingOperations && (req.body.pendingProposalStatus === 'pending' || req.body.pendingProposalStatus === undefined && req.body.lastAssistantProposalStatus !== 'stale')) {
         try {
-          const prepared = validateAssistProposal(JSON.stringify({ ...pendingChanges, reply: 'Pending proposal' }), 'chat', mutationTargets, req.body.taskSnapshots);
+          const prepared = validPendingChanges!;
           validPending = { tasks: prepared.tasks ?? [], tabs: prepared.tabs ?? [], ...validateTaskMutations(prepared, mutationTargets) };
         } catch { /* An old/invalid payload is not a prepared proposal; never infer one from prose. */ }
       }
@@ -716,7 +727,7 @@ export async function assistHandler(req: any, rawRes: any) {
         : req.body.lastAssistantProposalStatus === 'stale'
           ? (isUk ? 'Попередня пропозиція вже неактуальна. Напишіть, які завдання та що потрібно змінити, щоб підготувати актуальну пропозицію.' : 'The earlier proposal is no longer current. Specify which tasks and what to change to prepare a current proposal.')
           : (isUk ? 'Немає підготовлених змін для застосування. Попередня текстова відповідь не містить картки змін. Напишіть, які завдання та що потрібно змінити.' : 'There are no prepared changes to apply. The earlier text reply contains no change proposal. Specify which tasks and what to change.');
-      return res.json({ reply, summary: reply, ...(validPending ?? { tasks: [], tabs: [], taskUpdates: [], taskDeletions: [] }), source: validPending ? 'pending-proposal-confirmation' : req.body.lastAssistantProposalStatus === 'stale' ? 'stale-proposal-clarification' : 'proposal-apply-clarification' });
+      return res.json({ reply, summary: reply, ...(validPending ?? { tasks: [], tabs: [], taskUpdates: [], taskDeletions: [], proposalDisposition: 'clarification' }), source: validPending ? 'pending-proposal-confirmation' : req.body.lastAssistantProposalStatus === 'stale' ? 'stale-proposal-clarification' : 'proposal-apply-clarification' });
     }
     const personalRequest = preparePersonalDiscoveryRequest(personalProfileForRequest(strategyContext), prompt, discoveryConfirmationId);
     const personalProfile = personalRequest.profile;
@@ -728,7 +739,7 @@ export async function assistHandler(req: any, rawRes: any) {
       || (req.body.currentDiscoveryQuestionId === pendingQuestion.id &&
         (lastAssistantMessageId === resumedQuestionId || lastAssistantMessageId.startsWith(`${resumedQuestionId}:after:`))));
     if (action === 'chat' && intent === 'auto' && /^(?:так|гаразд|добре|погоджуюсь|погоджуюся|підтверджую|підтверджено|ок|окей|застосувати|застосуй|зберегти|збережи|yes|ok|okay|agreed|confirm|i agree)[.!\s]*$/iu.test(prompt.trim())
-      && req.body.lastAssistantProposalStatus === 'stale' && !hasPendingOperations && !discoveryConfirmationId && !respondsToCurrentQuestion) {
+      && req.body.lastAssistantProposalStatus === 'stale' && !hasPendingOperations && !recentActionableOffer && !discoveryConfirmationId && !respondsToCurrentQuestion) {
       // A bare yes shows no form of address; the recent conversation decides.
       const reply = staleProposalReply(isUk, discoveryAddressFor(personalProfile, prompt, Array.isArray(conversation) ? conversation.slice(-10) : []));
       return res.json({ reply, summary: reply, tasks: [], tabs: [], taskUpdates: [], taskDeletions: [], source: 'stale-proposal-clarification' });
@@ -751,8 +762,22 @@ export async function assistHandler(req: any, rawRes: any) {
     const previousUserTexts = conversationHistory
       .filter((message: unknown) => isRecord(message) && message.role === 'user' && nonEmptyText(message.content))
       .slice(-3).map((message: any) => String(message.content).replace(/^\s*\[\d{2}\.\d{2}\s+\d{2}:\d{2}\]\s*/u, '').slice(0, 2000));
-    const chatRoute = classifyPersonalChatRequest(prompt, intent, mutationTargets, personalProfile, isRecord(pendingChanges) ? pendingChanges : undefined,
+    const chatRoute = classifyPersonalChatRequest(prompt, intent, mutationTargets, personalProfile, validPendingChanges,
       { answeringDiscovery, discoveryMode, previousAssistantText, previousUserText, previousUserTexts });
+    if (action === 'chat' && chatRoute.scope?.operation === 'cancel') {
+      const reply = isUk ? 'Пропозицію скасовано. Її зміни не застосовано.' : 'The proposal was cancelled. Its changes were not applied.';
+      return res.json({ reply, summary: reply, tasks: [], tabs: [], taskUpdates: [], taskDeletions: [], proposalDisposition: 'cancelled', source: 'pending-proposal-cancelled' });
+    }
+    if (action === 'chat' && chatRoute.pendingRevision && !chatRoute.pendingRevision.allowedIds.length && !chatRoute.pendingRevision.allowCreate) {
+      const reply = isUk ? 'Яке саме завдання в підготовленій пропозиції потрібно змінити? Назвіть його точніше; попередні зміни збережено для уточнення.'
+        : 'Which task in the prepared proposal should change? Name it more precisely; the draft has been kept for clarification.';
+      return res.json({ reply, summary: reply, tasks: [], tabs: [], taskUpdates: [], taskDeletions: [], proposalDisposition: 'clarification', source: 'pending-proposal-clarification' });
+    }
+    if (action === 'chat' && requestedTimeWindow(prompt)?.ambiguous && (chatRoute.route === 'task_command' || /(?:заплан|потрібно|додати|створити|schedule|plan|create|add)/iu.test(prompt))) {
+      const reply = isUk ? 'Уточніть, будь ласка, час початку й завершення та чи завершується робота наступного дня. Пропозицію поки не змінено.'
+        : 'Please clarify the start and end times and whether the work ends the next day. The proposal has not been changed.';
+      return res.json({ reply, summary: reply, tasks: [], tabs: [], taskUpdates: [], taskDeletions: [], proposalDisposition: 'clarification', source: 'time-window-clarification' });
+    }
     if (action === 'chat' && chatRoute.route === 'task_command' && chatRoute.scope?.operation === 'update' && !chatRoute.scope.taskIds.length
       && /(?:розкладай|розклади|розплануй|сплануй|перенеси|перекинь|заплануй|reschedule|schedule|move)/iu.test(prompt)
       && /(?:сьогодні|завтра|today|tomorrow|\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}\.\d{2,4})/iu.test(prompt)) {
@@ -873,7 +898,9 @@ ${prompt}`),
           `TASK TEMPORAL CONTEXT: ${JSON.stringify(chatTemporalSummary)}`,
           ...(includePersonalMemory ? [`PERSONAL STRATEGY MEMORY (persistent independently of recent conversation; user statements and AI hypotheses are distinct):\n${JSON.stringify(strategyPromptContext(personalProfile))}`] : []),
           ...(operationsRoute ? [`AVAILABLE TAB IDS: ${JSON.stringify(activeTabIds)}`] : []),
-          `PENDING UNAPPLIED PROPOSAL: ${hasPendingOperations ? JSON.stringify(pendingChanges) : 'none'}`,
+          `PENDING UNAPPLIED PROPOSAL: ${hasPendingOperations ? JSON.stringify(validPendingChanges) : 'none'}`,
+          ...(chatRoute.pendingRevision ? [`PENDING REVISION TARGETS (patch only these identities; the app preserves untouched draft operations): ${JSON.stringify(chatRoute.pendingRevision.targets.filter(target => chatRoute.pendingRevision!.allowedIds.includes(target.id)).map(target => ({ ...target.task, draftKind: target.kind })))}`] : []),
+          ...(chatRoute.pendingRevision?.allowCreate ? ['PENDING DRAFT ADDITION: true. Propose only the explicitly requested additional new tasks; the app appends them to the existing draft.'] : []),
           `WORKSPACE CONTEXT:\n${JSON.stringify(workspaceContext)}`,
           // The person said yes to this offer: its steps and wording are what to propose.
           ...(chatRoute.acceptedOffer && previousAssistantText ? [`ACCEPTED OFFER (your previous reply, which the person has just agreed to; propose exactly the change and steps it describes):\n${previousAssistantText}`] : []),
@@ -920,7 +947,10 @@ ${prompt}`),
 
         /** The shared validation and scope pipeline for one complete JSON proposal. */
         const validateChatProposal = (text: string) => {
-          const parsed = validateAssistProposal(text, action, mutationTargets, req.body.taskSnapshots);
+          const revision = chatRoute.pendingRevision;
+          const revisionIds = new Set(revision?.targets.map(target => target.id) ?? []);
+          const validationTargets = revision ? [...mutationTargets.filter(task => !revisionIds.has(task.id)), ...revision.targets.map(target => target.task)] : mutationTargets;
+          const parsed = validateAssistProposal(text, action, validationTargets, req.body.taskSnapshots);
           if (intent === 'analysis' && chatRoute.route === 'personal') {
             parsed.tasks = []; parsed.tabs = []; parsed.taskUpdates = []; parsed.taskDeletions = [];
             if (parsed.strategy) {
@@ -936,7 +966,15 @@ ${prompt}`),
           const constrained = chatRoute.route === 'personal'
             ? constrainReadyPersonalResponse(parsed, personalProfile, prompt, textOr(req.body.turnId, textOr(req.body.requestId, 'personal-preview')), isUk, { history: conversationHistory })
             : constrainOrdinaryChatResponse(parsed, chatRoute.route, operationScope);
-          const validated = validateAssistProposal(JSON.stringify(constrained), action, mutationTargets, req.body.taskSnapshots);
+          const consolidated = revision && validPendingChanges ? reconcilePendingProposal(constrained, validPendingChanges, revision) : constrained;
+          const validated = validateAssistProposal(JSON.stringify(consolidated), action, mutationTargets, req.body.taskSnapshots);
+          if (hasProposedOperations(constrained)) {
+            const windowCandidates = revision ? [...revision.targets.filter(target => revision.allowedIds.includes(target.id))
+              .map(target => target.kind === 'create' ? validated.tasks?.[target.index] : validated.taskUpdates?.[target.index]).filter(Boolean),
+              ...(revision.allowCreate ? (validated.tasks ?? []).slice(validPendingChanges?.tasks?.length ?? 0) : [])]
+              : [...(validated.tasks ?? []), ...(validated.taskUpdates ?? [])];
+            assertRequestedTimeWindow(prompt, windowCandidates, clientClock.timeZone);
+          }
           // The model's prose described operations the command scope removed entirely.
           // Server-side marker only: sendChatProposal builds the response body field by field.
           if ((chatRoute.route === 'task_command' || toolsRoute) && hasProposedOperations(parsed) && !hasProposedOperations(validated)) validated.operationsDropped = true;
@@ -945,7 +983,8 @@ ${prompt}`),
 
         /** Reply guards, tab/task normalization and the final body shared by the JSON and tools paths. */
         const sendChatProposal = (validated: Record<string, any>, generation: { usedModel: string; fallbackUsed: boolean; metrics: unknown }, streamedReply?: string) => {
-          const parsed = guardUnappliedClaims(guardTemporalResponse(validated, prompt, clientClock, isUk, chatAddress), isUk, chatAddress);
+          const summarized = chatRoute.pendingRevision && hasProposedOperations(validated) ? { ...validated, reply: proposalSummaryReply(validated, isUk, chatAddress) } : validated;
+          const parsed = guardUnappliedClaims(guardTemporalResponse(summarized, prompt, clientClock, isUk, chatAddress), isUk, chatAddress);
           if (intent === 'analysis') {
             parsed.tasks = []; parsed.taskUpdates = []; parsed.taskDeletions = []; parsed.tabs = [];
             if (parsed.strategy) parsed.strategy.actions = [];
@@ -1002,6 +1041,7 @@ ${prompt}`),
             tasks: validatedTasks,
             tabs: validatedTabs,
             ...mutations,
+            ...(!hasProposedOperations({ tasks: validatedTasks, tabs: validatedTabs, ...mutations }) && (chatRoute.pendingRevision || validated.operationsDropped === true) ? { proposalDisposition: 'clarification' } : {}),
             source: "gemini-chat",
             usedModel: generation.usedModel,
             fallbackUsed: generation.fallbackUsed,

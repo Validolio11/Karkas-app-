@@ -1,8 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { PSTask } from '../types';
-import { aiApplyOutcome, describeAIApplyResult, describeAITimer, getAITimerContext, prepareAITask } from './aiTaskProposal';
+import { aiApplyOutcome, describeAIApplyResult, describeAITimer, describeAIRecordedWork, getAITimerContext, prepareAITask } from './aiTaskProposal';
 import { createTask } from '../utils/taskOperations';
+
+test('work correction preview clearly replaces total recorded time including zero', () => {
+  assert.equal(describeAIRecordedWork(10800, 'uk'), 'Усього витрачено: 3:00:00. Це замінить записаний час роботи.');
+  assert.match(describeAIRecordedWork(0, 'en')!, /0:00:00.*replaces/);
+  assert.equal(describeAIRecordedWork(undefined, 'uk'), null);
+  assert.equal(describeAIRecordedWork(-1, 'uk'), null);
+});
 
 test('AI creation keeps a zero-step countdown and explicit start request', () => {
   const proposal = prepareAITask({ title: 'References', phase: 'focus', priority: 2, steps: 0,

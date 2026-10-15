@@ -2,12 +2,20 @@ import type { AIIntent, PersonalStrategyProfile, StrategyDiscoveryPatch, Strateg
 import { applyStrategyMemory, readPersonalStrategy } from '../src/utils/personalStrategy';
 import { addressFormOf, applyDiscoveryTurn, detectDiscoveryAddress, discoveryEvidenceTexts, discoveryQuestionForState, discoveryQuestionStreak, discoveryQuestionsEquivalent, isDiscoveryRepetitionComplaint, isPersonalStrategyReady, mentionsDiscoveryTopic, missingStrategyDiscoveryTopics, normalizeStrategyDiscovery, PRACTICAL_HELP_OFFER, STRATEGY_DISCOVERY_TOPICS, type DiscoveryAddress } from '../src/utils/strategyDiscovery';
 import { lastChangeOffer } from './temporalResponseGuard';
+import { hasExplicitTimeRange, pendingRevisionTargets, type PendingProposalRevision } from './pendingProposalRevision';
 
 export type PersonalChatRoute = 'personal' | 'task_command' | 'workspace_analysis' | 'help' | 'general';
 export interface ConcreteTaskScope {
   operation: 'create' | 'update' | 'delete' | 'timer' | 'steps' | 'tabs' | 'proposal' | 'cancel';
   taskIds: string[];
   createCount?: number;
+  /** A requested clock window must survive the timer-field scope filter. */
+  allowSchedule?: boolean;
+  /** Only an explicit retrospective correction may replace recorded work. */
+  allowRecordedWork?: true;
+}
+export function requestedRecordedWorkCorrection(prompt: string): boolean {
+  return /(?:забув|забула|забули)\s+(?:(?:його|її|таймер)\s+)?(?:включити|увімкнути|запустити)|(?:вже\s+)?(?:відпрацював|відпрацювала|працював|працювала)\s+\d|(?:зарахуй|зарахуйте|запиши|запишіть)\s+\d+(?:[.,]\d+)?\s*(?:годин|год|хвилин|хв)\p{L}*\s+роботи|(?:виправ|зміни|встанови|онови)\s+(?:(?:записаний|витрачений|відпрацьований|фактичний)\s+час)|forgot\s+to\s+(?:start|turn\s+on)\s+(?:the\s+)?timer|(?:set|change|correct|update)\s+(?:(?:the|my)\s+)?(?:recorded|spent|logged)\s+time|(?:record|log)\s+\d+(?:[.,]\d+)?\s*(?:hours?|minutes?|mins?)\s+(?:of\s+)?work/iu.test(prompt);
 }
 const normalized = (value: string) => value.trim().toLocaleLowerCase().replace(/\s+/g, ' ');
 // A reported refusal or unexplained non-start belongs to the personal path, which asks why before adapting.
@@ -26,7 +34,7 @@ const genericWords = new Set(`для про або але так все всі �
   таймер таймера відлік пріоритет час хвилин хвилини годин години сьогодні завтра післязавтра новий нове нову нові нового виконане виконаним виконаною виконані готове
   клієнт клієнта клієнтом клієнту клієнтів the for and with from into onto that this these those all every each mine our your task tasks subtask subtasks step steps
   item items please can you could help make new set add create edit update rename delete remove mark complete completed done reopen break down split start pause stop
-  configure reduce increase change revise cancel reschedule schedule move timer date deadline today tomorrow minutes hours title name client`.split(/\s+/u));
+  configure reduce increase change revise cancel reschedule schedule move timer date deadline today tomorrow minutes hours title name client робота роботи зарахуй зарахуйте запиши запишіть record log work`.split(/\s+/u));
 const titleWords = (value: string) => [...new Set((value.toLocaleLowerCase().replace(/['’ʼ]/gu, '')
   .replace(/\d{4}-\d{2}-\d{2}|\d{1,2}[.:]\d{1,2}(?:[.:]\d{2,4})?/gu, ' ').match(/[\p{L}\p{N}]+/gu) || [])
   .filter(word => word.length >= 3 && !genericWords.has(word) && !/^(?:під)?(?:завдан|задач)/u.test(word)))];
@@ -69,6 +77,7 @@ export interface PersonalChatClassification {
   proposalScope?: ConcreteTaskScope;
   /** The person agreed to the concrete change offered in the previous assistant reply. */
   acceptedOffer?: boolean;
+  pendingRevision?: PendingProposalRevision;
 }
 
 export interface PersonalChatRequestOptions {
@@ -80,7 +89,7 @@ export interface PersonalChatRequestOptions {
   previousAssistantText?: string;
   /** The person's previous message; tasks it named stay in the proposal scope of this turn. */
   previousUserText?: string;
-  /** The person's recent messages before this one, oldest first (about three); an accepted offer that names no task looks for its target there. */
+  /** The person's recent messages before this one, oldest first (about three); unnamed commands and accepted offers can resolve their target there. */
   previousUserTexts?: string[];
 }
 
@@ -90,7 +99,7 @@ const timerStopTopic = /(?:пауз|зупин|вимкн|стоп|pause|stop|ha
 const timerStartTopic = /(?:запуст|увімкн|старт|почн|start|resume|run)/iu;
 const stepsOfferTopic = /(?:крок|підзавдан|підзадач|пункт|розби|розділ|виконан|познач|заверш|step|subtask|split|break|done|complete|finish|mark)/iu;
 // "Створити окреме завдання для звуку?" proposes new tasks only; it never borrows a target.
-const createOfferTopic = /(?:створ\p{L}*|додат\p{L}*|додам|додамо|create|add)\s+(?:(?:\p{L}+\s+){0,2})?(?:завдан|задач|tasks?(?![\p{L}]))/iu;
+const createOfferTopic = /(?:створ\p{L}*|додат\p{L}*|додам|додамо|create|add)\s+(?:(?:\p{L}+\s+){0,2})?(?:завдан|задач|tasks?(?![\p{L}])|їх(?![\p{L}])|them(?![\p{L}]))/iu;
 
 // Conversational lead-ins never change the meaning of the command after them (“Так, додай…”, “Ок, розбий…”).
 const conversationalLeadIn = /^(?:ну|ок|окей|окай|добре|гаразд|так|ага|угу|а|тоді|ok|okay|yes|yeah|yep|sure|alright|so|then)(?:\s*[,!.:]\s*|\s+)/iu;
@@ -151,7 +160,12 @@ export function classifyPersonalChatRequest(prompt: string, intent: AIIntent, ta
   // Only a wholly unnamed command can use the sole task. An unmatched name
   // (even when there is just one task) must leave scope empty for clarification.
   const unnamedCommand = /^(?:видали|видаліть|прибери|заверши|завершіть|відкрий|поверни|розбий|розділи|запусти|увімкни|призупини|зупини|вимкни|delete|remove|complete|reopen|split|break\s+down|start|pause|stop)\s+(?:(?:це|цей|цю|поточне|поточний|поточну|єдине|the|this|current|only)\s+)*(?:завдання|задачу|таймер|task|timer)(?:\s+(?:для|for)\s+(?:(?:цього|поточного|the|this|current)\s+)?(?:завдання|task))?[.!?]?$/iu.test(command);
-  const unnamedTimerCommand = /^(?:(?:додай|додайте|постав|запусти|увімкни)\s+(?:таймер|відлік)(?:\s+на\s+\d+(?:[.,]\d+)?\s*(?:хвилин(?:и|у)?|хв\.?|годин(?:и|у)?|год\.?|секунд(?:и|у)?|сек\.?))?(?:\s+(?:до|для)\s+(?:(?:цього|поточного|єдиного)\s+)?завдання)?|(?:set|add|start|configure)\s+(?:(?:the|this|current|only)\s+)?(?:task\s+)?timer(?:\s+(?:to|for)\s+\d+(?:[.,]\d+)?\s*(?:minutes?|mins?|hours?|seconds?))?(?:\s+for\s+(?:(?:the|this|current|only)\s+)?task)?)[.!?]?$/iu.test(command);
+  // A reason explains the command, but must not be mistaken for a task name.
+  const commandWithoutReason = command.split(/\s+(?:бо|тому\s+що|оскільки|because)\s+/iu)[0].replace(/[,\s]+$/u, '');
+  const allowRecordedWork = requestedRecordedWorkCorrection(command);
+  const recordedWorkCommand = allowRecordedWork && /^(?:зарахуй|зарахуйте|запиши|запишіть|виправ|зміни|встанови|онови|record|log|set|change|correct|update)(?![\p{L}\p{N}_])/iu.test(command);
+  const unnamedRecordedWorkCommand = /^(?:(?:зарахуй|зарахуйте|запиши|запишіть)\s+\d+(?:[.,]\d+)?\s*(?:годин(?:и|у)?|год\.?|хвилин(?:и|у)?|хв\.?)\s+роботи|(?:record|log)\s+\d+(?:[.,]\d+)?\s*(?:hours?|minutes?|mins?)\s+(?:of\s+)?work)[.!?]?$/iu.test(commandWithoutReason);
+  const unnamedTimerCommand = /^(?:(?:додай|додайте|постав|запусти|увімкни|зміни|змініть|онови|оновіть|поміняй|зменши|збільши)\s+(?:(?:цей|поточний|єдиний)\s+)?(?:таймер|відлік|секундомір)(?:\s+(?:на|до)\s+\d+(?:[.,]\d+)?\s*(?:хвилин(?:и|у)?|хв\.?|годин(?:и|у)?|год\.?|секунд(?:и|у)?|сек\.?))?(?:\s+(?:до|для)\s+(?:(?:цього|поточного|єдиного)\s+)?завдання)?|(?:set|add|start|configure|change|update|reduce|increase)\s+(?:(?:the|this|current|only)\s+)?(?:task\s+)?timer(?:\s+(?:to|for)\s+\d+(?:[.,]\d+)?\s*(?:minutes?|mins?|hours?|seconds?))?(?:\s+for\s+(?:(?:the|this|current|only)\s+)?task)?)[.!?]?$/iu.test(commandWithoutReason);
   const unnamedDateCommand = /^(?:(?:перенеси|заплануй|reschedule|schedule|move)\s+(?:(?:це|поточне|єдине|the|this|current|only)\s+)?(?:завдання|task)\s+(?:на|до|on|to|by)\s+(?:завтра|сьогодні|післязавтра|tomorrow|today|\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}\.\d{2,4})|(?:прибери|видали|remove|clear)\s+(?:дату|дедлайн|термін|date|deadline)\s+(?:(?:для|з|for|from)\s+)?(?:(?:цього|поточного|єдиного|the|this|current|only)\s+)?(?:завдання|task))[.!?]?$/iu.test(command);
   const singleTarget = matchingIds.length ? matchingIds : live.length === 1 && (unnamedCommand || unnamedTimerCommand || unnamedDateCommand) ? [live[0].id] : [];
   // Steps and timers need one target: a partial name must single out one task, and “all tasks” never does.
@@ -160,23 +174,55 @@ export function classifyPersonalChatRequest(prompt: string, intent: AIIntent, ta
     && /(?:завдан|задач)/iu.test(command)
     && /(?:сьогодні|завтра|післязавтра|\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}\.\d{2,4})(?![\p{L}\p{N}_])/iu.test(command);
   if (directCalendarPlanning) return { route: 'task_command', scope: { operation: 'update', taskIds: matchingIds } };
-  const explicit = changeRequested || /^(?:створи|створіть|додай|додайте|зміни|змініть|онови|оновіть|перейменуй|перейменуйте|видали|видаліть|прибери|познач|заверши|завершіть|відкрий|поверни|розбий|розділи|запусти|увімкни|постав|призупини|зупини|вимкни|зменши|збільши|поміняй|перероби|скасуй|перенеси|перенесіть|заплануй|заплануйте|create|add|edit|update|rename|delete|remove|mark|complete|reopen|break\s+down|split|start|pause|stop|set|configure|reduce|increase|change|revise|cancel|reschedule|schedule|move)(?![\p{L}\p{N}_])/iu.test(command);
+  const explicit = recordedWorkCommand || changeRequested || /^(?:створи|створіть|додай|додайте|зміни|змініть|онови|оновіть|перейменуй|перейменуйте|видали|видаліть|прибери|познач|заверши|завершіть|відкрий|поверни|розбий|розділи|запусти|увімкни|постав|призупини|зупини|вимкни|зменши|збільши|поміняй|перероби|скасуй|перенеси|перенесіть|заплануй|заплануйте|create|add|edit|update|rename|delete|remove|mark|complete|reopen|break\s+down|split|start|pause|stop|set|configure|reduce|increase|change|revise|cancel|reschedule|schedule|move)(?![\p{L}\p{N}_])/iu.test(command);
+  const newTaskCreation = /^(?:створи|створіть|додай|додайте|create|add)\s+(?:(?:ще|також|одне|один|нов[еуії]|новий|a|an|new|the|another|also|more)\s+)*(?:завдання|завдань|задачу|задачі|задач|tasks?)(?![\p{L}\p{N}_])/iu.test(command)
+    && !/(?:підзавдан|підзадач|subtask|крок|step)/iu.test(command);
   const hasPending = pendingProposal && ['tasks', 'tabs', 'taskUpdates', 'taskDeletions'].some(key => Array.isArray(pendingProposal[key]) && pendingProposal[key].length);
-  if (hasPending && explicit && /(?:пропозиц|замість|\d+\s*(?:хв|год|min|hour)|proposal|instead|duration|priority|пріоритет)/iu.test(command)) {
-    const targetIds = [...(Array.isArray(pendingProposal.taskUpdates) ? pendingProposal.taskUpdates : []), ...(Array.isArray(pendingProposal.taskDeletions) ? pendingProposal.taskDeletions : [])].map((item: any) => item?.id).filter((id: any) => live.some(task => task.id === id));
-    return { route: 'task_command', scope: { operation: /^(?:скасуй|cancel)(?![\p{L}\p{N}_])/iu.test(command) ? 'cancel' : 'proposal', taskIds: targetIds, createCount: Array.isArray(pendingProposal.tasks) ? pendingProposal.tasks.length : 0 } };
+  if (hasPending && explicit) {
+    // Cancelling the whole draft must name the proposal. “Скасуй анімацію” or
+    // “Скасуй це” cannot silently cancel its other pending tasks.
+    const wholeDraftCancellation = /^(?:скасуй|скасуйте|cancel)\s+(?:(?:цю|поточну|останню|підготовлену|the|this|current|pending)\s+)?(?:пропозицію|чернетку|proposal|draft)[.!?]*$/iu.test(command);
+    if (wholeDraftCancellation) return { route: 'task_command', scope: { operation: 'cancel', taskIds: [] } };
+    const draftReference = /(?:^|[^\p{L}\p{N}_])(?:(?:у|в|до|з|із|цю|цієї|поточну|поточній|підготовлену|підготовленій|останню|останніх)\s+(?:(?:цій|поточній|підготовленій)\s+)?(?:пропозиц|чернетк)|(?:in|to|of|this|the|pending|current)\s+(?:(?:the|this|pending|current)\s+)?(?:proposal|draft))/iu.test(command)
+      || /^(?:зміни|онови|перероби|change|revise|update)\s+(?:пропозицію|чернетку|proposal|draft)(?![\p{L}])/iu.test(command);
+    const deictic = /(?:до\s+цього|до\s+цієї|у\s+цьому|в\s+цьому|для\s+цього|цьому\s+завдан\p{L}*|цього\s+завдан\p{L}*|це\s+завдання|this|that|these)(?![\p{L}\p{N}_])/iu.test(command);
+    const targets = pendingRevisionTargets(pendingProposal, live);
+    const addingToDraft = newTaskCreation && /(?:ще|також|до\s+цього|до\s+пропозиції|до\s+чернетки|another|also|more|to\s+(?:this|the)\s+(?:proposal|draft))(?![\p{L}\p{N}_])/iu.test(command);
+    if (addingToDraft) return { route: 'task_command', scope: { operation: 'proposal', taskIds: [], createCount: Math.max(0, 50 - (pendingProposal.tasks?.length ?? 0)) },
+      pendingRevision: { targets, allowedIds: [], allowCreate: true } };
+    const draftNamed = partiallyNamedTasks(command, targets.map(target => target.task));
+    const draftExact = targets.filter(target => mentioned(target.task.title) || mentioned(target.id)).map(target => target.id);
+    // A shared partial name still refers to the draft, but cannot authorize an
+    // arbitrary one of its tasks. Keep the revision open for clarification.
+    const draftWords = titleWords(command);
+    const draftSharedName = targets.some(target => titleWords(target.task.title).some(title => draftWords.some(word => sameStem(word, title))));
+    // A live task named exactly still wins unless the person explicitly says draft/proposal.
+    // Pending titles are resolved before fuzzy workspace names such as “Робота над анімацією”.
+    const ambiguousCancellation = /^(?:скасуй|скасуйте|cancel)(?![\p{L}\p{N}_])/iu.test(command) && !exactIds.length;
+    const revise = !newTaskCreation && (draftReference || ambiguousCancellation || !exactIds.length && (draftExact.length > 0 || draftNamed.ids.length > 0 || draftSharedName || deictic));
+    if (revise) {
+      const ids = draftExact.length ? draftExact : draftNamed.ids.length ? draftNamed.best
+        : draftReference ? targets.map(target => target.id) : targets.length === 1 ? [targets[0].id] : [];
+      const cancelling = /^(?:скасуй|скасуйте|cancel)(?![\p{L}\p{N}_])/iu.test(command);
+      const operation = cancelling ? 'update' : recordedWorkCommand || /(?:таймер|секундомір|відлік|timer|stopwatch|countdown)/iu.test(command) ? 'timer'
+        : /(?:крок|підзавдан|підзадач|step|subtask)/iu.test(command) ? 'steps' : 'update';
+      const allowedIds = cancelling ? [] : ids;
+      return { route: 'task_command', scope: { operation, taskIds: allowedIds,
+        ...(operation === 'timer' && hasExplicitTimeRange(command) ? { allowSchedule: true } : {}), ...(allowRecordedWork ? { allowRecordedWork: true as const } : {}) },
+        pendingRevision: { targets, allowedIds } };
+    }
   }
   let scope: ConcreteTaskScope | undefined;
   const taskWord = /(?:завдан|задач|task|subtask|підзавдан|підзадач|крок|step)/iu.test(command);
-  const timerWord = /(?:таймер|секундомір|відлік|timer|stopwatch|countdown)/iu.test(command);
+  const timerWord = recordedWorkCommand || /(?:таймер|секундомір|відлік|timer|stopwatch|countdown)/iu.test(command);
   const dateField = /(?:дат[ауи]|дедлайн|термін|deadline|due\s+date|planned\s+date)/iu.test(command);
   const calendarHint = /(?:завтра|сьогодні|післязавтра|tomorrow|today|\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}\.\d{2,4})(?![\p{L}\p{N}_])/iu.test(command);
   const createVerb = /^(?:створи|створіть|додай|додайте|create|add)(?![\p{L}\p{N}_])/iu.test(command);
   if (intent === 'steps' && oneTarget.length === 1) scope = { operation: 'steps', taskIds: oneTarget };
   else if (explicit) {
     if (createVerb && /(?:вкладк|категор|tab|category)/iu.test(command) && !taskWord) scope = { operation: 'tabs', taskIds: [] };
-    else if (/^(?:створи|створіть|додай|додайте|create|add)\s+(?:(?:нов[еуії]|новий|a|an|new|the)\s+)*(?:завдання|завдань|задачу|задачі|задач|tasks?)(?![\p{L}\p{N}_])/iu.test(command) && !/(?:підзавдан|підзадач|subtask|крок|step)/iu.test(command)) scope = { operation: 'create', taskIds: [] };
-    else if (timerWord) scope = { operation: 'timer', taskIds: oneTarget };
+    else if (newTaskCreation) scope = { operation: 'create', taskIds: [] };
+    else if (timerWord) scope = { operation: 'timer', taskIds: oneTarget, ...(hasExplicitTimeRange(command) ? { allowSchedule: true } : {}), ...(allowRecordedWork ? { allowRecordedWork: true as const } : {}) };
     // Removing a date must never archive the parent task, even if its title is mentioned.
     else if (dateField) scope = { operation: 'update', taskIds: singleTarget };
     // A partial word match must not turn “add something new” into an edit of a similar task.
@@ -196,6 +242,45 @@ export function classifyPersonalChatRequest(prompt: string, intent: AIIntent, ta
     const found = partiallyNamedTasks(text, live);
     return found.best.length ? found.best : found.ids;
   };
+  // A repeated explicit instruction ("зміни таймер на 3 години") is as concrete
+  // as accepting an offer. Resolve its missing subject from the conversation,
+  // while never substituting a target for an unknown or ambiguous task name.
+  const unnamedStepsCommand = /^(?:розбий|розділи|split|break\s+down)\s+(?:(?:це|поточне|єдине|the|this|current|only)\s+)?(?:завдання|задачу|task)(?:\s+(?:на\s+кроки|into\s+steps))?[.!?]?$/iu.test(command);
+  if (scope && ['timer', 'steps', 'update'].includes(scope.operation) && !namedNow.length
+    && (unnamedCommand || unnamedTimerCommand || unnamedRecordedWorkCommand || unnamedDateCommand || unnamedStepsCommand)) {
+    const recentTexts = (options.previousUserTexts?.length ? options.previousUserTexts : [options.previousUserText])
+      .filter((text): text is string => typeof text === 'string' && !!text.trim()).slice(-3);
+    const contextNamedIn = (text: string) => {
+      const named = namedIn(text, true);
+      if (named.length) return named;
+      // A shared partial name is still a subject, just an ambiguous one. Do not
+      // skip it and fall back to an older subject or the one running timer.
+      const words = titleWords(text);
+      return live.filter(task => titleWords(task.title).some(title => words.some(word => sameStem(word, title)))).map(task => task.id as string);
+    };
+    const recent = [...recentTexts].reverse().map(contextNamedIn).find(ids => ids.length);
+    const previous = namedIn(options.previousAssistantText, false);
+    // The person's latest subject wins over task names quoted in the assistant's
+    // explanation. Multiple possible subjects must still trigger clarification.
+    const discussed = recent ?? (previous.length ? previous : undefined);
+    if (discussed) scope.taskIds = discussed.length === 1 ? discussed : [];
+    else if (scope.operation === 'timer') {
+      const running = live.filter(task => task.timerRunning === true && !task.done).map(task => task.id as string);
+      const active = live.filter(task => !task.done && !task.scheduledPending).map(task => task.id as string);
+      scope.taskIds = running.length ? running.length === 1 ? running : [] : active.length === 1 ? active : [];
+    }
+    if (scope.operation === 'timer' && scope.taskIds.length === 1 && !scope.allowRecordedWork && unnamedTimerCommand
+      && /^(?:зміни|змініть|онови|оновіть|поміняй|change|update|set)(?![\p{L}\p{N}_])/iu.test(command) && /\d/u.test(commandWithoutReason)) {
+      // A short repeated command keeps the correction already requested before
+      // the task clarification. A different intervening subject ends that scope.
+      const newestFirst = [...recentTexts].reverse();
+      const correction = newestFirst.findIndex(requestedRecordedWorkCorrection);
+      if (correction >= 0 && newestFirst.slice(0, correction + 1).every(text => {
+        const ids = contextNamedIn(text);
+        return !ids.length || ids.length === 1 && ids[0] === scope!.taskIds[0];
+      })) scope.allowRecordedWork = true;
+    }
+  }
   /**
    * Targets of an accepted offer, first match wins: (1) tasks named in the offer or the previous
    * reply; (2) a timer offer ("поставлю таймер на паузу?") → the tasks whose timer is running;
@@ -228,8 +313,11 @@ export function classifyPersonalChatRequest(prompt: string, intent: AIIntent, ta
   // A yes to the change the previous reply offered: the offer's plan becomes the proposal.
   // Outside discovery only; a doubt, refusal or question is never consent.
   const offer = !discoveryMode && !options.answeringDiscovery ? lastChangeOffer(options.previousAssistantText) : undefined;
-  if (offer && affirmativeReply.test(input) && !doubtfulReply.test(input) && !/\?\s*$/u.test(input) && input.split(' ').length <= 12) {
+  if (offer && (affirmativeReply.test(input) || /^(?:застосуй(?:те)?|застосувати|apply)(?:\s+(?:ці\s+)?(?:зміни|пропозицію|changes|proposal))?[.!\s]*$/iu.test(input)) && !doubtfulReply.test(input) && !/\?\s*$/u.test(input) && input.split(' ').length <= 12) {
     if (scope && (scope.taskIds.length || ['create', 'tabs'].includes(scope.operation))) return { route: 'task_command', scope, acceptedOffer: true };
+    // “Додам їх знову?” concerns missing new tasks. A different existing task
+    // named in the surrounding explanation must not become its update target.
+    if (createOfferTopic.test(offer) && !stepsOfferTopic.test(offer) && !timerOfferTopic.test(offer)) return { route: 'task_command', scope: { operation: 'create', taskIds: [] }, acceptedOffer: true };
     const targets = [...new Set([...namedNow, ...acceptedOfferTargets(offer)])].slice(0, 8);
     return { route: 'task_command', scope: { operation: 'proposal', taskIds: targets }, acceptedOffer: true };
   }
@@ -285,10 +373,15 @@ export function constrainOrdinaryChatResponse(parsed: Record<string, any>, route
   next.taskDeletions = ['delete', 'proposal'].includes(scope?.operation || '') && Array.isArray(parsed.taskDeletions) ? parsed.taskDeletions.filter((item: any) => allowed.has(item?.id)) : [];
   next.taskUpdates = ['update', 'timer', 'steps', 'proposal'].includes(scope?.operation || '') && Array.isArray(parsed.taskUpdates)
     ? parsed.taskUpdates.filter((item: any) => allowed.has(item?.id)).map((item: any) => {
-      if (scope?.operation === 'timer') return Object.fromEntries(Object.entries(item).filter(([key]) => ['id', 'timerMode', 'countdownDurationSeconds', 'timerAction'].includes(key)));
+      if (scope?.operation === 'timer') return Object.fromEntries(Object.entries(item).filter(([key]) => (scope.allowRecordedWork
+        ? ['id', 'recordedWorkSeconds']
+        : ['id', 'timerMode', 'countdownDurationSeconds', 'timerAction', ...(scope.allowSchedule ? ['schedule', 'plannedDate'] : [])]).includes(key)));
       if (scope?.operation === 'steps') return Object.fromEntries(Object.entries(item).filter(([key]) => ['id', 'stepList', 'steps'].includes(key)));
-      return item;
-    }) : [];
+      if (!scope?.allowRecordedWork) { const { recordedWorkSeconds: _recordedWorkSeconds, ...safe } = item; return safe; }
+      const { timerMode: _timerMode, countdownDurationSeconds: _countdownDurationSeconds, timerAction: _timerAction, schedule: _schedule, plannedDate: _plannedDate, ...correction } = item;
+      return correction;
+    }).map((item: Record<string, any>) => Object.fromEntries(Object.entries(item).filter(([, value]) => value !== undefined)))
+      .filter((item: Record<string, any>) => Object.keys(item).some(key => key !== 'id')) : [];
   delete next.strategy;
   return next;
 }
@@ -297,6 +390,7 @@ export const personalGuidanceSystemPolicy = `PERSONAL GUIDANCE POLICY (takes pri
 Distinguish a concrete task command from a person's wishes or answer to a getting-to-know-you question. A wish such as wanting a portfolio, freelance income, English or faster typing is personal context, NOT permission to create a plan or tasks.
 For PERSONAL_DISCOVERY, first understand motives, actual barriers and available capacity/circumstances, adaptively, one meaningful question at a time. Never rush from goal names to a schedule, commitments, duration estimates or an execution plan. Even a direct request for a personal plan still needs the most important missing clarification. Never infer readiness from an agreed goal, your own ready status, elapsed chat length or a bare yes. Only the app's discovery state and scoped confirmation of its pending understanding summary authorize personal planning.
 Concrete CRUD/timer/subtask/help commands and read-only workspace analysis remain available without a personal interview, strictly within the supplied command scope. They do not complete the personal interview or replace an existing strategy.
+When a timer command scope has allowRecordedWork:true, it authorizes correcting the task's absolute recorded work total through recordedWorkSeconds only. Preserve timer mode, countdown duration, running/paused state and schedule; do not substitute a future countdown for missed recorded work. Without that flag, never include recordedWorkSeconds.
 Respect negation and ambivalence in the person's actual words. Do not substitute your assumptions for motives, effort, mood or life circumstances. No profession assumptions, diagnoses, personality labels, blame, canned praise or generic productivity lecture. Ask about the specific situation, prior attempts and what happens before distraction when relevant. When someone has not started/refuses, ask what happened before suggesting fixes.
 Use the person's existing answers. Repetitive routine, boredom and excessive time spent are concrete barriers. "Nothing happens" after a question about an event before distraction is an answer, not a reason to repeat that question. Never repeat or paraphrase a question already asked. If the person complains about repeated questions, stop the interview and respond to their stated concern without another question or readiness claim.
 Memory updates add grounded observations; facts quote exact user words, interpretations are hypotheses. Never silently change or self-confirm goals. Retain existing useful memory and agreed strategy. Discovery questions, ordinary task commands and metric analysis are not new personal strategies.

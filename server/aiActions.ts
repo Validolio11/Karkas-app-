@@ -37,6 +37,7 @@ export const taskMutationProperties = {
         note: { type: Type.STRING }, done: { type: Type.BOOLEAN },
         steps: { type: Type.INTEGER },
         ...taskTimerProperties,
+        recordedWorkSeconds: { type: Type.INTEGER, minimum: 0, maximum: 6000059, description: 'Explicit replacement of this existing task\'s TOTAL recorded work in seconds, only when the person asks to correct work already done (e.g. forgot to start the timer). 3 hours means 10800. Not a countdown, not additional work. Never combine with timer configuration, timerAction or schedule. Preserves current running state and countdown remainder. Requires Apply.' },
         ...taskScheduleProperties,
         ...taskDateProperties,
         stepList: {
@@ -111,6 +112,8 @@ APPLICATION ACTION CONTRACT:
 - You can create tasks and category tabs, edit existing tasks and their subtasks, configure/start/pause/stop task timers, complete/reopen tasks, and archive entire tasks. You cannot rename/delete tabs, restore archived tasks, or change app settings. Explain unsupported requests honestly.
 - Timer changes must use structured fields, not a note: timerMode:"none" removes the timer, "stopwatch" measures elapsed time, "countdown" sets a time budget with countdownDurationSeconds (integer 60..86400). Convert requested minutes/hours to seconds: 40 minutes means countdownDurationSeconds:2400, never 40. New or reconfigured timers default to paused; omit timerAction when no action was requested and use timerAction:"start" ONLY if the user explicitly asks to start. "pause" and "stop" end the running session while preserving remaining time and recorded work time; neither resets the countdown budget. Never output raw timerRunning, timerStartedAt, timeSpentSeconds or countdownRemainingSeconds.
 - For existing tasks use taskUpdates with the exact task id and only requested timer fields. Preserve unrelated task content, progress, and recorded time. For new tasks include timer fields in tasks. A countdown needs a duration; if the user did not give one and no configured duration exists, ask a short clarification with no mutations. Start is forbidden for completed tasks unless explicitly reopened using done:false. Ask which task when the target is ambiguous.
+- Explicitly correcting work already done ("зарахуй 3 години роботи", "зміни таймер на 3 години бо забув його включити", "I worked 3 hours but forgot to start") uses taskUpdates:[{id,recordedWorkSeconds:10800}] for the existing task. recordedWorkSeconds is the replacement TOTAL, integer 0..6000059; never a future countdown or a delta. If the person says to ADD missed work rather than replace the total, clarify the desired total; never infer an unprovided live total. A plain timer duration without past-work context is countdown configuration. Never combine recordedWorkSeconds with timerMode, countdownDurationSeconds, timerAction or schedule, never use it on new tasks or future templates. Recorded-work corrections preserve running state and countdown remainder; unrelated step attribution is cleared because the corrected total was not measured per step. The person must press Apply before anything changes.
+- A requested work window such as "з 15:30 до 18:30" or "from 15:30 to 18:30" includes BOTH its clock start and its duration: schedule.startAt at 15:30 in the requested client-local day, timerMode:"countdown", countdownDurationSeconds:10800. Preserve all other tasks in a multi-task request and attach each window to its named task. A time range must not become only a date or only an untimed 180-minute countdown. Keep the timer paused unless starting was explicitly requested. If an end time precedes the start without an explicit next-day/overnight instruction, ask whether the window crosses midnight. Never silently move a past start to tomorrow or start a timer automatically.
 - "tasks" is ONLY for genuinely NEW top-level tasks. To add, remove, rename, complete, or break down subtasks of an EXISTING task, use "taskUpdates" with that parent's exact id and the COMPLETE resulting "stepList". Never create a duplicate parent or a top-level task for a requested subtask.
 - Preserve all unrelated subtasks, their exact ids, order and done states. Omit id for new subtasks; new subtasks default to done:false. Remove only requested items; stepList:[] removes all subtasks. Omit stepList when no subtask change was requested.
 - Step order: new starter/preparatory steps (or any breakdown of how to begin, e.g. "start small", "break the start into 15-minute steps") go after the done steps and BEFORE the existing not-done later steps, which keep their ids and relative order. Other new steps go last.
@@ -165,7 +168,7 @@ export function withoutTitleEchoNotes<T extends { id?: unknown; note?: unknown; 
 
 type TimerContext = { timerMode?: unknown; countdownDurationSeconds?: unknown; done?: unknown; scheduledPending?: unknown; plannedDate?: string; deadlineDate?: string };
 
-const mutationOptionalFields = ['title', 'phase', 'priority', 'note', 'done', 'steps', 'stepList', 'timerMode', 'countdownDurationSeconds', 'timerAction', 'schedule'];
+const mutationOptionalFields = ['title', 'phase', 'priority', 'note', 'done', 'steps', 'stepList', 'timerMode', 'countdownDurationSeconds', 'timerAction', 'recordedWorkSeconds', 'schedule'];
 
 /** Legacy optional nulls mean absent. Date fields are deliberately excluded: null clears a date. */
 function omitOptionalNulls(item: any, fields: string[]) {
@@ -196,6 +199,7 @@ export function normalizeAIOptionalFields(parsed: Record<string, any>) {
 export function validatedTimerFields(item: any, existing?: TimerContext) {
   item = omitOptionalNulls(item, ['timerMode', 'countdownDurationSeconds', 'timerAction']);
   const fields: Record<string, unknown> = {};
+  if (item.recordedWorkSeconds !== undefined && !existing) throw new Error('Recorded work correction requires an existing task');
   for (const key of ['timerRunning', 'timerStartedAt', 'timeSpentSeconds', 'countdownRemainingSeconds']) {
     if (item[key] !== undefined) throw new Error('Unsupported timer accounting field');
   }
@@ -235,7 +239,7 @@ export function validateTaskMutations(parsed: any, tasks: ({ id: string } & Time
       if (field === 'taskDeletions' && item.deletionReason !== undefined && !['accidental', 'cancelled'].includes(item.deletionReason)) throw new Error('Invalid deletion reason');
       if (field === 'taskDeletions' && item.reason !== undefined && typeof item.reason !== 'string') throw new Error('Invalid deletion note');
       if (field === 'taskUpdates') {
-        const editableFields = ['title', 'phase', 'priority', 'note', 'done', 'steps', 'stepList', 'timerMode', 'countdownDurationSeconds', 'timerAction', 'schedule', 'plannedDate', 'deadlineDate'];
+        const editableFields = ['title', 'phase', 'priority', 'note', 'done', 'steps', 'stepList', 'timerMode', 'countdownDurationSeconds', 'timerAction', 'recordedWorkSeconds', 'schedule', 'plannedDate', 'deadlineDate'];
         if (!editableFields.some(key => item[key] !== undefined)) throw new Error('Task update contains no supported changes');
         for (const key of ['title', 'phase']) {
           if (item[key] !== undefined && (typeof item[key] !== 'string' || !item[key].trim())) throw new Error('Invalid task text');
@@ -245,6 +249,11 @@ export function validateTaskMutations(parsed: any, tasks: ({ id: string } & Time
             item.done !== undefined && typeof item.done !== 'boolean' ||
             item.steps !== undefined && (!Number.isInteger(item.steps) || item.steps < 0 || item.steps > 50)) throw new Error('Invalid task update value');
         const existing = tasks.find(task => task.id === item.id);
+        if (item.recordedWorkSeconds !== undefined && (!Number.isInteger(item.recordedWorkSeconds)
+          || item.recordedWorkSeconds < 0 || item.recordedWorkSeconds > 6000059 || existing?.scheduledPending
+          || ['timerMode', 'countdownDurationSeconds', 'timerAction', 'schedule'].some(key => item[key] !== undefined))) {
+          throw new Error('Invalid recorded work correction');
+        }
         if ((existing?.scheduledPending || item.schedule) && (item.timerAction === 'start' || item.done === true ||
             Array.isArray(item.stepList) && item.stepList.length > 0 && item.stepList.every((step: any) => step.done === true))) {
           throw new Error('Pending scheduled plans cannot be started or completed');

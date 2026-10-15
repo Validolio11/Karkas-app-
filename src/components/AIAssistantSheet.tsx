@@ -38,14 +38,14 @@ import { selectRelevantArchivedTasks } from '../utils/taskArchive';
 import { loadAIChatHistory, saveAIChatHistory, ensureAIChatWelcome, recentAIChatContext, visibleAIChatMessages } from '../services/chatHistory';
 import type { PersistedAIChatMessage } from '../services/chatHistory';
 import { AICommandMenu } from './AICommandMenu';
-import { proposalTargetsUnchanged } from './aiProposalGuard';
+import { proposalTargetsUnchanged, proposalTransition } from './aiProposalGuard';
 import { isExplicitAIProposalApplyRequest } from '../utils/aiProposalConfirmation';
 import { AI_COMMANDS, intentMode, migrateAIComposer, modeIntent, parseAICommand } from './aiCommands';
 import { strategyGreeting } from '../utils/personalStrategy';
 import { addressedDiscoveryQuestion, detectDiscoveryAddress, discoveryQuestionForState, isDiscoveryRepetitionComplaint, practicalHelpRequested } from '../utils/strategyDiscovery';
 import { exitDiscoveryMode, nextDiscoveryMode, readDiscoveryMode, saveDiscoveryMode, type DiscoveryModeState } from './aiDiscoveryMode';
 import { useDialogKeyboard } from './useDialogKeyboard';
-import { aiApplyOutcome, describeAIApplyResult, describeAITimer, getAITimerContext, prepareAITask, type AIApplyResult } from './aiTaskProposal';
+import { aiApplyOutcome, describeAIApplyResult, describeAITimer, describeAIRecordedWork, getAITimerContext, prepareAITask, type AIApplyResult } from './aiTaskProposal';
 import { describeSchedule } from '../utils/schedulePresentation';
 import { formatTaskDate } from '../utils/taskDates';
 import { readWebApiKey, storeWebApiKey } from '../utils/webApiKey';
@@ -184,10 +184,12 @@ const ProposalSteps: React.FC<{ steps: (string | { id?: string; title: string; d
 
 const TaskUpdatePreview: React.FC<{ update: AITaskUpdate; existing?: PSTask; tabs: TaskTab[]; lang: Language }> = ({ update, existing, tabs, lang }) => {
   const phaseLabel = update.phase && ((TRANSLATIONS[lang].phases as any)[update.phase] || tabs.find(tab => tab.id === update.phase)?.name || update.phase);
+  const recordedWork = describeAIRecordedWork(update.recordedWorkSeconds, lang);
   return <div className="min-w-0 space-y-2 text-base leading-[1.6]">
     {update.title && existing?.title && update.title !== existing.title && <p className="text-sm text-neutral-400 line-through break-words">{existing.title}</p>}
     <p className="font-semibold text-neutral-100 break-words">{update.title || existing?.title || update.id}</p>
     <TimerProposal settings={update} lang={lang} />
+    {recordedWork && <p className="text-sky-300">{recordedWork}</p>}
     <DateProposal settings={update} lang={lang} />
     {update.stepList !== undefined && <div className="space-y-2">
       <p className="text-sm font-semibold text-neutral-400">{lang === 'uk' ? 'Підзавдання' : 'Subtasks'} ({update.stepList.length})</p>
@@ -748,8 +750,12 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
 
     const result = onInjectTasks(tasks, pendingChatTabs, pendingChatUpdates, pendingChatDeletions);
     const appliedId = latestProposalMessageId.current;
+    const hasFutureSchedule = [...tasks, ...pendingChatUpdates].some(task => task.schedule
+      && Date.parse(task.schedule.startAt) - (task.schedule.leadMinutes ?? 5) * 60_000 > Date.now());
+    const scheduleNotice = result.rejected === 0 && hasFutureSchedule
+      ? (lang === 'uk' ? ' Майбутні завдання збережено в розділі «Заплановані завдання»; у робочому списку вони з’являться перед початком.' : ' Future tasks are saved under Scheduled tasks and will appear in the work list before their start time.') : '';
     // applyOutcome tells later turns whether the changes really happened (all, some or none).
-    setChatMessages(previous => previous.map(message => message.id === appliedId ? { ...message, proposalStatus: 'applied', applyOutcome: aiApplyOutcome(result), notice: describeAIApplyResult(result, lang) } : message));
+    setChatMessages(previous => previous.map(message => message.id === appliedId ? { ...message, proposalStatus: 'applied', applyOutcome: aiApplyOutcome(result), notice: describeAIApplyResult(result, lang) + scheduleNotice } : message));
 
     setRecoverableRequest(null);
     setRequestError(null);
@@ -813,6 +819,18 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     if (!requestText) return;
     if (requestInFlight.current) return;
     const latestAssistantMessage = [...chatMessages].reverse().find(message => message.role === 'assistant' && message.id !== `reply-${currentRequest.turnId}`);
+    const draftMessage = chatMessages.find(message => message.id === latestProposalMessageId.current);
+    const ownsDraft = draftMessage?.proposalStatus === 'pending' && pendingChangeCount > 0
+      && !pendingChatConfirmed.current && pendingProposalOwnerRef.current === accountId;
+    const draftTargets = [...pendingChatUpdates.map(update => update.id), ...pendingChatDeletions.map(deletion => deletion.id)];
+    const draftUnchanged = ownsDraft && proposalTargetsUnchanged(pendingTaskSnapshotRef.current, currentTasks, draftTargets);
+    const draftWasReady = draftUnchanged && chatProposalReadyRef.current && !requestError;
+    // Capture this before suspending Apply. A failed request must not destroy the
+    // original draft, and an unrelated answer must not replace it with empty arrays.
+    const requestDraft = draftUnchanged ? {
+      tasks: pendingChatTasks, tabs: pendingChatTabs,
+      taskUpdates: pendingChatUpdates, taskDeletions: pendingChatDeletions,
+    } : undefined;
     // Inside discovery mode an explicit request for help (or a yes to the help offer) gets practical
     // help now as an ordinary turn; the reply then offers to continue or finish the interview.
     const inDiscoveryMode = discoveryMode.active;
@@ -845,30 +863,26 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     const scopedAcknowledgement = !discoveryQuestionIsVisible && !summaryIsCurrent
       && latestAssistantMessage?.id === latestProposalMessageId.current && latestAssistantMessage?.proposalStatus === 'pending'
       && isProposalApplyAcknowledgement(requestText, latestAssistantMessage.content);
-    if (parsedCommand.intent === 'auto' && (isExplicitAIProposalApplyRequest(requestText) || scopedAcknowledgement)) {
-      const currentProposal = latestAssistantMessage?.id === latestProposalMessageId.current
-        && latestAssistantMessage?.proposalStatus === 'pending' && chatProposalReadyRef.current
-        && pendingChangeCount > 0 && !pendingChatConfirmed.current && !requestError
-        && pendingProposalOwnerRef.current === accountId;
-      const targets = [...pendingChatUpdates.map(update => update.id), ...pendingChatDeletions.map(deletion => deletion.id)];
-      const unchanged = currentProposal && proposalTargetsUnchanged(pendingTaskSnapshotRef.current, currentTasks, targets);
-      const result = unchanged ? confirmChatChanges() : undefined;
-      if (currentProposal && !unchanged) {
+    if (parsedCommand.intent === 'auto' && ownsDraft && (isExplicitAIProposalApplyRequest(requestText) || scopedAcknowledgement)) {
+      const result = draftWasReady ? confirmChatChanges() : undefined;
+      if (!draftUnchanged) {
         setChatProposalReadiness(false);
         const staleProposalId = latestProposalMessageId.current;
         setChatMessages(previous => previous.map(message => message.id === staleProposalId ? { ...message, proposalStatus: 'stale' } : message));
       }
-      const content = result ? describeAIApplyResult(result, lang) : currentProposal && !unchanged
+      const content = result ? describeAIApplyResult(result, lang) : !draftUnchanged
         ? (lang === 'uk'
           ? 'Завдання змінилися після підготовки пропозиції. Зміни не застосовано. Повторіть запит, щоб підготувати актуальну пропозицію.'
           : 'Tasks changed after the proposal was prepared. No changes were applied. Repeat the request to prepare a current proposal.')
         : (lang === 'uk'
-          ? 'Зараз немає підготовленої актуальної пропозиції для застосування. Зміни не застосовано. Опишіть, які завдання та як потрібно змінити.'
-          : 'There is no current prepared proposal to apply. No changes were applied. Describe which tasks to change and how.');
+          ? 'Чернетку збережено, але останнє уточнення ще не завершено. Зміни не застосовано. Дайте відповідь на уточнення або повторіть останній запит.'
+          : 'The draft is saved, but the latest revision is incomplete. No changes were applied. Answer the clarification or retry the latest request.');
       if (!keepDraft) { setPrompt(''); setMode('chat'); }
-      setRequestError(null);
-      setRecoverableRequest(null);
-      setKeyStatus(null);
+      if (result) {
+        setRequestError(null);
+        setRecoverableRequest(null);
+        setKeyStatus(null);
+      }
       setChatMessages(previous => {
         const messages = [...previous];
         if (!messages.some(message => message.id === currentRequest.turnId)) messages.push({
@@ -883,7 +897,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       return;
     }
     setChatProposalReadiness(false);
-    setChatMessages(previous => previous.map(message => message.proposalStatus === 'pending' ? { ...message, proposalStatus: 'stale' } : message));
+    if (ownsDraft && !draftUnchanged) setChatMessages(previous => previous.map(message => message.id === latestProposalMessageId.current ? { ...message, proposalStatus: 'stale' } : message));
     setApplyNotice(null);
 
     const generation = requestGeneration.current;
@@ -945,6 +959,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
         awaitingKeyRef.current = false;
         setKeyStatus(null);
         setRequestError(null);
+        setChatProposalReadiness(draftWasReady);
         if (preservedRequestDraftRef.current !== null) setPrompt(preservedRequestDraftRef.current);
         sound.activate();
         requestToResume = pendingRequest.current;
@@ -1039,6 +1054,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
           discoveryMode: inDiscoveryMode && !discoveryHelpTurn,
           lastAssistantProposalStatus: latestAssistantMessage?.proposalStatus,
           lastAssistantMessageId: latestAssistantMessage?.id,
+          pendingProposalId: requestDraft ? draftMessage?.id : undefined,
+          pendingProposalStatus: requestDraft ? (draftWasReady ? 'pending' : 'stale') : undefined,
           currentDiscoveryQuestionId: discoveryQuestionIsVisible ? currentQuestion?.id : undefined,
           turnId: currentRequest.turnId,
           lang,
@@ -1047,11 +1064,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
           currentTasks: currentTasks.map(task => ({ ...task, ...getAITimerContext(task) })),
           taskSnapshots: currentTasks,
           conversation: recentAIChatContext(chatMessages, 10, currentRequest.turnId),
-          pendingChanges: {
-            tasks: pendingChatTasks, tabs: pendingChatTabs,
-            taskUpdates: pendingChatUpdates,
-            taskDeletions: pendingChatDeletions,
-          },
+          pendingChanges: requestDraft,
           allowNewTabs: isTabMutation,
           customApiKey: customEnabled ? customKey : undefined,
           availableModels: window.karkasDesktop || customEnabled ? availableModelsRef.current.filter(isChatModel) : undefined,
@@ -1127,7 +1140,10 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       activeRequest.current = null;
       const hasPendingActions = [data.tasks, data.tabs, data.taskUpdates, data.taskDeletions].some(actions => (actions?.length || 0) > 0);
       const hasPendingChatActions = hasPendingActions;
-      setRecoverableRequest(hasPendingActions ? { ...currentRequest, purpose: 'proposal' } : null);
+      const transition = proposalTransition(data, !!requestDraft, draftWasReady);
+      setRecoverableRequest(hasPendingActions ? { ...currentRequest, purpose: 'proposal' }
+        : transition === 'retain' ? recoverableRequest
+        : transition === 'suspend' ? (data.proposalDisposition === 'clarification' ? currentRequest : recoverableRequest) : null);
       setRequestError(null);
       if (preservedRequestDraftRef.current !== null) setPrompt(preservedRequestDraftRef.current);
       // A selected model that does not exist for this key would slow every request
@@ -1143,20 +1159,21 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       } else if (data.fallbackUsed && data.usedModel) setKeyStatus(lang === 'uk' ? `Відповідь підготувала доступна модель ${data.usedModel}.` : `The response was generated by the available model ${data.usedModel}.`);
       const isDiscoveryResponse = !hasPendingActions && (data.strategy?.status === 'getting_to_know' || data.strategy?.status === 'clarifying');
       const isPlanningResponse = !isDiscoveryResponse && (!!data.tasks?.length || !!data.taskUpdates?.length || currentRequest.intent === 'plan' || currentRequest.intent === 'steps' || /план|\bplan(?:ning)?\b/iu.test((planningSourceRef.current || currentRequest).text));
-      setChatPlanningRequest(isPlanningResponse ? planningSourceRef.current || currentRequest : null);
-      setChatPlanningResponse(isPlanningResponse ? data : null);
-      pendingChatConfirmed.current = false;
-      // Bind the proposal to the account that requested it before enabling Apply.
-      pendingProposalOwnerRef.current = hasPendingChatActions ? requestOwner : undefined;
-      setChatProposalReadiness(hasPendingChatActions);
-      setPendingChatTasks(data.tasks || []);
-      setPendingChatTabs((data.tabs || []).map(tb => ({ id: tb.id, name: tb.name, color: tb.color || '#6366f1' })));
-      setPendingChatUpdates(data.taskUpdates || []);
-      setPendingChatDeletions(data.taskDeletions || []);
       const messageId = `reply-${currentRequest.turnId}`;
-      latestProposalMessageId.current = messageId;
+      if (transition === 'replace' || transition === 'cancel' || transition === 'none') {
+        setChatPlanningRequest(isPlanningResponse ? planningSourceRef.current || currentRequest : null);
+        setChatPlanningResponse(isPlanningResponse ? data : null);
+        pendingChatConfirmed.current = false;
+        pendingProposalOwnerRef.current = hasPendingChatActions ? requestOwner : undefined;
+        setPendingChatTasks(data.tasks || []);
+        setPendingChatTabs((data.tabs || []).map(tb => ({ id: tb.id, name: tb.name, color: tb.color || '#6366f1' })));
+        setPendingChatUpdates(data.taskUpdates || []);
+        setPendingChatDeletions(data.taskDeletions || []);
+        latestProposalMessageId.current = hasPendingChatActions ? messageId : null;
+        pendingTaskSnapshotRef.current = hasPendingChatActions ? currentTasks : [];
+      }
+      setChatProposalReadiness(hasPendingChatActions || transition === 'retain');
       setDiscoveryChoiceId(discoveryHelpTurn && !discoveryRepetitionComplaint ? messageId : null);
-      pendingTaskSnapshotRef.current = currentTasks;
       const strategyResult = onStrategyResponse?.(data, currentRequest.text, currentRequest.turnId!, currentRequest.intent || 'auto', requestOwner, requestProfile, currentRequest.discoveryConfirmationId);
         if (inDiscoveryMode && data.strategy?.status === 'getting_to_know' && !data.strategy.question
           && !data.strategy.memoryPatch?.discovery?.summary) {
@@ -1164,7 +1181,10 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
           setDiscoveryMode(previous => exitDiscoveryMode(previous));
         }
       const strategyNotice = strategyResult && typeof strategyResult === 'object' ? strategyResult : undefined;
-      setChatMessages(previous => [...previous, {
+      setChatMessages(previous => [...previous.map(message =>
+        (transition === 'replace' || transition === 'cancel') && message.proposalStatus === 'pending'
+          ? { ...message, proposalStatus: 'stale' as const, ...(transition === 'cancel' ? { notice: lang === 'uk' ? 'Чернетку скасовано. Зміни не застосовано.' : 'Draft cancelled. No changes were applied.' } : {}) }
+          : message), {
         id: messageId,
         role: 'assistant',
         sentAt: Date.now(),
@@ -1201,7 +1221,6 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
 
   const cancelAIRequest = () => {
     setChatProposalReadiness(false);
-    setChatMessages(previous => previous.map(message => message.proposalStatus === 'pending' ? { ...message, proposalStatus: 'stale' } : message));
     requestGeneration.current += 1;
     assistController.current?.abort();
     assistController.current = null;
@@ -1368,7 +1387,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                     {message.role === 'assistant' ? <AIChatText text={parsed.body} /> : <div className="whitespace-pre-wrap">{parsed.body}</div>}
                     {!!parsed.options.length && <div className="flex flex-col gap-2 mt-3">{parsed.options.map(option => <button key={option.text} type="button" disabled={loading} onClick={() => handleGenerate(option.text, 'chat')} className="min-h-11 w-full text-left border border-neutral-700 px-3 py-2 hover:border-white disabled:opacity-40">{option.label}. {option.text}</button>)}</div>}
                     {message.response && <ChatResponseCards response={message.response} currentTasks={currentTasks} tabs={tabs} lang={lang} />}
-                    {message.proposalStatus === 'stale' && <p className="mt-3 text-sm text-neutral-400">{lang === 'uk' ? `Попередня пропозиція. ${discoveryAddress() === 'ty' ? 'Повтори' : 'Повторіть'} запит, щоб підготувати актуальні зміни.` : 'Previous proposal. Repeat the request to prepare current changes.'}</p>}
+                    {message.proposalStatus === 'stale' && <p className="mt-3 text-sm text-neutral-400">{lang === 'uk' ? 'Ця попередня картка вже неактуальна й не застосовується.' : 'This earlier card is no longer current and cannot be applied.'}</p>}
                     {message.proposalStatus === 'pending' && message.id === latestProposalMessageId.current && chatProposalReady && pendingChangeCount > 0 && !loading && !requestError && <button id="ai-chat-apply-changes-btn" type="button" onClick={confirmChatChanges} className="mt-3 min-h-11 bg-white text-black px-3 py-2 font-semibold hover:bg-neutral-200">{lang === 'uk' ? `Застосувати зміни (${pendingChangeCount})` : `Apply changes (${pendingChangeCount})`}</button>}
                     {message.notice && <p role="status" className="mt-3 text-sm text-emerald-300">{message.notice}</p>}
                     {message.actionId && onUndoStrategy && <button type="button" onClick={() => { if (onUndoStrategy(message.actionId!) === true) setChatMessages(previous => previous.map(item => item.id === message.id ? { ...item, actionId: undefined, notice: lang === 'uk' ? 'Зміну плану скасовано.' : 'Plan change undone.' } : item)); }} className="mt-2 min-h-11 border border-neutral-700 px-3 py-2 hover:border-white">{lang === 'uk' ? 'Скасувати зміни стратегії' : 'Undo strategy changes'}</button>}
@@ -1439,6 +1458,17 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
             {/* Custom Prompt Input at the bottom of the sheet */}
             <div className="shrink-0 px-3 sm:px-6 pt-3 pb-3 sm:pb-4 bg-[#0c0c0e]">
               <div className="mx-auto w-full max-w-3xl space-y-2">
+              {pendingChangeCount > 0 && pendingProposalOwnerRef.current === accountId && !pendingChatConfirmed.current
+                && chatMessages.some(message => message.id === latestProposalMessageId.current && message.proposalStatus === 'pending') && (
+                <div className="flex flex-wrap items-center justify-between gap-2 border border-neutral-800 px-3 py-2 text-sm">
+                  <p role="status" className="min-w-0 text-neutral-300">
+                    {lang === 'uk' ? `Чернетка: ${pendingChangeCount} змін. Ще не застосовано.` : `Draft: ${pendingChangeCount} changes. Not applied yet.`}
+                    {!loading && !chatProposalReady && <span className="block text-xs text-neutral-400">{lang === 'uk' ? 'Завершіть уточнення або повторіть останній запит — чернетку збережено.' : 'Complete the clarification or retry the latest request — the draft is saved.'}</span>}
+                  </p>
+                  {chatProposalReady && !loading && !requestError && !awaitingApiKey && <button id="ai-current-proposal-apply-btn" type="button" onClick={confirmChatChanges} className="min-h-11 shrink-0 border border-neutral-600 px-3 py-2 font-semibold hover:border-white">{lang === 'uk' ? 'Застосувати зміни' : 'Apply changes'}</button>}
+                  {!chatProposalReady && !loading && !requestError && !awaitingApiKey && recoverableRequest && <button type="button" onClick={() => { setMode(recoverableRequest.mode); void handleGenerate(recoverableRequest.text, recoverableRequest.mode, false, !!prompt.trim() && prompt.trim() !== recoverableRequest.text.trim()); }} className="min-h-11 shrink-0 border border-neutral-700 px-3 py-2 hover:border-white">{lang === 'uk' ? 'Повторити уточнення' : 'Retry revision'}</button>}
+                </div>
+              )}
               {/* Voice recording / transcription status indicator */}
               {voiceNotice && <div role="status" className="flex items-center gap-2 text-amber-400 text-xs">
                 <AlertTriangle className="w-4 h-4 shrink-0" />

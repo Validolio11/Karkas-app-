@@ -1,0 +1,22 @@
+{
+  "passed": true,
+  "version": "1.3.14",
+  "installerSha512": "ULAU3xo21rbq5uTzzRWLjMac04ajSjgR+uiET5/ltp8J4KkpsqCuS9WA9dK9Ue7oURXulyqfWUJHnbixfdqIHg==",
+  "assets": [
+    {
+      "name": "Karkas-Setup-1.3.14.exe",
+      "size": 139227769,
+      "sha256": "7b3567efa607f1b5036e0aab837d965b75c679a2bfed4ee8c3bddc4ea7d844e8"
+    },
+    {
+      "name": "Karkas-Setup-1.3.14.exe.blockmap",
+      "size": 146452,
+      "sha256": "401efbf0c66fdb18c4618f9bfef4f7f0d9afdf0dbe5df9810cd8eb5c83fa0d0a"
+    },
+    {
+      "name": "latest.yml",
+      "size": 344,
+      "sha256": "06f0455676f6dea5f6a1e5ace65084d89ad785c6f6520cbfee37e6048f26fe96"
+    }
+  ]
+}

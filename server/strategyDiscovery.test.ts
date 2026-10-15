@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { classifyPersonalChatRequest, constrainOrdinaryChatResponse, constrainReadyPersonalResponse, discoveryAddressContext, discoveryAddressFor, safeDiscoveryQuestion, sanitizeDiscoveryResponse } from './strategyDiscovery';
+import { classifyPersonalChatRequest, constrainOrdinaryChatResponse, constrainReadyPersonalResponse, discoveryAddressContext, discoveryAddressFor, requestedRecordedWorkCorrection, safeDiscoveryQuestion, sanitizeDiscoveryResponse } from './strategyDiscovery';
 import { applyStrategyResponse, createPersonalStrategyProfile } from '../src/utils/personalStrategy';
 import { continueStrategyDiscovery, normalizeStrategyDiscovery } from '../src/utils/strategyDiscovery';
 import { confirmedProfile, discoveryGoal, understandingProfile } from '../src/utils/strategyDiscovery.testHelpers';
@@ -25,6 +25,79 @@ test('an unknown named target cannot mutate the sole other task', () => {
     assert.deepEqual(classifyPersonalChatRequest(prompt, 'auto', sole).scope?.taskIds, ['t1']);
     assert.deepEqual(classifyPersonalChatRequest(prompt, 'auto', tasks).scope?.taskIds, []);
   }
+});
+
+test('repeated unnamed timer commands retain the task clarified in conversation', () => {
+  const live = [{ id: 'animation', title: 'Робота над анімацією', done: false }, { id: 'study', title: 'Навчання', done: false }];
+  const options = {
+    previousUserTexts: ['зміни таймер на 3 години бо я забув його включити', 'Про анімацію'],
+    previousAssistantText: 'Я бачу активне завдання «Робота над анімацією». Ви хочете змінити час у таймері на 3 години чи продовжити роботу?',
+  };
+  for (const prompt of ['зміни таймер на 3 години', 'зміни таймер на 3 години бо я забув його включити', 'Change the timer to 3 hours', 'Зупини таймер']) {
+    const result = classifyPersonalChatRequest(prompt, 'auto', live, undefined, undefined, options);
+    assert.deepEqual(result.scope, { operation: 'timer', taskIds: ['animation'], ...(prompt === 'Зупини таймер' ? {} : { allowRecordedWork: true }) }, prompt);
+  }
+  const previousAssistantText = options.previousAssistantText;
+  assert.deepEqual(classifyPersonalChatRequest('Зміни таймер на 3 години', 'auto', live, undefined, undefined, { previousAssistantText }).scope?.taskIds, ['animation']);
+  for (const prompt of ['Розбий це завдання на кроки', 'Перенеси це завдання на завтра']) {
+    assert.deepEqual(classifyPersonalChatRequest(prompt, 'auto', live, undefined, undefined, options).scope?.taskIds, ['animation'], prompt);
+  }
+  const constrained = constrainOrdinaryChatResponse({ taskUpdates: [{ id: 'animation', recordedWorkSeconds: 10800 }, { id: 'study', recordedWorkSeconds: 10800 }] },
+    'task_command', classifyPersonalChatRequest('Зміни таймер на 3 години', 'auto', live, undefined, undefined, options).scope);
+  assert.deepEqual(constrained.taskUpdates, [{ id: 'animation', recordedWorkSeconds: 10800 }]);
+});
+
+test('unnamed timer fallback preserves explicit and conversational ambiguity', () => {
+  const live = [{ id: 'animation', title: 'Анімація логотипу', timerRunning: true }, { id: 'titles', title: 'Анімація титрів' }];
+  const options = { previousUserText: 'Про логотип', previousAssistantText: 'Змінити таймер «Анімація логотипу»?' };
+  for (const prompt of ['Зміни таймер Biology на 3 години', 'Зміни таймер анімації на 3 години']) {
+    assert.deepEqual(classifyPersonalChatRequest(prompt, 'auto', live, undefined, undefined, options).scope?.taskIds, [], prompt);
+  }
+  for (const previousUserTexts of [['Про анімацію'], ['Про логотип', 'Про анімацію'], ['Про логотип і титри']]) {
+    assert.deepEqual(classifyPersonalChatRequest('Зміни таймер на 3 години', 'auto', live, undefined, undefined,
+      { ...options, previousUserTexts }).scope?.taskIds, [], previousUserTexts.join(' / '));
+  }
+  assert.deepEqual(classifyPersonalChatRequest('Зміни таймер на 3 години', 'auto', live).scope?.taskIds, ['animation']);
+  assert.deepEqual(classifyPersonalChatRequest('Зміни таймер на 3 години', 'auto', live.map(task => ({ ...task, timerRunning: true }))).scope?.taskIds, []);
+  assert.deepEqual(classifyPersonalChatRequest('Зміни таймер на 3 години', 'auto', live.map(task => ({ ...task, timerRunning: false }))).scope?.taskIds, []);
+  assert.deepEqual(classifyPersonalChatRequest('Зміни таймер на 3 години', 'auto', [{ id: 'only', title: 'Навчання' }]).scope?.taskIds, ['only']);
+  assert.deepEqual(classifyPersonalChatRequest('Зміни таймер Biology на 3 години', 'auto', [{ id: 'only', title: 'Навчання', timerRunning: true }], undefined, undefined, options).scope?.taskIds, []);
+});
+
+test('latest user subject wins over older task references and another running timer', () => {
+  const live = [{ id: 'animation', title: 'Робота над анімацією' }, { id: 'study', title: 'Навчання', timerRunning: true }];
+  const result = classifyPersonalChatRequest('Зміни таймер на 3 години', 'auto', live, undefined, undefined, {
+    previousUserTexts: ['Про навчання', 'Про анімацію'], previousAssistantText: 'Порівняємо «Навчання» та «Робота над анімацією».',
+  });
+  assert.deepEqual(result.scope?.taskIds, ['animation']);
+});
+
+test('recorded work corrections require explicit retrospective authorization', () => {
+  const live = [{ id: 'animation', title: 'Робота над анімацією' }, { id: 'study', title: 'Навчання' }];
+  for (const prompt of ['Зарахуй 3 години роботи для анімації', 'Запиши 3 години роботи для анімації', 'Зміни таймер анімації на 3 години бо я забув його включити']) {
+    assert.equal(requestedRecordedWorkCorrection(prompt), true, prompt);
+    const route = classifyPersonalChatRequest(prompt, 'auto', live);
+    assert.deepEqual(route.scope, { operation: 'timer', taskIds: ['animation'], allowRecordedWork: true }, prompt);
+    assert.deepEqual(constrainOrdinaryChatResponse({ taskUpdates: [{ id: 'animation', recordedWorkSeconds: 10800 }] }, route.route, route.scope).taskUpdates,
+      [{ id: 'animation', recordedWorkSeconds: 10800 }]);
+  }
+  const contextual = classifyPersonalChatRequest('Зарахуй 3 години роботи', 'auto', live, undefined, undefined, { previousUserText: 'Про анімацію' });
+  assert.deepEqual(contextual.scope, { operation: 'timer', taskIds: ['animation'], allowRecordedWork: true });
+  for (const prompt of ['Зміни таймер на 3 години', 'Запусти таймер анімації', 'Set timer to 3 hours']) assert.equal(requestedRecordedWorkCorrection(prompt), false, prompt);
+  for (const operation of ['timer', 'update', 'proposal'] as const) {
+    const result = constrainOrdinaryChatResponse({ taskUpdates: [{ id: 'animation', recordedWorkSeconds: 10800 }] }, 'task_command', { operation, taskIds: ['animation'] });
+    assert.deepEqual(result.taskUpdates, [], operation);
+    const correction = constrainOrdinaryChatResponse({ taskUpdates: [{ id: 'animation', recordedWorkSeconds: 10800, timerMode: 'countdown', countdownDurationSeconds: 10800, timerAction: 'start', schedule: {}, plannedDate: '2026-10-16' }] },
+      'task_command', { operation, taskIds: ['animation'], allowRecordedWork: true });
+    assert.deepEqual(correction.taskUpdates, [{ id: 'animation', recordedWorkSeconds: 10800 }], operation);
+  }
+  assert.deepEqual(constrainOrdinaryChatResponse({ taskUpdates: [{ id: 'animation', countdownDurationSeconds: 10800 }] },
+    'task_command', { operation: 'timer', taskIds: ['animation'], allowRecordedWork: true }).taskUpdates, []);
+  assert.deepEqual(constrainOrdinaryChatResponse({ taskUpdates: [{ id: 'animation', recordedWorkSeconds: undefined }] },
+    'task_command', { operation: 'timer', taskIds: ['animation'], allowRecordedWork: true }).taskUpdates, []);
+  const changedSubject = classifyPersonalChatRequest('Зміни таймер на 3 години', 'auto', live, undefined, undefined,
+    { previousUserTexts: ['Зарахуй 3 години роботи для навчання', 'Про анімацію'] });
+  assert.deepEqual(changedSubject.scope, { operation: 'timer', taskIds: ['animation'] });
 });
 
 test('concrete Ukrainian commands and polite infinitives stay available during discovery', () => {
@@ -187,12 +260,55 @@ test('pending proposal revisions preserve concrete proposals without opening per
   const pending = { tasks: [{ title: 'References' }], taskUpdates: [{ id: 't1', timerMode: 'countdown', countdownDurationSeconds: 1500 }] };
   const route = classifyPersonalChatRequest('Зменши час у пропозиції до 10 хвилин', 'auto', tasks, undefined, pending);
   assert.equal(route.route, 'task_command');
-  assert.equal(route.scope?.operation, 'proposal');
+  assert.equal(route.scope?.operation, 'update');
+  assert.deepEqual(route.pendingRevision?.allowedIds, ['pending-task:0', 't1']);
   const result = constrainOrdinaryChatResponse({ tasks: [{ title: 'References' }, { title: 'Unrelated goal' }], taskUpdates: [{ id: 't1', countdownDurationSeconds: 600 }, { id: 't2', done: true }] }, route.route, route.scope);
-  assert.equal(result.tasks.length, 1);
+  assert.equal(result.tasks.length, 0, 'draft edits are scoped patches; new copies are forbidden');
   assert.deepEqual(result.taskUpdates, [{ id: 't1', countdownDurationSeconds: 600 }]);
   const cancel = classifyPersonalChatRequest('Скасуй пропозицію', 'auto', tasks, undefined, pending);
   assert.deepEqual(constrainOrdinaryChatResponse(pending, cancel.route, cancel.scope).tasks, []);
+});
+
+test('a draft animation timer clarification cannot target a similar live animation task', () => {
+  const live = [{ id: 'animation', title: 'Робота над анімацією' }];
+  const pending = { tasks: [{ title: 'Зробити три анімації' }, { title: 'Швидкий друк навчання' }] };
+  const route = classifyPersonalChatRequest('Додай до цього, до анімації таймер. щоб я знав, з 15:30 до 18:30.', 'auto', live, undefined, pending);
+  assert.equal(route.scope?.operation, 'timer');
+  assert.deepEqual(route.scope?.taskIds, ['pending-task:0']);
+  assert.equal(route.scope?.allowSchedule, true);
+  assert.deepEqual(route.pendingRevision?.allowedIds, ['pending-task:0']);
+  const schedule = { startAt: '2026-10-15T15:30:00+03:00', recurrence: 'once', timeZone: 'Europe/Kiev', leadMinutes: 5 };
+  const result = constrainOrdinaryChatResponse({ taskUpdates: [{ id: 'animation', timerMode: 'stopwatch' }, { id: 'pending-task:0', timerMode: 'countdown', countdownDurationSeconds: 10800, schedule, priority: 3 }] }, route.route, route.scope);
+  assert.deepEqual(result.taskUpdates, [{ id: 'pending-task:0', timerMode: 'countdown', countdownDurationSeconds: 10800, schedule }]);
+  const liveRoute = classifyPersonalChatRequest('Додай таймер на 20 хвилин до завдання Робота над анімацією', 'auto', live, undefined, pending);
+  assert.equal(liveRoute.pendingRevision, undefined);
+  assert.deepEqual(liveRoute.scope?.taskIds, ['animation']);
+  const fresh = classifyPersonalChatRequest('Додай завдання анімації логотипу', 'auto', live, undefined, pending);
+  assert.equal(fresh.scope?.operation, 'create');
+  assert.equal(fresh.pendingRevision, undefined);
+  const addition = classifyPersonalChatRequest('Додай ще завдання Створити скрипт', 'auto', live, undefined, pending);
+  assert.equal(addition.pendingRevision?.allowCreate, true);
+  assert.deepEqual(addition.scope?.taskIds, []);
+  for (const prompt of ['Так', 'Що робити далі?']) assert.equal(classifyPersonalChatRequest(prompt, 'auto', live, undefined, pending).pendingRevision, undefined);
+});
+
+test('ambiguous draft names and cancellation cannot silently discard the proposal', () => {
+  const pending = { tasks: [{ title: 'Анімація логотипу' }, { title: 'Анімація титрів' }] };
+  for (const prompt of ['Додай до цього таймер на 20 хвилин', 'Додай до анімації таймер на 20 хвилин', 'Скасуй це', 'Скасуй анімацію']) {
+    const route = classifyPersonalChatRequest(prompt, 'auto', [], undefined, pending);
+    assert.ok(route.pendingRevision, prompt);
+    assert.deepEqual(route.pendingRevision.allowedIds, [], prompt);
+    assert.notEqual(route.scope?.operation, 'cancel', prompt);
+  }
+  assert.equal(classifyPersonalChatRequest('Скасуй пропозицію', 'auto', [], undefined, pending).scope?.operation, 'cancel');
+});
+
+test('apply after offering missing new tasks prepares creation without borrowing a live task', () => {
+  const live = [{ id: 'animation', title: 'Робота над анімацією' }];
+  const previousAssistantText = 'У списку є «Робота над анімацією», але «Швидкий друк навчання» і створення скрипта ще не з’явилися, бо пропозиція не була застосована.\n\nХочеш, я додам їх знову?';
+  const route = classifyPersonalChatRequest('застосуй', 'auto', live, undefined, undefined, { previousAssistantText });
+  assert.equal(route.acceptedOffer, true);
+  assert.deepEqual(route.scope, { operation: 'create', taskIds: [] });
 });
 
 test('ready personal refusal with no reason asks before adapting; scope changes re-open discovery', () => {
@@ -351,7 +467,7 @@ test('a yes to a concrete offered change carries it into a scoped proposal; a do
   assert.deepEqual(named.scope, { operation: 'steps', taskIds: ['reel'] });
   assert.equal(named.acceptedOffer, true);
   // Without a named task only new tasks can be proposed.
-  assert.deepEqual(classifyPersonalChatRequest('Так', 'auto', workTasks, undefined, undefined, { previousAssistantText: 'Створити окреме завдання для звуку?' }).scope, { operation: 'proposal', taskIds: [] });
+  assert.deepEqual(classifyPersonalChatRequest('Так', 'auto', workTasks, undefined, undefined, { previousAssistantText: 'Створити окреме завдання для звуку?' }).scope, { operation: 'create', taskIds: [] });
   for (const prompt of ['Ні, не треба', 'Давай потім', 'Так, а скільки це займе?', 'Не зараз', 'No, later']) {
     const route = classifyPersonalChatRequest(prompt, 'auto', workTasks, undefined, undefined, { previousAssistantText: offer });
     assert.notEqual(route.route, 'task_command', prompt);

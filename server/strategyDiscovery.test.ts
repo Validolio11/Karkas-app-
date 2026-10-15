@@ -103,6 +103,48 @@ test('not knowing stays unknown and narrows the pending question rather than rep
   assert.equal(persisted.discovery?.phase, 'exploring');
 });
 
+test('a repeated model question cannot reopen the routine barrier already explained by the user', () => {
+  const profile = continueStrategyDiscovery(confirmedProfile());
+  profile.discovery!.topics.capacity = { status: 'unknown', evidence: [] };
+  const original = profile.discovery!.pendingQuestion!.text;
+  const quote = 'Встановлювати кейфрейми, багато кейфреймів щоб все почало рухатись і це забирає багато часу і багато не цікавої рутини';
+  const result = sanitizeDiscoveryResponse({ memoryPatch: { discovery: {
+    answers: [{ topic: 'barriers', status: 'answered', quote }], question: { topic: 'barriers', text: original },
+  } } }, profile, quote, 'keyframes', true);
+  assert.notEqual(result.strategy.question, original);
+  assert.equal(result.strategy.memoryPatch?.discovery?.question?.topic, 'capacity');
+  const persisted = applyStrategyResponse(profile, result.strategy, quote, 'keyframes');
+  assert.equal(persisted.discovery?.topics.barriers.status, 'answered');
+  assert.equal(persisted.discovery?.topics.barriers.evidence.at(-1)?.quote, quote);
+  assert.equal(persisted.discovery?.topics.capacity.status, 'unknown');
+});
+
+test('discovery questions from recent assistant replies are not asked again even when pending changed', () => {
+  const profile = continueStrategyDiscovery(confirmedProfile());
+  const original = 'Пригадай останній раз, коли важлива справа відкладалася: що відбувалося безпосередньо перед тим, як увага перемкнулася на інше?';
+  const result = sanitizeDiscoveryResponse({ memoryPatch: { discovery: { question: { topic: 'barriers', text: original } } } },
+    profile, 'Нічого не відбувається', 'no-event', true, { history: [{ role: 'assistant', content: `Зрозуміло.\n\n${original}` }] });
+  assert.ok(!result.reply.includes(original));
+  assert.notEqual(result.strategy.question, original);
+  assert.notEqual(applyStrategyResponse(profile, result.strategy, 'Нічого не відбувається', 'no-event').discovery?.phase, 'ready');
+});
+
+test('a complaint about repeated questions stops the interview without accepting provider evidence or actions', () => {
+  const profile = continueStrategyDiscovery(confirmedProfile());
+  const quote = 'та блять я заєбався відповідати на одні і тай й ж повідомлення';
+  const result = sanitizeDiscoveryResponse({ ...early, strategy: { ...early.strategy, memoryPatch: { discovery: {
+    answers: [{ topic: 'barriers', status: 'answered', quote }], question: { topic: 'barriers', text: profile.discovery!.pendingQuestion!.text },
+  } } } }, profile, quote, 'complaint', true);
+  assert.doesNotMatch(result.reply, /\?|FORBIDDEN/);
+  assert.equal(result.strategy.question, undefined);
+  assert.equal(result.strategy.memoryPatch, undefined);
+  for (const field of ['tasks', 'tabs', 'taskUpdates', 'taskDeletions'] as const) assert.deepEqual(result[field], []);
+  assert.deepEqual(result.strategy.actions, []);
+  const persisted = applyStrategyResponse(profile, result.strategy, quote, 'complaint');
+  assert.deepEqual(persisted.discovery?.topics, profile.discovery?.topics);
+  assert.notEqual(persisted.discovery?.phase, 'ready');
+});
+
 test('privacy produces an optional practical alternative and never a plan or confirmation', () => {
   const profile = continueStrategyDiscovery(confirmedProfile());
   const quote = 'Не хочу про це розповідати, це приватне';
@@ -398,11 +440,26 @@ test('discovery replies never echo the whole message; the model reflection is on
 
 test('a fallback question quotes at most a short key phrase of the person and skips the canned acknowledgement', () => {
   const profile = continueStrategyDiscovery(confirmedProfile());
-  const result = sanitizeDiscoveryResponse({ memoryPatch: { discovery: {} } }, profile, freelancer, 'grounded', true);
+  // A label alone still needs clarification; the concrete After Effects event below does not.
+  const unexplained = 'Я моушн-дизайнер на фрілансі, в мене жахлива прокрастинація, але поки не знаю чому';
+  const result = sanitizeDiscoveryResponse({ memoryPatch: { discovery: {} } }, profile, unexplained, 'grounded', true);
   assert.match(result.reply, /^Ви пишете: «в мене жахлива прокрастинація»\. /);
   assert.doesNotMatch(result.reply, /After Effects/);
   assert.equal(result.strategy.memoryPatch?.discovery?.question?.topic, 'barriers');
   assert.equal((result.reply.match(/\?/g) || []).length, 1);
+});
+
+test('a concrete barrier advances to an understanding summary even when the model omits answers', () => {
+  const profile = continueStrategyDiscovery(confirmedProfile());
+  const result = sanitizeDiscoveryResponse({ memoryPatch: { discovery: {} } }, profile, freelancer, 'direct-barrier', true);
+  assert.equal(result.strategy.memoryPatch?.discovery?.summary, result.reply);
+  assert.match(result.reply, /Чи правильно я зрозумів/);
+  assert.equal(result.strategy.memoryPatch?.discovery?.question, undefined);
+  const persisted = applyStrategyResponse(profile, result.strategy, freelancer, 'direct-barrier');
+  assert.equal(persisted.discovery?.topics.barriers.status, 'answered');
+  assert.equal(persisted.discovery?.topics.barriers.evidence.at(-1)?.quote, freelancer);
+  assert.equal(persisted.discovery?.phase, 'confirming');
+  assert.equal(persisted.discovery?.pendingSummary?.confirmed, false);
 });
 
 test('app-written discovery text follows the person’s ти or ви', () => {

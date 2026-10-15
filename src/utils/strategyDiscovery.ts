@@ -10,6 +10,30 @@ const strictYes = (value: string) => /^(?:так|погоджуюсь|погод
 const uncertain = (value: string) => /^(?:(?:я\s+)?(?:ще\s+|поки\s+)?(?:не знаю|не впевнен[аий]*|важко сказати)|(?:i\s+)?(?:don['’]?t know|do not know|not sure)|maybe|можливо)(?:[.!?,\s]|$)/iu.test(value.trim())
   && !/(?:не знаю.*(?:з чого|як)\s+почати|don['’]?t know.*(?:how|where).*start)/iu.test(value);
 const decline = (value: string) => /(?:не хочу (?:про це|розповідати|обговорювати|відповідати|ділитися)|не готов[аий]* (?:обговорювати|ділитися|розповідати)|особисте|приватн|пропуст(?:имо|ити)|skip (?:this|that)|prefer not|rather not|private|don['’]?t want to (?:share|discuss|answer))/iu.test(value);
+/** Feedback about the conversation is never evidence of a personal obstacle. */
+export function isDiscoveryRepetitionComplaint(text: string): boolean {
+  if (/^\s*(?:будь\s+ласка[,\s]+|please\s+)?(?:повтори|повторіть|repeat)(?![\p{L}])/iu.test(text)) return false;
+  const conversational = /(?:питан|запитан|повідомлен|відповідати|розпит|question|asking|answering|messages?)/iu.test(text);
+  return conversational && /(?:повтор|одн[еіу]\s+(?:і|й|та)\s+(?:(?:те|ті|той)\s+)?(?:й\s+|і\s+)?ж|те\s+(?:ж\s+)?саме|ті\s+самі|однаков|знов|набрид|досить|годі|перестан|втом|за[єеї]б|задовб|same|repeat|again|stop|enough|tired)/iu.test(text);
+}
+
+/** Compare the question's meaning, including common paraphrases of the same antecedent prompt. */
+export function discoveryQuestionsEquivalent(left: string, right: string): boolean {
+  if (typeof left !== 'string' || typeof right !== 'string') return false;
+  const normalize = (value: string) => value.toLocaleLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/gu, ' ').trim();
+  const a = normalize(left), b = normalize(right);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const antecedent = (value: string) => /(?:що.{0,30}відбу|what.{0,30}happen)/iu.test(value)
+    && /(?:перед|безпосередньо|(?:в|у)\s+ту\s+мить|before|preced|at that moment)/iu.test(value)
+    && /(?:відвол|переключ|перемк|уваг|відклад|attention|distract|switch|put.{0,12}(?:off|aside))/iu.test(value);
+  if (antecedent(a) && antecedent(b)) return true;
+  const words = (value: string) => new Set(value.split(' ').filter(word => word.length >= 4).map(word => word.slice(0, 5)));
+  const aa = words(a), bb = words(b);
+  if (aa.size < 3 || bb.size < 3) return false;
+  const shared = [...aa].filter(word => bb.has(word)).length;
+  return shared / Math.max(aa.size, bb.size) >= 0.8;
+}
 /**
  * How the app addresses the person in Ukrainian: "ти" only when they write with "ти", otherwise "ви".
  * App-written text (acknowledgements, fallback questions) must use the same form as the model.
@@ -66,10 +90,11 @@ const describedUncertainty = /(?:знаю|знав|знала|розумію|р�
 const explicitHelp = /(?:(?<![\p{L}])що\s+(?:ж\s+|же\s+)?(?:(?:мені|нам)\s+)?(?:(?:тепер|зараз|конкретно|ж|же|далі|взагалі)\s+)*(?:робити|зробити|почати|порадиш|порадите)(?![\p{L}])|(?<![\p{L}])з\s+чого\s+(?:мені\s+)?(?:почати|починати)(?![\p{L}])|(?<![\p{L}])(?:допоможи|допоможіть)(?:\s+(?:мені|будь\s+ласка|з\s+цим|нарешті))*\s*(?:[.!?…]|$)|(?<![\p{L}])(?:дай|дайте)\s+(?:мені\s+)?(?:(?:якусь|конкретну|практичну|хоч\s+якусь)\s+)?(?:пораду|поради|рекомендацію|рекомендації)(?![\p{L}])|(?<![\p{L}])(?:порадь|порадьте)(?![\p{L}])|(?<![\p{L}])(?:підкажи|підкажіть)\s+(?:мені\s+)?(?:що|як|з\s+чого|перший|якийсь)(?![\p{L}])|(?<![\p{L}])я\s+(?:ж\s+|же\s+)?(?:вже\s+)?(?:все|усе|достатньо)\s+(?:вже\s+)?(?:розповів|розповіла|розказав|розказала|пояснив|пояснила|описав|описала)(?![\p{L}])|(?<![\p{L}])(?:досить|вистачить|годі)\s+(?:питань|запитань|розпитувати|розпитувань)(?![\p{L}])|\bwhat\s+(?:should|do|can)\s+i\s+(?:do|start\s+with)\b|\bwhere\s+(?:do|should)\s+i\s+start\b|\bgive\s+me\s+(?:some\s+)?(?:advice|a\s+tip|tips|a\s+suggestion)\b|\bany\s+(?:advice|tips|suggestions)\b|\bhelp\s+me(?:\s+(?:now|please|with\s+this))?\s*(?:[.!?]|$)|\bi['’]?ve\s+(?:already\s+)?told\s+you\s+(?:everything|enough)\b|\benough\s+questions\b)/iu;
 /** An explicit request for practical help now ("що мені робити?", "допоможи", "я вже все розповів"). */
 export function wantsPracticalHelpNow(text: string): boolean {
+  if (isDiscoveryRepetitionComplaint(text)) return true;
   const input = text.replace(describedUncertainty, ' ');
   // A personal plan still needs the interview; this is only a request for immediate practical help.
   if (/(?:(?<![\p{L}])план(?:у|ом|и)?(?![\p{L}])|\bplan\b|стратегі|\bstrategy\b)/iu.test(input)) return false;
-  return explicitHelp.test(input);
+  return explicitHelp.test(input) || /(?:допоможи|допоможіть)\s+(?:мені\s+)?(?:почати|розпочати|продовжити|виконати)\s+(?:завдання|роботу|справу)|help\s+me\s+(?:start|begin|continue|finish)\s+(?:the\s+|this\s+)?(?:task|work)/iu.test(input);
 }
 /** A yes to PRACTICAL_HELP_OFFER; "давай ще трохи розберемося" continues the interview. */
 export function acceptsPracticalHelpOffer(text: string): boolean {
@@ -138,7 +163,7 @@ const anchors: Record<StrategyDiscoveryTopic, RegExp> = {
   attempts: /(?:пробува|спроб|намаг|раніше|вже роби|допомог|не допомог|нічого.*(?:роб|проб)|ще не|поки не|tried|attempt|previous|helped|nothing yet|never tried|haven['’]?t tried)/iu,
 };
 function meaningful(topic: StrategyDiscoveryTopic, quote: string, asked: StrategyDiscoveryTopic | undefined): boolean {
-  if (!quote || strictYes(quote) || uncertain(quote) || decline(quote)) return false;
+  if (!quote || strictYes(quote) || uncertain(quote) || decline(quote) || isDiscoveryRepetitionComplaint(quote)) return false;
   if (/^(?:можливо|мабуть|припускаю|може бути|perhaps|maybe)(?:\s|,|$)/iu.test(quote.trim())) return false;
   if (topic === 'direction' && /(?:не хочу|не прагну|don['’]?t want)/iu.test(quote)) return false;
   if (topic === 'motivation' && /(?:не важливо|неважливо|не має.*сенсу|немає.*сенсу|doesn['’]?t matter|not important)/iu.test(quote)) return false;
@@ -150,6 +175,10 @@ function meaningful(topic: StrategyDiscoveryTopic, quote: string, asked: Strateg
     // Naming procrastination alone does not describe an actual situation or obstacle.
     if (/(?:не\s+(?:граю|дивлюс|відкладаю|прокраст|відволікаю)|don['’]?t\s+(?:play|watch|procrastinate|get distracted))/iu.test(quote)) return false;
     const length = quote.split(/\s+/u).length;
+    // A concrete description of tedious work is an obstacle even without a recalled distraction event.
+    const routine = /(?:рутин|монотон|нудн|не\s*цікав|одноманіт|boring|monoton|repetitiv|tedious)/iu.test(quote);
+    const concreteWork = /(?:робот|завдан|справ|процес|час|викон|встанов|розстав|налаштов|work|task|time|process|setting|placing)/iu.test(quote);
+    if (length >= 4 && routine && (asked === 'barriers' || concreteWork)) return true;
     const concreteFeeling = /(?:боюс|боя|бої|ляка|страх|незрозум|не знаю.*почати|afraid|unclear)/iu.test(quote);
     return (length >= 3 && concreteFeeling || length >= 4 && /(?:коли|перед|після|замість|останн|сідаю|почина|відкрив|граю|дивлюс|перемика|втом|when|before|after|instead|last time|i play|i watch|switch|tired)/iu.test(quote)) && anchors.barriers.test(quote);
   }
@@ -336,6 +365,7 @@ export function preparePersonalDiscoveryRequest(profile: PersonalStrategyProfile
 export function applyDiscoveryTurn(profile: PersonalStrategyProfile, response: AIStrategyResponse, userText: string, turnId: string): PersonalStrategyProfile {
   const previous = normalizeStrategyDiscovery(profile);
   if (!turnId || previous.processedTurnIds.includes(turnId)) return profile;
+  if (isDiscoveryRepetitionComplaint(userText)) return profile;
   let discovery = previous;
   const patch: StrategyDiscoveryPatch | undefined = response.memoryPatch?.discovery;
   const topics = { ...discovery.topics };
@@ -354,12 +384,25 @@ export function applyDiscoveryTurn(profile: PersonalStrategyProfile, response: A
     topics[answer.topic] = { status: deferred ? 'deferred' : 'answered', evidence: next };
   }
   const selectedGoalIds = patch?.selectedGoalIds === undefined ? discovery.selectedGoalIds : uniqueIds(patch.selectedGoalIds).filter(id => profile.goals.some(goal => goal.id === id));
+  // A direct, independently validated answer must not depend on the model repeating it in answers[].
+  if (patch && asked === 'barriers' && topics.barriers.status === 'unknown'
+    && groundedAnswer('barriers', fullQuote, fullQuote, asked)) {
+    topics.barriers = { status: 'answered', evidence: [...topics.barriers.evidence, { quote: fullQuote, messageId: turnId }].slice(-100) };
+  }
+  // Keep a direct reply as context even when it cannot prove the missing topic.
+  // For example, «нічого не відбувається» denies an antecedent; it does not explain a barrier.
+  if (patch && asked && fullQuote && !strictYes(fullQuote) && !decline(fullQuote)
+    && topics[asked].status === 'unknown' && !topics[asked].evidence.some(entry => entry.messageId === turnId)) {
+    topics[asked] = { ...topics[asked], evidence: [...topics[asked].evidence, { quote: fullQuote, messageId: turnId }].slice(-100) };
+  }
   discovery = { ...discovery, topics, selectedGoalIds, processedTurnIds: [...discovery.processedTurnIds, turnId].slice(-100000) };
   // Question ids carry how many interview questions were asked in a row and whether help was offered.
   const streak = discoveryQuestionStreak(previous.pendingQuestion?.id);
   const marked = (id: string) => `${id}~q${Math.min(streak.asked + 1, 99)}${streak.offered ? ':offered' : ''}`;
   const address = detectDiscoveryAddress([...discoveryEvidenceTexts(previous), userText]);
-  if (patch?.question && isTopic(patch.question.topic) && clean(patch.question.text)) {
+  const repeatedQuestion = patch?.question && previous.pendingQuestion
+    && discoveryQuestionsEquivalent(patch.question.text, previous.pendingQuestion.text);
+  if (patch?.question && isTopic(patch.question.topic) && clean(patch.question.text) && !repeatedQuestion) {
     const offer = isPracticalHelpOffer(patch.question.text);
     // A fresh clarification reopens that topic even if an older answer was sufficient before.
     if (!offer && topics[patch.question.topic].status === 'answered') topics[patch.question.topic] = { ...topics[patch.question.topic], status: 'unknown' };

@@ -1,0 +1,107 @@
+import { createRequire } from 'node:module';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const require = createRequire(import.meta.url);
+const { chromium } = require('C:/Users/Ivan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright');
+const output = path.dirname(fileURLToPath(import.meta.url));
+const url = process.env.QA_URL || 'http://127.0.0.1:54837';
+assert.ok(['127.0.0.1', 'localhost'].includes(new URL(url).hostname), 'Synthetic QA uses a local server');
+const routine = 'Встановлювати кейфрейми, багато кейфреймів щоб все почало рухатись і це забирає багато часу і багато не цікавої рутини';
+const help = 'Допоможи мені почати завдання «Робота над анімацією» — зараз на черзі «Анімація 2». Спершу зрозумій, що робить початок складним.';
+const complaint = 'та блять я заєбався відповідати на одні і тай й ж повідомлення';
+const canonical = 'Пригадай останній раз, коли важлива справа відкладалася: що відбувалося безпосередньо перед тим, як увага перемкнулася на інше?';
+const capacity = 'Скільки часу й сил ти реально можеш виділити зараз, з урахуванням відпочинку та інших справ?';
+const profileKey = 'karkas.personal-strategy.v1:guest';
+const historyKey = 'karkas_ai_chat_history.v2:guest';
+const modeKey = 'karkas_ai_discovery_mode.v2:guest';
+const results = [];
+const browser = await chromium.launch({ headless: true, channel: 'chrome' });
+try {
+  for (const viewport of [{ width: 1440, height: 1000 }, { width: 375, height: 812 }]) {
+    const context = await browser.newContext({ viewport });
+    const requests = [], errors = [];
+    await context.route(request => new URL(request).origin !== new URL(url).origin, route => route.abort('blockedbyclient'));
+    await context.route('**/api/**', async route => {
+      if (!route.request().url().includes('/api/ai/assist')) return route.fulfill({ json: { ok: true, success: true, models: ['gemini-3-flash-preview'] } });
+      const body = route.request().postDataJSON();
+      requests.push(body);
+      let response;
+      if (body.prompt === routine) response = { reply: `Рутинне встановлення кейфреймів забирає багато часу.\n\n${capacity}`, strategy: { status: 'clarifying', question: capacity, actions: [], memoryPatch: { discovery: { answers: [{ topic: 'barriers', status: 'answered', quote: routine }], question: { topic: 'capacity', text: capacity } } } } };
+      else if (body.prompt === help) response = { reply: 'Початок ускладнює монотонне встановлення кейфреймів. Почни з одного руху для поточної анімації.' };
+      else if (body.prompt === complaint) response = { reply: 'Зупиняю повторні запитання. Для поточної анімації спробуй скопіювати наявні кейфрейми й змінити лише потрібні значення.' };
+      else throw new Error(`Unexpected synthetic prompt: ${body.prompt}`);
+      await route.fulfill({ json: response });
+    });
+    await context.addInitScript(({ canonical, profileKey, historyKey, modeKey }) => {
+      if (localStorage.getItem('qa-discovery-seeded')) return;
+      localStorage.setItem('qa-discovery-seeded', '1');
+      localStorage.setItem('todo_app_lang', 'uk');
+      localStorage.setItem('life_todo_tabs_v2', JSON.stringify([{ id: 'work', name: 'Робота', color: '#fff' }]));
+      localStorage.setItem('life_todo_tasks_v2', '[]');
+      localStorage.setItem('karkas_deleted_tasks_v2', '[]');
+      localStorage.setItem('karkas_custom_ai_enabled', 'true');
+      localStorage.setItem('karkas_available_models', JSON.stringify(['gemini-3-flash-preview']));
+      localStorage.setItem('karkas_custom_model', 'gemini-3-flash-preview');
+      sessionStorage.setItem('karkas_custom_api_key_session', 'synthetic-local-qa-key');
+      const id = `continue:${Date.now()}-qa:barriers`;
+      const topics = Object.fromEntries(['direction', 'motivation', 'circumstances', 'barriers', 'capacity', 'attempts'].map(topic => [topic, { status: 'unknown', evidence: [] }]));
+      topics.direction = { status: 'answered', evidence: [{ quote: 'Хочу завершити анімацію.', messageId: 'seed-direction' }] };
+      topics.motivation = { status: 'answered', evidence: [{ quote: 'Це важливо для роботи.', messageId: 'seed-motivation' }] };
+      localStorage.setItem(profileKey, JSON.stringify({ version: 1, onboardingStatus: 'in_progress', phase: 'exploring', goals: [{ id: 'g-animation', title: 'Завершити анімацію', motive: 'Робота', agreed: false, taskIds: [], categoryIds: ['work'] }], facts: [], barriers: [], preferences: [], feedback: [], actionHistory: [], processedTurnIds: [], reminders: { enabled: false, times: [], maxPerDay: 2 }, discovery: { version: 1, topics, selectedGoalIds: ['g-animation'], processedTurnIds: [], phase: 'exploring', pendingQuestion: { id, topic: 'barriers', text: canonical } } }));
+      localStorage.setItem(modeKey, JSON.stringify({ active: true, continueId: id }));
+      localStorage.setItem(historyKey, JSON.stringify([{ id: 'seed-question', role: 'assistant', content: canonical }]));
+    }, { canonical, profileKey, historyKey, modeKey });
+    const page = await context.newPage();
+    page.on('pageerror', error => errors.push(error.message));
+    await page.goto(url);
+    await page.locator('#bottom-summon-ai-btn').click();
+    await page.locator('#ai-discovery-mode-chip').waitFor();
+    const send = async text => {
+      await page.getByPlaceholder('Напишіть повідомлення…', { exact: true }).fill(text);
+      await page.locator('#ai-generate-submit-btn').click();
+      await page.waitForFunction(({ key, text }) => JSON.parse(localStorage.getItem(key) || '[]').some(message => message.role === 'user' && message.content === text), { key: historyKey, text });
+      await page.waitForFunction(key => JSON.parse(localStorage.getItem(key) || '[]').at(-1)?.role === 'assistant', historyKey);
+    };
+    await send(routine);
+    let state = await page.evaluate(({ profileKey, historyKey }) => ({ profile: JSON.parse(localStorage.getItem(profileKey)), history: JSON.parse(localStorage.getItem(historyKey)) }), { profileKey, historyKey });
+    assert.equal(state.profile.discovery.topics.barriers.status, 'answered');
+    assert.equal(state.profile.discovery.topics.barriers.evidence.at(-1).quote, routine);
+    assert.equal(state.profile.discovery.pendingQuestion.topic, 'capacity');
+    const repeatsBefore = state.history.filter(message => message.role === 'assistant' && message.content.includes(canonical)).length;
+    await send(help);
+    assert.equal(requests.at(-1).discoveryMode, false, 'Task help escapes the interview for this turn');
+    assert.equal(requests.at(-1).strategyContext.discovery.topics.barriers.evidence.at(-1).quote, routine, 'Prior answer reaches the next request');
+    await send(complaint);
+    assert.equal(requests.at(-1).discoveryMode, false, 'Complaint goes to practical help');
+    await page.locator('#ai-discovery-mode-chip').waitFor({ state: 'detached' });
+    await page.waitForFunction(key => JSON.parse(localStorage.getItem(key)).active === false, modeKey);
+    state = await page.evaluate(({ profileKey, historyKey }) => ({ profile: JSON.parse(localStorage.getItem(profileKey)), history: JSON.parse(localStorage.getItem(historyKey)) }), { profileKey, historyKey });
+    assert.equal(state.history.filter(message => message.role === 'assistant' && message.content.includes(canonical)).length, repeatsBefore, 'No canonical question appended again');
+    assert.equal(state.profile.discovery.topics.barriers.evidence.at(-1).quote, routine, 'Complaint preserves personal answers');
+    assert.equal(state.profile.discovery.pendingQuestion.topic, 'capacity', 'Complaint preserves pending topic');
+    const savedHistory = state.history, savedProfile = state.profile;
+    await page.locator('#close-ai-sheet-btn').click();
+    await page.locator('#bottom-summon-ai-btn').click();
+    assert.equal(await page.locator('#ai-discovery-mode-chip').count(), 0);
+    await page.reload();
+    await page.locator('#bottom-summon-ai-btn').click();
+    await page.getByPlaceholder('Напишіть повідомлення…', { exact: true }).waitFor();
+    assert.equal(await page.locator('#ai-discovery-mode-chip').count(), 0, 'Reload does not resume the interview');
+    const restored = await page.evaluate(({ profileKey, historyKey }) => ({ profile: JSON.parse(localStorage.getItem(profileKey)), history: JSON.parse(localStorage.getItem(historyKey)) }), { profileKey, historyKey });
+    assert.deepEqual(restored.history, savedHistory, 'Reopening and reload retain history without resumed question');
+    assert.deepEqual(restored.profile, savedProfile, 'Reopening and reload retain personal memory');
+    assert.deepEqual(errors, [], 'No uncaught browser errors');
+    await page.waitForFunction(() => {
+      const sheet = document.querySelector('#ps-ai-sheet');
+      return sheet && Math.abs(new DOMMatrixReadOnly(getComputedStyle(sheet).transform).m42) < 0.5;
+    });
+    await page.screenshot({ path: path.join(output, viewport.width > 500 ? 'discovery-desktop.png' : 'discovery-mobile.png'), fullPage: true });
+    results.push({ viewport, passed: true, assistRequests: requests.length, scenarios: ['Routine barrier stored', 'Task-help request uses ordinary turn', 'Complaint exits persisted interview mode', 'Close/reopen and reload keep memory and history without resuming'] });
+    await context.close();
+  }
+  fs.writeFileSync(path.join(output, 'discovery-ui-results.json'), JSON.stringify({ passed: true, syntheticOnly: true, realAiCalls: 0, note: 'Assist responses are deterministic mocks; server sanitizer is covered by separate real utility tests.', results }, null, 2));
+  console.log(`PASS ${results.length} discovery UI regression groups`);
+} finally { await browser.close(); }

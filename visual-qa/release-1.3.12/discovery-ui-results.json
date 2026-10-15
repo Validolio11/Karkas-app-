@@ -1,0 +1,36 @@
+{
+  "passed": true,
+  "syntheticOnly": true,
+  "realAiCalls": 0,
+  "note": "Assist responses are deterministic mocks; server sanitizer is covered by separate real utility tests.",
+  "results": [
+    {
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "passed": true,
+      "assistRequests": 3,
+      "scenarios": [
+        "Routine barrier stored",
+        "Task-help request uses ordinary turn",
+        "Complaint exits persisted interview mode",
+        "Close/reopen and reload keep memory and history without resuming"
+      ]
+    },
+    {
+      "viewport": {
+        "width": 375,
+        "height": 812
+      },
+      "passed": true,
+      "assistRequests": 3,
+      "scenarios": [
+        "Routine barrier stored",
+        "Task-help request uses ordinary turn",
+        "Complaint exits persisted interview mode",
+        "Close/reopen and reload keep memory and history without resuming"
+      ]
+    }
+  ]
+}

@@ -42,7 +42,7 @@ import { proposalTargetsUnchanged } from './aiProposalGuard';
 import { isExplicitAIProposalApplyRequest } from '../utils/aiProposalConfirmation';
 import { AI_COMMANDS, intentMode, migrateAIComposer, modeIntent, parseAICommand } from './aiCommands';
 import { strategyGreeting } from '../utils/personalStrategy';
-import { addressedDiscoveryQuestion, detectDiscoveryAddress, discoveryQuestionForState, practicalHelpRequested } from '../utils/strategyDiscovery';
+import { addressedDiscoveryQuestion, detectDiscoveryAddress, discoveryQuestionForState, isDiscoveryRepetitionComplaint, practicalHelpRequested } from '../utils/strategyDiscovery';
 import { exitDiscoveryMode, nextDiscoveryMode, readDiscoveryMode, saveDiscoveryMode, type DiscoveryModeState } from './aiDiscoveryMode';
 import { useDialogKeyboard } from './useDialogKeyboard';
 import { aiApplyOutcome, describeAIApplyResult, describeAITimer, getAITimerContext, prepareAITask, type AIApplyResult } from './aiTaskProposal';
@@ -817,6 +817,10 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     // help now as an ordinary turn; the reply then offers to continue or finish the interview.
     const inDiscoveryMode = discoveryMode.active;
     const discoveryHelpTurn = inDiscoveryMode && parsedCommand.intent === 'auto' && practicalHelpRequested(requestText, strategyProfile);
+    const discoveryRepetitionComplaint = inDiscoveryMode && isDiscoveryRepetitionComplaint(requestText);
+    // A request to stop repeated questions ends the explicit interview, including after reopening.
+    // Keep its saved answers and pending topic so only an explicit restart resumes it.
+    if (discoveryRepetitionComplaint) setDiscoveryMode(previous => exitDiscoveryMode(previous));
     const currentQuestion = inDiscoveryMode ? strategyProfile?.discovery?.pendingQuestion : undefined;
     const questionResumeId = currentQuestion ? `discovery-resume-${currentQuestion.id}` : '';
     const discoveryHasQuestion = !!currentQuestion && !!latestAssistantMessage && (
@@ -1149,9 +1153,14 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
       setPendingChatDeletions(data.taskDeletions || []);
       const messageId = `reply-${currentRequest.turnId}`;
       latestProposalMessageId.current = messageId;
-      setDiscoveryChoiceId(discoveryHelpTurn ? messageId : null);
+      setDiscoveryChoiceId(discoveryHelpTurn && !discoveryRepetitionComplaint ? messageId : null);
       pendingTaskSnapshotRef.current = currentTasks;
       const strategyResult = onStrategyResponse?.(data, currentRequest.text, currentRequest.turnId!, currentRequest.intent || 'auto', requestOwner, requestProfile, currentRequest.discoveryConfirmationId);
+        if (inDiscoveryMode && data.strategy?.status === 'getting_to_know' && !data.strategy.question
+          && !data.strategy.memoryPatch?.discovery?.summary) {
+          // No fresh question means the server paused the interview; do not resume a hidden fallback.
+          setDiscoveryMode(previous => exitDiscoveryMode(previous));
+        }
       const strategyNotice = strategyResult && typeof strategyResult === 'object' ? strategyResult : undefined;
       setChatMessages(previous => [...previous, {
         id: messageId,

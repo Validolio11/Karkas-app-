@@ -1,6 +1,6 @@
 import type { AIIntent, PersonalStrategyProfile, StrategyDiscoveryPatch, StrategyDiscoveryTopic, StrategyMemoryPatch } from '../src/types';
 import { applyStrategyMemory, readPersonalStrategy } from '../src/utils/personalStrategy';
-import { addressFormOf, applyDiscoveryTurn, detectDiscoveryAddress, discoveryEvidenceTexts, discoveryQuestionForState, discoveryQuestionStreak, isPersonalStrategyReady, mentionsDiscoveryTopic, missingStrategyDiscoveryTopics, normalizeStrategyDiscovery, PRACTICAL_HELP_OFFER, STRATEGY_DISCOVERY_TOPICS, type DiscoveryAddress } from '../src/utils/strategyDiscovery';
+import { addressFormOf, applyDiscoveryTurn, detectDiscoveryAddress, discoveryEvidenceTexts, discoveryQuestionForState, discoveryQuestionStreak, discoveryQuestionsEquivalent, isDiscoveryRepetitionComplaint, isPersonalStrategyReady, mentionsDiscoveryTopic, missingStrategyDiscoveryTopics, normalizeStrategyDiscovery, PRACTICAL_HELP_OFFER, STRATEGY_DISCOVERY_TOPICS, type DiscoveryAddress } from '../src/utils/strategyDiscovery';
 import { lastChangeOffer } from './temporalResponseGuard';
 
 export type PersonalChatRoute = 'personal' | 'task_command' | 'workspace_analysis' | 'help' | 'general';
@@ -298,6 +298,7 @@ Distinguish a concrete task command from a person's wishes or answer to a gettin
 For PERSONAL_DISCOVERY, first understand motives, actual barriers and available capacity/circumstances, adaptively, one meaningful question at a time. Never rush from goal names to a schedule, commitments, duration estimates or an execution plan. Even a direct request for a personal plan still needs the most important missing clarification. Never infer readiness from an agreed goal, your own ready status, elapsed chat length or a bare yes. Only the app's discovery state and scoped confirmation of its pending understanding summary authorize personal planning.
 Concrete CRUD/timer/subtask/help commands and read-only workspace analysis remain available without a personal interview, strictly within the supplied command scope. They do not complete the personal interview or replace an existing strategy.
 Respect negation and ambivalence in the person's actual words. Do not substitute your assumptions for motives, effort, mood or life circumstances. No profession assumptions, diagnoses, personality labels, blame, canned praise or generic productivity lecture. Ask about the specific situation, prior attempts and what happens before distraction when relevant. When someone has not started/refuses, ask what happened before suggesting fixes.
+Use the person's existing answers. Repetitive routine, boredom and excessive time spent are concrete barriers. "Nothing happens" after a question about an event before distraction is an answer, not a reason to repeat that question. Never repeat or paraphrase a question already asked. If the person complains about repeated questions, stop the interview and respond to their stated concern without another question or readiness claim.
 Memory updates add grounded observations; facts quote exact user words, interpretations are hypotheses. Never silently change or self-confirm goals. Retain existing useful memory and agreed strategy. Discovery questions, ordinary task commands and metric analysis are not new personal strategies.
 Never provide a personal plan via legacy task arrays to bypass discovery. For PERSONAL_DISCOVERY omit all mutations, narrative, nextAction and focusTaskId; return only a short reflection in your own words, optionally one grounded insight, the next question and discovery evidence/summary.`;
 
@@ -430,7 +431,7 @@ export function discoveryAddressContext(address: DiscoveryAddress, uk: boolean, 
 }
 
 export interface DiscoveryReplyOptions {
-  /** Recent conversation ({ role, content }), used to keep the person's form of address. */
+  /** Recent conversation ({ role, content }), used for address and to avoid repeated questions. */
   history?: unknown;
 }
 
@@ -528,6 +529,14 @@ function modelField(parsed: Record<string, any>, incoming: Record<string, any>, 
   return [parsed[key], record(parsed.strategy) ? parsed.strategy[key] : undefined, incoming[key]].find(value => typeof value === 'string' && value.trim());
 }
 
+/** Include the stored question even when the client sent no recent conversation. */
+function previousDiscoveryQuestions(profile: PersonalStrategyProfile, history: unknown): string[] {
+  const recent = Array.isArray(history) ? history.filter(message => record(message) && message.role === 'assistant' && typeof message.content === 'string')
+    .slice(-20).flatMap(message => (message.content as string).match(/[^.!?\n]*\?/gu) || []) : [];
+  const pending = normalizeStrategyDiscovery(profile).pendingQuestion?.text;
+  return pending ? [...recent, pending] : recent;
+}
+
 /**
  * Ignore free-form provider prose and all action containers when interview evidence is incomplete.
  * The reply is: a short reflection (the model's own validated sentence, or a neutral acknowledgement),
@@ -535,15 +544,23 @@ function modelField(parsed: Record<string, any>, incoming: Record<string, any>, 
  * then, the app offers practical help once instead of a further interview question.
  */
 export function sanitizeDiscoveryResponse(parsed: Record<string, any>, profile: PersonalStrategyProfile, userText: string, turnId: string, uk: boolean, options: DiscoveryReplyOptions = {}) {
+  // A complaint concerns this conversation, never personal evidence or consent to continue it.
+  if (isDiscoveryRepetitionComplaint(userText)) {
+    const reply = uk ? 'Я повторював уже поставлене запитання. Зупиняю це опитування; попередні відповіді вже є в розмові.'
+      : 'I repeated a question I had already asked. I am stopping the interview; your earlier answers are already in the conversation.';
+    return { reply, tasks: [], taskUpdates: [], taskDeletions: [], tabs: [], strategy: { status: 'getting_to_know' as const, question: undefined, memoryPatch: undefined, actions: [] } };
+  }
   const raw = record(parsed.strategy?.memoryPatch) ? parsed.strategy.memoryPatch : parsed.memoryPatch;
   const patch = discoveryMemory(raw);
   const incoming = record(raw?.discovery) ? raw.discovery : {};
   const address = discoveryAddressFor(profile, userText, options.history);
   let interviewProfile = profile;
   const before = normalizeStrategyDiscovery(profile);
+  const askedBefore = previousDiscoveryQuestions(profile, options.history);
+  const freshQuestion = (value: string | undefined) => !!value && !askedBefore.some(previous => discoveryQuestionsEquivalent(previous, value));
   const clarification = record(incoming.question) ? incoming.question : undefined;
   const clarificationText = clarification ? discoveryQuestionText(clarification.text) : undefined;
-  const usableClarification = clarification && topic(clarification.topic) && clarificationText && !addressMismatch(clarificationText, address) ? clarificationText : undefined;
+  const usableClarification = clarification && topic(clarification.topic) && clarificationText && !addressMismatch(clarificationText, address) && freshQuestion(clarificationText) ? clarificationText : undefined;
   const previousQuestion = before.pendingQuestion;
   if (usableClarification && previousQuestion?.topic === clarification!.topic) {
     // A substantive first answer may still need a narrower follow-up on the same topic.
@@ -566,20 +583,39 @@ export function sanitizeDiscoveryResponse(parsed: Record<string, any>, profile: 
   }
   const desired = usableClarification && missing.includes(clarification!.topic) ? { topic: clarification!.topic as StrategyDiscoveryTopic, text: usableClarification } : undefined;
   const defaultTopic = state.topics.direction.status === 'answered' && state.topics.barriers.status === 'unknown' ? 'barriers' : missing[0];
-  const nextTopic: StrategyDiscoveryTopic = needsDirection && !missing.length ? 'direction' : desired?.topic || defaultTopic;
+  let nextTopic: StrategyDiscoveryTopic = needsDirection && !missing.length ? 'direction' : desired?.topic || defaultTopic;
   const lang = uk ? 'uk' : 'en';
   const reflection = safeDiscoveryReflection(modelField(parsed, incoming, 'reflection'), userText, address, uk);
   // With the model's own reflection, a quoted key phrase in the question would repeat it.
   const grounded = reflection ? undefined : groundedFallbackQuestion(nextTopic, userText, uk, address);
-  const question = state.topics[nextTopic].status === 'deferred'
+  let question = state.topics[nextTopic].status === 'deferred'
     ? discoveryQuestionForState(state, nextTopic, lang, address)
     : /^(?:не знаю|не впевнен[аий]*|важко сказати|i don['’]?t know|not sure|maybe|можливо)[.!\s]*$/iu.test(userText.trim()) && previousQuestion?.topic === nextTopic
       ? narrowerDiscoveryQuestion(nextTopic, uk, address)
     : desired?.text || grounded || (nextTopic === 'capacity' ? discoveryQuestionForState(state, nextTopic, lang, address) : fallbackDiscoveryQuestion(nextTopic, uk, address));
+  if (!freshQuestion(question)) {
+    // Explore a different aspect rather than cycling through synonyms of the same question.
+    const candidates = [...new Set([nextTopic, ...missing])].flatMap(candidateTopic => {
+      const practical = { topic: candidateTopic, text: discoveryQuestionForState(state, candidateTopic, lang, address) };
+      // A refusal to share never falls back to a direct question about the private topic.
+      return state.topics[candidateTopic].status === 'deferred' ? [practical] : [practical,
+        { topic: candidateTopic, text: narrowerDiscoveryQuestion(candidateTopic, uk, address) },
+        { topic: candidateTopic, text: fallbackDiscoveryQuestion(candidateTopic, uk, address) },
+      ];
+    });
+    const next = candidates.find(candidate => freshQuestion(candidate.text));
+    if (next) { nextTopic = next.topic; question = next.text; }
+    else {
+      // Exhausting safe questions does not authorize a summary, a plan, or invented evidence.
+      if (patch.discovery) delete patch.discovery.question;
+      return { reply: [reflection, uk ? 'Не ставитиму знову ті самі запитання. Зупиняю опитування на цьому місці.' : 'I will not ask the same questions again. I am pausing the interview here.'].filter(Boolean).join('\n\n'),
+        tasks: [], taskUpdates: [], taskDeletions: [], tabs: [], strategy: { status: 'getting_to_know' as const, question: undefined, memoryPatch: patch, actions: [] } };
+    }
+  }
   // After two interview questions in a row each reply carries one grounded insight, or once offers practical help instead.
   const streak = discoveryQuestionStreak(previousQuestion?.id);
   const insight = streak.asked >= 2 ? safeDiscoveryInsight(modelField(parsed, incoming, 'insight'), userText, address, uk) : undefined;
-  const offer = streak.asked >= 2 && !insight && !streak.offered && state.topics[nextTopic].status !== 'deferred';
+  const offer = streak.asked >= 2 && !insight && !streak.offered && state.topics[nextTopic].status !== 'deferred' && freshQuestion(PRACTICAL_HELP_OFFER[lang]);
   const asked = offer ? PRACTICAL_HELP_OFFER[lang] : question;
   patch.discovery = { ...patch.discovery, question: { topic: nextTopic, text: asked } };
   const lead = reflection || (question === grounded && !offer ? '' : acknowledgement(userText, uk, before.processedTurnIds.length));

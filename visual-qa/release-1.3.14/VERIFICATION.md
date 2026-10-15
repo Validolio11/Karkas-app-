@@ -16,3 +16,5 @@ Changes: task targeting from recent conversation, explicit replacement of record
 The earlier functional/source evidence is documented in docs/AI-TIME-FIX-2026-10-16.md and docs/FUNCTIONAL-QA-2026-10-16.md. AI browser/provider tests use synthetic responses; no live Gemini, two-device cloud sync, microphone or Windows suspend/resume validation is claimed. Existing large-chunk build warning and unsigned installer status are unchanged.
 
 Build output: release/release-1.3.14. Release tag: 1.3.14, matching existing published tag format and avoiding an independent v* CI publication.
+
+Publication confirmed: https://github.com/Validolio11/Karkas-app-/releases/tag/1.3.14. All three uploaded assets match verified local sizes and SHA256. A final check through the application's actual resolveTrustedUpdate/verifyUpdateFile implementation accepted the public latest release and manifest as an update from 1.3.13 and matched its SHA512 to the built installer. See publication.json and public-update-verification.json. This check did not install or launch the update on the user's machine.

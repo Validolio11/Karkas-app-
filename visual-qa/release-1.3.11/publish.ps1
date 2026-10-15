@@ -76,6 +76,11 @@ try {
   }
   $published = Invoke-RestMethod -Method Patch -Uri "$api/$($release.id)" -Headers $headers -ContentType 'application/json' -Body (@{ draft = $false; make_latest = 'true' } | ConvertTo-Json)
   if ($published.draft -or -not $published.published_at) { throw 'Publication was not confirmed' }
-  @{ version = $version; commit = $commit; releaseId = $published.id; url = $published.html_url; publishedAt = $published.published_at; assets = $verifiedAssets } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $PSScriptRoot 'publication.json') -Encoding UTF8
+  $publicAssets = @($published.assets | ForEach-Object {
+    $local = $localAssets[$_.name]
+    if (-not $local -or $_.size -ne $local.size) { throw 'Published asset mismatch' }
+    @{ name = $_.name; size = $_.size; sha256 = $local.sha256; url = $_.browser_download_url }
+  })
+  @{ version = $version; commit = $commit; releaseId = $published.id; url = $published.html_url; publishedAt = $published.published_at; assets = $publicAssets } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $PSScriptRoot 'publication.json') -Encoding UTF8
   Write-Output "Published $($published.html_url)"
 } finally { Pop-Location }

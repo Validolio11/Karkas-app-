@@ -8,19 +8,19 @@
       "sha256": "f5971c41fe83ee29d2d1c520454672b2081228d08d9322b2a6fd4bda02e910b3",
       "size": 139214325,
       "name": "Karkas-Setup-1.3.11.exe",
-      "url": "https://github.com/Validolio11/Karkas-app-/releases/download/untagged-b4c4a05ae8fe1358eeed/Karkas-Setup-1.3.11.exe"
+      "url": "https://github.com/Validolio11/Karkas-app-/releases/download/1.3.11/Karkas-Setup-1.3.11.exe"
     },
     {
       "sha256": "661035ae50671073c351313e8c6df25a6b994cb20496450b6db0c3ca363e2cd8",
       "size": 146338,
       "name": "Karkas-Setup-1.3.11.exe.blockmap",
-      "url": "https://github.com/Validolio11/Karkas-app-/releases/download/untagged-b4c4a05ae8fe1358eeed/Karkas-Setup-1.3.11.exe.blockmap"
+      "url": "https://github.com/Validolio11/Karkas-app-/releases/download/1.3.11/Karkas-Setup-1.3.11.exe.blockmap"
     },
     {
       "sha256": "97cc7900d535228a55ba8386334ca37a5908e8a8e45ff953469f71efa0dfa9c0",
       "size": 344,
       "name": "latest.yml",
-      "url": "https://github.com/Validolio11/Karkas-app-/releases/download/untagged-b4c4a05ae8fe1358eeed/latest.yml"
+      "url": "https://github.com/Validolio11/Karkas-app-/releases/download/1.3.11/latest.yml"
     }
   ],
   "publishedAt": "2026-10-15T06:07:23Z"

@@ -1081,6 +1081,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
               createdAt: t.createdAt,
               updatedAt: t.updatedAt,
               activityTrail: t.activityTrail,
+              limitedStart: t.limitedStart,
               startedAt: t.startedAt,
               completedAt: t.completedAt,
               scheduledFor: t.scheduledFor,

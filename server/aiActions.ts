@@ -200,7 +200,7 @@ export function validatedTimerFields(item: any, existing?: TimerContext) {
   item = omitOptionalNulls(item, ['timerMode', 'countdownDurationSeconds', 'timerAction']);
   const fields: Record<string, unknown> = {};
   if (item.recordedWorkSeconds !== undefined && !existing) throw new Error('Recorded work correction requires an existing task');
-  for (const key of ['timerRunning', 'timerStartedAt', 'timeSpentSeconds', 'countdownRemainingSeconds']) {
+  for (const key of ['timerRunning', 'timerStartedAt', 'timeSpentSeconds', 'countdownRemainingSeconds', 'limitedStart', 'activityTrail']) {
     if (item[key] !== undefined) throw new Error('Unsupported timer accounting field');
   }
   if (item.timerMode !== undefined) {

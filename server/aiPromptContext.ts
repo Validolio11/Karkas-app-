@@ -114,6 +114,7 @@ export function compactTaskPromptContext(tasks: readonly PromptTask[], options: 
     ...(task.scheduledFor !== undefined ? { scheduledFor: task.scheduledFor } : {}),
     ...(task.scheduleNextStartAt ? { scheduleNextStartAt: task.scheduleNextStartAt } : {}),
     timerRunning: task.timerRunning === true,
+    ...(task.limitedStart ? { limitedStart: { capSeconds: task.limitedStart.capSeconds, continued: Boolean(task.limitedStart.continued) } } : {}),
     ...(task.timerStartedAt !== undefined ? { timerStartedAt: task.timerStartedAt } : {}),
     timerMode: task.timerMode ?? ((task.countdownDurationSeconds ?? 0) > 0 ? 'countdown' : 'stopwatch'),
     ...(task.countdownDurationSeconds !== undefined ? { countdownDurationSeconds: task.countdownDurationSeconds } : {}),

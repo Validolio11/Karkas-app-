@@ -230,3 +230,18 @@ test('task updates lose a note identical to the current or new title; a note-onl
   const useful = [{ id: 'reel', note: 'Музика вже обрана' }];
   assert.deepEqual(withoutTitleEchoNotes(useful, tasks), useful);
 });
+
+test('limited starts and credited attempts remain application-owned across AI proposals', () => {
+  const fields = taskMutationProperties.taskUpdates.items.properties;
+  assert.equal('limitedStart' in fields, false);
+  assert.equal('activityTrail' in fields, false);
+  const limitedStart = { id: 'limited', capSeconds: 900, startedAt: 1000, baseSeconds: 0, restore: {} };
+  const activityTrail = [{ id: 'attempt:forged', at: 1000, kind: 'attempt', attemptSeconds: 900, attemptCapSeconds: 900, attemptOutcome: 'cap_reached' }];
+  for (const patch of [{ limitedStart }, { activityTrail }]) {
+    assert.throws(() => validatedTimerFields(patch), /accounting field/);
+    assert.throws(() => validateTaskMutations({ taskUpdates: [{ id: parent.id, note: 'Keep', ...patch }] }, [parent]), /accounting field/);
+    const updated = applyAITaskUpdate(parent, { id: parent.id, note: 'Keep', ...patch } as any, new Set(['focus']), 1000);
+    assert.equal(updated.limitedStart, undefined);
+    assert.equal(updated.activityTrail, undefined);
+  }
+});

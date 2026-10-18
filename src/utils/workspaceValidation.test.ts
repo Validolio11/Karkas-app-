@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { parseWorkspace } from './workspaceValidation';
+import { parseWorkspace, isTaskLimitedStart } from './workspaceValidation';
+import { parseWorkspace as parseSharedWorkspace } from '../../electron/workspace-validation.mjs';
+import { isTaskActivityEvent } from './taskActivity';
 import { readLocalWorkspace, parseAccountRecord } from './localWorkspace';
 import type { WorkspaceState } from './syncState';
 
@@ -65,4 +67,30 @@ test('legacy category labels migrate without altering the original workspace and
   assert.equal(account.workspace.tabs[0].name, 'Work');
   assert.equal(account.base.tabs[0].name, 'Work');
   assert.equal(store.getItem('account:recovery-backup'), accountRaw);
+});
+
+test('limited starts and attempts use matching renderer and native validation', () => {
+  const valid = workspace();
+  const limitedStart = { id: 'limited', capSeconds: 900, startedAt: 1000, baseSeconds: 30, continued: true,
+    restore: { timerMode: 'countdown', countdownDurationSeconds: 1500, countdownRemainingSeconds: 1200 } };
+  const attempt = { id: 'attempt:limited', at: 301000, kind: 'attempt', attemptSeconds: 300, attemptCapSeconds: 900,
+    attemptOutcome: 'stopped', attemptContinued: true };
+  const input = { ...valid, tasks: [{ ...valid.tasks[0], limitedStart, activityTrail: [attempt] }] };
+  assert.equal(isTaskLimitedStart(limitedStart), true);
+  assert.equal(isTaskActivityEvent(attempt), true);
+  assert.deepEqual(parseWorkspace(input), input);
+  assert.deepEqual(parseSharedWorkspace(input), input);
+  for (const patch of [{ id: '' }, { capSeconds: 59 }, { capSeconds: 3601 }, { capSeconds: 60.5 }, { startedAt: NaN },
+    { baseSeconds: -1 }, { baseSeconds: 1.5 }, { continued: 1 }, { restore: null }, { restore: { timerMode: 'invalid' } },
+    { restore: { countdownRemainingSeconds: -1 } }, { unexpected: true }]) {
+    const invalid = { ...limitedStart, ...patch };
+    assert.equal(isTaskLimitedStart(invalid), false);
+    for (const parse of [parseWorkspace, parseSharedWorkspace]) assert.throws(() => parse({ ...input, tasks: [{ ...input.tasks[0], limitedStart: invalid }] }));
+  }
+  for (const patch of [{ attemptSeconds: -1 }, { attemptSeconds: 1.5 }, { attemptSeconds: Infinity }, { attemptSeconds: 86401 },
+    { attemptCapSeconds: '900' }, { attemptCapSeconds: 86401 }, { attemptOutcome: 'failed' }, { attemptContinued: 1 }]) {
+    const invalid = { ...attempt, ...patch };
+    assert.equal(isTaskActivityEvent(invalid), false);
+    for (const parse of [parseWorkspace, parseSharedWorkspace]) assert.throws(() => parse({ ...input, tasks: [{ ...input.tasks[0], activityTrail: [invalid] }] }));
+  }
 });

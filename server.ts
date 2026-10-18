@@ -1232,6 +1232,7 @@ Return valid JSON adhering to schema.`;
             timerMode: t.timerMode ?? (t.countdownDurationSeconds > 0 ? 'countdown' : 'stopwatch'),
             countdownDurationSeconds: t.countdownDurationSeconds ?? null,
             countdownRemainingSeconds: t.countdownRemainingSeconds ?? null,
+            ...(t.limitedStart ? { limitedStart: { capSeconds: t.limitedStart.capSeconds, continued: !!t.limitedStart.continued } } : {}),
             done: !!t.done,
           })),
           // History is compact so the provider does not re-read sync/timer journals on every request.

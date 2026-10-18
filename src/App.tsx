@@ -1,4 +1,5 @@
 import { pauseTaskTimer, startTaskTimer, configureTaskCountdown, clearTaskCountdown, extendTaskCountdown, getTaskRemainingSeconds } from './utils/taskTimer';
+import { startLimitedStart, finishLimitedStart, needsLimitedStartFinish, latestAttempt, summarizeAttempts } from './utils/limitedStart';
 import { applyAITaskUpdate } from './utils/aiTaskUpdates';
 import { applyAITimerSettings, isAITimerSettingsValid } from './utils/aiTaskTimer';
 import { isNewerAppVersion, isValidAppVersion } from './utils/appVersion';
@@ -195,6 +196,7 @@ export default function App() {
   const timerWorkspaceReadyRef = React.useRef(false);
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [timerNotice, setTimerNotice] = useState<string | null>(null);
+  const [timerNoticeCalm, setTimerNoticeCalm] = useState(false);
   const notifiedSchedulesRef = React.useRef(new Set<string>());
   const archivedScheduleIdsRef = React.useRef<string[]>([]);
 
@@ -222,6 +224,7 @@ export default function App() {
           return occurrence.title + ' · ' + (lang === 'uk' ? 'Заплановано на' : 'Planned for') + ' ' + at;
         }).join('\n');
         const scope = timerNoticeScopeRef.current;
+        setTimerNoticeCalm(false);
         setTimerNotice(body);
         if (window.karkasDesktop) void window.karkasDesktop.system.showNotification({ title, body, target: { view: 'STRATEGY', ownerId: workspaceOwnerRef.current, taskId: due[0].taskId } }).then(result => {
           if (!result.ok && scope === timerNoticeScopeRef.current) setTimerNotice(body + ' ' + (lang === 'uk' ? 'Сповіщення Windows недоступне.' : 'Windows notification unavailable.'));
@@ -232,9 +235,15 @@ export default function App() {
         const key = `${task.id}:${task.timerStartedAt}`;
         if (notifiedTimersRef.current.has(key)) continue;
         notifiedTimersRef.current.add(key);
-        const title = lang === 'uk' ? 'Karkas · Час вийшов' : 'Karkas · Time is up';
-        const body = lang === 'uk' ? `${task.title}. Завершіть завдання або додайте час.` : `${task.title}. Complete the task or add more time.`;
+        const limited = task.limitedStart;
+        const title = limited
+          ? (lang === 'uk' ? 'Karkas · Спробу зараховано' : 'Karkas · Attempt counted')
+          : (lang === 'uk' ? 'Karkas · Час вийшов' : 'Karkas · Time is up');
+        const body = limited
+          ? (lang === 'uk' ? `«${task.title}»: ${limited.capSeconds / 60} хв роботи. Можна зупинитись або продовжити.` : `“${task.title}”: ${limited.capSeconds / 60} min of work. You can stop or continue.`)
+          : (lang === 'uk' ? `${task.title}. Завершіть завдання або додайте час.` : `${task.title}. Complete the task or add more time.`);
         const noticeScope = timerNoticeScopeRef.current;
+        setTimerNoticeCalm(!!limited);
         setTimerNotice(body);
         if (window.karkasDesktop) {
           void window.karkasDesktop.system.showNotification({ title, body }).then(result => {
@@ -243,7 +252,8 @@ export default function App() {
         }
       }
       setTasks(previous => {
-        const updated = sanitizeTasksTimerSafeguard(previous, now);
+        const normalized = previous.map(task => needsLimitedStartFinish(task, now) ? finishLimitedStart(task, now) : task);
+        const updated = sanitizeTasksTimerSafeguard(normalized, now).map(task => needsLimitedStartFinish(task, now) ? finishLimitedStart(task, now) : task);
         return updated.some((task, index) => task !== previous[index]) ? updated : previous;
       });
     }, 1000);
@@ -1928,7 +1938,7 @@ export default function App() {
     if (!current) return;
     const shouldComplete = !current.done;
     setTasks(prev => prev.map(task => task.id === id
-      ? shouldComplete ? completeTask(task, now) : reopenTask(task, now)
+      ? shouldComplete ? completeTask(finishLimitedStart(task, now), now) : reopenTask(task, now)
       : task));
     setCompletedNoticeId(shouldComplete ? id : null);
     if (!shouldComplete) {
@@ -1940,7 +1950,23 @@ export default function App() {
 
   const handleStartTask = (id: string) => {
     const now = Date.now();
-    setTasks(prev => prev.map(task => task.id === id ? startTaskWork(task, now) : task));
+    setTasks(prev => prev.map(task => task.id === id ? startTaskWork(finishLimitedStart(task, now), now) : task));
+  };
+
+  const handleLimitedStart = (id: string, capSeconds: number, options?: { continued?: boolean }) => {
+    sound.activate();
+    const now = Date.now();
+    setTasks(previous => previous.map(task => {
+      if (task.id !== id) return task;
+      const attempt = latestAttempt(task);
+      const recent = !!attempt && now >= attempt.at && now - attempt.at <= 30 * 60000;
+      return startLimitedStart(task, capSeconds, now, { continued: options?.continued ?? recent });
+    }));
+  };
+
+  const handleFinishLimitedStart = (id: string) => {
+    const now = Date.now();
+    setTasks(previous => previous.map(task => task.id === id ? finishLimitedStart(task, now) : task));
   };
 
   const handleToggleTimer = (id: string) => {
@@ -1948,42 +1974,43 @@ export default function App() {
     const now = Date.now();
     const shouldPause = tasks.find(task => task.id === id)?.timerRunning;
     setTasks(previous => previous.map(task => task.id === id
-      ? shouldPause ? pauseTaskTimer(task, now) : task.done ? task : startTaskTimer(task, now)
+      ? shouldPause ? task.limitedStart ? finishLimitedStart(task, now) : pauseTaskTimer(task, now) : task.done ? task : startTaskTimer(finishLimitedStart(task, now), now)
       : task));
   };
 
   const handleConfigureCountdown = (id: string, seconds: number) => {
     if (!Number.isFinite(seconds) || seconds < 60 || seconds > 86400) return;
     const now = Date.now();
-    setTasks(previous => previous.map(task => task.id === id && !task.done ? configureTaskCountdown(task, seconds, now) : task));
+    setTasks(previous => previous.map(task => task.id === id && !task.done ? configureTaskCountdown(finishLimitedStart(task, now), seconds, now) : task));
   };
 
   const handleStopTimer = (id: string) => {
     const now = Date.now();
-    setTasks(previous => previous.map(task => task.id === id ? pauseTaskTimer(task, now) : task));
+    setTasks(previous => previous.map(task => task.id === id ? task.limitedStart ? finishLimitedStart(task, now) : pauseTaskTimer(task, now) : task));
   };
 
   const handleExtendCountdown = (id: string, extraSeconds: number) => {
     const now = Date.now();
-    setTasks(previous => previous.map(task => task.id === id ? extendTaskCountdown(task, extraSeconds, now) : task));
+    setTasks(previous => previous.map(task => task.id === id ? extendTaskCountdown(finishLimitedStart(task, now), extraSeconds, now) : task));
   };
 
   const handleClearCountdown = (id: string) => {
     const now = Date.now();
-    setTasks(previous => previous.map(task => task.id === id ? clearTaskCountdown(task, now) : task));
+    setTasks(previous => previous.map(task => task.id === id ? clearTaskCountdown(finishLimitedStart(task, now), now) : task));
   };
 
   const handleResetTimer = (id: string) => {
     const task = tasks.find(task => task.id === id);
     if ((task?.timeSpentSeconds || task?.timerRunning) && !window.confirm(lang === 'uk' ? 'Скинути весь записаний час цього завдання до нуля?' : 'Reset all recorded time for this task to zero?')) return;
     sound.tick(300);
+    const now = Date.now();
     setTasks((prev) =>
       prev.map((t) => {
         if (t.id === id) {
           return {
-            ...discardTaskStepAttribution(pauseTaskTimer(t)),
+            ...discardTaskStepAttribution(t.limitedStart ? finishLimitedStart(t, now) : pauseTaskTimer(t, now)),
             timeSpentSeconds: 0,
-            timeResetAt: Math.max(Date.now(), (t.timeResetAt || 0) + 1),
+            timeResetAt: Math.max(now, (t.timeResetAt || 0) + 1),
             timerRunning: false,
             timerStartedAt: undefined,
           };
@@ -1996,7 +2023,7 @@ export default function App() {
   const handleUpdateTimeSpent = (id: string, seconds: number) => {
     sound.tick(500);
     const now = Date.now();
-    setTasks(prev => prev.map(task => task.id === id ? { ...setTaskTimeSpent(task, seconds, now), timeResetAt: Math.max(now, (task.timeResetAt || 0) + 1) } : task));
+    setTasks(prev => prev.map(task => task.id === id ? { ...setTaskTimeSpent(finishLimitedStart(task, now), seconds, now), timeResetAt: Math.max(now, (task.timeResetAt || 0) + 1) } : task));
   };
 
   const handleUpdateStep = (id: string, step: number) => {
@@ -2221,7 +2248,7 @@ export default function App() {
           .filter((t) => {
             if (toDeleteSet.has(t.id)) {
               const deletionReason = deletionReasons.get(t.id);
-              deletedToArchive.push({ ...pauseTaskTimer(t), deletedAt: Date.now(), ...(deletionReason ? { deletionReason } : {}) });
+              deletedToArchive.push({ ...pauseTaskTimer(finishLimitedStart(t, Date.now())), deletedAt: Date.now(), ...(deletionReason ? { deletionReason } : {}) });
               return false;
             }
             return true;
@@ -2229,7 +2256,9 @@ export default function App() {
           .map((t) => {
             const update = updatesMap.get(t.id);
             if (!update) return t;
-            return applyAITaskUpdate(t, update, availableTabIds);
+            // AI timer changes replace the attempt's temporary ceiling, so credit the attempt first.
+            const timerChange = update.timerMode !== undefined || update.countdownDurationSeconds !== undefined || update.timerAction !== undefined || update.recordedWorkSeconds !== undefined;
+            return applyAITaskUpdate(timerChange ? finishLimitedStart(t, Date.now()) : t, update, availableTabIds);
           });
 
         if (deletedToArchive.length > 0) {
@@ -2401,9 +2430,9 @@ export default function App() {
           <p>{lang === 'uk' ? `Знайдено збережений простір: ${recoveryCandidate.workspace.tasks.length} завдань, ${recoveryCandidate.workspace.tabs.length} категорій, ${recoveryCandidate.workspace.deletedTasks.length} в архіві.` : `Retained workspace found: ${recoveryCandidate.workspace.tasks.length} tasks, ${recoveryCandidate.workspace.tabs.length} categories, ${recoveryCandidate.workspace.deletedTasks.length} archived.`}</p>
           <button type="button" onClick={restoreRetainedWorkspace} className="mt-3 min-h-11 border border-amber-800 px-3">{lang === 'uk' ? 'Відновити збережений простір' : 'Restore retained workspace'}</button>
         </div>}
-        {timerNotice && <div role="status" className="mb-5 flex items-center gap-3 border border-amber-800 bg-amber-950/20 p-3 text-sm leading-relaxed text-amber-200">
+        {timerNotice && <div role="status" className={`mb-5 flex flex-wrap items-center gap-3 border p-3 text-sm leading-relaxed ${timerNoticeCalm ? 'border-neutral-700 bg-neutral-950/80 text-neutral-200' : 'border-amber-800 bg-amber-950/20 text-amber-200'}`}>
           <span className="min-w-0 flex-1 break-words">{timerNotice}</span>
-          <button type="button" onClick={() => openStrategyChat(lang === 'uk' ? `Обговорімо це повідомлення: ${timerNotice}` : `Discuss this notice: ${timerNotice}`)} className="min-h-11 shrink-0 border border-amber-800 px-3 text-xs">{lang === 'uk' ? 'ШІ-чат' : 'AI chat'}</button>
+          <button type="button" onClick={() => openStrategyChat(lang === 'uk' ? `Обговорімо це повідомлення: ${timerNotice}` : `Discuss this notice: ${timerNotice}`)} className={`min-h-11 shrink-0 border px-3 text-xs ${timerNoticeCalm ? 'border-neutral-700' : 'border-amber-800'}`}>{lang === 'uk' ? 'ШІ-чат' : 'AI chat'}</button>
           <button type="button" aria-label={lang === 'uk' ? 'Закрити сповіщення' : 'Dismiss notification'} onClick={() => setTimerNotice(null)} className="flex h-11 w-11 shrink-0 items-center justify-center hover:bg-white/10"><X className="h-5 w-5" /></button>
         </div>}
         {!workspaceReady ? <p role="status" className="text-sm text-neutral-400">{syncError
@@ -2434,6 +2463,7 @@ export default function App() {
             onProfileChange={next => updatePersonalProfile(preserveDiscoveryAfterUserGoalEdit(personalProfileRef.current, next))} onResetMemory={resetPersonalMemory} onChat={openStrategyChat}
             onDeepenDiscovery={() => deepenPersonalDiscovery()}
             onStart={handleStartTask} onPauseTimer={handleStopTimer} onOpenTask={handleRevealTask} onOpenAdd={() => setIsAddOpen(true)}
+            onLimitedStart={handleLimitedStart} onFinishLimitedStart={handleFinishLimitedStart} attemptsSummary={summarizeAttempts(tasks, Date.now())}
             onUndo={handleUndoStrategy} onApplyPriority={applySuggestedPriority} onEditPlan={setWorkPlanTaskId} />
           : <p role="status" className="text-sm text-neutral-400">{lang === 'uk' ? 'Завантажуємо ваш простір…' : 'Loading your workspace…'}</p>
         ) : selectedPhase === 'NOTES' ? (

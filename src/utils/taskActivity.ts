@@ -4,12 +4,17 @@ import { isTaskDate } from './taskDates';
 
 export const TASK_ACTIVITY_LIMIT = 64;
 
-const activityKinds: TaskActivityKind[] = ['created', 'edited', 'rescheduled', 'started', 'paused', 'completed', 'reopened', 'progress', 'time_adjusted'];
+const activityKinds: TaskActivityKind[] = ['created', 'edited', 'rescheduled', 'started', 'paused', 'completed', 'reopened', 'progress', 'time_adjusted', 'attempt'];
 export function isTaskActivityEvent(value: unknown): value is TaskActivityEvent {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const event = value as Record<string, unknown>;
   if (typeof event.id !== 'string' || !event.id.trim() || event.id.length > 512 || typeof event.at !== 'number' || !Number.isFinite(event.at) || event.at < 0 || !activityKinds.includes(event.kind as TaskActivityKind)) return false;
   if (event.changeKey !== undefined && (typeof event.changeKey !== 'string' || event.changeKey.length > 128)) return false;
+  for (const key of ['attemptSeconds', 'attemptCapSeconds']) {
+    if (event[key] !== undefined && (typeof event[key] !== 'number' || !Number.isInteger(event[key]) || (event[key] as number) < 0 || (event[key] as number) > 86400)) return false;
+  }
+  if (event.attemptOutcome !== undefined && event.attemptOutcome !== 'stopped' && event.attemptOutcome !== 'cap_reached') return false;
+  if (event.attemptContinued !== undefined && typeof event.attemptContinued !== 'boolean') return false;
   for (const key of ['previousPlannedDate', 'plannedDate', 'previousDeadlineDate', 'deadlineDate']) {
     if (event[key] !== undefined && event[key] !== null && !isTaskDate(event[key])) return false;
   }
@@ -33,7 +38,8 @@ export function mergeTaskActivityTrail(left: TaskActivityEvent[] | undefined, ri
 
 // Accumulated seconds and active-session checkpoints change while banking time.
 // They are not edits, and must not fill the history on timer ticks or recovery.
-function meaningfulState(task: PSTask): unknown {
+function meaningfulState(task: PSTask) {
+  const timer = task.limitedStart?.restore ?? task;
   return {
     title: task.title, note: task.note, phase: task.phase, priority: task.priority,
     pinned: task.pinned, steps: task.steps, currentStep: task.currentStep, done: task.done,
@@ -41,8 +47,8 @@ function meaningfulState(task: PSTask): unknown {
     plannedDate: task.plannedDate, deadlineDate: task.deadlineDate, schedule: task.schedule,
     scheduledFor: task.scheduledFor, scheduledPending: task.scheduledPending,
     startedAt: task.startedAt, completedAt: task.completedAt,
-    timerMode: task.timerMode, timerRunning: Boolean(task.timerRunning),
-    countdownDurationSeconds: task.countdownDurationSeconds, plannedDurationSeconds: task.plannedDurationSeconds, timeResetAt: task.timeResetAt,
+    timerMode: timer.timerMode, timerRunning: Boolean(task.timerRunning),
+    countdownDurationSeconds: timer.countdownDurationSeconds, plannedDurationSeconds: task.plannedDurationSeconds, timeResetAt: task.timeResetAt,
   };
 }
 
@@ -68,7 +74,11 @@ export function annotateTaskChanges(previous: PSTask[], next: PSTask[], now: num
   const beforeById = new Map(previous.map(task => [task.id, task]));
   return next.map(task => {
     const before = beforeById.get(task.id);
-    const changed = before && canonical(meaningfulState(before)) !== canonical(meaningfulState(task));
+    const previousState = before && meaningfulState(before);
+    const nextState = meaningfulState(task);
+    // A limited attempt ends without a second generic pause event.
+    if (previousState && before?.limitedStart && !task.timerRunning) previousState.timerRunning = false;
+    const changed = previousState && canonical(previousState) !== canonical(nextState);
     const timeAdjusted = before && (before.timeResetAt !== task.timeResetAt ||
       (!before.timerRunning && !task.timerRunning && canonical(before.timeSessions) === canonical(task.timeSessions) &&
         (before.timeSpentSeconds ?? 0) !== (task.timeSpentSeconds ?? 0)));
@@ -87,10 +97,10 @@ export function annotateTaskChanges(previous: PSTask[], next: PSTask[], now: num
       if (rescheduled) kinds.push('rescheduled');
       if (before.done !== task.done) kinds.push(task.done ? 'completed' : 'reopened');
       if ((!Number.isFinite(before.startedAt) && Number.isFinite(task.startedAt)) || (!before.timerRunning && task.timerRunning)) kinds.push('started');
-      if (before.timerRunning && !task.timerRunning) kinds.push('paused');
+      if (before.timerRunning && !task.timerRunning && !before.limitedStart) kinds.push('paused');
       if (before.currentStep !== task.currentStep || canonical(before.stepList?.map(step => [step.id, step.done])) !== canonical(task.stepList?.map(step => [step.id, step.done]))) kinds.push('progress');
       if (timeAdjusted) kinds.push('time_adjusted');
-      if (!kinds.length || ['title', 'note', 'phase', 'priority', 'pinned', 'steps', 'timerMode', 'countdownDurationSeconds', 'plannedDurationSeconds'].some(key => canonical(before[key as keyof PSTask]) !== canonical(task[key as keyof PSTask])) ||
+      if (!kinds.length || ['title', 'note', 'phase', 'priority', 'pinned', 'steps', 'timerMode', 'countdownDurationSeconds', 'plannedDurationSeconds'].some(key => canonical(previousState![key as keyof typeof nextState]) !== canonical(nextState[key as keyof typeof nextState])) ||
         canonical(before.stepList?.map(step => [step.id, step.title, step.estimatedDurationSeconds])) !== canonical(task.stepList?.map(step => [step.id, step.title, step.estimatedDurationSeconds]))) kinds.push('edited');
     }
     const events: TaskActivityEvent[] = kinds.map(kind => ({

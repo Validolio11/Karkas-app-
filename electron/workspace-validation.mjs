@@ -44,8 +44,12 @@ function validSchedule(value) {
 /** @param {unknown} value */
 function validTaskActivity(value) {
   if (!object(value) || !id(value.id) || !number(value.at) || !text(value.kind) ||
-      !['created', 'edited', 'rescheduled', 'started', 'paused', 'completed', 'reopened', 'progress', 'time_adjusted'].includes(value.kind) ||
-      !optional(value, 'changeKey', v => text(v) && v.length <= 128)) return false;
+      !['created', 'edited', 'rescheduled', 'started', 'paused', 'completed', 'reopened', 'progress', 'time_adjusted', 'attempt'].includes(value.kind) ||
+      !optional(value, 'changeKey', v => text(v) && v.length <= 128) ||
+      !optional(value, 'attemptSeconds', v => integer(v) && v <= 86400) ||
+      !optional(value, 'attemptCapSeconds', v => integer(v) && v <= 86400) ||
+      !optional(value, 'attemptOutcome', v => v === 'stopped' || v === 'cap_reached') ||
+      !optional(value, 'attemptContinued', v => typeof v === 'boolean')) return false;
   for (const key of ['previousPlannedDate', 'plannedDate', 'previousDeadlineDate', 'deadlineDate']) {
     if (!optional(value, key, v => v === null || validDate(v))) return false;
   }
@@ -55,6 +59,18 @@ function validTaskActivity(value) {
   return true;
 }
 
+/** @param {unknown} value */
+export function isTaskLimitedStart(value) {
+  if (!object(value) || Object.keys(value).some(key => !['id', 'capSeconds', 'startedAt', 'baseSeconds', 'continued', 'restore'].includes(key)) ||
+      !id(value.id) || !integer(value.capSeconds) || value.capSeconds < 60 || value.capSeconds > 3600 ||
+      !number(value.startedAt) || !integer(value.baseSeconds) || !optional(value, 'continued', v => typeof v === 'boolean') ||
+      !object(value.restore)) return false;
+  const restore = value.restore;
+  return Object.keys(restore).every(key => ['timerMode', 'countdownDurationSeconds', 'countdownRemainingSeconds'].includes(key)) &&
+    optional(restore, 'timerMode', v => text(v) && ['none', 'stopwatch', 'countdown'].includes(v)) &&
+    optional(restore, 'countdownDurationSeconds', number) && optional(restore, 'countdownRemainingSeconds', number);
+}
+
 /** @param {unknown} value @param {boolean} deleted */
 function validTask(value, deleted) {
   if (!object(value) || !id(value.id) || !text(value.title) || !id(value.phase) ||
@@ -62,7 +78,7 @@ function validTask(value, deleted) {
       !integer(value.currentStep) || value.currentStep > value.steps ||
       typeof value.done !== 'boolean' || typeof value.pinned !== 'boolean' || !number(value.createdAt)) return false;
   if (deleted && !number(value.deletedAt)) return false;
-  if (!optional(value, 'updatedAt', number)) return false;
+  if (!optional(value, 'updatedAt', number) || !optional(value, 'limitedStart', isTaskLimitedStart)) return false;
   if (value.activityTrail !== undefined) {
     if (!Array.isArray(value.activityTrail) || value.activityTrail.length > 64 || value.activityTrail.some(event => !validTaskActivity(event)) ||
         new Set(value.activityTrail.map(event => event.id)).size !== value.activityTrail.length) return false;

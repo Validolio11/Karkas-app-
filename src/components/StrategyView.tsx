@@ -18,6 +18,8 @@ interface StrategyViewProps {
   onProfileChange: (profile: PersonalStrategyProfile) => void;
   onResetMemory: () => void; onChat: (text: string) => void; onStart: (id: string) => void; onDeepenDiscovery: () => void;
   onPauseTimer: (id: string) => void; onOpenTask: (id: string) => void; onOpenAdd: () => void;
+  onLimitedStart: (id: string, capSeconds: number, options?: { continued?: boolean }) => void;
+  onFinishLimitedStart: (id: string) => void; attemptsSummary: { count: number; seconds: number };
   onUndo: (id: string) => void; onRemindersChange: (value: boolean) => void;
   onApplyPriority: (id: string, from: 1 | 2 | 3, to: 1 | 2 | 3) => void; onEditPlan: (id: string) => void;
 }
@@ -115,7 +117,8 @@ export const StrategyView: React.FC<StrategyViewProps> = (props: StrategyViewPro
 
     <div className="grid items-stretch gap-5 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
       <StrategyNextStep candidates={candidates} nextAction={profile.latestStrategy?.nextAction} tabs={tabs} lang={lang} now={clock}
-        onStart={props.onStart} onPause={props.onPauseTimer} onChat={onChat} onOpenTask={props.onOpenTask} onOpenAdd={props.onOpenAdd} />
+        onStart={props.onStart} onPause={props.onPauseTimer} onChat={onChat} onOpenTask={props.onOpenTask} onOpenAdd={props.onOpenAdd}
+        onLimitedStart={props.onLimitedStart} onFinishLimitedStart={props.onFinishLimitedStart} attemptsSummary={props.attemptsSummary} />
       {sideCard}
     </div>
 

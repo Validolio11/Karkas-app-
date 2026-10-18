@@ -57,3 +57,12 @@ test('week boundaries follow the client time zone, and Sunday’s tomorrow is al
   assert.equal(utc.counts.upcomingDeadlinesThisWeek, 0);
   assert.equal(utc.counts.deadlinesNextWeek, 1);
 });
+
+test('credited attempts are described neutrally without claiming task completion', () => {
+  const context = buildTaskTemporalContext([{ id: 'a', title: 'Portfolio', done: false,
+    activityTrail: [{ id: 'attempt:a', at: Date.parse(clock.now) - 1000, kind: 'attempt', attemptSeconds: 300,
+      attemptCapSeconds: 900, attemptOutcome: 'stopped' }] }], clock);
+  assert.equal(context.tasks[0].recentActivity?.[0].description, 'обмежена спроба: 5 хв із 15');
+  assert.equal(context.tasks[0].done, false);
+  assert.equal(context.tasks[0].recentActivity?.[0].attemptOutcome, 'stopped');
+});

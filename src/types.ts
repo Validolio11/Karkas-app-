@@ -31,13 +31,17 @@ export interface TaskSchedule {
   leadMinutes: number; // Add the occurrence this many minutes before its start
 }
 
-export type TaskActivityKind = 'created' | 'edited' | 'rescheduled' | 'started' | 'paused' | 'completed' | 'reopened' | 'progress' | 'time_adjusted';
+export type TaskActivityKind = 'created' | 'edited' | 'rescheduled' | 'started' | 'paused' | 'completed' | 'reopened' | 'progress' | 'time_adjusted' | 'attempt';
 
 /** App-recorded history, never accepted as editable AI task fields. Missing legacy history is unknown. */
 export interface TaskActivityEvent {
   id: string;
   at: number;
   kind: TaskActivityKind;
+  attemptSeconds?: number;
+  attemptCapSeconds?: number;
+  attemptOutcome?: 'stopped' | 'cap_reached';
+  attemptContinued?: boolean;
   previousPlannedDate?: string | null;
   plannedDate?: string | null;
   previousDeadlineDate?: string | null;
@@ -82,6 +86,10 @@ export interface PSTask {
   timerStartedAt?: number; // Timestamp (ms) when current stopwatch session started
   countdownDurationSeconds?: number; // Configured focus session duration
   countdownRemainingSeconds?: number; // Remaining at the last start/pause; live elapsed is derived
+  limitedStart?: { // Temporary countdown ceiling; restore the user's timer after the attempt.
+    id: string; capSeconds: number; startedAt: number; baseSeconds: number; continued?: boolean;
+    restore: { timerMode?: TimerMode; countdownDurationSeconds?: number; countdownRemainingSeconds?: number };
+  };
   autoPausedOverdue?: boolean; // Timer was auto-paused due to session cap or inactivity safeguard
 }
 

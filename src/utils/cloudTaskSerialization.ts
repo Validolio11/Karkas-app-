@@ -1,5 +1,6 @@
 import type { DeletedTask, PSTask } from '../types';
 import { mergeTaskActivityTrail } from './taskActivity';
+import { isTaskLimitedStart } from './workspaceValidation';
 
 /** Explicit legacy-root serialization prevents task features from disappearing during cloud sync. */
 export function serializeTaskForCloud<T extends PSTask | DeletedTask>(task: T, now = Date.now()): T {
@@ -35,6 +36,7 @@ export function serializeTaskForCloud<T extends PSTask | DeletedTask>(task: T, n
   if (Number.isFinite(task.timerStartedAt)) result.timerStartedAt = task.timerStartedAt;
   if (Number.isFinite(task.countdownDurationSeconds)) result.countdownDurationSeconds = task.countdownDurationSeconds;
   if (Number.isFinite(task.countdownRemainingSeconds)) result.countdownRemainingSeconds = task.countdownRemainingSeconds;
+  if (isTaskLimitedStart(task.limitedStart)) result.limitedStart = structuredClone(task.limitedStart);
   if (task.autoPausedOverdue !== undefined) result.autoPausedOverdue = Boolean(task.autoPausedOverdue);
   if (Array.isArray(task.stepList)) result.stepList = task.stepList.map(step => ({
     id: step.id, title: step.title, done: Boolean(step.done),

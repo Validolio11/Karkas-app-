@@ -15,3 +15,5 @@ Change: limited start on the "Next step" card (5/15/25-minute ceiling, permissio
 Not verified: the Windows notification for an attempt in the packaged app, live Gemini, two-device cloud sync. Unsigned installer and large-chunk build warning are unchanged.
 
 Release tag: 1.3.15 (published tag format without the v prefix, avoiding an independent CI publication).
+
+Publication confirmed: https://github.com/Validolio11/Karkas-app-/releases/tag/1.3.15 (tag 1.3.15 at the release commit, marked latest). publish.ps1 stopped before any API call: Windows PowerShell 5.1 sent a malformed `git credential fill` request. The same checks were done with the authenticated GitHub CLI instead: a draft release from the pushed commit, upload of the three assets, size and SHA256 digest match with local files, then publication. A check through the application's resolveTrustedUpdate/verifyUpdateFile accepted the public release and manifest as an update from 1.3.14 and matched the installer SHA512. See publication.json and public-update-verification.json. The update was not installed on the user's machine.

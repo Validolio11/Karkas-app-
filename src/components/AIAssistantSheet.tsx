@@ -148,7 +148,7 @@ const AgentTurnCard: React.FC<{
   const pending = agent?.pendingConfirmations ?? [];
   return <>
     {!!summaries.length && <ul className="mt-3 space-y-1 border-l-2 border-emerald-500/60 pl-3 text-sm text-neutral-200">
-      {summaries.map((summary, index) => <li key={index}>{uk ? summary.uk : summary.en}</li>)}
+      {summaries.map((summary, index) => <li key={index} className="whitespace-pre-line">{uk ? summary.uk : summary.en}</li>)}
     </ul>}
     {!!failures.length && <ul role="status" className="mt-2 space-y-1 text-sm text-amber-300">
       {failures.map((failure, index) => <li key={index}>{uk ? 'Не виконано' : 'Not done'}: {failure.error}</li>)}

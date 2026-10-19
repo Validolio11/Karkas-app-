@@ -13,6 +13,8 @@ interface TaskDateCalendarProps {
   plannedInputRef?: React.RefObject<HTMLInputElement | null>;
   deadlineInputRef?: React.RefObject<HTMLInputElement | null>;
   invalid?: boolean;
+  plannedOnly?: boolean;
+  idPrefix?: string;
 }
 
 function calendarDate(value: string): Date {
@@ -23,12 +25,12 @@ function calendarDate(value: string): Date {
   return date;
 }
 
-export function TaskDateCalendar({ plannedDate, deadlineDate, onPlannedDateChange, onDeadlineDateChange, lang, plannedInputRef, deadlineInputRef, invalid = false }: TaskDateCalendarProps) {
+export function TaskDateCalendar({ plannedDate, deadlineDate, onPlannedDateChange, onDeadlineDateChange, lang, plannedInputRef, deadlineInputRef, invalid = false, plannedOnly = false, idPrefix = 'quick-add' }: TaskDateCalendarProps) {
   const uk = lang === 'uk';
   const locale = uk ? 'uk-UA' : 'en-GB';
   const today = localTaskDate();
   // Continue where the user left off: with a work day but no deadline, the next click sets the deadline.
-  const [activeField, setActiveField] = useState<TaskDateField>(() => isTaskDate(plannedDate) && !isTaskDate(deadlineDate) ? 'deadline' : 'planned');
+  const [activeField, setActiveField] = useState<TaskDateField>(() => !plannedOnly && isTaskDate(plannedDate) && !isTaskDate(deadlineDate) ? 'deadline' : 'planned');
   const [hint, setHint] = useState('');
   const [month, setMonth] = useState(() => {
     const initial = calendarDate(isTaskDate(plannedDate) ? plannedDate : isTaskDate(deadlineDate) ? deadlineDate : today);
@@ -46,6 +48,7 @@ export function TaskDateCalendar({ plannedDate, deadlineDate, onPlannedDateChang
   const deadlineLabel = uk ? 'Завершити до' : 'Complete by';
   const shortDate = (value: string) => calendarDate(value).toLocaleDateString(locale, { day: 'numeric', month: 'long' });
   const choose = (value: string) => {
+    if (plannedOnly) { setHint(''); onPlannedDateChange(value); return true; }
     const pick = pickTaskDate(activeField, value, plannedDate, deadlineDate);
     if ('rejected' in pick) {
       setHint(uk ? `Дедлайн не може бути раніше дня роботи (${shortDate(plannedDate)}). Оберіть пізніший день або змініть «${plannedLabel}».` : `The deadline cannot be before the work day (${shortDate(plannedDate)}). Choose a later day or change “${plannedLabel}”.`);
@@ -115,7 +118,7 @@ export function TaskDateCalendar({ plannedDate, deadlineDate, onPlannedDateChang
             date.setDate(day);
             const value = localTaskDate(date.getTime());
             const planned = value === plannedDate;
-            const deadline = value === deadlineDate;
+            const deadline = !plannedOnly && value === deadlineDate;
             const current = value === today;
             const beforePlanned = activeField === 'deadline' && isTaskDate(plannedDate) && value < plannedDate;
             const annotations = [planned && plannedLabel, deadline && deadlineLabel, current && (uk ? 'Сьогодні' : 'Today'), beforePlanned && (uk ? 'раніше за день роботи' : 'before the work day')].filter(Boolean).join(', ');
@@ -128,7 +131,7 @@ export function TaskDateCalendar({ plannedDate, deadlineDate, onPlannedDateChang
           })}
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-white/10 pt-3 text-[11px] text-neutral-400" aria-hidden="true">
-          {([['planned', plannedDate, plannedLabel, 'bg-white'], ['deadline', deadlineDate, deadlineLabel, 'border border-neutral-400']] as const).map(([field, value, label, swatch]) => {
+          {([['planned', plannedDate, plannedLabel, 'bg-white'], ['deadline', deadlineDate, deadlineLabel, 'border border-neutral-400']] as const).filter(([field]) => !plannedOnly || field === 'planned').map(([field, value, label, swatch]) => {
             const set = isTaskDate(value);
             return <span key={field} className={`flex items-center gap-2 ${set ? 'text-neutral-200' : 'text-neutral-600'}`}><span className={`h-2.5 w-2.5 ${swatch} ${set ? '' : 'opacity-40'}`} />{label}{set ? <><Check className="h-3 w-3 text-white" />{shortDate(value)}</> : <span>—</span>}</span>;
           })}
@@ -136,7 +139,7 @@ export function TaskDateCalendar({ plannedDate, deadlineDate, onPlannedDateChang
       </section>
       <aside className="min-w-0 border-t border-white/10 pt-4 md:border-l md:border-t-0 md:pl-4 md:pt-0" aria-label={uk ? 'Вибрані дати' : 'Selected dates'}>
         <p className="mb-3 text-[11px] uppercase tracking-[0.13em] text-neutral-500">{uk ? 'Ваші дати' : 'Your dates'}</p>
-        <div className="space-y-1">{target('planned', plannedDate, plannedLabel)}{target('deadline', deadlineDate, deadlineLabel)}</div>
+        <div className="space-y-1">{target('planned', plannedDate, plannedLabel)}{!plannedOnly && target('deadline', deadlineDate, deadlineLabel)}</div>
         <p aria-live="polite" className="mt-3 text-xs leading-relaxed text-neutral-400">{uk ? `Зараз обираєте: ${activeField === 'planned' ? 'день роботи' : 'дедлайн'}.` : `Selecting: ${activeField === 'planned' ? 'work day' : 'deadline'}.`}</p>
         {hint && <p role="status" className="mt-2 text-xs leading-relaxed text-amber-300">{hint}</p>}
         <div className="mt-3 flex flex-wrap gap-x-4 gap-y-3 text-xs">
@@ -146,8 +149,8 @@ export function TaskDateCalendar({ plannedDate, deadlineDate, onPlannedDateChang
         </div>
         <div className="mt-4 space-y-2 border-t border-white/10 pt-3">
           <p className="text-[11px] uppercase tracking-[0.1em] text-neutral-600">{uk ? 'Точна дата' : 'Exact date'}</p>
-          <label className="block text-[11px] text-neutral-500">{plannedLabel}<input id="quick-add-planned-date" ref={plannedInputRef} type="date" min="0001-01-01" max="9999-12-31" value={plannedDate} onFocus={() => setActiveField('planned')} onChange={event => setExactDate('planned', event.target.value)} aria-invalid={invalid || undefined} aria-describedby={invalid ? 'quick-add-dates-warning' : undefined} className="mt-1 block w-full min-w-0 border-0 border-b border-white/15 bg-transparent py-2 text-sm text-neutral-300 [color-scheme:dark] focus:border-white focus:outline-none" /></label>
-          <label className="block text-[11px] text-neutral-500">{deadlineLabel}<input id="quick-add-deadline-date" ref={deadlineInputRef} type="date" min="0001-01-01" max="9999-12-31" value={deadlineDate} onFocus={() => setActiveField('deadline')} onChange={event => setExactDate('deadline', event.target.value)} aria-invalid={invalid || undefined} aria-describedby={invalid ? 'quick-add-dates-warning' : undefined} className="mt-1 block w-full min-w-0 border-0 border-b border-white/15 bg-transparent py-2 text-sm text-neutral-300 [color-scheme:dark] focus:border-white focus:outline-none" /></label>
+          <label className="block text-[11px] text-neutral-500">{plannedLabel}<input id={`${idPrefix}-planned-date`} ref={plannedInputRef} type="date" min="0001-01-01" max="9999-12-31" value={plannedDate} onFocus={() => setActiveField('planned')} onChange={event => setExactDate('planned', event.target.value)} aria-invalid={invalid || undefined} aria-describedby={invalid ? 'quick-add-dates-warning' : undefined} className="mt-1 block w-full min-w-0 border-0 border-b border-white/15 bg-transparent py-2 text-sm text-neutral-300 [color-scheme:dark] focus:border-white focus:outline-none" /></label>
+          {!plannedOnly && <label className="block text-[11px] text-neutral-500">{deadlineLabel}<input id={`${idPrefix}-deadline-date`} ref={deadlineInputRef} type="date" min="0001-01-01" max="9999-12-31" value={deadlineDate} onFocus={() => setActiveField('deadline')} onChange={event => setExactDate('deadline', event.target.value)} aria-invalid={invalid || undefined} aria-describedby={invalid ? 'quick-add-dates-warning' : undefined} className="mt-1 block w-full min-w-0 border-0 border-b border-white/15 bg-transparent py-2 text-sm text-neutral-300 [color-scheme:dark] focus:border-white focus:outline-none" /></label>}
         </div>
       </aside>
     </div>

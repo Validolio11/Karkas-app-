@@ -579,3 +579,71 @@ test('expiry and day shift tool schemas and instructions preserve explicit work 
   assert.match(AGENT_SYSTEM_INSTRUCTION, /Never create a tab unless the person asks/);
   assert.match(AGENT_SYSTEM_INSTRUCTION, /Створити вкладку «Особисте»/);
 });
+
+
+test('replan_day exposes a timed schedule and replays through the shared action engine', async () => {
+  const missed = task({ scheduledFor: NOW - 90 * 60000, scheduledDurationSeconds: 1800,
+    countdownDurationSeconds: 1800, countdownRemainingSeconds: 1800 });
+  const fake = scripted([
+    calls(call('replan_day', { from: '12:05' })),
+    request => {
+      const result = responses(request)[0].response;
+      assert.equal(result.ok, true);
+      assert.deepEqual(result.changedTaskIds, ['animation']);
+      assert.deepEqual(result.data.schedule.map((block: any) => [block.start, block.end]), [['12:05', '12:35']]);
+      assert.deepEqual(result.data.overflowTaskIds, []);
+      assert.equal(result.tasks[0].timer.running, false);
+      return { text: result.summary.uk };
+    },
+  ]);
+  const result = await runAgentTurn({ ...base, userText: 'підкоригуй час, я не встигаю', workspace: workspace({ tasks: [missed] }), generate: fake.generate });
+  assert.deepEqual(result.actions.map(applied => applied.action), [{ type: 'replan_day', from: '12:05' }]);
+  assert.equal(result.workspace.tasks[0].scheduledFor, NOW + 5 * 60000);
+  assert.equal(result.workspace.tasks[0].countdownRemainingSeconds, 1800);
+  assert.match(result.text, /12:05–12:35 · Робота над анімацією/);
+  assert.equal(result.clarification, undefined);
+});
+
+test('replan_day overflow always asks one question with tomorrow, shorten and clear-time choices', async () => {
+  const now = Date.parse('2026-10-19T15:30:00Z');
+  const missed = task({ scheduledFor: Date.parse('2026-10-19T12:30:00Z'), scheduledDurationSeconds: 1800,
+    countdownDurationSeconds: 1800, countdownRemainingSeconds: 1800 });
+  const paused = task({ id: 'paused', title: 'Робота на паузі', scheduledFor: Date.parse('2026-10-19T13:00:00Z'),
+    scheduledDurationSeconds: 18000, countdownDurationSeconds: 18000, countdownRemainingSeconds: 18000,
+    startedAt: Date.parse('2026-10-19T13:00:00Z'), timeSpentSeconds: 60 });
+  const late = task({ id: 'typing', title: 'Навчання друку', scheduledFor: Date.parse('2026-10-19T19:00:00Z'),
+    scheduledDurationSeconds: 1800, countdownDurationSeconds: 1800, countdownRemainingSeconds: 1800 });
+  for (const modelAsks of [false, true]) {
+    const fake = scripted([
+      calls(call('replan_day', {})),
+      request => {
+        const result = responses(request)[0].response;
+        assert.deepEqual(result.data.overflowTaskIds, ['typing']);
+        assert.match(result.summary.uk, /19:00–24:00/);
+        return modelAsks ? calls(call('ask_user', { question: 'Інше питання?', options: [{ label: 'Так', message: 'Так' }] }),
+          call('update_task', { taskId: 'typing', clearTime: true })) : { text: 'Готово.' };
+      },
+    ]);
+    const result = await runAgentTurn({ ...base, now, userText: 'переплануй решту дня', workspace: workspace({ tasks: [missed, paused, late] }), generate: fake.generate });
+    assert.deepEqual(result.actions.map(applied => applied.action.type), ['replan_day']);
+    assert.equal(result.workspace.tasks[2].scheduledFor, late.scheduledFor);
+    assert.match(result.clarification!.question, /Не вміщається сьогодні.*Навчання друку/);
+    assert.deepEqual(result.clarification!.options.map(option => option.label), ['Перенести на завтра', 'Скоротити блоки', 'Лишити без часу']);
+    assert.match(result.clarification!.options[0].message, /2026-10-20.*Навчання друку.*22:00/);
+    assert.match(result.clarification!.options[1].message, /23:59/);
+    assert.match(result.clarification!.options[2].message, /Прибери час.*Навчання друку/);
+    assert.match(result.text, /18:30–19:00/);
+    assert.equal(fake.requests.length, 2);
+  }
+});
+
+test('replan_day declaration and instructions distinguish adjustment from explicit shifts and dictation noise', () => {
+  const byName = Object.fromEntries(AGENT_TOOL_DECLARATIONS.map(tool => [tool.name, tool.parametersJsonSchema]));
+  assert.deepEqual(byName.replan_day.required, []);
+  assert.deepEqual(Object.keys(byName.replan_day.properties), ['from']);
+  assert.equal(byName.replan_day.properties.from.pattern, byName.shift_day.properties.fromTime.pattern);
+  assert.match(AGENT_SYSTEM_INSTRUCTION, /підкоригуй час.*replan_day/);
+  assert.match(AGENT_SYSTEM_INSTRUCTION, /посунь на N хв.*shift_day/);
+  assert.match(AGENT_SYSTEM_INSTRUCTION, /overflowTaskIds.*ask_user ONCE/);
+  assert.match(AGENT_SYSTEM_INSTRUCTION, /Париж зараз 1 година.*schedule.*time zones/);
+});

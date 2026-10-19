@@ -42,7 +42,9 @@ export const AGENT_SYSTEM_INSTRUCTION = [
   'For day planning (“сплануй день”, “розклад”, “по годинах”, “план на сьогодні”), call plan_day ONCE with every item in the person’s order. Spoken hours become fixedStart plus durationMinutes: “з пів першої до третьої” = 12:30 for 150 minutes, “пів другої” = 13:30, “о другій” = 14:00 in daytime context. Estimate unknown durations realistically with estimated:true. Reference existing tasks by taskId from the ACTIVE TASK INDEX or find_tasks; never duplicate them. After success reply with the hour-by-hour schedule from the tool result, marking estimates “орієнтовно”. On a conflict/invalid error fix the plan or ask one ask_user question.',
   'Give every new or re-planned task a phase chosen by tab NAME from WORKSPACE TABS to match its meaning: learning/courses/typing → a “Навчання”-like tab; rest/home/chores → a personal/home tab; “Робота” only for work. If none fits, use the first tab and briefly offer a suitable new tab, e.g. “Створити вкладку «Особисте»?”. Never create a tab unless the person asks for it.',
   'When a task timer has countdownExpiredAt, “я ще працюю над X” / “ще не закінчив” means continue_after_expiry, not a new countdown. It credits the time since expiry and resumes for extendMinutes (30 by default). “закінчив о 16:10” means finish_after_expiry with workedUntil=16:10; “закінчив” without time clears the expiry without adding work. This response does not complete the task; use complete_task only when requested. State the actual credited time from the tool result. After more than 3 hours do not infer work: ask for the actual finish time or an explicit recorded total, then use finish_after_expiry or set_recorded_time as appropriate.',
-  'For “посунь план на пів години” use shift_day minutes=30. “Посунь решту дня” without an amount: read timed tasks with list_tasks and calculate the delay of the running or expired current block beyond its scheduled end, rounded up to 5 minutes; use that positive delay as minutes. fromTime is an optional HH:MM boundary today. Report shifted blocks and every block that does not fit before 24:00; never move it to tomorrow.',
+  'For “підкоригуй час”, “скоригуй час”, “я не встигаю”, “перебудуй день”, “переплануй решту” and “посунь решту дня” without an amount, use replan_day: it rebuilds all remaining timed blocks today from now (or optional from HH:MM), including missed and paused blocks, while protecting running timers and recorded work. Reply with the new schedule rows from its result. For explicit “посунь план на пів години” / “посунь на N хв” use shift_day minutes=N; fromTime is an optional HH:MM boundary today. Report every overflow block; never move or shorten overflow without a choice.',
+  'If replan_day returns overflowTaskIds, immediately call ask_user ONCE with three options: “Перенести на завтра” (update_task with tomorrow date and the same startTime), “Скоротити блоки” (fit the remaining blocks before 23:59 using explicit durationMinutes), “Лишити без часу” (update_task clearTime:true for overflow tasks). Ask one concrete question and include task titles, dates and times in self-contained option messages. Preserve paused timers unless asked to start them. Never silently discard overflow.',
+  'When an odd phrase looks like dictation noise and does not concern tasks (e.g. “Париж зараз 1 година…”), and recent context concerned plan times, briefly ask whether it concerns the schedule. Do not switch to an answer about time zones.',
   'Explicit priority words win. Otherwise use priority 1 for a deadline, a promise to others, or something called main/important; 3 for rest/optional; 2 otherwise. Set a priority on every plan_day item.',
   'Always resolve existing tasks using the ACTIVE TASK INDEX or find_tasks/get_task before acting. Never invent IDs. Inspect the latest tool results and recover from invalid arguments or missing IDs. Reuse values and context from recent turns; never ask again for a value already supplied.',
   'Use ask_user only for genuine ambiguity: one concrete question with concrete options. Each option label has 1–4 words; its message is a full self-contained command including already supplied values, e.g. “Постав таймер на 3 години для «Робота над анімацією»”. Do not ask for confirmation through ask_user.',
@@ -88,7 +90,8 @@ export const AGENT_TOOL_DECLARATIONS = [
       required: ['durationMinutes'], oneOf: [{ required: ['taskId'] }, { required: ['title'] }], additionalProperties: false,
     } },
   }, ['items']),
-  declaration('shift_day', 'Shift today’s remaining unstarted timed tasks by minutes, preserving order and duration. fromTime is an optional inclusive local HH:MM boundary; otherwise use the delayed current block or now. Blocks beyond 24:00 remain in place and are reported as overflow.', { minutes: planMinutes, fromTime: time }, ['minutes']),
+  declaration('replan_day', 'Rebuild all unfinished timed tasks today from now or optional local from HH:MM, rounded up to 5 minutes. Includes missed unstarted and paused blocks; protects running timers, recorded work and countdowns. Paused blocks use remaining countdown, at least 5 minutes. Overflow stays unchanged; immediately ask_user once with tomorrow/smaller blocks/clear time choices.', { from: time }),
+  declaration('shift_day', 'Shift today’s unfinished timed tasks by an explicit number of minutes, preserving order and duration. Includes missed and paused blocks if their shifted start is not in the past; running timers stay unchanged. fromTime is an optional inclusive local HH:MM boundary. Blocks beyond 24:00 remain in place and are reported as overflow.', { minutes: planMinutes, fromTime: time }, ['minutes']),
   taskTool('complete_task', 'Complete an existing task and bank running work.'),
   taskTool('reopen_task', 'Return a completed task to work.'),
   declaration('add_steps', 'Insert checklist steps; afterStepIndex=0 prepends, otherwise after the 1-based row; omit to append.', { taskId, titles: { ...strings, minItems: 1 }, afterStepIndex: { type: 'integer', minimum: 0 } }, ['taskId', 'titles']),
@@ -268,9 +271,11 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
     ...pendingConfirmations.map(pendingSummary),
     ...(withFailures ? failures : []),
   ].join('\n');
+  let overflowQuestion: AgentClarification | undefined;
   const execute = (call: AIFunctionCall): Record<string, unknown> => {
+    if (overflowQuestion && call.name !== 'ask_user') return { ok: false, code: 'turn_ended', error: 'Overflow needs one ask_user choice before any further action.' };
     const schema = Object.hasOwn(readChecks, call.name) ? readChecks[call.name] : undefined;
-    const args = call.args;
+    const args = call.name === 'ask_user' && overflowQuestion ? overflowQuestion : call.args;
     if (schema) {
       const error = readArgs(args, schema.fields, schema.required);
       if (error) return { ok: false, code: 'invalid', error };
@@ -338,6 +343,24 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
     workspace = output.workspace;
     actions.push(appliedAction(action, output.result));
     if (action.type === 'open_view' || action.type === 'reveal_task') view = action;
+    if (action.type === 'replan_day') {
+      const data = output.result.data as { overflowTaskIds?: string[]; schedule?: { taskId: string; start: string; end: string; title: string }[] } | undefined;
+      const overflow = (data?.overflowTaskIds ?? []).flatMap(id => {
+        const task = workspace.tasks.find(task => task.id === id);
+        return task ? [describeTask(task, now, timeZone)] : [];
+      });
+      if (overflow.length) {
+        const titles = overflow.map(task => '«' + task.title + '»').join(', ');
+        const blocks = overflow.map(task => '«' + task.title + '»' + (task.startTime ? ' ' + task.startTime : '')).join(', ');
+        const date = new Date(Date.parse(temporal.clock.localDate + 'T00:00:00Z') + 86400000).toISOString().slice(0, 10);
+        const schedule = (data?.schedule ?? []).map(block => block.start + '–' + block.end + ' · ' + block.title).join('; ');
+        overflowQuestion = { question: uk ? 'Не вміщається сьогодні: ' + titles + '. Що зробити з цими блоками?' : 'Does not fit today: ' + titles + '. What should happen to these blocks?', options: [
+          { label: uk ? 'Перенести на завтра' : 'Move to tomorrow', message: uk ? 'Перенеси на завтра, ' + date + ', блоки ' + blocks + ', зберігши той самий час початку й тривалість.' : 'Move these blocks to tomorrow, ' + date + ', keeping the same start times and durations: ' + blocks + '.' },
+          { label: uk ? 'Скоротити блоки' : 'Shorten blocks', message: uk ? 'Скороти решту блоків дня, щоб усі вмістилися від поточного часу до 23:59, включно з ' + titles + '. Поточний розклад: ' + schedule + '. Не змінюй записаний час і не запускай таймери.' : 'Shorten the remaining day blocks so all fit from now before 23:59, including ' + titles + '. Current schedule: ' + schedule + '. Preserve recorded work and keep timers paused.' },
+          { label: uk ? 'Лишити без часу' : 'Leave without a time', message: uk ? 'Прибери час початку з блоків ' + titles + ', які не вміщаються сьогодні. Залиши дату й записаний час.' : 'Clear the start time from these blocks that do not fit today: ' + titles + '. Keep their date and recorded work.' },
+        ] };
+      }
+    }
     return { ...output.result, tasks: output.result.changedTaskIds.flatMap(id => {
       const task = workspace.tasks.find(task => task.id === id) ?? workspace.deletedTasks.find(task => task.id === id);
       return task ? [describe(task)] : [];
@@ -392,8 +415,12 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
       responseParts.push({ functionResponse: { name: call.name, ...(call.id ? { id: call.id } : {}), response: result } });
     }
     contents.push(response.modelContent ?? responseModelContent(response), { role: 'user', parts: responseParts });
-    if (clarification || handoff) { text = clarification?.question ?? ''; break; }
+    if (clarification || handoff) { text = overflowQuestion ? [finishText(false), clarification?.question].filter(Boolean).join('\n') : clarification?.question ?? ''; break; }
     if (round === AGENT_MAX_ROUNDS - 1) text = [finishText(false), uk ? 'Частину запиту виконати не вдалося. Спробуй сформулювати її інакше.' : 'Part of the request could not be done. Try rephrasing it.'].filter(Boolean).join('\n');
+  }
+  if (overflowQuestion && !clarification) {
+    execute({ name: 'ask_user', args: overflowQuestion });
+    text = [finishText(false), overflowQuestion.question].filter(Boolean).join('\n');
   }
   if (!text && !handoff) text = finishText() || (uk ? 'Не вдалося сформувати відповідь.' : 'Could not produce an answer.');
   signal?.throwIfAborted();

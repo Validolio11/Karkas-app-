@@ -9,7 +9,7 @@ import { annotateTaskChanges } from './taskActivity';
 import { selectArchivedTasks } from './taskArchive';
 import { remapTaskTabs } from './workspaceTabs';
 import { continueAfterExpiry, finishAfterExpiry, MAX_OVERRUN_SECONDS, overrunGapSeconds } from './countdownOverrun';
-import { shiftDay } from './dayPlanShift';
+import { replanRestOfDay, shiftDay } from './dayPlanShift';
 import { taskScheduledEnd } from './schedulePresentation';
 
 export interface AgentWorkspace { tasks: PSTask[]; deletedTasks: DeletedTask[]; tabs: TaskTab[]; notes: NotepadNote[] }
@@ -23,6 +23,7 @@ export type AgentAction =
   | { type: 'update_task'; taskId: string; title?: string; note?: string; priority?: 1 | 2 | 3; phase?: string; plannedDate?: string | null; deadlineDate?: string | null; pinned?: boolean; date?: string; startTime?: string; durationMinutes?: number; clearTime?: true }
   | { type: 'plan_day'; date?: string; start?: string; items: AgentDayPlanItem[] }
   | { type: 'shift_day'; minutes: number; fromTime?: string }
+  | { type: 'replan_day'; from?: string }
   | { type: 'continue_after_expiry'; taskId: string; extendMinutes?: number }
   | { type: 'finish_after_expiry'; taskId: string; workedUntil?: string }
   | { type: 'complete_task' | 'reopen_task'; taskId: string }
@@ -79,6 +80,7 @@ const schemas: Record<AgentAction['type'], Schema> = {
   update_task: { required: { taskId: nonempty }, optional: { title: nonempty, note: text, priority, phase: nonempty, plannedDate: nullableDate, deadlineDate: nullableDate, pinned: boolean, date, startTime: clockTime, durationMinutes: planMinutes, clearTime: value => value === true } },
   plan_day: { required: { items: planItems }, optional: { date, start: clockTime } },
   shift_day: { required: { minutes: planMinutes }, optional: { fromTime: clockTime } },
+  replan_day: { required: {}, optional: { from: clockTime } },
   continue_after_expiry: { required: { taskId: nonempty }, optional: { extendMinutes: planMinutes } },
   finish_after_expiry: { required: { taskId: nonempty }, optional: { workedUntil: clockTime } },
   complete_task: taskOnly, reopen_task: taskOnly,
@@ -412,6 +414,24 @@ export function applyAgentAction(ws: AgentWorkspace, input: AgentAction, ctx: Ag
       });
       const summary = (lang: 'uk' | 'en') => schedule.map(block => block.start + '–' + block.end + ' · ' + block.title + ' · ' + (ws.tabs.find(tab => tab.id === block.phase)?.name ?? block.phase) + ' · P' + block.priority + (block.estimated ? lang === 'uk' ? ' (орієнтовно)' : ' (estimated)' : '')).join('\n');
       return success({ ...ws, tasks }, summary('uk'), summary('en'), changedTaskIds, createdIds, schedule);
+    }
+    if (action.type === 'replan_day') {
+      const from = action.from === undefined ? undefined : localTimeEpoch(today(), action.from, timeZone);
+      const replanned = replanRestOfDay(ws, now, timeZone, { from });
+      const changed = new Set(replanned.shiftedTaskIds);
+      const tasks = replanned.workspace.tasks.map(task => changed.has(task.id) ? stamp(task) : task);
+      const schedule = replanned.shiftedTaskIds.map(id => {
+        const task = tasks.find(task => task.id === id)!;
+        const end = taskScheduledEnd(task)!;
+        return { taskId: id, title: task.title, start: localClock(task.scheduledFor!, timeZone).slice(11, 16),
+          end: localClock(end, timeZone).slice(0, 10) === today() ? localClock(end, timeZone).slice(11, 16) : '24:00' };
+      });
+      const overflow = replanned.overflowTaskIds.map(id => ({ taskId: id, title: ws.tasks.find(task => task.id === id)!.title }));
+      const rows = schedule.map(block => block.start + '–' + block.end + ' · ' + block.title);
+      const summary = (uk: boolean) => [...(rows.length ? rows : [uk ? 'Немає блоків для перебудови' : 'No blocks to replan']),
+        ...(overflow.length ? [(uk ? 'Не вміщається сьогодні: ' : 'Does not fit today: ') + overflow.map(task => task.title).join(', ')] : [])].join('\n');
+      return success({ ...replanned.workspace, tasks }, summary(true), summary(false), replanned.shiftedTaskIds, undefined,
+        { schedule, shiftedTaskIds: replanned.shiftedTaskIds, overflowTaskIds: replanned.overflowTaskIds, overflow });
     }
     if (action.type === 'shift_day') {
       const fromTime = action.fromTime === undefined ? undefined : localTimeEpoch(today(), action.fromTime, timeZone);

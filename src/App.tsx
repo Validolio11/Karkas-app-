@@ -3,7 +3,7 @@ import { continueAfterExpiry, finishAfterExpiry, countdownReminderIndex } from '
 import { planDelay } from './utils/dayPlanShift';
 import { startLimitedStart, finishLimitedStart, needsLimitedStartFinish, latestAttempt, summarizeAttempts } from './utils/limitedStart';
 import { applyAITaskUpdate } from './utils/aiTaskUpdates';
-import { applyAgentAction, type AgentWorkspace } from './utils/aiAgentActions';
+import { applyAgentAction, type AgentAction, type AgentWorkspace } from './utils/aiAgentActions';
 import { captureAgentUndo, undoAgentTurn, type AgentUndoSnapshot } from './utils/agentUndo';
 import { canonical } from './utils/canonical';
 import type { AgentApplyOptions, AgentApplyResult } from './components/aiAgentClient';
@@ -1769,6 +1769,7 @@ export default function App() {
   const listTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Kyiv';
   const listDayKey = calendarDateKey(insightNow, listTimeZone);
   const dayDelay = useMemo(() => planDelay(tasks, insightNow, listTimeZone), [tasks, insightNow, listTimeZone]);
+  const missedBlockCount = dayDelay.missedTasks?.length ?? 0;
 
   // Filtered & Sorted Tasks (Running timers, then today's timed tasks by start, then pinned, priority, creation)
   const filteredTasks = useMemo(() => {
@@ -2096,22 +2097,35 @@ export default function App() {
     return { undone, conflicts: undone ? [] : ['workspace'] };
   };
 
-  const handleShiftDay = async () => {
-    if (dayShiftBusyRef.current) return;
+  const handleScheduleActions = async (actions: AgentAction[]): Promise<void> => {
+    if (dayShiftBusyRef.current) throw new Error(lang === 'uk' ? 'План уже оновлюється. Спробуйте ще раз.' : 'The plan is being updated. Please try again.');
     const now = Date.now(), ownerId = workspaceOwnerRef.current;
-    const delay = planDelay(latestTasksRef.current, now, listTimeZone);
-    if (!delay.minutes || !delay.tasks.length) return;
     dayShiftBusyRef.current = true;
+    let noticeWritten = false;
     try {
-      const result = await handleApplyAgentActions({ messageId: 'shift-day:' + crypto.randomUUID(), ownerId,
+      const result = await handleApplyAgentActions({ messageId: 'schedule:' + crypto.randomUUID(), ownerId,
         clientClock: { now: new Date(now).toISOString(), timeZone: listTimeZone },
-        actions: [{ action: { type: 'shift_day', minutes: delay.minutes }, summary: { uk: '', en: '' }, changedTaskIds: [] }] });
-      if (!agentOwnerIsCurrent(ownerId)) return;
+        actions: actions.map(action => ({ action, summary: { uk: '', en: '' }, changedTaskIds: [] })) });
+      if (!agentOwnerIsCurrent(ownerId)) throw new Error(lang === 'uk' ? 'Робочий простір змінився. Відкрийте завдання ще раз.' : 'The workspace changed. Open the task again.');
       setDayShiftNotice({ ownerId, undoToken: result.undoToken,
-        text: [...result.applied.map(summary => summary[lang]), ...result.failed.map(item => item.error)].join(' · ') });
-    } catch {
-      if (agentOwnerIsCurrent(ownerId)) setDayShiftNotice({ ownerId, text: lang === 'uk' ? 'Не вдалося посунути план. Спробуйте ще раз.' : 'Could not shift the plan. Please try again.' });
+        text: [...result.applied.map(summary => summary[lang]), ...result.failed.map(item => item.error)].join('\n') });
+      noticeWritten = true;
+      setInsightNow(Date.now());
+      if (result.failed.length) throw new Error(result.failed.map(item => item.error).join('\n'));
+    } catch (error) {
+      if (!noticeWritten && agentOwnerIsCurrent(ownerId)) setDayShiftNotice({ ownerId,
+        text: error instanceof Error ? error.message : lang === 'uk' ? 'Не вдалося оновити план. Спробуйте ще раз.' : 'Could not update the plan. Please try again.' });
+      throw error;
     } finally { dayShiftBusyRef.current = false; }
+  };
+  const handleShiftDay = async () => {
+    const delay = planDelay(latestTasksRef.current, Date.now(), listTimeZone);
+    if (!delay.minutes || !delay.tasks.length || dayShiftBusyRef.current) return;
+    try { await handleScheduleActions([{ type: 'shift_day', minutes: delay.minutes }]); } catch { /* The schedule notice contains the failure. */ }
+  };
+  const handleReplanDay = async () => {
+    if (dayShiftBusyRef.current) return;
+    try { await handleScheduleActions([{ type: 'replan_day' }]); } catch { /* The schedule notice contains the failure. */ }
   };
   const handleUndoDayShift = async () => {
     const notice = dayShiftNotice;
@@ -2121,9 +2135,9 @@ export default function App() {
       const result = await handleUndoAgentActions(notice.undoToken);
       if (!agentOwnerIsCurrent(notice.ownerId)) return;
       setDayShiftNotice(result.undone ? null : { ownerId: notice.ownerId,
-        text: lang === 'uk' ? 'План уже змінився. Не вдалося скасувати зсув; перегляньте блоки.' : 'The plan has changed. Could not undo the shift; review the blocks.' });
+        text: lang === 'uk' ? 'План уже змінився. Не вдалося скасувати зміну; перегляньте блоки.' : 'The plan has changed. Could not undo the change; review the blocks.' });
     } catch {
-      if (agentOwnerIsCurrent(notice.ownerId)) setDayShiftNotice({ ownerId: notice.ownerId, text: lang === 'uk' ? 'Не вдалося скасувати зсув. Перегляньте план.' : 'Could not undo the shift. Review the plan.' });
+      if (agentOwnerIsCurrent(notice.ownerId)) setDayShiftNotice({ ownerId: notice.ownerId, text: lang === 'uk' ? 'Не вдалося скасувати зміну. Перегляньте план.' : 'Could not undo the change. Review the plan.' });
     } finally { dayShiftBusyRef.current = false; }
   };
 
@@ -2806,14 +2820,21 @@ export default function App() {
             )}
 
             {dayShiftNotice && dayShiftNotice.ownerId === workspaceOwnerRef.current ? <div role="status" className="mb-4 flex flex-wrap items-center gap-3 border border-neutral-700 bg-neutral-900/70 px-4 py-3 text-sm text-neutral-200">
-              <span className="min-w-0 break-words">{dayShiftNotice.text}</span>
+              <span className="min-w-0 whitespace-pre-line break-words">{dayShiftNotice.text}</span>
               {dayShiftNotice.undoToken && <button type="button" onClick={() => void handleUndoDayShift()} className="min-h-11 px-3 underline focus-visible:outline-2 focus-visible:outline-white">{lang === 'uk' ? 'Скасувати' : 'Undo'}</button>}
               <button type="button" onClick={() => setDayShiftNotice(null)} className="min-h-11 px-3 text-neutral-400 hover:text-white">{lang === 'uk' ? 'Закрити' : 'Dismiss'}</button>
-            </div> : dayDelay.minutes > 0 && dayDelay.tasks.length > 0 && <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border border-amber-900/60 px-4 py-3 text-sm">
-              <p className="text-amber-200">{lang === 'uk' ? `Ти відстаєш від плану на ${dayDelay.minutes} хв` : `Your plan is ${dayDelay.minutes} min behind`}</p>
-              <button type="button" onClick={() => void handleShiftDay()} className="min-h-11 border border-neutral-700 px-3 py-2 text-neutral-200 hover:border-white hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
-                {lang === 'uk' ? `Посунути решту дня на +${dayDelay.minutes} хв` : `Shift the rest of today by +${dayDelay.minutes} min`}
-              </button>
+            </div> : dayDelay.minutes > 0 && <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border border-amber-900/60 px-4 py-3 text-sm">
+              <p className="text-amber-200">{missedBlockCount > 1
+                ? lang === 'uk' ? `${missedBlockCount} ${missedBlockCount % 10 === 1 && missedBlockCount % 100 !== 11 ? 'блок' : missedBlockCount % 10 >= 2 && missedBlockCount % 10 <= 4 && (missedBlockCount % 100 < 12 || missedBlockCount % 100 > 14) ? 'блоки' : 'блоків'} вже в минулому` : `${missedBlockCount} blocks are already in the past`
+                : lang === 'uk' ? `Ти відстаєш від плану на ${dayDelay.minutes} хв` : `Your plan is ${dayDelay.minutes} min behind`}</p>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" onClick={() => void handleReplanDay()} className="min-h-11 bg-white px-3 py-2 font-medium text-black hover:bg-neutral-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
+                  {lang === 'uk' ? 'Перебудувати решту дня від зараз' : 'Replan the rest of today from now'}
+                </button>
+                {dayDelay.tasks.length > 0 && <button type="button" onClick={() => void handleShiftDay()} className="min-h-11 border border-neutral-700 px-3 py-2 text-neutral-200 hover:border-white hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
+                  {lang === 'uk' ? `Посунути на +${dayDelay.minutes} хв` : `Shift by +${dayDelay.minutes} min`}
+                </button>}
+              </div>
             </div>}
             {/* Tasks List */}
             <div className="flex flex-col gap-4">
@@ -2834,6 +2855,9 @@ export default function App() {
                       tabs={tabs}
                       onToggleDone={handleToggleDone}
                       onStartTask={handleStartTask}
+                      timeZone={listTimeZone}
+                      onApplyAgentActions={handleScheduleActions}
+                      onReplanDay={() => void handleReplanDay()}
                       onUpdateStep={handleUpdateStep}
                       onCyclePriority={handleCyclePriority}
                       onCyclePhase={handleCyclePhase}

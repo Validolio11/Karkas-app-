@@ -1149,3 +1149,58 @@ test('timed create and update retain fixed durations independently from countdow
   assert.equal(cleared.workspace.tasks[0].scheduledDurationSeconds, undefined);
   assert.equal(cleared.workspace.tasks[0].plannedDate, '2026-10-19');
 });
+
+
+test('replan_day schedules missed and paused blocks, preserves work and has schedule-aware undo', () => {
+  const now = Date.parse('2026-10-19T15:30:00Z');
+  const missed = task({ id: 'missed', title: 'Спланувати анімацію', scheduledFor: Date.parse('2026-10-19T12:30:00Z'),
+    timerMode: 'countdown', countdownDurationSeconds: 1800, countdownRemainingSeconds: 1800, scheduledDurationSeconds: 1800 });
+  const paused = task({ scheduledFor: Date.parse('2026-10-19T13:00:00Z'), startedAt: Date.parse('2026-10-19T13:00:00Z'),
+    timerMode: 'countdown', timerRunning: false, countdownDurationSeconds: 21600, countdownRemainingSeconds: 18000,
+    scheduledDurationSeconds: 21600, steps: 6, currentStep: 3, timeSpentSeconds: 3600, timeSessions: { work: { seconds: 3600 } } });
+  const overflow = task({ id: 'typing', title: 'Навчання друку', scheduledFor: Date.parse('2026-10-19T19:00:00Z'),
+    scheduledDurationSeconds: 1800, timerMode: 'countdown', countdownDurationSeconds: 1800 });
+  const ws = workspace({ tasks: [missed, paused, overflow] });
+  const output = success(ws, { type: 'replan_day' }, context({ now }));
+  const [first, second, third] = output.workspace.tasks;
+  assert.equal(first.scheduledFor, now);
+  assert.equal(second.scheduledFor, now + 1800000);
+  assert.equal(second.scheduledDurationSeconds, 18000);
+  assert.equal(second.countdownDurationSeconds, paused.countdownDurationSeconds);
+  assert.equal(second.countdownRemainingSeconds, paused.countdownRemainingSeconds);
+  assert.equal(second.timeSpentSeconds, paused.timeSpentSeconds);
+  assert.deepEqual(second.timeSessions, paused.timeSessions);
+  assert.equal(second.currentStep, 3);
+  assert.equal(third, overflow);
+  assert.deepEqual(output.result.changedTaskIds, ['missed', 'task-1']);
+  assert.deepEqual((output.result.data as { overflowTaskIds: string[] }).overflowTaskIds, ['typing']);
+  assert.match(output.result.summary.uk, /18:30–19:00 · Спланувати анімацію\n19:00–24:00 · Робота над анімацією/);
+  assert.match(output.result.summary.uk, /Не вміщається сьогодні: Навчання друку/);
+  const undone = undoAgentTurn(output.workspace, captureAgentUndo(ws, output.workspace));
+  assert.equal(undone.undone, true);
+  assert.deepEqual(undone.workspace.tasks.map(task => [task.scheduledFor, task.scheduledDurationSeconds]), ws.tasks.map(task => [task.scheduledFor, task.scheduledDurationSeconds]));
+  const later = success(ws, { type: 'replan_day', from: '19:00' }, context({ now }));
+  assert.equal(later.workspace.tasks[0].scheduledFor, now + 1800000);
+});
+
+test('shift_day can recover missed and paused blocks when the explicit shift reaches now', () => {
+  const now = Date.parse('2026-10-19T15:30:00Z');
+  const original = task({ scheduledFor: now - 30 * 60000, scheduledDurationSeconds: 1800,
+    timerMode: 'countdown', countdownDurationSeconds: 1800, countdownRemainingSeconds: 900, startedAt: now - 20 * 60000,
+    timerRunning: false, timeSpentSeconds: 900 });
+  const ws = workspace({ tasks: [original] });
+  const shifted = success(ws, { type: 'shift_day', minutes: 30 }, context({ now }));
+  assert.equal(shifted.workspace.tasks[0].scheduledFor, now);
+  assert.equal(shifted.workspace.tasks[0].timeSpentSeconds, 900);
+  assert.equal(shifted.workspace.tasks[0].countdownRemainingSeconds, 900);
+  const missed = success(workspace({ tasks: [{ ...original, startedAt: undefined }] }), { type: 'shift_day', minutes: 30 }, context({ now }));
+  assert.equal(missed.workspace.tasks[0].scheduledFor, now);
+  const tooSmall = success(ws, { type: 'shift_day', minutes: 5 }, context({ now }));
+  assert.equal(tooSmall.workspace.tasks[0].scheduledFor, original.scheduledFor);
+});
+
+test('replan_day validates its optional local start and rejects unrelated arguments', () => {
+  for (const action of [{ type: 'replan_day' }, { type: 'replan_day', from: '18:30' }]) assert.deepEqual(validateAgentAction(action), action);
+  for (const action of [{ type: 'replan_day', from: '24:00' }, { type: 'replan_day', from: '9:00' },
+    { type: 'replan_day', minutes: 30 }, { type: 'replan_day', fromTime: '18:30' }]) assert.ok('error' in validateAgentAction(action));
+});

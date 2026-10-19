@@ -93,3 +93,10 @@ test('fixed scheduled duration stays independent of extensions, timer mode and t
   assert.equal(taskTimeRange(replanned, WEDNESDAY_MORNING, KYIV, 'uk'), 'Сьогодні 14:30–16:00');
   assert.equal(replanned.plannedDurationSeconds, 3600);
 });
+
+test('a block ending exactly at next midnight shows 24:00 in both languages', () => {
+  const midnight = block('2026-10-21T19:00:00+03:00', 300);
+  assert.equal(taskTimeRange(midnight, WEDNESDAY_MORNING, KYIV, 'uk'), 'Сьогодні 19:00–24:00');
+  assert.equal(taskTimeRange(midnight, WEDNESDAY_MORNING, KYIV, 'en'), 'Today 19:00–24:00');
+  assert.equal(taskTimeRange(block('2026-10-21T23:30:00+03:00', 60), WEDNESDAY_MORNING, KYIV, 'en'), 'Today 23:30–00:30');
+});

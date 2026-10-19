@@ -7,6 +7,9 @@ import { formatDigitalDuration as formatTime, formatDurationFull } from '../util
 import { Language, TRANSLATIONS } from '../utils/i18n';
 import { AIIcon } from './AIIconTemplates';
 import { TaskTimeDialog } from './TaskTimeDialog';
+import { TaskScheduleDialog } from './TaskScheduleDialog';
+import type { AgentAction } from '../utils/aiAgentActions';
+import { missedBlock } from '../utils/dayPlanShift';
 import { CountdownExpiryNotice, type CountdownExpiryActions } from './CountdownExpiryNotice';
 import { formatTaskDate, getDeadlineProgress, isTaskDate, taskDateEnd } from '../utils/taskDates';
 import { taskTimeRange } from '../utils/schedulePresentation';
@@ -25,6 +28,7 @@ import {
   RotateCcw,
   AlertTriangle,
   Pencil,
+  MoreHorizontal,
 } from 'lucide-react';
 
 interface TaskCardProps extends CountdownExpiryActions {
@@ -32,6 +36,9 @@ interface TaskCardProps extends CountdownExpiryActions {
   index: number;
   lang: Language;
   tabs?: TaskTab[];
+  timeZone?: string;
+  onApplyAgentActions?: (actions: AgentAction[]) => void | Promise<void>;
+  onReplanDay?: () => void;
   onToggleDone: (id: string) => void;
   onStartTask?: (id: string) => void;
   onUpdateStep: (id: string, step: number) => void;
@@ -75,6 +82,9 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
   task,
   lang,
   tabs = [],
+  timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Kyiv',
+  onApplyAgentActions,
+  onReplanDay,
   onToggleDone,
   onStartTask,
   onUpdateStep,
@@ -134,6 +144,9 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
   };
   const [isConfiguringTimer, setIsConfiguringTimer] = useState(false);
   const [correctionOpen, setCorrectionOpen] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const scheduleTriggerRef = useRef<HTMLElement | null>(null);
+  const openSchedule = (trigger: HTMLElement) => { scheduleTriggerRef.current = trigger; setScheduleOpen(true); };
   const [now, setNow] = useState(Date.now());
   const timeTriggerRef = useRef<HTMLButtonElement>(null);
   const openTimeSettings = (trigger: HTMLButtonElement, correction = false) => {
@@ -162,7 +175,9 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
   const showTimerWidget = timerMode !== 'none' || !!task.timerRunning;
   const timerValue = formatTime(hasCountdown ? remainingSeconds : currentElapsedSeconds);
   const countdownFinished = hasCountdown && remainingSeconds === 0;
-  const scheduledRange = taskTimeRange(task, now, Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Kyiv', lang);
+  const scheduledRange = taskTimeRange(task, now, timeZone, lang);
+  const missed = missedBlock(task, now, timeZone);
+  const missedSince = missed ? new Intl.DateTimeFormat(lang === 'uk' ? 'uk-UA' : 'en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(missed.since) : '';
   const hasStarted = Number.isFinite(task.startedAt) || !!task.timerRunning || currentElapsedSeconds > 0;
   const countdownProgress = hasCountdown
     ? Math.min(100, Math.max(0, (1 - remainingSeconds / task.countdownDurationSeconds!) * 100)) : 0;
@@ -291,9 +306,9 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
         onPointerDown={(event) => {
           // Native drag listeners run before React bubbling. Start explicitly so
           // text selection and button gestures can never become a task swipe.
-          if (isEditingTask || (isExpanded && isAddingStep) || isConfiguringTimer || event.button !== 0) return;
+          if (isEditingTask || (isExpanded && isAddingStep) || isConfiguringTimer || scheduleOpen || event.button !== 0) return;
           const target = event.target;
-          if (target instanceof Element && target.closest('button, input, textarea, select, a, [role="button"], [contenteditable="true"]')) return;
+          if (target instanceof Element && target.closest('button, summary, input, textarea, select, a, [role="button"], [contenteditable="true"]')) return;
           dragControls.start(event);
         }}
         dragConstraints={{ left: -100, right: 100 }}
@@ -301,7 +316,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
         onDragEnd={handleDragEnd}
         onContextMenu={(e) => {
           const target = e.target;
-          if (isEditingTask || (target instanceof Element && target.closest('button, input, textarea, select, a, [role="button"], [contenteditable="true"]'))) return;
+          if (isEditingTask || (target instanceof Element && target.closest('button, summary, input, textarea, select, a, [role="button"], [contenteditable="true"]'))) return;
           e.preventDefault();
           sound.tick(500);
           beginEditingTask();
@@ -509,7 +524,12 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   >
                     {task.title}
                   </h3>
-                  {scheduledRange && <p className="mt-1 text-sm leading-relaxed text-emerald-300"><span className="sr-only">{lang === 'uk' ? 'Заплановано: ' : 'Planned: '}</span><time dateTime={new Date(task.scheduledFor!).toISOString()}>{scheduledRange}</time></p>}
+                  {scheduledRange && <div className="mt-1 text-sm leading-relaxed text-emerald-300">{onApplyAgentActions ? <button type="button" id={`task-schedule-btn-${task.id}`} title={lang === 'uk' ? 'Змінити час' : 'Change time'} aria-haspopup="dialog" aria-controls={`task-schedule-dialog-${task.id}`} onClick={event => { event.stopPropagation(); openSchedule(event.currentTarget); }} className="min-h-11 text-left underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-300 sm:min-h-8"><span className="sr-only">{lang === 'uk' ? 'Заплановано: ' : 'Planned: '}</span><time dateTime={new Date(task.scheduledFor!).toISOString()}>{scheduledRange}</time></button> : <><span className="sr-only">{lang === 'uk' ? 'Заплановано: ' : 'Planned: '}</span><time dateTime={new Date(task.scheduledFor!).toISOString()}>{scheduledRange}</time></>}</div>}
+                  {missed && <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-amber-300/90">
+                    <p>{lang === 'uk' ? `Пропущено з ${missedSince}` : `Missed since ${missedSince}`}</p>
+                    <button type="button" disabled={missed.paused ? !onToggleTimer : !onStartTask} onClick={event => { event.stopPropagation(); if (!allowAction('timer')) return; sound.activate(); if (missed.paused) onToggleTimer?.(task.id); else onStartTask?.(task.id); }} className="min-h-11 underline underline-offset-4 hover:text-amber-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-300 disabled:opacity-40 sm:min-h-8">{lang === 'uk' ? 'Почати зараз' : 'Start now'}</button>
+                    {onReplanDay && <button type="button" onClick={event => { event.stopPropagation(); onReplanDay(); }} className="min-h-11 underline underline-offset-4 hover:text-amber-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-300 sm:min-h-8">{lang === 'uk' ? 'Перебудувати день' : 'Replan day'}</button>}
+                  </div>}
 
                   {task.note && (
                     <div className="mt-1.5 max-w-prose text-sm leading-relaxed break-words [overflow-wrap:anywhere] font-sans text-neutral-400">
@@ -692,6 +712,13 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
 
               {/* Tools stay together so they wrap as one group on narrow screens. */}
               <div className="flex items-center sm:border-l sm:border-neutral-800 sm:pl-2">
+                {onApplyAgentActions && <details className="relative" onClick={event => event.stopPropagation()}>
+                  <summary aria-label={lang === 'uk' ? 'Меню завдання' : 'Task menu'} title={lang === 'uk' ? 'Меню завдання' : 'Task menu'} className={iconAction + ' list-none cursor-pointer [&::-webkit-details-marker]:hidden'}><MoreHorizontal className="h-4 w-4" aria-hidden="true" /></summary>
+                  <div className="absolute bottom-full right-0 z-30 mb-2 min-w-44 border border-neutral-700 bg-neutral-950 p-1 shadow-xl">
+                    <button type="button" onClick={event => { const menu = event.currentTarget.closest('details'); const trigger = menu?.querySelector('summary'); if (trigger) openSchedule(trigger); menu?.removeAttribute('open'); }} className="min-h-11 w-full px-3 py-2 text-left text-sm text-neutral-300 hover:bg-neutral-900 hover:text-white focus-visible:outline-2 focus-visible:outline-white">{lang === 'uk' ? 'Змінити час' : 'Change time'}</button>
+                  </div>
+                </details>}
+
 
                 <button
                   id={`task-edit-btn-${task.id}`}
@@ -892,6 +919,12 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
           </motion.div>
         )}
       </AnimatePresence>
+
+      {scheduleOpen && onApplyAgentActions && <TaskScheduleDialog
+        task={task} lang={lang} timeZone={timeZone} triggerRef={scheduleTriggerRef} onApply={onApplyAgentActions}
+        onClose={() => setScheduleOpen(false)}
+        onExtend={hasCountdown && onExtendCountdown ? () => { setScheduleOpen(false); const trigger = document.getElementById('task-time-settings-' + task.id); timeTriggerRef.current = scheduleTriggerRef.current instanceof HTMLButtonElement ? scheduleTriggerRef.current : trigger instanceof HTMLButtonElement ? trigger : null; setCorrectionOpen(false); setIsConfiguringTimer(true); } : undefined}
+      />}
 
       {isConfiguringTimer && <TaskTimeDialog
         task={task} lang={lang} triggerRef={timeTriggerRef} correctionOpen={correctionOpen}

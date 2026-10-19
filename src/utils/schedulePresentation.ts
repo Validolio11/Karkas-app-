@@ -63,7 +63,8 @@ export function taskTimeRange(task: TimedTask, now: number, timeZone: string, la
   const locale = lang === 'uk' ? 'uk-UA' : 'en-GB';
   const clock = (at: number) => formatter(locale, timeZone, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(at);
   const end = taskScheduledEnd(task);
-  const time = end === undefined ? clock(start) : `${clock(start)}–${clock(end)}`;
+  const endClock = end === undefined ? undefined : end % 60000 === 0 && clock(end) === '00:00' && calendarDateKey(end, timeZone) === nextDateKey(calendarDateKey(start, timeZone)) ? '24:00' : clock(end);
+  const time = endClock === undefined ? clock(start) : `${clock(start)}–${endClock}`;
   const today = calendarDateKey(now, timeZone);
   const day = calendarDateKey(start, timeZone);
   if (day === today) return `${lang === 'uk' ? 'Сьогодні' : 'Today'} ${time}`;

@@ -6,7 +6,7 @@ import { calendarDateKey, compareTodayTimedFirst, taskTimeRange } from './schedu
 const KYIV = 'Europe/Kyiv';
 const at = (iso: string) => Date.parse(iso);
 const block = (start: string, minutes?: number, fields: Partial<PSTask> = {}): Pick<PSTask, 'scheduledFor' | 'timerMode' | 'countdownDurationSeconds' | 'done'> => ({
-  scheduledFor: at(start),
+  scheduledFor: at(start), done: false,
   ...(minutes === undefined ? {} : { timerMode: 'countdown' as const, countdownDurationSeconds: minutes * 60 }),
   ...fields,
 });
@@ -63,7 +63,7 @@ test('the same instant can be today in one time zone and tomorrow in another', (
 
 test("today's unfinished timed tasks come first in start order and the rest keep the caller's order", () => {
   const tasks = [
-    { id: 'unscheduled' },
+    { id: 'unscheduled', done: false },
     { id: 'animation', ...block('2026-10-21T14:30:00+03:00', 300) },
     { id: 'tomorrow', ...block('2026-10-22T09:00:00+03:00', 60) },
     { id: 'blinds', ...block('2026-10-21T13:00:00+03:00', 60) },
@@ -76,8 +76,8 @@ test("today's unfinished timed tasks come first in start order and the rest keep
 });
 
 test('the comparator uses the given time zone for "today"', () => {
-  const late = { scheduledFor: at('2026-10-21T22:30:00Z') };
-  const plain = {};
+  const late = { scheduledFor: at('2026-10-21T22:30:00Z'), done: false };
+  const plain = { done: false };
   assert.ok(compareTodayTimedFirst(late, plain, WEDNESDAY_MORNING, 'UTC') < 0);
   assert.equal(compareTodayTimedFirst(late, plain, WEDNESDAY_MORNING, KYIV), 0);
 });

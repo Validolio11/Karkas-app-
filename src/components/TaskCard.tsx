@@ -11,7 +11,7 @@ import { TaskScheduleDialog } from './TaskScheduleDialog';
 import type { AgentAction } from '../utils/aiAgentActions';
 import { missedBlock } from '../utils/dayPlanShift';
 import { CountdownExpiryNotice, type CountdownExpiryActions } from './CountdownExpiryNotice';
-import { formatTaskDate, getDeadlineProgress, isTaskDate, taskDateEnd } from '../utils/taskDates';
+import { describeDeadline, describePlannedDate, getDeadlineProgress, isTaskDate } from '../utils/taskDates';
 import { taskTimeRange } from '../utils/schedulePresentation';
 import {
   Pin,
@@ -121,6 +121,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
     lastAction.current[group] = now;
     return true;
   };
+  const [expandedFromCompact, setExpandedFromCompact] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
   const [isAddingStep, setIsAddingStep] = useState(false);
   const [newStepText, setNewStepText] = useState('');
@@ -172,7 +173,9 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
   const timerMode = getTaskTimerMode(task);
   const hasCountdown = timerMode === 'countdown' && (task.countdownDurationSeconds || 0) > 0;
   const remainingSeconds = getTaskRemainingSeconds(task, now) ?? 0;
-  const showTimerWidget = timerMode !== 'none' || !!task.timerRunning;
+  const isFresh = !task.done && !task.timerRunning && !((task.timeSpentSeconds || 0) > 0) && !Number.isFinite(task.startedAt) && !task.countdownExpiredAt && !task.limitedStart && !Number.isFinite(task.scheduledFor);
+  const isCompact = isFresh && !expandedFromCompact && !isEditingTask && !isConfiguringTimer && !scheduleOpen && !isExpanded && !isAddingStep;
+  const showTimerWidget = !isFresh && (timerMode !== 'none' || !!task.timerRunning);
   const timerValue = formatTime(hasCountdown ? remainingSeconds : currentElapsedSeconds);
   const countdownFinished = hasCountdown && remainingSeconds === 0;
   const scheduledRange = taskTimeRange(task, now, timeZone, lang);
@@ -271,6 +274,86 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
   const primaryAction = 'inline-flex min-h-11 sm:min-h-9 items-center justify-center gap-2 border border-white bg-white px-3 py-1.5 text-sm font-bold text-black transition-colors hover:bg-neutral-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white disabled:opacity-40';
   const iconAction = 'inline-flex h-11 w-11 sm:h-9 sm:w-9 items-center justify-center text-neutral-500 transition-colors hover:bg-neutral-900 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white';
 
+  const handleStartTask = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    if (!allowAction('timer')) return;
+    sound.activate();
+    onStartTask?.(task.id);
+  };
+  const handleToggleDone = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    sound.slice();
+    onToggleDone(task.id);
+  };
+  const shortDate = (full: string) => Number(full.slice(6)) === new Date(now).getFullYear() ? full.slice(0, 5) : full;
+  const planned = task.plannedDate ? describePlannedDate(task.plannedDate, lang, now) : null;
+  const deadline = task.deadlineDate ? describeDeadline(task.deadlineDate, lang, now) : null;
+  const deadlineProgress = Math.round(getDeadlineProgress(task, now));
+  const plannedDateChip = planned?.label ? <span title={planned.full} className={`mx-1.5 inline-flex items-center font-mono text-[11px] font-bold ${task.done ? 'text-neutral-500' : planned.tone === 'missed' ? 'text-amber-400' : 'text-neutral-400'}`}>
+    {task.done && planned.tone === 'missed' ? shortDate(planned.full) : planned.label}
+  </span> : null;
+  const deadlineChip = deadline?.label ? <span title={`${deadline.full} · ${lang === 'uk' ? `Минуло ${deadlineProgress}% часу від створення до кінця дедлайну` : `${deadlineProgress}% of time from creation to deadline elapsed`}`} className={`mx-1.5 inline-flex items-center gap-2 font-mono text-[11px] font-bold ${task.done ? 'text-neutral-500' : deadline.tone === 'overdue' || deadline.tone === 'today' ? 'text-red-400' : deadline.tone === 'soon' ? 'text-amber-400' : 'text-neutral-400'}`}>
+    <span>{task.done ? `${lang === 'uk' ? 'Дедлайн' : 'Due'} ${shortDate(deadline.full)}` : deadline.label}</span>
+    {!task.done && <span role="progressbar" aria-label={lang === 'uk' ? 'Час до дедлайну, що минув' : 'Elapsed deadline time'} aria-valuemin={0} aria-valuemax={100} aria-valuenow={deadlineProgress} className="h-1 w-10 bg-neutral-800">
+      <span className="block h-full bg-current" style={{ width: `${deadlineProgress}%` }} />
+    </span>}
+  </span> : null;
+  const taskTools = (
+    <div className="flex items-center sm:border-l sm:border-neutral-800 sm:pl-2">
+      {onApplyAgentActions && <details className="relative" onClick={event => event.stopPropagation()}>
+        <summary aria-label={lang === 'uk' ? 'Меню завдання' : 'Task menu'} title={lang === 'uk' ? 'Меню завдання' : 'Task menu'} className={iconAction + ' list-none cursor-pointer [&::-webkit-details-marker]:hidden'}><MoreHorizontal className="h-4 w-4" aria-hidden="true" /></summary>
+        <div className="absolute bottom-full right-0 z-30 mb-2 min-w-44 border border-neutral-700 bg-neutral-950 p-1 shadow-xl">
+          <button type="button" onClick={event => { const menu = event.currentTarget.closest('details'); const trigger = menu?.querySelector('summary'); if (trigger) openSchedule(trigger); menu?.removeAttribute('open'); }} className="min-h-11 w-full px-3 py-2 text-left text-sm text-neutral-300 hover:bg-neutral-900 hover:text-white focus-visible:outline-2 focus-visible:outline-white">{lang === 'uk' ? 'Змінити час' : 'Change time'}</button>
+        </div>
+      </details>}
+
+
+      <button
+        id={`task-edit-btn-${task.id}`}
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          sound.tick(500);
+          if (isEditingTask) setIsEditingTask(false);
+          else beginEditingTask();
+        }}
+        title={lang === 'uk' ? 'Редагувати текст завдання (або ПКМ)' : 'Edit task text (or right-click)'}
+        aria-label={lang === 'uk' ? 'Редагувати текст завдання' : 'Edit task text'}
+        className={iconAction}
+      >
+        <Pencil className="h-4 w-4" aria-hidden="true" />
+      </button>
+      <button
+        id={`task-delete-btn-${task.id}`}
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          sound.tick(300);
+          onDelete(task.id);
+        }}
+        title={lang === 'uk' ? 'Видалити завдання' : 'Delete task'}
+        aria-label={lang === 'uk' ? 'Видалити завдання' : 'Delete task'}
+        className={`${iconAction} hover:text-rose-400`}
+      >
+        <Trash2 className="h-4 w-4" aria-hidden="true" />
+      </button>
+      <button
+        id={`task-ai-btn-${task.id}`}
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          sound.activate();
+          onAskAIAboutTask(task.title);
+        }}
+        title={t.askAI}
+        aria-label={t.askAI}
+        className={`${iconAction} hover:text-emerald-400`}
+      >
+        <AIIcon className="h-4 w-4" />
+      </button>
+    </div>
+  );
+
   return (
     <div id={`task-wrapper-${task.id}`} className="relative group select-none touch-pan-y">
       {/* Background Gesture Layer - Left: Slice to Complete */}
@@ -323,7 +406,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
         }}
         style={{ x, rotate: x.get() < 0 ? rotateLeft : rotateRight }}
         whileTap={{ cursor: 'grabbing' }}
-        className={`relative z-10 bg-[#0c0c0d] border transition-all duration-200 p-4 sm:p-5 cursor-grab ${
+        className={`relative z-10 bg-[#0c0c0d] border transition-all duration-200 ${isCompact ? 'px-3 py-2' : 'p-4 sm:p-5'} cursor-grab ${
           task.timerRunning
             ? 'border-emerald-500/90 task-timer-glow'
             : task.done
@@ -343,6 +426,56 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
           />
         )}
 
+        {isCompact ? (
+          <div className="flex min-h-9 flex-wrap items-center gap-x-3 gap-y-1.5 sm:flex-nowrap">
+            <button type="button" id={`task-toggle-action-${task.id}`} role="checkbox" aria-checked={false}
+              aria-label={lang === 'uk' ? `Завершити «${task.title}»` : `Complete “${task.title}”`}
+              onClick={handleToggleDone}
+              className="h-5 w-5 shrink-0 border border-neutral-600 transition-colors hover:border-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white" />
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 sm:flex-nowrap">
+              <div className="min-w-0 basis-full sm:flex-1 sm:basis-0">
+                <button type="button" title={task.title} aria-expanded={expandedFromCompact}
+                  onClick={event => { event.stopPropagation(); setExpandedFromCompact(true); }}
+                  className="block w-full truncate text-left text-[15px] text-neutral-100 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
+                  {task.title}
+                </button>
+                {task.note && <p title={task.note} className="truncate text-xs text-neutral-500">{task.note}</p>}
+              </div>
+              <div className="flex min-w-0 basis-full flex-wrap items-center gap-x-2 gap-y-1 text-[11px] sm:basis-auto sm:justify-end">
+                <button type="button" id={`task-phase-btn-${task.id}`}
+                  onClick={event => { event.stopPropagation(); sound.tick(700); onCyclePhase(task.id); }}
+                  title={lang === 'uk' ? 'Натисніть для зміни вкладки/категорії' : 'Tap to cycle category'}
+                  aria-label={lang === 'uk' ? `Категорія ${phaseLabel}, натисніть для зміни` : `Category ${phaseLabel}, press to change`}
+                  className={`inline-flex min-h-6 min-w-0 items-center gap-1.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white ${phaseStyle.text}`}
+                  style={matchedTab?.color ? { color: matchedTab.color } : undefined}>
+                  <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-current" />
+                  <span className="truncate">{phaseLabel}</span>
+                </button>
+                <button type="button" id={`task-priority-btn-${task.id}`}
+                  onClick={event => { event.stopPropagation(); sound.tick(400 + task.priority * 150); onCyclePriority(task.id); }}
+                  title={lang === 'uk' ? `Пріоритет P${task.priority}, натисніть для зміни` : `Priority P${task.priority}, press to change`}
+                  aria-label={lang === 'uk' ? `Пріоритет P${task.priority}, натисніть для зміни` : `Priority P${task.priority}, press to change`}
+                  className={`min-h-6 font-mono font-bold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white ${task.priority === 1 ? 'text-red-400' : task.priority === 2 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                  P{task.priority}
+                </button>
+                {deadlineChip || plannedDateChip}
+                {task.pinned && <span title={lang === 'uk' ? 'Закріплено' : 'Pinned'} className="inline-flex text-neutral-400">
+                  <Pin className="h-3 w-3 fill-neutral-400" aria-hidden="true" />
+                  <span className="sr-only">{lang === 'uk' ? 'Закріплено' : 'Pinned'}</span>
+                </span>}
+              </div>
+            </div>
+            <div className="ml-auto flex max-w-full basis-full shrink-0 flex-wrap items-center justify-end gap-1.5 sm:basis-auto">
+              <button type="button" id={`task-start-action-${task.id}`} disabled={!onStartTask} onClick={handleStartTask}
+                className="inline-flex min-h-9 items-center justify-center border border-neutral-700 px-3 text-sm font-semibold text-neutral-300 transition-colors hover:border-white hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white disabled:opacity-40">
+                {lang === 'uk' ? 'Почати' : 'Start'}
+              </button>
+              <div className="opacity-0 group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity">
+                {taskTools}
+              </div>
+            </div>
+          </div>
+        ) : (
         <div className="flex flex-col gap-4">
           {/* Content first: meta and title on the left, a compact timer readout on the right. */}
           <div className={`grid min-w-0 gap-x-6 gap-y-3 ${showTimerWidget ? 'sm:grid-cols-[minmax(0,1fr)_auto]' : ''}`}>
@@ -422,21 +555,8 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   </span>
                 </button>
 
-                {task.plannedDate && <span className="mx-1.5 inline-flex items-center font-mono text-[11px] font-bold text-neutral-400">
-                  {lang === 'uk' ? 'НА' : 'ON'} {formatTaskDate(task.plannedDate, lang, now)}
-                </span>}
-                {task.deadlineDate && (() => {
-                  const progress = Math.round(getDeadlineProgress(task, now));
-                  const end = taskDateEnd(task.deadlineDate);
-                  const overdue = !task.done && end !== null && now > end;
-                  const color = task.done ? 'text-neutral-400' : overdue || progress >= 85 ? 'text-red-400' : progress >= 60 ? 'text-amber-400' : 'text-emerald-400';
-                  return <span title={lang === 'uk' ? `${overdue ? 'Термін минув. ' : ''}Минуло ${progress}% часу від створення до кінця дедлайну` : `${overdue ? 'Overdue. ' : ''}${progress}% of time from creation to deadline elapsed`} className={`mx-1.5 inline-flex items-center gap-2 font-mono text-[11px] font-bold ${color}`}>
-                    <span>{lang === 'uk' ? 'ДО' : 'BY'} {formatTaskDate(task.deadlineDate, lang, now)}{overdue && ' !'}</span>
-                    <span role="progressbar" aria-label={lang === 'uk' ? 'Час до дедлайну, що минув' : 'Elapsed deadline time'} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress} className="h-1 w-10 bg-neutral-800">
-                      <span className="block h-full bg-current" style={{ width: `${progress}%` }} />
-                    </span>
-                  </span>;
-                })()}
+                {plannedDateChip}
+                {deadlineChip}
 
                 {task.pinned && (
                   <span className="mx-1.5 inline-flex items-center text-neutral-400" title={lang === 'uk' ? 'Закріплено' : 'Pinned'}>
@@ -663,7 +783,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
               <div className="flex flex-wrap items-center gap-1.5">
                 {!task.done && !hasStarted && <button
                   type="button" id={`task-start-action-${task.id}`} disabled={!onStartTask}
-                  onClick={(e) => { e.stopPropagation(); if (!allowAction('timer')) return; sound.activate(); onStartTask?.(task.id); }}
+                  onClick={handleStartTask}
                   className={primaryAction}>
                   <Play className="h-4 w-4" aria-hidden="true" />
                   {lang === 'uk' ? 'Почати' : 'Start'}
@@ -697,11 +817,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                 <button
                   type="button"
                   id={`task-toggle-action-${task.id}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    sound.slice();
-                    onToggleDone(task.id);
-                  }}
+                  onClick={handleToggleDone}
                   className="inline-flex min-h-11 sm:min-h-9 items-center justify-center gap-2 border border-neutral-700 px-3 py-1.5 text-sm font-semibold text-neutral-300 transition-colors hover:border-white hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
                 >
                   {task.done ? <RotateCcw className="h-4 w-4" aria-hidden="true" /> : <Check className="h-4 w-4" aria-hidden="true" />}
@@ -710,63 +826,11 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
 
               </div>
 
-              {/* Tools stay together so they wrap as one group on narrow screens. */}
-              <div className="flex items-center sm:border-l sm:border-neutral-800 sm:pl-2">
-                {onApplyAgentActions && <details className="relative" onClick={event => event.stopPropagation()}>
-                  <summary aria-label={lang === 'uk' ? 'Меню завдання' : 'Task menu'} title={lang === 'uk' ? 'Меню завдання' : 'Task menu'} className={iconAction + ' list-none cursor-pointer [&::-webkit-details-marker]:hidden'}><MoreHorizontal className="h-4 w-4" aria-hidden="true" /></summary>
-                  <div className="absolute bottom-full right-0 z-30 mb-2 min-w-44 border border-neutral-700 bg-neutral-950 p-1 shadow-xl">
-                    <button type="button" onClick={event => { const menu = event.currentTarget.closest('details'); const trigger = menu?.querySelector('summary'); if (trigger) openSchedule(trigger); menu?.removeAttribute('open'); }} className="min-h-11 w-full px-3 py-2 text-left text-sm text-neutral-300 hover:bg-neutral-900 hover:text-white focus-visible:outline-2 focus-visible:outline-white">{lang === 'uk' ? 'Змінити час' : 'Change time'}</button>
-                  </div>
-                </details>}
-
-
-                <button
-                  id={`task-edit-btn-${task.id}`}
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    sound.tick(500);
-                    if (isEditingTask) setIsEditingTask(false);
-                    else beginEditingTask();
-                  }}
-                  title={lang === 'uk' ? 'Редагувати текст завдання (або ПКМ)' : 'Edit task text (or right-click)'}
-                  aria-label={lang === 'uk' ? 'Редагувати текст завдання' : 'Edit task text'}
-                  className={iconAction}
-                >
-                  <Pencil className="h-4 w-4" aria-hidden="true" />
-                </button>
-                <button
-                  id={`task-delete-btn-${task.id}`}
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    sound.tick(300);
-                    onDelete(task.id);
-                  }}
-                  title={lang === 'uk' ? 'Видалити завдання' : 'Delete task'}
-                  aria-label={lang === 'uk' ? 'Видалити завдання' : 'Delete task'}
-                  className={`${iconAction} hover:text-rose-400`}
-                >
-                  <Trash2 className="h-4 w-4" aria-hidden="true" />
-                </button>
-                <button
-                  id={`task-ai-btn-${task.id}`}
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    sound.activate();
-                    onAskAIAboutTask(task.title);
-                  }}
-                  title={t.askAI}
-                  aria-label={t.askAI}
-                  className={`${iconAction} hover:text-emerald-400`}
-                >
-                  <AIIcon className="h-4 w-4" />
-                </button>
-              </div>
+              {taskTools}
             </div>
           </div>
         </div>
+        )}
       </motion.div>
 
       {/* Collapsible Animated Sub-Card with Granular Steps & Descriptions */}

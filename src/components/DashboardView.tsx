@@ -116,12 +116,8 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
         deletedCompleted.filter((t) => t.phase === tab.id).length;
       const catDropped = droppedInPeriod.filter((t) => t.phase === tab.id).length;
       const catTotal = catActive + catDelivered + catDropped;
-      const catPercent =
-        catDelivered + catDropped > 0
-          ? Math.round((catDelivered / (catDelivered + catDropped)) * 100)
-          : catTotal > 0
-          ? Math.round((catDelivered / catTotal) * 100)
-          : 0;
+      // Share of the category's period workload that is done, so the bar agrees with "delivered/total".
+      const catPercent = catTotal > 0 ? Math.round((catDelivered / catTotal) * 100) : 0;
       const tabDisplayName = (t.phases as any)[tab.id] || tab.name;
 
       return {
@@ -394,7 +390,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
                       {tp.name}
                     </span>
                     <span className="text-xs text-neutral-400">
-                      ({tp.delivered}/{tp.total})
+                      {lang === 'uk' ? `${tp.delivered} з ${tp.total} виконано` : `${tp.delivered} of ${tp.total} done`}
                     </span>
                   </div>
                   <div className="flex items-center shrink-0 gap-1.5 text-xs text-neutral-400">

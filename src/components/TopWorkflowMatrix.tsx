@@ -14,6 +14,8 @@ interface TopWorkflowMatrixProps {
   selectedPhase: string;
   soundEnabled: boolean;
   isAddOpen: boolean;
+  /** The inline quick-add row replaces this hint on task lists; it stays while the drawer is open so it can be closed. */
+  hidePullHint?: boolean;
   lang: Language;
   aiIconVariant?: AIIconId;
   historyCount?: number;
@@ -47,6 +49,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
   selectedPhase,
   soundEnabled,
   isAddOpen,
+  hidePullHint = false,
   lang,
   aiIconVariant,
   historyCount = 0,
@@ -560,7 +563,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
         </div>
 
         {/* Pull-down Gesture Indicator (Clickable as well) */}
-        <button type="button"
+        {!hidePullHint && <button type="button"
           id="pull-down-indicator"
           style={{ touchAction: 'none' }}
           onPointerDown={event => {
@@ -590,7 +593,7 @@ const TopWorkflowMatrixComponent: React.FC<TopWorkflowMatrixProps> = ({
             <ChevronDown className={`w-3 h-3 transition-transform ${isAddOpen ? 'rotate-180' : ''}`} />
             <span>{isAddOpen ? t.collapseInput : t.pullDownToInject}</span>
           </span>
-        </button>
+        </button>}
       </div>
     </header>
   );

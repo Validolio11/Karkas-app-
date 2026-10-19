@@ -2,7 +2,7 @@ import React, { useId, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { ChevronRight } from 'lucide-react';
 import type { PSTask } from '../types';
-import { formatTaskDate, getDeadlineProgress, taskDateEnd } from '../utils/taskDates';
+import { describeDeadline, getDeadlineProgress } from '../utils/taskDates';
 
 /** Shared building blocks of «Моя стратегія»; they follow the task card and dashboard styles. */
 export const btn = 'inline-flex min-h-11 sm:min-h-8 items-center justify-center gap-1.5 border border-neutral-700 px-2.5 py-1.5 text-xs font-semibold text-neutral-200 transition-colors hover:border-white hover:text-white disabled:opacity-40 motion-reduce:transition-none';
@@ -74,17 +74,18 @@ export const CategoryChip: React.FC<{ name: string; color?: string }> = ({ name,
     {color && <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />}[{name}]
   </span>;
 
-/** «ДО 16.10.2026» chip with the same colour thresholds as the task card. */
+/** Relative deadline chip with elapsed-time progress. */
 export const DeadlineChip: React.FC<{ task: PSTask; lang: 'uk' | 'en'; now: number }> = ({ task, lang, now }) => {
   if (!task.deadlineDate) return null;
-  const end = taskDateEnd(task.deadlineDate);
+  const deadline = describeDeadline(task.deadlineDate, lang, now);
+  if (!deadline.label) return null;
   const progress = Math.round(getDeadlineProgress(task, now));
-  const overdue = !task.done && end !== null && now > end;
-  const color = task.done ? 'text-neutral-400 border-neutral-700' : overdue || progress >= 85 ? 'text-red-400 border-red-900/70' : progress >= 60 ? 'text-amber-400 border-amber-900/70' : 'text-emerald-400 border-emerald-900/70';
-  return <span title={lang === 'uk' ? `${overdue ? 'Термін минув. ' : ''}Минуло ${progress}% часу до дедлайну` : `${overdue ? 'Overdue. ' : ''}${progress}% of time to deadline elapsed`}
+  const date = Number(deadline.full.slice(6)) === new Date(now).getFullYear() ? deadline.full.slice(0, 5) : deadline.full;
+  const color = task.done ? 'text-neutral-500 border-neutral-700' : deadline.tone === 'overdue' || deadline.tone === 'today' ? 'text-red-400 border-red-900/70' : deadline.tone === 'soon' ? 'text-amber-400 border-amber-900/70' : 'text-neutral-400 border-neutral-700';
+  return <span title={`${deadline.full} · ${lang === 'uk' ? `Минуло ${progress}% часу до дедлайну` : `${progress}% of time to deadline elapsed`}`}
     className={`inline-flex items-center gap-2 border bg-[#0a0a0c] px-2 py-1 font-mono text-[11px] font-bold ${color}`}>
-    {lang === 'uk' ? 'ДО' : 'BY'} {formatTaskDate(task.deadlineDate, lang, now)}{overdue && ' !'}
-    <span aria-hidden="true" className="h-2 w-10 bg-neutral-800"><span className="block h-full bg-current" style={{ width: `${progress}%` }} /></span>
+    {task.done ? `${lang === 'uk' ? 'Дедлайн' : 'Due'} ${date}` : deadline.label}
+    {!task.done && <span aria-hidden="true" className="h-2 w-10 bg-neutral-800"><span className="block h-full bg-current" style={{ width: `${progress}%` }} /></span>}
   </span>;
 };
 

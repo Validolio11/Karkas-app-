@@ -12,7 +12,7 @@ import { applyAITimerSettings, isAITimerSettingsValid } from './utils/aiTaskTime
 import { isNewerAppVersion, isValidAppVersion } from './utils/appVersion';
 import React, { useState, useEffect, useMemo } from 'react';
 import { PSTask, DeletedTask, TaskTab, FilterMode, WorkflowStats, TaskStepItem, AdaptiveProfile, AITaskUpdate, AITimerSettings, AIDeletedTaskRef, NotepadNote, NewTaskInput } from './types';
-import { isTaskDate } from './utils/taskDates';
+import { isTaskDate, taskDateEnd } from './utils/taskDates';
 import { annotateTaskChanges } from './utils/taskActivity';
 import { isCompletedArchivedTask, selectRelevantArchivedTasks } from './utils/taskArchive';
 import { TaskCard } from './components/TaskCard';
@@ -22,7 +22,9 @@ import { useAccountNotes } from './hooks/useAccountNotes';
 import { useDialogKeyboard } from './components/useDialogKeyboard';
 import { HistoryView } from './components/HistoryView';
 import { TopWorkflowMatrix } from './components/TopWorkflowMatrix';
-import { QuickAddDrawer } from './components/QuickAddDrawer';
+import { QuickAddDrawer, type QuickAddPrefill } from './components/QuickAddDrawer';
+import { QuickAddLine } from './components/QuickAddLine';
+import { NowStrip } from './components/NowStrip';
 import { AIAssistantSheet } from './components/AIAssistantSheet';
 import { ManageTabsModal } from './components/ManageTabsModal';
 import { FireParticlesBackground } from './components/FireParticlesBackground';
@@ -299,6 +301,8 @@ export default function App() {
     restoreNote: handleRestoreNote, getNotes: getCurrentNotes, replaceNotes: replaceAgentNotes } = useAccountNotes(localStorage.getItem('karkas_workspace_owner'),
       lang === 'uk' ? INITIAL_NOTES_UK : INITIAL_NOTES_EN);
   const [isAddOpen, setIsAddOpen] = useState(false);
+  const [quickAddPrefill, setQuickAddPrefill] = useState<QuickAddPrefill>();
+  const quickAddPrefillKey = React.useRef(0);
   const [isAIOpen, setIsAIOpen] = useState(false);
   const [isManageTabsOpen, setIsManageTabsOpen] = useState(false);
   const [isAccountOpen, setIsAccountOpen] = useState(false);
@@ -471,6 +475,9 @@ export default function App() {
   const [tabToDeleteConfirm, setTabToDeleteConfirm] = useState<TaskTab | null>(null);
   useDialogKeyboard(!!tabToDeleteConfirm, () => setTabToDeleteConfirm(null), 'tab-delete-confirm-dialog');
   const searchInputRef = React.useRef<HTMLInputElement | null>(null);
+  const quickAddInputRef = React.useRef<HTMLInputElement | null>(null);
+  const quickAddVisible = workspaceReady && activeFilter !== 'DONE'
+    && !['DASHBOARD', 'STRATEGY', 'NOTES', 'HISTORY'].includes(selectedPhase);
 
   // Sync fullscreen state with browser fullscreen changes
   useEffect(() => {
@@ -511,11 +518,14 @@ export default function App() {
         return;
       }
 
-      // Ctrl + N / Cmd + N -> Open Quick Add Drawer
+      // Ctrl + N / Cmd + N -> Focus quick add or open the drawer
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
         e.preventDefault();
         sound.tick(600);
-        setIsAddOpen(true);
+        if (quickAddVisible && quickAddInputRef.current) {
+          setIsAddOpen(false);
+          quickAddInputRef.current.focus();
+        } else setIsAddOpen(true);
         return;
       }
 
@@ -532,7 +542,7 @@ export default function App() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isAIOpen, isAccountOpen, isManageTabsOpen, isUpdateOpen, isSettingsOpen, isAddOpen, isWindowMinimized, searchQuery]);
+  }, [isAIOpen, isAccountOpen, isManageTabsOpen, isUpdateOpen, isSettingsOpen, isAddOpen, isWindowMinimized, searchQuery, quickAddVisible]);
 
   const handleToggleFullscreen = () => {
     sound.tick(500);
@@ -1800,8 +1810,13 @@ export default function App() {
         // Incomplete first
         if (!a.done && b.done) return -1;
         if (a.done && !b.done) return 1;
+        // Missed deadlines surface before fresh work of the same urgency
+        const overdueA = !a.done && !!a.deadlineDate && (taskDateEnd(a.deadlineDate) ?? Infinity) < insightNow;
+        const overdueB = !b.done && !!b.deadlineDate && (taskDateEnd(b.deadlineDate) ?? Infinity) < insightNow;
+        if (overdueA !== overdueB) return overdueA ? -1 : 1;
         // Priority (1 is high, 2 standard, 3 low)
         if (a.priority !== b.priority) return a.priority - b.priority;
+        if ((a.deadlineDate || '') !== (b.deadlineDate || '')) return !a.deadlineDate ? 1 : !b.deadlineDate ? -1 : a.deadlineDate.localeCompare(b.deadlineDate);
         return b.createdAt - a.createdAt;
       });
   }, [operationalTasks, activeFilter, selectedPhase, searchQuery, listDayKey, listTimeZone]);
@@ -2550,6 +2565,7 @@ export default function App() {
         selectedPhase={selectedPhase}
         soundEnabled={soundEnabled}
         isAddOpen={isAddOpen}
+        hidePullHint={quickAddVisible && !isAddOpen}
         lang={lang}
         aiIconVariant={aiIconVariant}
         historyCount={completedHistoryCount}
@@ -2634,6 +2650,7 @@ export default function App() {
 
       {/* Quick Add Pull-Down Drawer with Dynamic Tabs */}
       <QuickAddDrawer
+        prefill={quickAddPrefill}
         ownerId={currentUser?.uid ?? null}
         isOpen={isAddOpen && timerWorkspaceReadyRef.current && workspaceOwnerRef.current === (currentUser?.uid ?? null)}
         lang={lang}
@@ -2721,6 +2738,35 @@ export default function App() {
                 <button type="button" onClick={() => { handleDelete(plan.id); setActionNotice(lang === 'uk' ? 'Розклад скасовано. Його можна відновити з кошика.' : 'Schedule cancelled. You can restore it from trash.'); }} className="min-h-11 border border-neutral-700 px-3 text-sm text-neutral-300 hover:border-neutral-400 hover:text-white">{lang === 'uk' ? 'Скасувати розклад' : 'Cancel schedule'}</button>
               </div>)}</div>
             </details>}
+            {quickAddVisible && <>
+              {!searchQuery && <NowStrip
+                key={`now:${currentUser?.uid ?? 'guest'}`}
+                tasks={operationalTasks}
+                lang={lang}
+                now={insightNow}
+                onReveal={handleRevealTask}
+                onStart={handleStartTask}
+                onMoveDeadline={(task, newDate) => handleEditTask(task.id, task.title, task.note || '', {
+                  title: task.title, note: task.note || '', plannedDate: task.plannedDate, deadlineDate: task.deadlineDate,
+                }, {
+                  plannedDate: task.plannedDate && task.plannedDate <= newDate ? task.plannedDate : undefined,
+                  deadlineDate: newDate,
+                })}
+              />}
+              <QuickAddLine
+                key={`quick-add:${currentUser?.uid ?? 'guest'}`}
+                tabs={tabs}
+                selectedPhase={selectedPhase}
+                lang={lang}
+                now={insightNow}
+                inputRef={quickAddInputRef}
+                onAdd={handleAddTask}
+                onMoreOptions={values => {
+                  setQuickAddPrefill({ ...values, key: ++quickAddPrefillKey.current });
+                  setIsAddOpen(true);
+                }}
+              />
+            </>}
             {/* Search Input Bar with Hotkeys Badge */}
             <div className="mb-6 flex items-center gap-3">
               <div className="relative flex-1">
@@ -2837,7 +2883,7 @@ export default function App() {
               </div>
             </div>}
             {/* Tasks List */}
-            <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-2.5">
               <AnimatePresence initial={false}>
                 {filteredTasks.map((task, index) => (
                   <motion.div

@@ -11,8 +11,18 @@ import { DEFAULT_QUICK_ADD_PRIORITY, buildQuickAddSteps, emptyQuickAddDraft, has
 import { isTaskDate } from '../utils/taskDates';
 import { TaskDateCalendar } from './TaskDateCalendar';
 
+export interface QuickAddPrefill {
+  key: number;
+  title: string;
+  phase?: string;
+  priority?: 1 | 2 | 3;
+  plannedDate?: string;
+  deadlineDate?: string;
+}
+
 interface QuickAddDrawerProps {
   ownerId?: string | null;
+  prefill?: QuickAddPrefill;
   isOpen: boolean;
   lang: Language;
   tabs: TaskTab[];
@@ -22,10 +32,19 @@ interface QuickAddDrawerProps {
 }
 
 // Remount the draft session on account changes so fields and in-flight AI results cannot cross accounts.
-export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = props =>
-  <QuickAddDraftSession key={quickAddDraftKey(props.ownerId ?? null)} {...props} />;
+export const QuickAddDrawer: React.FC<QuickAddDrawerProps> = props => {
+  const prefillOwner = useRef<{ key: number; ownerId: string | null; valid: boolean } | null>(null);
+  const ownerId = props.ownerId ?? null;
+  if (props.prefill && prefillOwner.current?.key !== props.prefill.key) {
+    prefillOwner.current = { key: props.prefill.key, ownerId, valid: true };
+  }
+  // A prefill expires on account changes, including a later return to the original account.
+  if (prefillOwner.current && prefillOwner.current.ownerId !== ownerId) prefillOwner.current.valid = false;
+  const prefill = prefillOwner.current?.valid ? props.prefill : undefined;
+  return <QuickAddDraftSession key={quickAddDraftKey(ownerId)} {...props} prefill={prefill} />;
+};
 
-const QuickAddDraftSession: React.FC<QuickAddDrawerProps> = ({ ownerId = null, isOpen, lang, tabs, selectedPhase, onClose, onAddTask }) => {
+const QuickAddDraftSession: React.FC<QuickAddDrawerProps> = ({ ownerId = null, isOpen, lang, tabs, selectedPhase, prefill, onClose, onAddTask }) => {
   const t = TRANSLATIONS[lang];
   const uk = lang === 'uk';
   const [savedDraft] = useState(() => { try { return readQuickAddDraft(localStorage, ownerId); } catch { return null; } });
@@ -103,6 +122,30 @@ const QuickAddDraftSession: React.FC<QuickAddDrawerProps> = ({ ownerId = null, i
     else if (!hasValidPhase) setPhase(tabs[0]?.id || 'focus');
 
   }, [isOpen, selectedPhase, tabs]);
+
+  const appliedPrefillKey = useRef<number | null>(null);
+  useEffect(() => {
+    if (!prefill || appliedPrefillKey.current === prefill.key) return;
+    appliedPrefillKey.current = prefill.key;
+    cancelAi();
+    submitLock.current = false;
+    navigationLock.current = 0;
+    nextFocus.current = 'title';
+    setTitle(prefill.title);
+    setNote('');
+    setPhase(tabs.some(tab => tab.id === prefill.phase) ? prefill.phase! : tabs.some(tab => tab.id === selectedPhase) ? selectedPhase! : tabs[0]?.id || 'focus');
+    setPriority(prefill.priority ?? DEFAULT_QUICK_ADD_PRIORITY);
+    setCustomSteps([]);
+    setSteps(0);
+    setTimerMode('stopwatch');
+    setCountdownMinutes('25');
+    setPlannedDate(prefill.plannedDate || '');
+    setDeadlineDate(prefill.deadlineDate || '');
+    setNotice('');
+    setError('');
+    setWizardStep(0);
+    if (isOpen) window.requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }));
+  }, [prefill?.key]);
 
   useEffect(() => () => { requestGeneration.current += 1; aiRequest.current?.abort(); }, []);
 

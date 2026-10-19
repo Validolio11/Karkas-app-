@@ -4,6 +4,7 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { PSTask } from '../types';
 import { TaskCard } from './TaskCard';
+import { taskTimeRange } from '../utils/schedulePresentation';
 
 const noop = () => {};
 const task = (fields: Partial<PSTask>): PSTask => ({
@@ -57,4 +58,13 @@ test('Stop is localized for English users', () => {
   const html = renderTimer({ timerRunning: true, timerStartedAt: Date.now() }, true, 'en');
   assert.match(html, />Stop<\/button>/);
   assert.match(html, /Stop and keep time spent and remaining time/);
+});
+
+test('planned start shows as a time block with a screen-reader prefix', () => {
+  const scheduledFor = Date.now() + 60 * 60 * 1000;
+  const html = renderTimer({ scheduledFor, countdownDurationSeconds: 1800, countdownRemainingSeconds: 1800 });
+  const range = taskTimeRange({ scheduledFor, timerMode: 'countdown', countdownDurationSeconds: 1800 }, Date.now(), Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Kyiv', 'uk')!;
+  assert.match(range, /\d{2}:\d{2}–\d{2}:\d{2}$/);
+  assert.match(html, new RegExp(`<span class="sr-only">Заплановано: </span><time datetime="${new Date(scheduledFor).toISOString()}">${range}</time>`, 'i'));
+  assert.doesNotMatch(renderTimer({}), /<time /);
 });

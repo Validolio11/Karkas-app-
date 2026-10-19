@@ -57,7 +57,7 @@ import packageMetadata from '../package.json';
 import { removeAccountStorage } from './utils/accountStorage';
 import { taskBreakdownContext } from './utils/taskBreakdownContext';
 import { materializeScheduledWorkspace, normalizeTaskSchedule } from './utils/taskScheduling';
-import { describeSchedule } from './utils/schedulePresentation';
+import { calendarDateKey, compareTodayTimedFirst, describeSchedule } from './utils/schedulePresentation';
 import { buildWorkInsights } from './utils/workInsights';
 import { discardTaskStepAttribution } from './utils/taskWorkTelemetry';
 import { TaskWorkPlanDialog } from './components/TaskWorkPlanDialog';
@@ -1748,7 +1748,11 @@ export default function App() {
     ]).size;
   }, [operationalTasks, deletedTasks]);
 
-  // Filtered & Sorted Tasks (Running timers & Pinned on top, then by search, priority, creation)
+  // Today's timed tasks only change place when the calendar day changes, not on every clock tick.
+  const listTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Kyiv';
+  const listDayKey = calendarDateKey(insightNow, listTimeZone);
+
+  // Filtered & Sorted Tasks (Running timers, then today's timed tasks by start, then pinned, priority, creation)
   const filteredTasks = useMemo(() => {
     return operationalTasks
       .filter((t) => {
@@ -1768,6 +1772,9 @@ export default function App() {
         // Active timer running operationalTasks pinned on very top!
         if (a.timerRunning && !b.timerRunning) return -1;
         if (!a.timerRunning && b.timerRunning) return 1;
+        // Today's planned blocks in start order, like a day schedule
+        const timedToday = compareTodayTimedFirst(a, b, insightNow, listTimeZone);
+        if (timedToday !== 0) return timedToday;
         // Pinned first
         if (a.pinned && !b.pinned) return -1;
         if (!a.pinned && b.pinned) return 1;
@@ -1778,7 +1785,7 @@ export default function App() {
         if (a.priority !== b.priority) return a.priority - b.priority;
         return b.createdAt - a.createdAt;
       });
-  }, [operationalTasks, activeFilter, selectedPhase, searchQuery]);
+  }, [operationalTasks, activeFilter, selectedPhase, searchQuery, listDayKey, listTimeZone]);
 
   // Strategy view task links: show the task in the full list, then scroll to it and flash its frame.
   const [revealTaskId, setRevealTaskId] = useState<string | null>(null);

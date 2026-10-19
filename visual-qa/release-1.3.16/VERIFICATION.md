@@ -15,3 +15,5 @@ Change: ordinary chat runs a live Gemini agent (function-calling loop) that oper
 Not verified: desktop (Electron) chat with a live key, word-by-word streaming (agent text arrives in one piece), two-device sync of agent changes.
 
 Release tag: 1.3.16 (no v prefix, avoiding an independent CI publication). Publication through the authenticated GitHub CLI with size and SHA256 digest checks.
+
+Publication confirmed: https://github.com/Validolio11/Karkas-app-/releases/tag/1.3.16 (tag 1.3.16 at the release commit, marked latest). All three assets match local sizes and SHA256 digests. The application's resolveTrustedUpdate/verifyUpdateFile accepted the public release and manifest as an update from 1.3.15 and matched the installer SHA512 (publication.json, public-update-verification.json). The update was not installed on the user's machine.

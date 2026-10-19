@@ -605,11 +605,12 @@ const reservedTabIds = new Set(['ALL', 'DASHBOARD', 'STRATEGY', 'NOTES', 'HISTOR
 function selectClientPeriodTasks(tasks: any[], archive: any[], period: string, clock: { now: string; timeZone: string }) {
   const end = Date.parse(clock.now);
   const date = new Date(end);
-  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: clock.timeZone, year: 'numeric', month: '2-digit' }).formatToParts(date);
+  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: clock.timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date);
   const year = Number(parts.find(part => part.type === 'year')!.value);
   const month = Number(parts.find(part => part.type === 'month')!.value) - 1;
-  const midnight = (y: number, m: number) => {
-    const wall = Date.UTC(y, m, 1);
+  const day = Number(parts.find(part => part.type === 'day')!.value);
+  const midnight = (y: number, m: number, d = 1) => {
+    const wall = Date.UTC(y, m, d);
     let timestamp = wall;
     const formatter = new Intl.DateTimeFormat('en-GB', { timeZone: clock.timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
     for (let iteration = 0; iteration < 4; iteration++) {
@@ -619,8 +620,9 @@ function selectClientPeriodTasks(tasks: any[], archive: any[], period: string, c
     }
     return timestamp;
   };
+  const days: Record<string, number> = { TODAY: 1, LAST_7_DAYS: 7, LAST_30_DAYS: 30, LAST_90_DAYS: 90, LAST_365_DAYS: 365 };
   const start = period === 'THIS_YEAR' ? midnight(year, 0) : period === 'LAST_YEAR' ? midnight(year - 1, 0)
-    : period === 'THIS_MONTH' ? midnight(year, month) : period === 'LAST_30_DAYS' ? end - 30 * 86400000 : -Infinity;
+    : period === 'THIS_MONTH' ? midnight(year, month) : days[period] ? midnight(year, month, day - days[period] + 1) : -Infinity;
   const periodEnd = period === 'LAST_YEAR' ? midnight(year, 0) - 1 : end;
   const included = (at: number) => Number.isFinite(at) && at >= start && at <= periodEnd;
   return { activeInPeriod: tasks.filter(task => !task.done && included(task.createdAt)),
@@ -1996,14 +1998,22 @@ export async function recommendationsHandler(req: any, res: any) {
           THIS_YEAR: `Цей рік (${currentYear})`,
           LAST_YEAR: `Минулий рік (${lastYear})`,
           THIS_MONTH: "Цей місяць",
+          TODAY: "День",
+          LAST_7_DAYS: "Тиждень",
           LAST_30_DAYS: "Останні 30 днів",
+          LAST_90_DAYS: "Квартал",
+          LAST_365_DAYS: "Рік",
         }
       : {
           ALL_TIME: "All Time",
           THIS_YEAR: `This Year (${currentYear})`,
           LAST_YEAR: `Last Year (${lastYear})`,
           THIS_MONTH: "This Month",
+          TODAY: "Day",
+          LAST_7_DAYS: "Week",
           LAST_30_DAYS: "Last 30 Days",
+          LAST_90_DAYS: "Quarter",
+          LAST_365_DAYS: "Year",
         };
     const periodHumanName = periodNames[period] || period;
 

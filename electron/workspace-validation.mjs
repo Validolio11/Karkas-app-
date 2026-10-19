@@ -50,6 +50,10 @@ function validTaskActivity(value) {
       !optional(value, 'attemptCapSeconds', v => integer(v) && v <= 86400) ||
       !optional(value, 'attemptOutcome', v => v === 'stopped' || v === 'cap_reached') ||
       !optional(value, 'attemptContinued', v => typeof v === 'boolean')) return false;
+  if (value.workedFrom !== undefined || value.workedUntil !== undefined) {
+    if (value.kind !== 'time_adjusted' || !number(value.workedFrom) || !number(value.workedUntil) ||
+        value.workedUntil < value.workedFrom || value.workedUntil > value.at || value.workedUntil - value.workedFrom > 3 * 60 * 60 * 1000) return false;
+  }
   for (const key of ['previousPlannedDate', 'plannedDate', 'previousDeadlineDate', 'deadlineDate']) {
     if (!optional(value, key, v => v === null || validDate(v))) return false;
   }

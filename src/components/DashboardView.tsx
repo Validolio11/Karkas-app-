@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
   PSTask,
   TaskTab,
@@ -7,7 +7,8 @@ import {
   AnalyticsPeriod,
 } from '../types';
 import { Language, TRANSLATIONS } from '../utils/i18n';
-import { getRollingWindows, selectPeriodTasks } from './workflowViewModel';
+import { selectPeriodTasks } from './workflowViewModel';
+import { buildActivityBuckets } from '../utils/dashboardBuckets';
 import { sound } from '../utils/audio';
 import {
   CheckCircle2,
@@ -26,15 +27,6 @@ import { AIIcon, AIIconId } from './AIIconTemplates';
 import { ActivityChart } from './ActivityChart';
 import { selectRelevantArchivedTasks } from '../utils/taskArchive';
 import { formatRecordedDuration, recordedTaskSeconds, summarizeTaskTime } from '../utils/taskTimeStats';
-
-const MONTH_NAMES_UK = [
-  'Січ', 'Лют', 'Бер', 'Кві', 'Тра', 'Чер',
-  'Лип', 'Сер', 'Вер', 'Жов', 'Лис', 'Гру',
-];
-const MONTH_NAMES_EN = [
-  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-];
 
 interface DashboardViewProps {
   tasks: PSTask[];
@@ -73,15 +65,18 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
   const tAnalytics = t.dashboardAnalytics || (TRANSLATIONS.uk.dashboardAnalytics as any);
 
   // Selected period for comprehensive historical analytics
-  const [selectedPeriod, setSelectedPeriod] = useState<AnalyticsPeriod>('THIS_MONTH');
+  const [selectedPeriod, setSelectedPeriod] = useState<AnalyticsPeriod>('LAST_7_DAYS');
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => {
+    const interval = window.setInterval(() => setClock(Date.now()), 60_000);
+    return () => window.clearInterval(interval);
+  }, []);
   const relevantDeletedTasks = useMemo(() => selectRelevantArchivedTasks(tasks, deletedTasks), [tasks, deletedTasks]);
   // -------------------------------------------------------------
   // Comprehensive Period Filtering & Math Calculations
   // -------------------------------------------------------------
   const analyticsData = useMemo(() => {
     const now = new Date();
-    const currentYear = now.getFullYear();
-    const currentMonth = now.getMonth();
 
     const { activeInPeriod, completedInPeriod, deletedCompleted, droppedInPeriod, createdInPeriod } =
       selectPeriodTasks(tasks, relevantDeletedTasks, selectedPeriod, now);
@@ -166,93 +161,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
       activeInPeriod.filter((t) => t.priority === 3).length +
       droppedInPeriod.filter((t) => t.priority === 3).length;
 
-    // Timeline distribution (Velocity Bars)
-    type BarItem = { label: string; delivered: number; dropped: number; created: number };
-    const velocityBars: BarItem[] = [];
-
-    if (selectedPeriod === 'THIS_YEAR' || selectedPeriod === 'LAST_YEAR') {
-      const targetYear = selectedPeriod === 'THIS_YEAR' ? currentYear : currentYear - 1;
-      const monthNames = lang === 'uk' ? MONTH_NAMES_UK : MONTH_NAMES_EN;
-
-      for (let m = 0; m < 12; m++) {
-        const mStart = new Date(targetYear, m, 1).getTime();
-        const mEnd = new Date(targetYear, m + 1, 0, 23, 59, 59, 999).getTime();
-
-        const mDelivered = [...completedInPeriod, ...deletedCompleted].filter((t) => {
-          const ts = t.completedAt || t.createdAt || 0;
-          return ts >= mStart && ts <= mEnd;
-        }).length;
-
-        const mDropped = droppedInPeriod.filter((t) => {
-          const ts = t.deletedAt || t.createdAt || 0;
-          return ts >= mStart && ts <= mEnd;
-        }).length;
-
-        const mCreated = createdInPeriod.filter((t) => {
-          const ts = t.createdAt || 0;
-          return ts >= mStart && ts <= mEnd;
-        }).length;
-
-        velocityBars.push({
-          label: monthNames[m],
-          delivered: mDelivered,
-          dropped: mDropped,
-          created: mCreated,
-        });
-      }
-    } else {
-      // 4 Weekly intervals based on actual task timestamps
-      const nowMs = now.getTime();
-      let pStart = nowMs - 30 * 24 * 60 * 60 * 1000;
-      let pEnd = nowMs;
-
-      if (selectedPeriod === 'THIS_MONTH') {
-        pStart = new Date(currentYear, currentMonth, 1).getTime();
-        pEnd = new Date(currentYear, currentMonth + 1, 0, 23, 59, 59, 999).getTime();
-      } else if (selectedPeriod === 'LAST_30_DAYS') {
-        pStart = nowMs - 30 * 24 * 60 * 60 * 1000;
-        pEnd = nowMs;
-      } else {
-        // ALL_TIME: find earliest task or default to 30 days
-        const allTimestamps = [...tasks, ...relevantDeletedTasks]
-          .map((t) => t.createdAt || 0)
-          .filter((t) => t > 0);
-        const earliest = allTimestamps.length > 0 ? Math.min(...allTimestamps) : nowMs - 30 * 24 * 60 * 60 * 1000;
-        pStart = Math.min(earliest, nowMs - 7 * 24 * 60 * 60 * 1000);
-        pEnd = nowMs;
-      }
-
-      const windows = getRollingWindows(pEnd, (pEnd - pStart) / (24 * 60 * 60 * 1000));
-
-      for (let w = 1; w <= 4; w++) {
-        const label = lang === 'uk' ? `Т-${w}` : `W${w}`;
-        const window = windows[w - 1];
-        const inWindow = (ts: number) =>
-          (window.includeStart ? ts >= window.start : ts > window.start) && ts <= window.end;
-
-        const wDelivered = [...completedInPeriod, ...deletedCompleted].filter((t) => {
-          const ts = t.completedAt || t.createdAt || 0;
-          return inWindow(ts);
-        }).length;
-
-        const wDropped = droppedInPeriod.filter((t) => {
-          const ts = t.deletedAt || t.createdAt || 0;
-          return inWindow(ts);
-        }).length;
-
-        const wCreated = createdInPeriod.filter((t) => {
-          const ts = t.createdAt || 0;
-          return inWindow(ts);
-        }).length;
-
-        velocityBars.push({
-          label,
-          delivered: wDelivered,
-          dropped: wDropped,
-          created: wCreated,
-        });
-      }
-    }
+    const velocityBars = buildActivityBuckets(selectedPeriod, tasks, relevantDeletedTasks, now, Intl.DateTimeFormat().resolvedOptions().timeZone, lang);
 
     return {
       completedTimeTasks,
@@ -273,7 +182,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
       p3Total,
       velocityBars,
     };
-  }, [tasks, relevantDeletedTasks, tabs, selectedPeriod, lang, t.phases]);
+  }, [tasks, relevantDeletedTasks, tabs, selectedPeriod, lang, t.phases, clock]);
 
   // Urgent active tasks list for Quick Action Queue
   const p1ActiveTasks = tasks.filter((t) => t.priority === 1 && !t.done);
@@ -281,11 +190,11 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
 
   // Period Selector Buttons definition
   const periodsList: { id: AnalyticsPeriod; label: string }[] = [
-    { id: 'THIS_MONTH', label: tAnalytics.periods.THIS_MONTH },
-    { id: 'THIS_YEAR', label: tAnalytics.periods.THIS_YEAR },
-    { id: 'LAST_YEAR', label: tAnalytics.periods.LAST_YEAR },
-    { id: 'LAST_30_DAYS', label: tAnalytics.periods.LAST_30_DAYS },
-    { id: 'ALL_TIME', label: tAnalytics.periods.ALL_TIME },
+    { id: 'TODAY', label: tAnalytics.dashboardPeriods.TODAY },
+    { id: 'LAST_7_DAYS', label: tAnalytics.dashboardPeriods.LAST_7_DAYS },
+    { id: 'LAST_30_DAYS', label: tAnalytics.dashboardPeriods.LAST_30_DAYS },
+    { id: 'LAST_90_DAYS', label: tAnalytics.dashboardPeriods.LAST_90_DAYS },
+    { id: 'LAST_365_DAYS', label: tAnalytics.dashboardPeriods.LAST_365_DAYS },
   ];
 
   const handleAnalyzeTime = () => {
@@ -318,7 +227,7 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
         </div>
 
         {/* Period Selector Tabs */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
+        <div className="flex flex-wrap items-center gap-1.5 pb-1">
           <span className="text-[11px] uppercase text-neutral-400 font-sans shrink-0 mr-1 flex items-center gap-1">
             <Calendar className="w-3 h-3 text-neutral-400" />
             <span>{tAnalytics.periodLabel}:</span>
@@ -427,9 +336,18 @@ const DashboardViewComponent: React.FC<DashboardViewProps> = ({
         period={periodsList.find(period => period.id === selectedPeriod)?.label || ''}
         completedLabel={tAnalytics.completed}
         deletedLabel={tAnalytics.dropped}
+        labelEvery={selectedPeriod === 'LAST_30_DAYS' ? 5 : 1}
+        workedLabel={lang === 'uk' ? 'Хвилини роботи' : 'Minutes worked'}
+        workedUnitLabel={lang === 'uk' ? 'хв роботи' : 'min worked'}
         unitLabel={lang === 'uk' ? '\u041a\u0456\u043b\u044c\u043a\u0456\u0441\u0442\u044c \u0437\u0430\u0432\u0434\u0430\u043d\u044c' : 'Task count'}
-        emptyLabel={lang === 'uk' ? 'За цей період ще немає виконаних чи явно скасованих завдань.' : 'No completed or explicitly cancelled tasks in this period yet.'}
+        emptyLabel={selectedPeriod === 'TODAY'
+          ? lang === 'uk' ? 'Сьогодні ще немає записаної активності, виконань чи скасувань.' : 'No recorded activity, completions or cancellations today yet.'
+          : lang === 'uk' ? 'За цей період ще немає виконаних чи явно скасованих завдань.' : 'No completed or explicitly cancelled tasks in this period yet.'}
       />
+
+      {selectedPeriod === 'TODAY' && <p className="-mt-5 text-xs leading-relaxed text-neutral-400">{lang === 'uk'
+        ? '≈ Хвилини роботи відновлено з історії таймера та записаних спроб. Давні сесії без подій можуть бути відсутні.'
+        : '≈ Minutes worked are reconstructed from timer history and recorded attempts. Older sessions without events may be missing.'}</p>}
 
       {/* ------------------------------------------------------------- */}
       {/* CATEGORY PRODUCTIVITY BREAKDOWN & PRIORITY MATRIX */}

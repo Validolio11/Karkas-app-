@@ -40,6 +40,8 @@ export interface TaskActivityEvent {
   at: number;
   kind: TaskActivityKind;
   attemptSeconds?: number;
+  workedFrom?: number; // Explicit credited work interval.
+  workedUntil?: number;
   attemptCapSeconds?: number;
   attemptOutcome?: 'stopped' | 'cap_reached';
   attemptContinued?: boolean;
@@ -329,7 +331,7 @@ export interface PersonalStrategyProfile {
   reminders: { enabled: boolean; times: string[]; maxPerDay: 2 };
 }
 
-export type AnalyticsPeriod = 'ALL_TIME' | 'THIS_YEAR' | 'LAST_YEAR' | 'THIS_MONTH' | 'LAST_30_DAYS';
+export type AnalyticsPeriod = 'ALL_TIME' | 'THIS_YEAR' | 'LAST_YEAR' | 'THIS_MONTH' | 'TODAY' | 'LAST_7_DAYS' | 'LAST_30_DAYS' | 'LAST_90_DAYS' | 'LAST_365_DAYS';
 
 export interface AIRecommendation {
   focusAdvice: string;

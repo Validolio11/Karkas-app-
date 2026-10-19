@@ -10,6 +10,11 @@ export function isTaskActivityEvent(value: unknown): value is TaskActivityEvent 
   const event = value as Record<string, unknown>;
   if (typeof event.id !== 'string' || !event.id.trim() || event.id.length > 512 || typeof event.at !== 'number' || !Number.isFinite(event.at) || event.at < 0 || !activityKinds.includes(event.kind as TaskActivityKind)) return false;
   if (event.changeKey !== undefined && (typeof event.changeKey !== 'string' || event.changeKey.length > 128)) return false;
+  if (event.workedFrom !== undefined || event.workedUntil !== undefined) {
+    if (event.kind !== 'time_adjusted' || typeof event.workedFrom !== 'number' || !Number.isFinite(event.workedFrom) || event.workedFrom < 0 ||
+      typeof event.workedUntil !== 'number' || !Number.isFinite(event.workedUntil) || event.workedUntil < event.workedFrom || event.workedUntil > event.at ||
+      event.workedUntil - event.workedFrom > 3 * 60 * 60 * 1000) return false;
+  }
   for (const key of ['attemptSeconds', 'attemptCapSeconds']) {
     if (event[key] !== undefined && (typeof event[key] !== 'number' || !Number.isInteger(event[key]) || (event[key] as number) < 0 || (event[key] as number) > 86400)) return false;
   }

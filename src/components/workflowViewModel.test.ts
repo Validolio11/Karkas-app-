@@ -80,8 +80,10 @@ test('restored tasks and repeated archive records are counted once, using the cu
   assert.deepEqual(result.deletedInPeriod.map(item => item.id), ['archived-completed']);
 });
 
-test('rolling month includes day 29 and 30 and excludes future timestamps', () => {
+test('calendar month includes exactly 30 local days and excludes future timestamps', () => {
   const { start, end } = getPeriodBounds('LAST_30_DAYS', now);
+  assert.equal(start, new Date(2026, 8, 7).getTime());
+  assert.equal(end, now.getTime());
   const result = selectPeriodTasks([
     task('first', { createdAt: start }),
     task('last', { createdAt: end }),
@@ -89,7 +91,34 @@ test('rolling month includes day 29 and 30 and excludes future timestamps', () =
     task('future', { createdAt: end + 1 }),
   ], [], 'LAST_30_DAYS', now);
   assert.deepEqual(result.createdInPeriod.map(item => item.id), ['first', 'last']);
+});
+
+test('dashboard periods start at local midnight and include today across calendar boundaries', () => {
+  const clock = new Date(2025, 9, 26, 12, 30);
+  for (const [period, days] of [['TODAY', 1], ['LAST_7_DAYS', 7], ['LAST_30_DAYS', 30], ['LAST_90_DAYS', 90], ['LAST_365_DAYS', 365]] as const) {
+    const expected = new Date(2025, 9, 26 - days + 1).getTime();
+    const { start, end } = getPeriodBounds(period, clock);
+    assert.equal(start, expected, period);
+    assert.equal(end, clock.getTime(), period);
+    const result = selectPeriodTasks([
+      task('before', { createdAt: start - 1 }), task('first', { createdAt: start }),
+      task('now', { createdAt: end }), task('future', { createdAt: end + 1 }),
+    ], [], period, clock);
+    assert.deepEqual(result.createdInPeriod.map(item => item.id), ['first', 'now'], period);
+  }
+});
+
+test('legacy calendar periods keep their existing bounds', () => {
+  assert.deepEqual(getPeriodBounds('THIS_MONTH', now), { start: new Date(2026, 9, 1).getTime(), end: now.getTime() });
+  assert.deepEqual(getPeriodBounds('THIS_YEAR', now), { start: new Date(2026, 0, 1).getTime(), end: now.getTime() });
+  assert.deepEqual(getPeriodBounds('LAST_YEAR', now), { start: new Date(2025, 0, 1).getTime(), end: new Date(2026, 0, 1).getTime() - 1 });
+  assert.deepEqual(getPeriodBounds('ALL_TIME', now), { start: -Infinity, end: now.getTime() });
+});
+
+test('legacy rolling windows partition elapsed time without overlapping boundaries', () => {
+  const end = now.getTime();
   const windows = getRollingWindows(end, 30);
+  const start = end - 30 * 86400000;
   assert.equal(windows[0].start, start);
   assert.equal(windows[3].end, end);
   for (const timestamp of [start, end, ...windows.slice(0, -1).map(window => window.end)]) {

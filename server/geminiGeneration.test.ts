@@ -315,6 +315,31 @@ test('selected period uses the client calendar timezone across a New Year bounda
   assert.match(result.body.periodRetrospective, /1 tasks were added and 1 completed/);
 });
 
+test('dashboard periods include exactly the selected client calendar days across winter time', async () => {
+  const clock = { now: '2026-10-26T12:00:00Z', timeZone: 'Europe/Kyiv' };
+  const end = Date.parse(clock.now);
+  for (const [period, first, label] of [
+    ['TODAY', '2026-10-26T00:00:00+02:00', 'Day'],
+    ['LAST_7_DAYS', '2026-10-20T00:00:00+03:00', 'Week'],
+    ['LAST_30_DAYS', '2026-09-27T00:00:00+03:00', 'Last 30 Days'],
+    ['LAST_90_DAYS', '2026-07-29T00:00:00+03:00', 'Quarter'],
+    ['LAST_365_DAYS', '2025-10-27T00:00:00+02:00', 'Year'],
+  ] as const) {
+    const start = Date.parse(first);
+    const tasks = [start - 1, start, end, end + 1].map((at, index) => ({
+      id: String(index), title: 'Calendar boundary', done: true, createdAt: at, completedAt: at,
+    }));
+    const deletedTasks = [start - 1, start, end, end + 1].map((at, index) => ({
+      id: 'cancelled-' + index, title: 'Cancelled boundary', done: false, deletionReason: 'cancelled', createdAt: at, deletedAt: at,
+    }));
+    const result = await invokeDesktopApi('recommendations', { period, lang: 'en', clientClock: clock, tasks, deletedTasks });
+    assert.equal(result.status, 200, period);
+    assert.ok(result.body.periodRetrospective.includes(label), period);
+    assert.match(result.body.periodRetrospective, /4 tasks were added and 2 completed/, period);
+    assert.match(result.body.dropoffAnalysis, /2 unfinished tasks were deliberately cancelled/, period);
+  }
+});
+
 test('retired selected model falls back through the real SDK with agent timer declarations', async () => {
   mockProvider((model, body, options) => {
     assert.ok(options.signal);

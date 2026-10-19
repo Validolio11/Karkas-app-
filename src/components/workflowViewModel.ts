@@ -9,7 +9,14 @@ export function getPeriodBounds(period: AnalyticsPeriod, now: Date) {
     case 'THIS_YEAR': return { start: new Date(year, 0, 1).getTime(), end };
     case 'LAST_YEAR': return { start: new Date(year - 1, 0, 1).getTime(), end: new Date(year, 0, 1).getTime() - 1 };
     case 'THIS_MONTH': return { start: new Date(year, month, 1).getTime(), end };
-    case 'LAST_30_DAYS': return { start: end - 30 * 24 * 60 * 60 * 1000, end };
+    case 'TODAY': return { start: new Date(year, month, now.getDate()).getTime(), end };
+    case 'LAST_7_DAYS':
+    case 'LAST_30_DAYS':
+    case 'LAST_90_DAYS':
+    case 'LAST_365_DAYS': {
+      const days = { LAST_7_DAYS: 7, LAST_30_DAYS: 30, LAST_90_DAYS: 90, LAST_365_DAYS: 365 }[period];
+      return { start: new Date(year, month, now.getDate() - days + 1).getTime(), end };
+    }
     default: return { start: -Infinity, end };
   }
 }

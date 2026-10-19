@@ -1,4 +1,5 @@
 import type { PSTask, TimerMode } from '../types';
+import { mergeTaskActivityTrail } from './taskActivity';
 import { activeTaskStepId, bankTaskStepSession, initialTaskPlanSeconds } from './taskWorkTelemetry';
 
 export function getTaskTimerMode(task: Pick<PSTask, 'timerMode' | 'countdownDurationSeconds'>): TimerMode {
@@ -47,8 +48,14 @@ export function pauseTaskTimer(task: PSTask, now = Date.now()): PSTask {
     ? task.timerSessionId ?? `legacy:${task.timerStartedAt}:${task.timeResetAt ?? 0}` : undefined;
   const previousSeconds = sessionId ? task.timeSessions?.[sessionId]?.seconds ?? 0 : 0;
   const bankedSeconds = Math.max(0, elapsed - previousSeconds);
+  const zeroAt = Number.isFinite(task.countdownExpiredAt) ? task.countdownExpiredAt!
+    : task.timerRunning && remaining === 0 && Number.isFinite(task.timerStartedAt) ? task.timerStartedAt! + elapsed * 1000 : undefined;
   return {
     ...bankTaskStepSession(task, bankedSeconds),
+    // Preserve the actual stop when a delayed callback records its generic pause later.
+    ...(zeroAt === undefined || task.limitedStart ? {} : { activityTrail: mergeTaskActivityTrail(task.activityTrail, [{
+      id: `countdown-stop:${task.id.slice(0, 384)}:${zeroAt}`, at: zeroAt, kind: 'paused',
+    }]) }),
     timeSpentSeconds: seconds(task.timeSpentSeconds) + bankedSeconds,
     ...(sessionId ? { timeSessions: { ...task.timeSessions, [sessionId]: {
       seconds: Math.max(previousSeconds, elapsed), ...(task.timerStepId ? { stepId: task.timerStepId } : {}),

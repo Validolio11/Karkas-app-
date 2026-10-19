@@ -15,3 +15,5 @@ Change: a countdown still auto-stops at zero but records `countdownExpiredAt`; t
 Not verified: Windows notifications for the +15/+45 reminders in the packaged app; desktop (Electron) chat with a live key.
 
 Release tag: 1.3.18 (no v prefix). Publication through the authenticated GitHub CLI with size and SHA256 digest checks.
+
+Publication confirmed: https://github.com/Validolio11/Karkas-app-/releases/tag/1.3.18 (tag 1.3.18 at the release commit, marked latest). All three assets match local sizes and SHA256 digests. The application's resolveTrustedUpdate/verifyUpdateFile accepted the public release and manifest as an update from 1.3.17 and matched the installer SHA512 (publication.json, public-update-verification.json). The update was not installed on the user's machine.

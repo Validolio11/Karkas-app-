@@ -1,0 +1,27 @@
+{
+  "publishedAt": "2026-10-19T14:34:32Z",
+  "commit": "097c77c11ae4995e49d3c12ec7828b4825848e12",
+  "releaseId": 417396642,
+  "version": "1.3.18",
+  "url": "https://github.com/Validolio11/Karkas-app-/releases/tag/1.3.18",
+  "assets": [
+    {
+      "url": "https://github.com/Validolio11/Karkas-app-/releases/download/1.3.18/Karkas-Setup-1.3.18.exe",
+      "sha256": "c273f2b22283398d11ff94ab1f33baf6d04c0e29dde7dbaf898172409b8a97ae",
+      "size": 139309475,
+      "name": "Karkas-Setup-1.3.18.exe"
+    },
+    {
+      "url": "https://github.com/Validolio11/Karkas-app-/releases/download/1.3.18/Karkas-Setup-1.3.18.exe.blockmap",
+      "sha256": "7653b79546620f63a59c9cc40298b14155a2b5949c4c5fef5ab978f4cd445978",
+      "size": 146895,
+      "name": "Karkas-Setup-1.3.18.exe.blockmap"
+    },
+    {
+      "url": "https://github.com/Validolio11/Karkas-app-/releases/download/1.3.18/latest.yml",
+      "sha256": "79acbfaee3fc39cbb2e0e8a1998ed1ae650f54e477111afcb59e725487eb137d",
+      "size": 344,
+      "name": "latest.yml"
+    }
+  ]
+}

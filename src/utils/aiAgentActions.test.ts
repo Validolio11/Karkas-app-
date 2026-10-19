@@ -726,22 +726,23 @@ test('plan_day undo removes every created task and restores the existing task sc
 });
 
 test('create_task and update_task timed fields keep tasks visible, paused and on the correct local date', () => {
-  const created = success(planWorkspace({ tasks: [] }), { type: 'create_task', title: 'Друк', startTime: '14:00', durationMinutes: 30, phase: 'Навчання' }, planContext());
+  const ctx = planContext();
+  const created = success(planWorkspace({ tasks: [] }), { type: 'create_task', title: 'Друк', startTime: '14:00', durationMinutes: 30, phase: 'Навчання' }, ctx);
   const value = created.workspace.tasks[0];
   assert.equal(value.plannedDate, '2026-10-19');
   assert.equal(value.scheduledFor, Date.parse('2026-10-19T11:00:00Z'));
   assert.equal(value.scheduledPending, false);
   assert.equal(value.schedule, undefined);
   assertPaused(value, 30);
-  const updated = success(created.workspace, { type: 'update_task', taskId: value.id, date: '2026-10-20', startTime: '09:30', durationMinutes: 45 }, planContext());
+  const updated = success(created.workspace, { type: 'update_task', taskId: value.id, date: '2026-10-20', startTime: '09:30', durationMinutes: 45 }, ctx);
   assert.equal(updated.workspace.tasks[0].plannedDate, '2026-10-20');
   assert.equal(updated.workspace.tasks[0].scheduledFor, Date.parse('2026-10-20T06:30:00Z'));
   assertPaused(updated.workspace.tasks[0], 45);
-  const cleared = success(updated.workspace, { type: 'update_task', taskId: value.id, clearTime: true }, planContext());
+  const cleared = success(updated.workspace, { type: 'update_task', taskId: value.id, clearTime: true }, ctx);
   assert.equal(cleared.workspace.tasks[0].scheduledFor, undefined);
   assert.equal(cleared.workspace.tasks[0].plannedDate, '2026-10-20');
   assertPaused(cleared.workspace.tasks[0], 45);
-  const today = success(updated.workspace, { type: 'update_task', taskId: value.id, startTime: '12:00' }, planContext());
+  const today = success(updated.workspace, { type: 'update_task', taskId: value.id, startTime: '12:00' }, ctx);
   assert.equal(today.workspace.tasks[0].plannedDate, '2026-10-19');
   assert.equal(today.workspace.tasks[0].scheduledFor, Date.parse('2026-10-19T09:00:00Z'));
 });

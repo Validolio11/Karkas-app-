@@ -14,3 +14,5 @@ Change: dashboard periods День / Тиждень / Місяць / Кварт�
 Not verified: «Аналіз часу AI» for the new periods with a live key in the browser (covered by server tests only); old sessions without trail events show zero by design.
 
 Release tag: 1.3.19 (no v prefix). Publication through the authenticated GitHub CLI with size and SHA256 digest checks.
+
+Publication confirmed: https://github.com/Validolio11/Karkas-app-/releases/tag/1.3.19 (tag 1.3.19 at the release commit, marked latest). All three assets match local sizes and SHA256 digests. The application's resolveTrustedUpdate/verifyUpdateFile accepted the public release and manifest as an update from 1.3.18 and matched the installer SHA512 (publication.json, public-update-verification.json). The update was not installed on the user's machine.

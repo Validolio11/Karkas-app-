@@ -25,6 +25,10 @@ import { TopWorkflowMatrix } from './components/TopWorkflowMatrix';
 import { QuickAddDrawer, type QuickAddPrefill } from './components/QuickAddDrawer';
 import { QuickAddLine } from './components/QuickAddLine';
 import { NowStrip } from './components/NowStrip';
+import { DayCloseDialog } from './components/DayCloseDialog';
+import { OnboardingChecklist } from './components/OnboardingChecklist';
+import { readOnboarding, writeOnboarding, shouldOfferOnboarding, type OnboardingState } from './utils/onboarding';
+import { summarizeDay, carryOverCandidates, dayCloseHour, shouldOfferDayClose, morningRecap, formatDayFocus, normalizeDayLog, type DayLog } from './utils/dayRecap';
 import { AIAssistantSheet } from './components/AIAssistantSheet';
 import { ManageTabsModal } from './components/ManageTabsModal';
 import { FireParticlesBackground } from './components/FireParticlesBackground';
@@ -58,10 +62,10 @@ import { UpdateModal } from './components/UpdateModal';
 import { SettingsModal } from './components/SettingsModal';
 import { mergeWorkspace, normalizeWorkspaceForStorage, sameWorkspace, type WorkspaceState } from './utils/syncState';
 import { diffWorkspaceOperations } from './utils/syncOperations';
-import { karkasApiFetch } from './utils/desktopApi';
+import { karkasApiFetch, desktopHasAiKey } from './utils/desktopApi';
 import { sanitizeTasksTimerSafeguard, completeTask, reopenTask, startTaskWork, createTask, setTaskProgress, toggleTaskStep, addTaskStep, deleteTaskStep, setTaskTimeSpent, setTaskSteps, materializeStepList } from './utils/taskOperations';
 import packageMetadata from '../package.json';
-import { removeAccountStorage } from './utils/accountStorage';
+import { readAccountStorage, writeAccountStorage, removeAccountStorage } from './utils/accountStorage';
 import { taskBreakdownContext } from './utils/taskBreakdownContext';
 import { materializeScheduledWorkspace, normalizeTaskSchedule } from './utils/taskScheduling';
 import { calendarDateKey, compareTodayTimedFirst, describeSchedule } from './utils/schedulePresentation';
@@ -1816,6 +1820,68 @@ export default function App() {
   const listDayKey = calendarDateKey(insightNow, listTimeZone);
   const dayDelay = useMemo(() => planDelay(tasks, insightNow, listTimeZone), [tasks, insightNow, listTimeZone]);
   const missedBlockCount = dayDelay.missedTasks?.length ?? 0;
+  const [dayLogState, setDayLogState] = useState<{ owner: string | null | undefined; value: DayLog }>({ owner: undefined, value: { closed: {} } });
+  const [dayClose, setDayClose] = useState<{ owner: string | null; date: string } | null>(null);
+  useEffect(() => {
+    setDayClose(null);
+    let value: DayLog = { closed: {} };
+    try { value = normalizeDayLog(JSON.parse(readAccountStorage(localStorage, 'karkas_day_log_v1', strategyOwner) || 'null')); }
+    catch { /* A missing local log never blocks work. */ }
+    setDayLogState({ owner: strategyOwner, value });
+  }, [strategyOwner]);
+  const dayRecapReady = workspaceReady && timerWorkspaceReadyRef.current && workspaceOwnerRef.current === strategyOwner
+    && dayLogState.owner === strategyOwner && (auth.currentUser?.uid ?? null) === strategyOwner;
+  const daySummaries = useMemo(() => {
+    const now = Math.max(insightNow, Date.now());
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    return { today: summarizeDay(tasks, deletedTasks, localTaskDate(now), now),
+      yesterday: summarizeDay(tasks, deletedTasks, localTaskDate(yesterday.getTime()), now) };
+  }, [tasks, deletedTasks, listDayKey, insightNow]);
+  const closeHour = useMemo(() => dayCloseHour(workInsights.workingPattern), [workInsights.workingPattern]);
+  const offerDayClose = useMemo(() => dayRecapReady && shouldOfferDayClose({ now: insightNow, closeHour,
+    summary: daySummaries.today, closedDates: dayLogState.value.closed }), [dayRecapReady, insightNow, closeHour, daySummaries.today, dayLogState.value]);
+  const yesterdayRecap = useMemo(() => dayRecapReady && daySummaries.today.focusSeconds < 60 && daySummaries.today.startedCount === 0
+    && !tasks.some(task => !task.done && !task.scheduledPending && task.timerRunning)
+    && dayLogState.value.recapDismissed !== daySummaries.today.date ? morningRecap(daySummaries.yesterday) : null,
+  [dayRecapReady, daySummaries, tasks, dayLogState.value.recapDismissed]);
+  const dayCarryOver = useMemo(() => carryOverCandidates(tasks, daySummaries.today.date), [tasks, daySummaries.today.date]);
+  const saveDayLog = (value: DayLog): boolean => {
+    if (!dayRecapReady || workspaceOwnerRef.current !== strategyOwner || (auth.currentUser?.uid ?? null) !== strategyOwner) return false;
+    const next = normalizeDayLog(value);
+    try { writeAccountStorage(localStorage, 'karkas_day_log_v1', strategyOwner, JSON.stringify(next)); }
+    catch { setActionNotice(lang === 'uk' ? 'Не вдалося зберегти підсумок на цьому пристрої. Спробуйте ще раз.' : 'Could not save the recap on this device. Try again.'); return false; }
+    setDayLogState({ owner: strategyOwner, value: next });
+    return true;
+  };
+  useEffect(() => {
+    if (!dayRecapReady || !workReminders.enabled || !offerDayClose || dayClose || !window.karkasDesktop) return;
+    const now = Date.now();
+    if (localTaskDate(now) !== daySummaries.today.date || new Date(now).getHours() !== closeHour
+      || latestTasksRef.current.some(task => !task.done && !task.scheduledPending && task.timerRunning)) return;
+    if (!claimPlanningNotice(localStorage, strategyOwner, 'day-close:' + daySummaries.today.date, now)) return;
+    const title = lang === 'uk' ? 'Karkas · Закрити день?' : 'Karkas · Close the day?';
+    const body = lang === 'uk' ? 'Сьогодні: ' + formatDayFocus(daySummaries.today.focusSeconds, lang) + ', закрито ' + daySummaries.today.completed.length + '. Підсумок займе пів хвилини.'
+      : 'Today: ' + formatDayFocus(daySummaries.today.focusSeconds, lang) + ', completed ' + daySummaries.today.completed.length + '. A recap takes half a minute.';
+    void window.karkasDesktop.system.showNotification({ title, body }).catch(() => { /* The in-app action remains available. */ });
+  }, [dayRecapReady, workReminders.enabled, offerDayClose, dayClose, daySummaries.today, closeHour, strategyOwner, lang]);
+
+  // First-run onboarding: four real actions, offered only to a genuinely empty workspace of this account.
+  const [onboarding, setOnboarding] = useState<{ owner: string | null | undefined; value: OnboardingState | null }>({ owner: undefined, value: null });
+  useEffect(() => {
+    let value: OnboardingState | null = null;
+    try { value = readOnboarding(localStorage, strategyOwner); } catch { /* Onboarding is optional. */ }
+    setOnboarding({ owner: strategyOwner, value });
+  }, [strategyOwner]);
+  const onboardingVisible = dayRecapReady && onboarding.owner === strategyOwner
+    && shouldOfferOnboarding({ stored: onboarding.value, tasks, deletedTasks });
+  const onboardingState: OnboardingState = onboarding.value
+    ?? { status: 'active', steps: { task: false, session: false, notify: 'pending', ai: 'pending' }, startedAt: insightNow };
+  const saveOnboarding = (value: OnboardingState) => {
+    if (onboarding.owner !== strategyOwner) return;
+    try { writeOnboarding(localStorage, strategyOwner, value); } catch { /* Keep the in-memory state. */ }
+    setOnboarding({ owner: strategyOwner, value });
+  };
 
   // Filtered & Sorted Tasks (Running timers, then today's timed tasks by start, then pinned, priority, creation)
   const filteredTasks = useMemo(() => {
@@ -2228,6 +2294,30 @@ export default function App() {
     handleEditTask(id, task.title, task.note || '', {
       title: task.title, note: task.note || '', plannedDate: task.plannedDate, deadlineDate: task.deadlineDate,
     }, { plannedDate: date, deadlineDate: task.deadlineDate });
+  };
+
+  const handleCloseDay = ({ moveTaskIds, note }: { moveTaskIds: string[]; note: string }) => {
+    const now = Date.now(), date = localTaskDate(now);
+    if (!dayClose || dayClose.owner !== strategyOwner || dayClose.date !== date || !dayRecapReady) return false;
+    const summary = summarizeDay(latestTasksRef.current, deletedTasks, date, now);
+    if (!saveDayLog({ ...dayLogState.value, closed: { ...dayLogState.value.closed, [date]: {
+      closedAt: now, focusSeconds: summary.focusSeconds, sessions: summary.sessions, completed: summary.completed.length,
+      ...(note.trim() ? { note: note.trim() } : {}),
+    } } })) return false;
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowDate = localTaskDate(tomorrow.getTime());
+    const selected = new Set(moveTaskIds);
+    for (const task of carryOverCandidates(latestTasksRef.current, date)) {
+      if (!selected.has(task.id) || task.deadlineDate && task.deadlineDate < tomorrowDate) continue;
+      handleEditTask(task.id, task.title, task.note || '', {
+        title: task.title, note: task.note || '', plannedDate: task.plannedDate, deadlineDate: task.deadlineDate,
+      }, { plannedDate: tomorrowDate, deadlineDate: task.deadlineDate });
+    }
+    setDayClose(null);
+    requestAnimationFrame(() => quickAddInputRef.current?.focus());
+    sound.sessionComplete();
+    return true;
   };
 
   const handleContinueSummaryCountdown = (id: string) => {
@@ -2822,11 +2912,34 @@ export default function App() {
               </div>)}</div>
             </details>}
             {quickAddVisible && <>
-              {!searchQuery && <NowStrip
+              {onboardingVisible && <OnboardingChecklist
+                key={`onboarding:${strategyOwner ?? 'guest'}`}
+                lang={lang} state={onboardingState} tasks={operationalTasks} isDesktop={!!window.karkasDesktop}
+                onChange={saveOnboarding}
+                onFocusQuickAdd={() => quickAddInputRef.current?.focus()}
+                onStartTrial={id => { handleConfigureCountdown(id, 300); handleStartTask(id); }}
+                onTestNotification={async () => {
+                  try {
+                    const result = await window.karkasDesktop?.system.showNotification({
+                      title: lang === 'uk' ? 'Karkas · 25 хв фокусу' : 'Karkas · 25 min of focus',
+                      body: lang === 'uk' ? 'Так виглядатиме кінець сесії. Відкрий Karkas — запишемо результат.' : 'This is how a session end will look. Open Karkas to record the result.',
+                    });
+                    return !!result?.ok;
+                  } catch { return false; }
+                }}
+                onOpenAI={() => setIsAIOpen(true)}
+                hasAiKey={() => desktopHasAiKey().catch(() => false)}
+                onSkip={() => saveOnboarding({ ...onboardingState, status: 'skipped' })}
+              />}
+              {!searchQuery && !onboardingVisible && <NowStrip
                 key={`now:${currentUser?.uid ?? 'guest'}`}
                 tasks={operationalTasks}
                 lang={lang}
                 now={insightNow}
+                todaySummary={daySummaries.today} offerDayClose={offerDayClose} recap={yesterdayRecap}
+                recapNote={dayRecapReady ? dayLogState.value.closed[daySummaries.yesterday.date]?.note : undefined}
+                onOpenDayClose={() => { if (dayRecapReady) setDayClose({ owner: strategyOwner, date: daySummaries.today.date }); }}
+                onDismissRecap={() => saveDayLog({ ...dayLogState.value, recapDismissed: daySummaries.today.date })}
                 onReveal={handleRevealTask}
                 onStart={handleStartTask}
                 onMoveDeadline={(task, newDate) => handleEditTask(task.id, task.title, task.note || '', {
@@ -2879,7 +2992,7 @@ export default function App() {
             </div>
 
             {/* Empty State */}
-            {filteredTasks.length === 0 && (
+            {filteredTasks.length === 0 && !(onboardingVisible && quickAddVisible) && (
               <div className="py-16 text-center border border-dashed border-neutral-800 bg-[#08080a] p-8 my-4 animate-in fade-in duration-200">
                 <div className="w-8 h-8 mx-auto mb-3 border border-neutral-700 flex items-center justify-center text-neutral-400">
                   <CheckCircle className="w-4 h-4 text-neutral-400" />
@@ -3083,6 +3196,10 @@ export default function App() {
         </AnimatePresence>
       </main>
       {workPlanTask && timerWorkspaceReadyRef.current && workspaceOwnerRef.current === (currentUser?.uid || null) && <TaskWorkPlanDialog key={`${currentUser?.uid || 'guest'}:${workPlanTask.id}`} task={workPlanTask} lang={lang} onClose={() => setWorkPlanTaskId(null)} onSave={saveWorkPlan} />}
+
+      {dayClose && dayRecapReady && dayClose.owner === strategyOwner && dayClose.date === daySummaries.today.date && <DayCloseDialog
+        key={strategyOwner + ':' + dayClose.date} summary={daySummaries.today} candidates={dayCarryOver} lang={lang}
+        onClose={() => setDayClose(null)} onConfirm={handleCloseDay} />}
 
       {showSessionSummary && sessionSummary && summaryTask && <SessionSummaryCard
         key={sessionSummary.session.taskId + ':' + sessionSummary.session.endedAt + ':' + (sessionSummary.session.sessionId ?? '')}

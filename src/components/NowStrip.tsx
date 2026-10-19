@@ -1,5 +1,6 @@
 import React, { useId, useState } from 'react';
 import type { PSTask } from '../types';
+import { formatDayFocus, type DaySummary, type morningRecap } from '../utils/dayRecap';
 import { formatTaskDate, localTaskDate, taskDateEnd } from '../utils/taskDates';
 import { rankNextStepCandidates, type NextStepCandidate } from './strategyViewModel';
 
@@ -7,6 +8,12 @@ interface NowStripProps {
   tasks: readonly PSTask[];
   lang: 'uk' | 'en';
   now: number;
+  todaySummary: DaySummary;
+  offerDayClose: boolean;
+  recap: ReturnType<typeof morningRecap>;
+  recapNote?: string;
+  onOpenDayClose: () => void;
+  onDismissRecap: () => void;
   onReveal: (id: string) => void;
   onStart: (id: string) => void;
   onMoveDeadline: (task: PSTask, date: string) => void;
@@ -43,7 +50,7 @@ function overdueLabel(deadline: string, today: string, lang: 'uk' | 'en'): strin
   return `Прострочено на ${days} ${unit}`;
 }
 
-export const NowStrip: React.FC<NowStripProps> = ({ tasks, lang, now, onReveal, onStart, onMoveDeadline }) => {
+export const NowStrip: React.FC<NowStripProps> = ({ tasks, lang, now, todaySummary, offerDayClose, recap, recapNote, onOpenDayClose, onDismissRecap, onReveal, onStart, onMoveDeadline }) => {
   const [candidateIndex, setCandidateIndex] = useState(0);
   const [overdueOpen, setOverdueOpen] = useState(false);
   const overdueId = useId();
@@ -63,7 +70,7 @@ export const NowStrip: React.FC<NowStripProps> = ({ tasks, lang, now, onReveal, 
     return end !== null && end < now;
   }).sort((a, b) => a.deadlineDate!.localeCompare(b.deadlineDate!));
 
-  if (!activeTasks.length) return null;
+  if (!activeTasks.length && !offerDayClose && !recap) return null;
 
   return <section aria-label={lang === 'uk' ? 'Зараз' : 'Now'} className="mb-3 border border-neutral-800 bg-[#0c0c0d] px-3 py-1 text-sm">
     {!running && candidate && <div className="flex min-w-0 flex-wrap items-center gap-x-2 sm:flex-nowrap">
@@ -78,7 +85,17 @@ export const NowStrip: React.FC<NowStripProps> = ({ tasks, lang, now, onReveal, 
       </button>}
     </div>}
     <div className="flex min-h-9 flex-wrap items-center gap-x-3 text-xs text-neutral-400">
-      {doneToday + plannedToday === 0 && overdue.length === 0
+      {offerDayClose ? <>
+        <span className="min-w-0 flex-1">{lang === 'uk' ? 'Сьогодні: ' : 'Today: '}{formatDayFocus(todaySummary.focusSeconds, lang)} · {lang === 'uk' ? 'закрито ' : 'completed '}{todaySummary.completed.length}</span>
+        <button type="button" className={action + ' shrink-0 bg-white px-2 font-bold text-black hover:bg-neutral-200'} onClick={onOpenDayClose}>{lang === 'uk' ? 'Закрити день' : 'Close the day'}</button>
+      </> : recap ? <>
+        <p className="min-w-0 flex-1 truncate" title={recapNote}>
+          {lang === 'uk' ? 'Вчора: ' : 'Yesterday: '}{formatDayFocus(recap.focusSeconds, lang)}
+          {recap.completedTitle && <> · {lang === 'uk' ? 'закрито «' : 'completed “'}{recap.completedTitle}{lang === 'uk' ? '»' : '”'}{recap.remainingCompleted > 0 && (lang === 'uk' ? ' і ще ' : ' and ')+recap.remainingCompleted+(lang === 'uk' ? '' : ' more')}</>}
+          {recapNote && <> — <i>{recapNote}</i></>}
+        </p>
+        <button type="button" className={action + ' shrink-0 px-2 text-lg hover:text-white'} aria-label={lang === 'uk' ? 'Приховати підсумок учора' : 'Dismiss yesterday’s recap'} onClick={onDismissRecap}>×</button>
+      </> : doneToday + plannedToday === 0 && overdue.length === 0
         ? <span className="text-neutral-500">{lang === 'uk' ? 'На сьогодні нічого не заплановано' : 'Nothing planned for today'}</span>
         : <span>{lang === 'uk' ? `Сьогодні: ${doneToday} з ${doneToday + plannedToday}` : `Today: ${doneToday} of ${doneToday + plannedToday}`}</span>}
       {overdue.length > 0 && <button type="button" className={`${action} text-red-400 hover:text-red-300`} aria-expanded={overdueOpen} aria-controls={overdueId} onClick={() => setOverdueOpen(value => !value)}>

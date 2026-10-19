@@ -25,6 +25,18 @@ before(async () => {
         const contents = typeof rawContents === 'string' ? rawContents
           : rawContents.flatMap(turn => turn.parts.map(part => part.text ?? '')).join(' ');
         // Chat commands use function calling: reply text plus one call per proposed operation.
+        if (config.tools?.[0]?.functionDeclarations.some(declaration => declaration.name === 'find_tasks')) {
+          const responses = rawContents.flatMap(turn => turn.parts).filter(part => part.functionResponse).map(part => part.functionResponse);
+          if (responses.some(response => response.name === 'create_task' || response.name === 'clear_countdown' || response.name === 'set_countdown')) {
+            return { text: responses.at(-1).response.ok ? 'Timer changed' : 'Invalid timer duration' };
+          }
+          if (contents.includes('timer-case-create')) return { functionCalls: [{ name: 'create_task', args: { title: 'References', phase: 'focus', timerMinutes: 25 } }] };
+          if (!responses.length) return { functionCalls: [{ name: 'get_task', args: { taskId: 'parent' } }] };
+          const task = responses.at(-1).response.task;
+          if (!task || task.timer?.remainingMinutes !== 15) throw new Error('Missing timer tool context');
+          return { functionCalls: [{ name: contents.includes('timer-case-invalid') ? 'set_countdown' : 'clear_countdown',
+            args: contents.includes('timer-case-invalid') ? { taskId: 'parent', minutes: 0 } : { taskId: 'parent' } }] };
+        }
         if (config.tools) {
           const parameters = Object.fromEntries(config.tools[0].functionDeclarations.map(declaration => [declaration.name, declaration.parameters]));
           if (config.responseSchema || config.toolConfig.functionCallingConfig.mode !== 'AUTO') throw new Error('Unexpected tools configuration');
@@ -126,6 +138,11 @@ test('chat and planning preserve configured countdown on newly generated tasks',
   for (const action of ['chat', 'generate']) {
     const data = await post('assist', { prompt: 'Create task timer-case-create with timer 25 minutes', action, tabs: ['focus'], lang: 'en' });
     assert.equal(data.source, action === 'chat' ? 'gemini-chat' : 'gemini');
+    if (action === 'chat') {
+      assert.deepEqual(data.agent.actions[0].action, { type: 'create_task', title: 'References', phase: 'focus', timerMinutes: 25 });
+      assert.deepEqual(data.tasks, []);
+      continue;
+    }
     assert.equal(data.tasks[0].timerMode, 'countdown');
     assert.equal(data.tasks[0].countdownDurationSeconds, 1500);
     assert.equal(data.tasks[0].timerAction, undefined);
@@ -135,21 +152,30 @@ test('chat and planning preserve configured countdown on newly generated tasks',
 
 test('AI receives current timer context and returns an explicit existing-task stop', async () => {
   for (const action of ['chat', 'generate']) {
-    const data = await post('assist', { prompt: 'Stop timer for References timer-case-stop', action, tabs: ['focus'], fullAppContext: { activeTasks: [{ id: 'parent', title: 'References', timerMode: 'countdown', countdownDurationSeconds: 1500, countdownRemainingSeconds: 900, timerRunning: true }] } });
+    const data = await post('assist', { prompt: 'Stop timer for References timer-case-stop', action, tabs: ['focus'], fullAppContext: { activeTasks: [{ id: 'parent', title: 'References', phase: 'focus', priority: 2, steps: 0, currentStep: 0, done: false, pinned: false, createdAt: 1, timerMode: 'countdown', countdownDurationSeconds: 1500, countdownRemainingSeconds: 900, timerRunning: true }] } });
     assert.equal(data.source, action === 'chat' ? 'gemini-chat' : 'gemini');
     assert.deepEqual(data.tasks, []);
-    assert.deepEqual(data.taskUpdates, [{ id: 'parent', timerAction: 'stop' }]);
+    if (action === 'chat') {
+      assert.deepEqual(data.agent.actions[0].action, { type: 'clear_countdown', taskId: 'parent' });
+      assert.deepEqual(data.taskUpdates, []);
+    } else assert.deepEqual(data.taskUpdates, [{ id: 'parent', timerAction: 'stop' }]);
   }
 });
 
-test('invalid model timer configuration gives an honest empty proposal', async () => {
+test('invalid model timer configuration returns an honest agent failure or rejects a planning proposal', async () => {
   for (const action of ['chat', 'generate']) {
     const response = await fetch(`${baseUrl}/api/ai/assist`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: 'Set timer for References timer-case-invalid', action, tabs: ['focus'], currentTasks: [{ id: 'parent', title: 'References' }], lang: 'en' }),
+      body: JSON.stringify({ prompt: 'Set timer for References timer-case-invalid', action, tabs: ['focus'], currentTasks: [{ id: 'parent', title: 'References', phase: 'focus', priority: 2, steps: 0, currentStep: 0, done: false, pinned: false, createdAt: 1, timerMode: 'countdown', countdownDurationSeconds: 1500, countdownRemainingSeconds: 900 }], lang: 'en' }),
     });
-    assert.equal(response.status, 502);
     const data = await response.json();
+    if (action === 'chat') {
+      assert.equal(response.status, 200);
+      assert.deepEqual(data.agent.actions, []);
+      assert.equal(data.text, 'Invalid timer duration');
+      continue;
+    }
+    assert.equal(response.status, 502);
     assert.equal(data.source, 'ai-error');
     assert.equal(data.code, 'INVALID_AI_RESPONSE');
     assert.deepEqual(data.tasks, []);

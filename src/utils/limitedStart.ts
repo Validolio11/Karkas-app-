@@ -7,13 +7,14 @@ export const LIMITED_START_CAPS = [300, 900, 1500];
 export const LIMITED_START_DEFAULT = 900;
 export const LIMITED_START_MIN_CREDIT = 60;
 
-export function startLimitedStart(task: PSTask, capSeconds: number, now: number, options?: { continued?: boolean }): PSTask {
+export function startLimitedStart(task: PSTask, capSeconds: number, now: number, options?: { continued?: boolean; newId?: () => string }): PSTask {
   if (task.done || task.limitedStart || !Number.isInteger(capSeconds) || capSeconds < 60 || capSeconds > 3600) return task;
   const paused = task.timerRunning ? pauseTaskTimer(task, now) : task;
+  const newId = options?.newId ?? (() => crypto.randomUUID());
   return {
     ...paused,
     limitedStart: {
-      id: crypto.randomUUID(), capSeconds, startedAt: now, baseSeconds: getTaskTotalSeconds(paused, now),
+      id: newId(), capSeconds, startedAt: now, baseSeconds: getTaskTotalSeconds(paused, now),
       ...(options?.continued ? { continued: true } : {}),
       restore: {
         ...(paused.timerMode === undefined ? {} : { timerMode: paused.timerMode }),
@@ -22,7 +23,7 @@ export function startLimitedStart(task: PSTask, capSeconds: number, now: number,
       },
     },
     timerMode: 'countdown', countdownDurationSeconds: capSeconds, countdownRemainingSeconds: capSeconds,
-    timerRunning: true, timerStartedAt: now, timerSessionId: crypto.randomUUID(), timerStepId: activeTaskStepId(paused),
+    timerRunning: true, timerStartedAt: now, timerSessionId: newId(), timerStepId: activeTaskStepId(paused),
     startedAt: Number.isFinite(task.startedAt) ? task.startedAt : now,
     autoPausedOverdue: false, updatedAt: Math.max(task.updatedAt ?? 0, now),
   };

@@ -8,6 +8,9 @@ import { verifyGeminiKey } from "./server/geminiKeyVerification";
 import { AIRequestError, AIStreamInterruptedError, AIToolsRejectedError, aiRequestFailure, classifyAIRequestError, generateGeminiWithFallback, streamGeminiWithFallback, createGeminiClient, rememberAvailableGeminiModels, type AIFunctionCall, type AIThinkingEffort, type AIRequestDiagnostics } from "./server/geminiGeneration";
 import { aiToolsEnabled, proposalFromFunctionCalls, proposalSummaryReply, TASK_COMMAND_TOOLS_CONFIG } from "./server/aiTools";
 import { createAssistEventStream } from './server/chatEventStream';
+import { applyConfirmedAgentAction, runAgentTurn } from './server/aiAgent';
+import { parseWorkspace } from './src/utils/workspaceValidation';
+import type { AgentWorkspace } from './src/utils/aiAgentActions';
 import { isCompletedArchivedTask, isCancelledArchivedTask, selectRelevantArchivedTasks } from "./src/utils/taskArchive";
 import { recordedTaskSeconds, summarizeTaskTime } from "./src/utils/taskTimeStats";
 import { buildWorkInsights } from "./src/utils/workInsights";
@@ -18,7 +21,7 @@ import { AI_CHAT_FALLBACK_TIMEOUT_MS, AI_CHAT_MODEL_TIMEOUT_MS, AI_CHAT_TOTAL_TI
 import { boundedPersonalPromptContext, chatHistoryContents, compactTaskPromptContext, KARKAS_ASSISTANT_PERSONA, mergeTemporalTaskContext, priorityLabel } from './server/aiPromptContext';
 import { buildTaskTemporalContext, temporalAwarenessSystemPolicy } from './src/utils/taskTemporalContext';
 import { currentClockReply } from './server/clockReply';
-import { guardOperationlessReply, guardTemporalResponse, guardUnappliedClaims, hasProposedOperations, lastChangeOffer, staleProposalReply, taskScopeClarificationReply } from './server/temporalResponseGuard';
+import { guardOperationlessReply, guardTemporalResponse, guardUnappliedClaims, hasProposedOperations, staleProposalReply, taskScopeClarificationReply } from './server/temporalResponseGuard';
 import { assertRequestedTimeWindow, reconcilePendingProposal, requestedTimeWindow } from './server/pendingProposalRevision';
 
 import { MAX_AUTONOMOUS_STRATEGY_ACTIONS } from './src/utils/strategyLimits';
@@ -57,6 +60,8 @@ const priorityOr = (value: unknown, fallback = 2): number =>
 function requestValidationError(body: unknown): string | undefined {
   if (!isRecord(body)) return 'JSON object is required';
   if (body.intent !== undefined && !['auto', 'plan', 'analysis', 'steps'].includes(body.intent)) return 'Invalid intent';
+  if (body.confirmed !== undefined && typeof body.confirmed !== 'boolean') return 'Invalid confirmed';
+  if (body.mutationTargets !== undefined && (!Array.isArray(body.mutationTargets) || !body.mutationTargets.every((task: unknown) => isRecord(task) && nonEmptyText(task.title)))) return 'Invalid mutationTargets';
   if (body.strategyContext !== undefined && !isRecord(body.strategyContext)) return 'Invalid strategyContext';
   if (body.discoveryConfirmationId !== undefined && typeof body.discoveryConfirmationId !== 'string') return 'Invalid discoveryConfirmationId';
   if (body.discoveryMode !== undefined && typeof body.discoveryMode !== 'boolean') return 'Invalid discoveryMode';
@@ -82,6 +87,7 @@ function requestValidationError(body: unknown): string | undefined {
     }
     if (context.tabs !== undefined && (!Array.isArray(context.tabs) ||
       !context.tabs.every((tab: unknown) => nonEmptyText(tab) || (isRecord(tab) && nonEmptyText(tab.id))))) return 'Invalid tabs';
+    if (context.notes !== undefined && !Array.isArray(context.notes)) return 'Invalid notes';
     if (context.stats !== undefined && !isRecord(context.stats)) return 'Invalid stats';
   }
   if (body.periodMetrics !== undefined) {
@@ -92,6 +98,29 @@ function requestValidationError(body: unknown): string | undefined {
         (key === 'successRate' ? value > 100 : !Number.isInteger(value)))) return `Invalid periodMetrics.${key}`;
     }
   }
+}
+
+/** Agent tools require complete records, rather than the lossy prompt context. */
+function agentWorkspaceForRequest(body: Record<string, any>): AgentWorkspace {
+  const context = body.fullAppContext ?? {};
+  const records = body.mutationTargets ?? body.currentTasks ?? body.tasks;
+  const tasks = records ?? [...new Map([
+    ...(body.activeTasks ?? context.activeTasks ?? []),
+    ...(body.completedTasks ?? context.completedTasks ?? []),
+    ...(context.scheduledPlans ?? []),
+  ].map(task => [task.id, task])).values()];
+  const tabs = (context.tabs ?? body.tabs ?? []).map((tab: unknown) => typeof tab === 'string' ? { id: tab, name: tab } : tab);
+  // Legacy fullAppContext archives are summaries; Stage 3 sends complete deletedTasks here.
+  const parsed = parseWorkspace({ tasks, deletedTasks: body.deletedTasks ?? [], tabs,
+    settings: { soundEnabled: false, fireEnabled: false, lang: 'uk', aiIconVariant: 'default' } });
+  const notes = body.notes ?? context.notes ?? [];
+  const timestamp = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 8.64e15;
+  if (!Array.isArray(notes) || notes.length > 50000 || !notes.every(note => isRecord(note) && nonEmptyText(note.id)
+    && typeof note.title === 'string' && typeof note.content === 'string' && timestamp(note.createdAt)
+    && (note.updatedAt === undefined || timestamp(note.updatedAt))
+    && (note.color === undefined || typeof note.color === 'string') && (note.pinned === undefined || typeof note.pinned === 'boolean'))
+    || new Set(notes.map(note => note.id)).size !== notes.length) throw new Error('Invalid notes');
+  return { tasks: parsed.tasks, deletedTasks: parsed.deletedTasks, tabs: parsed.tabs, notes };
 }
 
 function cleanAndParseJson(rawText: string): Record<string, any> {
@@ -640,26 +669,28 @@ export async function assistHandler(req: any, rawRes: any) {
       discoveryConfirmationId,
     } = req.body;
 
-    if (!nonEmptyText(prompt)) {
+    if (req.body.agentConfirm === undefined && !nonEmptyText(prompt)) {
       return res.status(400).json({ error: "Prompt is required" });
     }
 
     const clientClock = schedulingClockContext(req.body.clientClock);
+    if (req.body.agentConfirm !== undefined) {
+      if (req.body.confirmed !== true) return res.status(400).json({ error: 'agentConfirm requires confirmed: true' });
+      let workspace: AgentWorkspace;
+      try { workspace = agentWorkspaceForRequest(req.body); }
+      catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid agent workspace' }); }
+      const confirmation = applyConfirmedAgentAction(workspace, req.body.agentConfirm, { now: Date.parse(clientClock.now), timeZone: clientClock.timeZone });
+      if (!confirmation.result.ok) return res.status(400).json({ error: confirmation.result.error, code: confirmation.result.code });
+      // The action summary is listed under the reply, so the reply itself stays short.
+      const text = lang === 'en' ? 'Done.' : 'Готово.';
+      eventStream?.delta(text);
+      if (controller.signal.aborted) return;
+      return res.json({ text, reply: text, summary: text, source: 'agent-confirmation',
+        agent: { actions: [confirmation.applied], pendingConfirmations: [] } });
+    }
     const isUk = lang === "uk" || /[а-яіїєґ]/i.test(prompt);
     const clockReply = action === 'chat' && intent === 'auto' ? currentClockReply(prompt, clientClock, isUk) : null;
     if (clockReply) return res.json({ reply: clockReply, summary: clockReply, tasks: [], tabs: [], taskUpdates: [], taskDeletions: [], source: 'client-clock' });
-    const normalizedPrompt = prompt.trim().toLowerCase().replace(/[!?.,]/g, "");
-    const isSimpleGreeting = /^(привіт|вітаю|добрий день|доброго ранку|добрий вечір|hello|hi|hey)$/.test(normalizedPrompt);
-
-    if (action === "chat" && isSimpleGreeting && !strategyContext) {
-      return res.json({
-        reply: isUk
-          ? "Привіт. Я поруч і бачу весь контекст твоїх задач. Розкажи, що зараз плануєш зробити, яку задачу хочеш розбити чи змінити, або що викликає затримку."
-          : "Hi. I am here with full visibility into your tasks. Tell me what you want to plan, break down, edit, or what is slowing you down.",
-        source: "greeting",
-      });
-    }
-    
     // Dynamic AI Client setup
     let ai = getGeminiClient();
     if (customApiKey && typeof customApiKey === "string") {
@@ -673,35 +704,25 @@ export async function assistHandler(req: any, rawRes: any) {
     const contextCompletedTasks = Array.isArray(suppliedContext.completedTasks) ? suppliedContext.completedTasks : [];
     const contextDeletedTasks = Array.isArray(suppliedContext.deletedTasks) ? suppliedContext.deletedTasks : [];
     const contextTabs = Array.isArray(suppliedContext.tabs) ? suppliedContext.tabs : [];
-    const currentActiveRecords = activeTasks.length > 0
+    let currentActiveRecords = activeTasks.length > 0
       ? activeTasks
       : contextActiveTasks.length > 0
         ? contextActiveTasks
         : currentTasks.filter((t: any) => !t.done);
-    const currentCompletedRecords = completedTasks.length > 0
+    let currentCompletedRecords = completedTasks.length > 0
       ? completedTasks
       : contextCompletedTasks.length > 0
         ? contextCompletedTasks
         : currentTasks.filter((t: any) => t.done);
-    const effectiveActiveTasks = currentActiveRecords.filter((task: any) => !task.done && isLiveProductivityTask(task));
-    const effectiveCompletedTasks = currentCompletedRecords.filter((task: any) => task.done && isLiveProductivityTask(task));
-    const scheduledPlans = (Array.isArray(suppliedContext.scheduledPlans) ? suppliedContext.scheduledPlans : currentActiveRecords.filter((task: any) => task.scheduledPending)).filter((task: any) => task.scheduledPending && !task.done);
-    const mutationTargets = [...effectiveActiveTasks, ...effectiveCompletedTasks, ...scheduledPlans];
-    const effectiveDeletedTasks = deletedTasks.length > 0 ? deletedTasks : contextDeletedTasks;
-    // Deduplicate the archive against every current record, including accidental
-    // ones: an excluded current task must not resurface through an older archive row.
-    const temporalContext = buildTaskTemporalContext(mutationTargets, clientClock, { archivedTasks: selectRelevantArchivedTasks([...currentActiveRecords, ...currentCompletedRecords, ...scheduledPlans], effectiveDeletedTasks) });
-    const productivity = workspaceProductivityContext(effectiveActiveTasks, effectiveCompletedTasks, effectiveDeletedTasks, [...currentActiveRecords, ...currentCompletedRecords]);
-    const effectiveStats = productivity.stats;
-    const effectiveAdaptiveProfile = productivity.adaptiveProfile;
-    const workInsights = buildWorkInsights([...currentActiveRecords, ...currentCompletedRecords], effectiveDeletedTasks, {
-      now: Date.parse(clientClock.now), timeZone: clientClock.timeZone, lang: isUk ? 'uk' : 'en',
-    });
-
+    let effectiveActiveTasks = currentActiveRecords.filter((task: any) => !task.done && isLiveProductivityTask(task));
+    let effectiveCompletedTasks = currentCompletedRecords.filter((task: any) => task.done && isLiveProductivityTask(task));
+    let scheduledPlans = (Array.isArray(suppliedContext.scheduledPlans) ? suppliedContext.scheduledPlans : currentActiveRecords.filter((task: any) => task.scheduledPending)).filter((task: any) => task.scheduledPending && !task.done);
+    let mutationTargets = [...effectiveActiveTasks, ...effectiveCompletedTasks, ...scheduledPlans];
+    let effectiveDeletedTasks = deletedTasks.length > 0 ? deletedTasks : contextDeletedTasks;
     // Preserve tab names and colors for analysis
-    const tabList = contextTabs.length > 0 ? contextTabs : (Array.isArray(tabs) ? tabs : []);
-    const activeTabIds: string[] = tabList.map((t: any) => (typeof t === "string" ? t : t.id));
-    const primaryTab = activeTabIds[0] || "focus";
+    let tabList = contextTabs.length > 0 ? contextTabs : (Array.isArray(tabs) ? tabs : []);
+    let activeTabIds: string[] = tabList.map((t: any) => (typeof t === "string" ? t : t.id));
+    let primaryTab = activeTabIds[0] || "focus";
 
     const isTabCreationRequested = allowNewTabs || /(?:вкладк|категорі|розділ|напрямок|проєкт|проект|секці|tab|category|section|project)/iu.test(prompt);
     const isScheduleRequest = /(?:tomorrow|today|daily|every day|every evening|schedule|deadline|due\s+date|planned\s+date|\d{1,2}:\d{2}|\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}\.\d{2,4}|завтра|щодн|кожн|сьогодні|дедлайн|термін|дат[ауи]|на\s+\d{1,2}\s*(?:год|веч))/iu.test(prompt);
@@ -712,9 +733,8 @@ export async function assistHandler(req: any, rawRes: any) {
       catch { /* Invalid drafts cannot supply mutation identities or be applied. */ }
     }
     const hasPendingOperations = !!validPendingChanges && hasProposedOperations(validPendingChanges);
-    const lastConversationMessage = Array.isArray(conversation) ? conversation.at(-1) : undefined;
-    const recentActionableOffer = lastConversationMessage?.role === 'assistant' && lastChangeOffer(lastConversationMessage.content);
-    if (action === 'chat' && intent === 'auto' && isExplicitAIProposalApplyRequest(prompt) && (hasPendingOperations || !recentActionableOffer)) {
+    const legacyProposalChat = hasPendingOperations;
+    if (legacyProposalChat && action === 'chat' && intent === 'auto' && isExplicitAIProposalApplyRequest(prompt)) {
       let validPending: Record<string, any> | undefined;
       if (hasPendingOperations && (req.body.pendingProposalStatus === 'pending' || req.body.pendingProposalStatus === undefined && req.body.lastAssistantProposalStatus !== 'stale')) {
         try {
@@ -725,7 +745,7 @@ export async function assistHandler(req: any, rawRes: any) {
       const reply = validPending
         ? (isUk ? 'Підготовлені зміни ще не застосовано. Підтвердьте їх у картці пропозиції.' : 'The prepared changes have not been applied yet. Confirm them in the proposal card.')
         : req.body.lastAssistantProposalStatus === 'stale'
-          ? (isUk ? 'Попередня пропозиція вже неактуальна. Напишіть, які завдання та що потрібно змінити, щоб підготувати актуальну пропозицію.' : 'The earlier proposal is no longer current. Specify which tasks and what to change to prepare a current proposal.')
+          ? staleProposalReply(isUk, discoveryAddressFor(personalProfileForRequest(strategyContext), prompt, Array.isArray(conversation) ? conversation.slice(-10) : []))
           : (isUk ? 'Немає підготовлених змін для застосування. Попередня текстова відповідь не містить картки змін. Напишіть, які завдання та що потрібно змінити.' : 'There are no prepared changes to apply. The earlier text reply contains no change proposal. Specify which tasks and what to change.');
       return res.json({ reply, summary: reply, ...(validPending ?? { tasks: [], tabs: [], taskUpdates: [], taskDeletions: [], proposalDisposition: 'clarification' }), source: validPending ? 'pending-proposal-confirmation' : req.body.lastAssistantProposalStatus === 'stale' ? 'stale-proposal-clarification' : 'proposal-apply-clarification' });
     }
@@ -738,9 +758,9 @@ export async function assistHandler(req: any, rawRes: any) {
       (pendingQuestion.turnId && lastAssistantMessageId === `reply-${pendingQuestion.turnId}`)
       || (req.body.currentDiscoveryQuestionId === pendingQuestion.id &&
         (lastAssistantMessageId === resumedQuestionId || lastAssistantMessageId.startsWith(`${resumedQuestionId}:after:`))));
-    if (action === 'chat' && intent === 'auto' && /^(?:так|гаразд|добре|погоджуюсь|погоджуюся|підтверджую|підтверджено|ок|окей|застосувати|застосуй|зберегти|збережи|yes|ok|okay|agreed|confirm|i agree)[.!\s]*$/iu.test(prompt.trim())
-      && req.body.lastAssistantProposalStatus === 'stale' && !hasPendingOperations && !recentActionableOffer && !discoveryConfirmationId && !respondsToCurrentQuestion) {
-      // A bare yes shows no form of address; the recent conversation decides.
+    if (legacyProposalChat && action === 'chat' && intent === 'auto'
+      && /^(?:так|гаразд|добре|погоджуюсь|погоджуюся|підтверджую|підтверджено|ок|окей|застосувати|застосуй|зберегти|збережи|yes|ok|okay|agreed|confirm|i agree)[.!\s]*$/iu.test(prompt.trim())
+      && req.body.lastAssistantProposalStatus === 'stale' && !discoveryConfirmationId && !respondsToCurrentQuestion) {
       const reply = staleProposalReply(isUk, discoveryAddressFor(personalProfile, prompt, Array.isArray(conversation) ? conversation.slice(-10) : []));
       return res.json({ reply, summary: reply, tasks: [], tabs: [], taskUpdates: [], taskDeletions: [], source: 'stale-proposal-clarification' });
     }
@@ -762,28 +782,108 @@ export async function assistHandler(req: any, rawRes: any) {
     const previousUserTexts = conversationHistory
       .filter((message: unknown) => isRecord(message) && message.role === 'user' && nonEmptyText(message.content))
       .slice(-3).map((message: any) => String(message.content).replace(/^\s*\[\d{2}\.\d{2}\s+\d{2}:\d{2}\]\s*/u, '').slice(0, 2000));
-    const chatRoute = classifyPersonalChatRequest(prompt, intent, mutationTargets, personalProfile, validPendingChanges,
+    let chatRoute = classifyPersonalChatRequest(prompt, intent, mutationTargets, personalProfile, validPendingChanges,
       { answeringDiscovery, discoveryMode, previousAssistantText, previousUserText, previousUserTexts });
-    if (action === 'chat' && chatRoute.scope?.operation === 'cancel') {
+    if (legacyProposalChat && action === 'chat' && chatRoute.scope?.operation === 'cancel') {
       const reply = isUk ? 'Пропозицію скасовано. Її зміни не застосовано.' : 'The proposal was cancelled. Its changes were not applied.';
       return res.json({ reply, summary: reply, tasks: [], tabs: [], taskUpdates: [], taskDeletions: [], proposalDisposition: 'cancelled', source: 'pending-proposal-cancelled' });
     }
-    if (action === 'chat' && chatRoute.pendingRevision && !chatRoute.pendingRevision.allowedIds.length && !chatRoute.pendingRevision.allowCreate) {
+    if (legacyProposalChat && action === 'chat' && chatRoute.pendingRevision && !chatRoute.pendingRevision.allowedIds.length && !chatRoute.pendingRevision.allowCreate) {
       const reply = isUk ? 'Яке саме завдання в підготовленій пропозиції потрібно змінити? Назвіть його точніше; попередні зміни збережено для уточнення.'
         : 'Which task in the prepared proposal should change? Name it more precisely; the draft has been kept for clarification.';
       return res.json({ reply, summary: reply, tasks: [], tabs: [], taskUpdates: [], taskDeletions: [], proposalDisposition: 'clarification', source: 'pending-proposal-clarification' });
     }
-    if (action === 'chat' && requestedTimeWindow(prompt)?.ambiguous && (chatRoute.route === 'task_command' || /(?:заплан|потрібно|додати|створити|schedule|plan|create|add)/iu.test(prompt))) {
+    if (legacyProposalChat && action === 'chat' && requestedTimeWindow(prompt)?.ambiguous && (chatRoute.route === 'task_command' || /(?:заплан|потрібно|додати|створити|schedule|plan|create|add)/iu.test(prompt))) {
       const reply = isUk ? 'Уточніть, будь ласка, час початку й завершення та чи завершується робота наступного дня. Пропозицію поки не змінено.'
         : 'Please clarify the start and end times and whether the work ends the next day. The proposal has not been changed.';
       return res.json({ reply, summary: reply, tasks: [], tabs: [], taskUpdates: [], taskDeletions: [], proposalDisposition: 'clarification', source: 'time-window-clarification' });
     }
-    if (action === 'chat' && chatRoute.route === 'task_command' && chatRoute.scope?.operation === 'update' && !chatRoute.scope.taskIds.length
+    if (legacyProposalChat && action === 'chat' && chatRoute.route === 'task_command' && chatRoute.scope?.operation === 'update' && !chatRoute.scope.taskIds.length
       && /(?:розкладай|розклади|розплануй|сплануй|перенеси|перекинь|заплануй|reschedule|schedule|move)/iu.test(prompt)
       && /(?:сьогодні|завтра|today|tomorrow|\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}\.\d{2,4})/iu.test(prompt)) {
       const reply = taskScopeClarificationReply(isUk, discoveryAddressFor(personalProfile, prompt, conversationHistory));
       return res.json({ reply, summary: reply, tasks: [], tabs: [], taskUpdates: [], taskDeletions: [], source: 'task-scope-clarification' });
     }
+    let agentHandoff: Record<string, unknown> | undefined;
+    let agentHandoffTurn: Awaited<ReturnType<typeof runAgentTurn>> | undefined;
+    const withAgentHandoff = (body: Record<string, any>) => {
+      if (!agentHandoff || !agentHandoffTurn) return body;
+      const previous = agentHandoffTurn.metrics;
+      const current = body.aiMetrics;
+      const metrics = current ? { ...current, attempts: previous.attempts + current.attempts,
+        attemptModels: [...(previous.attemptModels ?? [previous.model]), ...(current.attemptModels ?? [current.model])],
+        failedAttempts: [...(previous.failedAttempts ?? []), ...(current.failedAttempts ?? [])],
+        elapsedMs: Math.round(performance.now() - assistStartedAt),
+        selectedModelFailure: current.selectedModelFailure ?? previous.selectedModelFailure,
+      } : previous;
+      if (current) for (const key of ['promptTokens', 'cachedTokens', 'outputTokens', 'thoughtsTokens', 'toolCalls'] as const) {
+        if (previous[key] !== undefined || current[key] !== undefined) metrics[key] = (previous[key] ?? 0) + (current[key] ?? 0);
+      }
+      const coachingText = textOr(body.reply, textOr(body.summary));
+      const text = [...agentHandoffTurn.actions.map(applied => applied.summary[isUk ? 'uk' : 'en'])
+        .filter(summary => !coachingText.includes(summary)), coachingText].filter(Boolean).join('\n');
+      eventStream?.delta(text);
+      return { ...body, text, reply: text, summary: text, agent: agentHandoff, aiMetrics: metrics,
+        fallbackUsed: Boolean(body.fallbackUsed || agentHandoffTurn.fallbackUsed) };
+    };
+    const sendChatResult = (body: Record<string, any>) => {
+      const result = withAgentHandoff(body);
+      if (controller.signal.aborted) return;
+      return res.json(result);
+    };
+    if (action === 'chat' && !legacyProposalChat && intent !== 'analysis' && chatRoute.route !== 'personal') {
+      let workspace: AgentWorkspace;
+      try { workspace = agentWorkspaceForRequest(req.body); }
+      catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid agent workspace' }); }
+      if (!ai) return sendAIRequestFailure(res, new AIRequestError('MISSING_API_KEY'), isUk);
+      const agentWorkInsights = buildWorkInsights(workspace.tasks, workspace.deletedTasks, {
+        now: Date.parse(clientClock.now), timeZone: clientClock.timeZone, lang: isUk ? 'uk' : 'en',
+      });
+      try {
+        const turn = await runAgentTurn({ ai, selectedModel, availableModels, workspace,
+          historyContents: chatHistoryContents(conversationHistory, '').map(turn => ({ ...turn,
+            parts: turn.parts.filter(part => part.text.trim()) })).filter(turn => turn.parts.length), userText: prompt,
+          clock: clientClock, now: Date.parse(clientClock.now), timeZone: clientClock.timeZone, lang,
+          signal: controller.signal, onTextDelta: eventStream?.delta });
+        const agent = { actions: turn.actions, pendingConfirmations: turn.pendingConfirmations,
+          clarification: turn.clarification, view: turn.view, handoff: turn.handoff };
+        logAIMetrics('chat:agent', turn.metrics);
+        if (turn.handoff === 'personal') {
+          agentHandoff = agent;
+          agentHandoffTurn = turn;
+          // Coaching reads the state after all successful actions in this same turn.
+          currentActiveRecords = turn.workspace.tasks.filter(task => !task.done);
+          currentCompletedRecords = turn.workspace.tasks.filter(task => task.done);
+          effectiveActiveTasks = currentActiveRecords.filter((task: any) => isLiveProductivityTask(task));
+          effectiveCompletedTasks = currentCompletedRecords.filter((task: any) => isLiveProductivityTask(task));
+          scheduledPlans = currentActiveRecords.filter((task: any) => task.scheduledPending);
+          mutationTargets = turn.workspace.tasks;
+          effectiveDeletedTasks = turn.workspace.deletedTasks;
+          tabList = turn.workspace.tabs;
+          activeTabIds = turn.workspace.tabs.map(tab => tab.id);
+          primaryTab = activeTabIds[0] || 'focus';
+          chatRoute = { route: 'personal' };
+        } else {
+          if (controller.signal.aborted) return;
+          return res.json({ text: turn.text, reply: turn.text, summary: turn.text, agent,
+            tasks: [], tabs: [], taskUpdates: [], taskDeletions: [], insights: [], source: 'gemini-chat',
+            usedModel: turn.usedModel, fallbackUsed: turn.fallbackUsed, workInsights: agentWorkInsights, aiMetrics: turn.metrics });
+        }
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        return sendAIRequestFailure(res, error, isUk);
+      }
+    }
+    // Deduplicate the archive against every current record, including accidental
+    // ones: an excluded current task must not resurface through an older archive row.
+    const temporalContext = buildTaskTemporalContext(mutationTargets, clientClock, { archivedTasks: selectRelevantArchivedTasks([...currentActiveRecords, ...currentCompletedRecords, ...scheduledPlans], effectiveDeletedTasks) });
+    const productivity = workspaceProductivityContext(effectiveActiveTasks, effectiveCompletedTasks, effectiveDeletedTasks, [...currentActiveRecords, ...currentCompletedRecords]);
+    const effectiveStats = productivity.stats;
+    const effectiveAdaptiveProfile = productivity.adaptiveProfile;
+    const workInsights = buildWorkInsights([...currentActiveRecords, ...currentCompletedRecords], effectiveDeletedTasks, {
+      now: Date.parse(clientClock.now), timeZone: clientClock.timeZone, lang: isUk ? 'uk' : 'en',
+    });
+
     const personalReady = isPersonalStrategyReady(personalProfile);
     const isPersonalDiscovery = chatRoute.route === 'personal' && !personalReady;
     // Tasks in scope, or named in the conversation, carry their steps, notes and recent activity for coaching.
@@ -803,7 +903,7 @@ export async function assistHandler(req: any, rawRes: any) {
           elapsedMs: Math.round(performance.now() - assistStartedAt),
         })}`);
       }
-      const chatStartedAt = performance.now();
+      const chatStartedAt = agentHandoff ? assistStartedAt : performance.now();
       let toolFailureDiagnostics: AIRequestDiagnostics | undefined;
       const remainingChatTimeout = () => {
         const remaining = AI_CHAT_TOTAL_TIMEOUT_MS - (performance.now() - chatStartedAt);
@@ -851,7 +951,7 @@ ${prompt}`),
           });
           const parsed = response.validatedResponse;
           logAIMetrics('chat:discovery', response.metrics);
-          return res.json({ ...parsed, summary: parsed.reply, source: 'gemini-chat', usedModel: response.usedModel, fallbackUsed: response.fallbackUsed, workInsights, aiMetrics: response.metrics });
+          return sendChatResult({ ...parsed, summary: parsed.reply, source: 'gemini-chat', usedModel: response.usedModel, fallbackUsed: response.fallbackUsed, workInsights, aiMetrics: response.metrics });
         }
         // Commands, help and general chat need the current queue, not history analytics.
         // Sending less context is the main input-side latency saving.
@@ -1049,7 +1149,7 @@ ${prompt}`),
             strategy: parsed.strategy,
             aiMetrics: generation.metrics,
           }, isUk);
-          return res.json({
+          return sendChatResult({
             ...finalProposal,
             // Streamed text was shown live; the `done` reply is authoritative and replaces it.
             ...(streamedReply && finalProposal.reply !== streamedReply ? { replyReplaced: true } : {}),
@@ -1166,6 +1266,18 @@ ${prompt}`),
             elapsedMs: Math.round(performance.now() - chatStartedAt),
             ...(chatError.diagnostics?.keyId || toolFailureDiagnostics.keyId ? { keyId: chatError.diagnostics?.keyId || toolFailureDiagnostics.keyId } : {}),
           };
+        }
+        if (agentHandoffTurn && (agentHandoffTurn.actions.length || agentHandoffTurn.pendingConfirmations.length)) {
+          const failure = aiRequestFailure(chatError instanceof AIRequestError ? chatError : new AIRequestError('INVALID_AI_RESPONSE'), isUk);
+          const reply = [...agentHandoffTurn.actions.map(applied => applied.summary[isUk ? 'uk' : 'en']),
+            ...(agentHandoffTurn.pendingConfirmations.length ? [isUk ? 'Запитані ризикові дії очікують підтвердження.' : 'The requested destructive actions await confirmation.'] : []),
+            failure.body.error.replace(isUk ? ' Зміни не підготовлено й не застосовано.' : ' No changes were prepared or applied.', '')].join('\n');
+          const diagnostics = chatError instanceof AIRequestError ? chatError.diagnostics : undefined;
+          return sendChatResult({ reply, summary: reply, tasks: [], tabs: [], taskUpdates: [], taskDeletions: [], insights: [],
+            source: 'gemini-chat', usedModel: agentHandoffTurn.usedModel, workInsights,
+            ...(diagnostics ? { aiMetrics: { model: agentHandoffTurn.usedModel, thinking: 'provider-default',
+              attempts: diagnostics.attempts.length, attemptModels: diagnostics.attempts.map(attempt => attempt.model),
+              failedAttempts: diagnostics.attempts } } : {}) });
         }
         return sendAIRequestFailure(res, chatError, isUk);
       }

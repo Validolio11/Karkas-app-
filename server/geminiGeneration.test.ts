@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { GoogleGenAI } from '@google/genai';
-import { AIRequestError, aiRequestFailure, classifyAIRequestError, createGeminiClient, generateGeminiWithFallback, quotaInfoFromError, resetModelHealthForTests, thinkingConfigForModel } from './geminiGeneration.ts';
+import { AIRequestError, aiRequestFailure, classifyAIRequestError, createGeminiClient, generateGeminiWithFallback, quotaInfoFromError, resetModelHealthForTests, responseModelContent, responseOutput, thinkingConfigForModel } from './geminiGeneration.ts';
 import { confirmedProfile, discoveryGoal, understandingProfile } from '../src/utils/strategyDiscovery.testHelpers';
 import { continueStrategyDiscovery } from '../src/utils/strategyDiscovery';
 import { applyStrategyActions } from '../src/utils/strategyActions';
@@ -41,9 +41,13 @@ function mockProvider(respond: (model: string, body: any, options: RequestInit) 
     const body = JSON.parse(String(options.body));
     calls.push({ model, body, signal: options.signal ?? undefined });
     const response = await respond(model, body, options);
-    // task_command uses function calling: the same proposal arrives as reply text plus one call per operation.
+    // Provider-error fixtures can return prose for agent chat or proposal tools for legacy drafts.
     const proposal = (response as any)?.proposal;
-    return body.tools && proposal ? toolCallResponse(proposal) : response;
+    if (body.tools && proposal) {
+      const agent = body.tools[0].functionDeclarations.some((declaration: any) => declaration.name === 'find_tasks');
+      return agent ? agentResponse([{ text: proposal.reply ?? '' }]) : toolCallResponse(proposal);
+    }
+    return response;
   }) as typeof fetch;
 }
 
@@ -68,10 +72,22 @@ async function withToolsOff<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 const rejected = (status: number, providerStatus: string, message = 'private-test-key provider-internal-data') => json({ error: { code: status, status: providerStatus, message } }, status);
+const persistedTask = (overrides: any = {}) => ({
+  id: 't1', title: 'Референси', phase: 'focus', priority: 2, steps: 0, currentStep: 0,
+  done: false, pinned: false, createdAt: 1, ...overrides,
+});
 const chat = (overrides: any = {}) => invokeDesktopApi('assist', {
   prompt: 'Додай таймер на 25 хвилин до завдання', action: 'chat', lang: 'uk', customApiKey: 'test-only-fake-key',
   selectedModel: 'gemini-3.1-flash-lite', ...overrides,
+  // The agent receives persisted records; discovery keeps its original snapshots.
+  ...(overrides.currentTasks && overrides.discoveryMode !== true && overrides.intent !== 'analysis'
+    ? { currentTasks: overrides.currentTasks.map((task: any) => persistedTask(task)) } : {}),
 });
+const agentResponse = (parts: any[], usageMetadata?: any) => json({
+  candidates: [{ content: { role: 'model', parts }, finishReason: 'STOP' }], ...(usageMetadata ? { usageMetadata } : {}),
+});
+const agentCall = (name: string, args: any) => ({ functionCall: { name, args } });
+const responsesIn = (body: any) => body.contents.at(-1).parts.map((part: any) => part.functionResponse?.response);
 
 test('unified chat transmits persistent memory and intent without private action journals', async () => {
   mockProvider((_model, body) => {
@@ -178,14 +194,19 @@ test('discovery prompts retain the pending question beyond ten messages and neve
   assert.equal(calls.length, 1);
 });
 
-test('concrete steps and polite timer requests preserve their operation without starting an interview', async () => {
-  for (const [prompt, intent, update] of [['Study', 'steps', { id: 't', stepList: [{ title: 'Read' }] }], ['Можеш запустити таймер Study?', 'auto', { id: 't', timerAction: 'start' }]] as const) {
-    mockProvider(() => success({ reply: 'Proposal', tasks: [{ title: 'Unrequested duplicate', phase: 'work', priority: 2, steps: 0 }], taskUpdates: [update], strategy: { status: 'ready', narrative: 'Unrequested strategy' } }));
-    const result = await chat({ prompt, intent, currentTasks: [{ id: 't', title: 'Study', phase: 'work', done: false, timerMode: 'stopwatch' }], strategyContext: { goals: [] } });
+test('concrete steps and polite timer requests execute agent actions without starting an interview', async () => {
+  for (const [prompt, intent, name, args] of [
+    ['Study', 'steps', 'add_steps', { taskId: 't', titles: ['Read'] }],
+    ['Можеш запустити таймер Study?', 'auto', 'start_timer', { taskId: 't' }],
+  ] as const) {
+    mockProvider(() => calls.length === 1 ? agentResponse([agentCall('find_tasks', { query: 'Study' })])
+      : calls.length === 2 ? agentResponse([agentCall(name, args)]) : agentResponse([{ text: 'Готово.' }]));
+    const result = await chat({ prompt, intent, currentTasks: [{ id: 't', title: 'Study', timerMode: 'stopwatch' }], strategyContext: { goals: [] } });
     assert.equal(result.status, 200);
-    assert.equal(calls.length, 1);
+    assert.equal(calls.length, 3);
+    assert.equal(result.body.agent.actions[0].action.type, name);
     assert.deepEqual(result.body.tasks, []);
-    assert.equal(result.body.taskUpdates.length, 1);
+    assert.deepEqual(result.body.taskUpdates, []);
     assert.equal(result.body.strategy, undefined);
   }
 });
@@ -294,29 +315,24 @@ test('selected period uses the client calendar timezone across a New Year bounda
   assert.match(result.body.periodRetrospective, /1 tasks were added and 1 completed/);
 });
 
-test('retired selected model falls back through the real SDK and preserves serialized timer schema', async () => {
+test('retired selected model falls back through the real SDK with agent timer declarations', async () => {
   mockProvider((model, body, options) => {
     assert.ok(options.signal);
-    // Commands use function calling: the tool parameters carry the same timer constraints.
     assert.equal(body.generationConfig?.responseSchema, undefined);
-    const declarations = Object.fromEntries(body.tools[0].functionDeclarations.map((declaration: any) => [declaration.name, declaration.parameters]));
-    assert.equal(declarations.propose_create_task.properties.countdownDurationSeconds.minimum, 60);
-    assert.equal(declarations.propose_create_task.properties.countdownDurationSeconds.maximum, 86400);
-    // Ordinary commands no longer ask the model for a personal strategy.
-    assert.equal(Object.keys(declarations).some(name => /strategy/.test(name)), false);
-    assert.deepEqual(declarations.propose_update_task.properties.timerAction.enum, ['start', 'pause', 'stop']);
-    return model === 'gemini-retired-model' ? rejected(404, 'NOT_FOUND') : success({
-      reply: 'Пропоную таймер на 25 хвилин.', tasks: [], taskUpdates: [{ id: 't1', timerMode: 'countdown', countdownDurationSeconds: 1500 }],
-    });
+    const declarations = Object.fromEntries(body.tools[0].functionDeclarations.map((declaration: any) => [declaration.name, declaration.parametersJsonSchema ?? declaration.parameters]));
+    assert.ok(declarations.find_tasks);
+    assert.ok(declarations.set_countdown.properties.minutes);
+    assert.ok(declarations.start_timer);
+    assert.equal(declarations.propose_update_task, undefined);
+    return model === 'gemini-retired-model' ? rejected(404, 'NOT_FOUND') : agentResponse([{ text: 'Готово.' }]);
   });
-  const result = await chat({ selectedModel: 'models/gemini-retired-model', currentTasks: [{ id: 't1', title: 'Референси' }] });
+  const result = await chat({ selectedModel: 'models/gemini-retired-model', currentTasks: [persistedTask()] });
   assert.equal(result.status, 200);
   assert.equal(result.body.source, 'gemini-chat');
-  assert.equal(result.body.taskUpdates[0].countdownDurationSeconds, 1500);
-  assert.equal(result.body.usedModel, 'gemini-3.5-flash-lite');
+  assert.equal(result.body.usedModel, 'gemini-3.8-flash');
   assert.equal(result.body.fallbackUsed, true);
   assert.equal(result.body.aiMetrics.selectedModelFailure, 'MODEL_UNAVAILABLE');
-  assert.deepEqual(calls.map(call => call.model), ['gemini-retired-model', 'gemini-3.5-flash-lite']);
+  assert.deepEqual(calls.map(call => call.model), ['gemini-retired-model', 'gemini-3.8-flash']);
 });
 
 test('fallback attempts each model once, then returns the quota category without raw diagnostics', async () => {
@@ -324,7 +340,7 @@ test('fallback attempts each model once, then returns the quota category without
   const result = await chat();
   assert.equal(result.status, 429);
   assert.equal(result.body.code, 'QUOTA_EXCEEDED');
-  assert.deepEqual(calls.map(call => call.model), ['gemini-3.1-flash-lite', 'gemini-3.5-flash-lite', 'gemini-3.8-flash']);
+  assert.deepEqual(calls.map(call => call.model), ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-3.5-flash-lite']);
   assert.deepEqual(result.body.taskUpdates, []);
   assert.equal(result.body.source, 'ai-error');
   assert.doesNotMatch(JSON.stringify(result.body), /private-test-key|provider-internal-data/);
@@ -366,21 +382,25 @@ test('model outages and network failures retain their category instead of a succ
   }
 });
 
-test('invalid Gemini output does not silently generate heuristic changes', async () => {
-  mockProvider(() => success({ reply: 'Сформовано.', tasks: [], taskUpdates: [{ id: 'unknown', timerAction: 'start' }] }));
+test('unknown agent task ids return an error to Gemini without heuristic changes', async () => {
+  mockProvider((_model, body) => {
+    if (calls.length === 1) return agentResponse([agentCall('start_timer', { taskId: 'unknown' })]);
+    assert.equal(responsesIn(body)[0].ok, false);
+    assert.equal(responsesIn(body)[0].code, 'not_found');
+    return agentResponse([{ text: 'Завдання не знайдено.' }]);
+  });
   const result = await chat();
-  assert.equal(result.status, 502);
-  assert.equal(result.body.code, 'INVALID_AI_RESPONSE');
-  assert.deepEqual(result.body.tasks, []);
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.body.agent.actions, []);
   assert.deepEqual(result.body.taskUpdates, []);
-  assert.deepEqual(calls.map(call => call.model), ['gemini-3.1-flash-lite', 'gemini-3.5-flash-lite', 'gemini-3.8-flash']);
+  assert.equal(calls.length, 2);
 });
 
 const lottieTask = { title: 'Пошук референсів для анімації Lottie', phase: 'focus', priority: 2, steps: 0, stepList: [], timerMode: 'countdown', countdownDurationSeconds: 2400 };
 const lottiePrompt = 'Привіт, додай завдання пошук референсів для анімації лотті з таймером на 40 хвилин';
 
-test('Lottie forty-minute task tolerates unused optional nulls and preserves zero subtasks', async () => {
-  for (const action of ['chat', 'generate']) {
+test('planning JSON: Lottie forty-minute task tolerates unused optional nulls and preserves zero subtasks', async () => {
+  for (const action of ['generate']) {
     mockProvider((_model, body) => {
       assert.match(body.systemInstruction.parts[0].text, /40 minutes means countdownDurationSeconds:2400/);
       return success({ reply: 'Пропоную завдання з таймером на 40 хвилин.', summary: 'Пропозицію підготовлено.',
@@ -399,21 +419,21 @@ test('Lottie forty-minute task tolerates unused optional nulls and preserves zer
   }
 });
 
-test('existing-task forty-minute timer with null optional text remains a valid complete mutation', async () => {
-  mockProvider(() => success({ reply: 'Пропоную таймер на 40 хвилин.', tasks: [], taskUpdates: [{
+test('planning JSON: existing-task forty-minute timer with null optional text remains a valid complete mutation', async () => {
+  mockProvider(() => success({ summary: 'Пропозицію підготовлено.', reply: 'Пропоную таймер на 40 хвилин.', tasks: [], taskUpdates: [{
     id: 't1', title: null, note: null, phase: null, priority: null, done: null, steps: null, stepList: null,
     timerMode: null, countdownDurationSeconds: 2400, timerAction: null,
   }], taskDeletions: null }));
-  const result = await chat({ prompt: `Додай таймер на 40 хвилин до завдання ${lottieTask.title}`, currentTasks: [{ id: 't1', title: lottieTask.title, note: 'Моя примітка' }] });
+  const result = await chat({ action: 'generate', prompt: `Додай таймер на 40 хвилин до завдання ${lottieTask.title}`, currentTasks: [{ id: 't1', title: lottieTask.title, note: 'Моя примітка' }] });
   assert.equal(result.status, 200);
   assert.deepEqual(result.body.taskUpdates, [{ id: 't1', countdownDurationSeconds: 2400, timerMode: 'countdown' }]);
   assert.equal(calls.length, 1);
 });
 
-test('invalid duration is not reinterpreted as minutes and a valid distinct fallback repairs the entire proposal', async () => {
-  mockProvider(model => success({ reply: 'Пропоную завдання.', tasks: [{ ...lottieTask,
+test('planning JSON: invalid duration is not reinterpreted as minutes and a valid distinct fallback repairs the entire proposal', async () => {
+  mockProvider(model => success({ summary: 'Пропозицію підготовлено.', reply: 'Пропоную завдання.', tasks: [{ ...lottieTask,
     countdownDurationSeconds: model === 'gemini-3.1-flash-lite' ? 40 : 2400 }] }));
-  const result = await chat({ prompt: lottiePrompt, tabs: ['focus'] });
+  const result = await chat({ action: 'generate', prompt: lottiePrompt, tabs: ['focus'] });
   assert.equal(result.status, 200);
   assert.equal(result.body.tasks[0].countdownDurationSeconds, 2400);
   assert.equal(result.body.usedModel, 'gemini-3.5-flash-lite');
@@ -423,7 +443,7 @@ test('invalid duration is not reinterpreted as minutes and a valid distinct fall
   assert.deepEqual(calls.map(call => call.model), ['gemini-3.1-flash-lite', 'gemini-3.5-flash-lite']);
 });
 
-test('all invalid timer, target and required-title variants fail without a partial proposal', async () => {
+test('planning JSON: all invalid timer, target and required-title variants fail without a partial proposal', async () => {
   for (const malformed of [
     { tasks: [{ ...lottieTask, countdownDurationSeconds: 40 }] },
     { tasks: [{ ...lottieTask, countdownDurationSeconds: '2400' }] },
@@ -433,8 +453,8 @@ test('all invalid timer, target and required-title variants fail without a parti
     { tasks: [], taskUpdates: [{ id: 'unknown', timerAction: 'start' }] },
     { tasks: [{ ...lottieTask, timerRunning: null }] },
   ]) {
-    mockProvider(() => success({ reply: 'Пропоную завдання.', ...malformed }));
-    const result = await chat({ prompt: lottiePrompt, tabs: ['focus'] });
+    mockProvider(() => success({ summary: 'Пропозицію підготовлено.', reply: 'Пропоную завдання.', ...malformed }));
+    const result = await chat({ action: 'generate', prompt: lottiePrompt, tabs: ['focus'] });
     assert.equal(result.status, 502, JSON.stringify(malformed));
     assert.equal(result.body.code, 'INVALID_AI_RESPONSE');
     assert.deepEqual(result.body.tasks, []);
@@ -443,11 +463,11 @@ test('all invalid timer, target and required-title variants fail without a parti
   }
 });
 
-test('malformed optional mutation values trigger model fallback before a successful server response', async () => {
+test('planning JSON: malformed optional mutation values trigger model fallback before a successful server response', async () => {
   for (const malformed of [{ title: {} }, { note: [] }, { phase: {} }, { steps: {} }, { steps: 2.5 }, { done: 'false' }]) {
-    mockProvider(model => success({ reply: 'Пропоную таймер.', tasks: [], taskUpdates: [{ id: 't1',
+    mockProvider(model => success({ summary: 'Пропозицію підготовлено.', reply: 'Пропоную таймер.', tasks: [], taskUpdates: [{ id: 't1',
       countdownDurationSeconds: 2400, ...(model === 'gemini-3.1-flash-lite' ? malformed : {}) }] }));
-    const result = await chat({ currentTasks: [{ id: 't1', title: lottieTask.title }] });
+    const result = await chat({ action: 'generate', currentTasks: [{ id: 't1', title: lottieTask.title }] });
     assert.equal(result.status, 200);
     assert.deepEqual(result.body.taskUpdates, [{ id: 't1', countdownDurationSeconds: 2400, timerMode: 'countdown' }]);
     assert.equal(result.body.usedModel, 'gemini-3.5-flash-lite');
@@ -497,14 +517,14 @@ test('all assistant modes send classified records and recomputed statistics to t
       assert.equal(profile.completionRate, 50);
       if (action === 'chat') assert.deepEqual(context.stats, { total: 4, completed: 2, active: 1, cancelled: 1, percent: 50, phaseCounts: { focus: 4 } });
       else assert.deepEqual(context.overview, { totalTasks: 4, completedCount: 2, completionPercent: 50, activeCount: 1, urgentP1Count: 0 });
-      // Chat workspace analysis has no JSON mutation schema; requested changes arrive only as propose_* tool calls.
+      // Explicit chat analysis keeps its existing read-only structured contract.
       if (action === 'chat') {
-        assert.equal(body.generationConfig?.responseSchema, undefined);
-        assert.ok(body.tools[0].functionDeclarations.some((declaration: any) => declaration.name === 'propose_delete_task'));
+        assert.equal(body.tools, undefined);
+        assert.equal(body.generationConfig.responseSchema.properties.taskUpdates, undefined);
       } else assert.deepEqual(body.generationConfig.responseSchema.properties.taskDeletions.items.properties.deletionReason.enum, ['accidental', 'cancelled']);
       return success({ reply: 'Review prepared.', summary: 'Review prepared.', tasks: [], taskUpdates: [], taskDeletions: [] });
     });
-    const result = await chat({ prompt: 'Audit the workspace', lang: 'en', action, fullAppContext });
+    const result = await chat({ prompt: 'Audit the workspace', lang: 'en', action, intent: action === 'chat' ? 'analysis' : 'auto', fullAppContext });
     assert.equal(result.status, 200);
     assert.equal(calls.length, 1);
   }
@@ -598,44 +618,46 @@ test('breakdown excludes completed, accidental and archived tasks from other act
   assert.equal(calls.length, 1);
 });
 
-test('classified deletion proposals round-trip through the SDK and unknown enum values fail without mutations', async () => {
-  for (const deletionReason of ['accidental', 'cancelled', undefined, 'unknown']) {
-    mockProvider(() => success({ reply: 'Deletion proposal prepared.', tasks: [], taskDeletions: [{ id: 't1', deletionReason }] }));
+test('agent deletion waits for confirmation and invalid reasons return recoverable errors', async () => {
+  for (const reason of ['accidental', 'cancelled', undefined, 'unknown']) {
+    mockProvider((_model, body) => {
+      if (calls.length === 1) return agentResponse([agentCall('find_tasks', { query: 'Current task' })]);
+      if (calls.length === 2) return agentResponse([agentCall('delete_task', { taskId: 't1', ...(reason ? { reason } : {}) })]);
+      const response = responsesIn(body)[0];
+      assert.equal(response.ok, false);
+      assert.equal(response.code, reason === 'unknown' ? 'invalid' : 'needs_confirmation');
+      return agentResponse([{ text: reason === 'unknown' ? 'Причину не розпізнано.' : 'Потрібно підтвердити видалення.' }]);
+    });
     const result = await chat({ prompt: 'Видали завдання Current task', currentTasks: [{ id: 't1', title: 'Current task' }] });
-    if (deletionReason === 'unknown') {
-      assert.equal(result.status, 502);
-      assert.equal(result.body.code, 'INVALID_AI_RESPONSE');
-      assert.deepEqual(result.body.taskDeletions, []);
-      assert.equal(calls.length, 3);
-    } else {
-      assert.equal(result.status, 200);
-      assert.deepEqual(result.body.taskDeletions, [{ id: 't1', ...(deletionReason ? { deletionReason } : {}) }]);
-      assert.equal(calls.length, 1);
-    }
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.body.agent.actions, []);
+    assert.deepEqual(result.body.taskDeletions, []);
+    assert.equal(result.body.agent.pendingConfirmations.length, reason === 'unknown' ? 0 : 1);
+    assert.equal(calls.length, 3);
   }
 });
 
-test('real SDK ignores thought text and joins fenced JSON text parts for the Lottie proposal', () => withToolsOff(async () => {
+test('planning JSON: real SDK ignores thought text and joins fenced JSON text parts for the Lottie proposal', () => withToolsOff(async () => {
   mockProvider(() => {
-    const proposal = JSON.stringify({ reply: 'Пропоную завдання.', tasks: [lottieTask] });
+    const proposal = JSON.stringify({ summary: 'Пропозицію підготовлено.', reply: 'Пропоную завдання.', tasks: [lottieTask] });
     const split = Math.floor(proposal.length / 2);
     return json({ candidates: [{ content: { role: 'model', parts: [
       { thought: true, text: 'Internal reasoning must not be parsed.' },
       { text: '\uFEFF```json\n' + proposal.slice(0, split) }, { text: proposal.slice(split) + '\n```' },
     ] }, finishReason: 'STOP' }] });
   });
-  const result = await chat({ prompt: lottiePrompt, tabs: ['focus'] });
+  const result = await chat({ action: 'generate', prompt: lottiePrompt, tabs: ['focus'] });
   assert.equal(result.status, 200);
   assert.equal(result.body.tasks[0].countdownDurationSeconds, 2400);
   assert.equal(calls.length, 1);
 }));
 
-test('malformed JSON uses a distinct model, while repeated truncation stays an explicit failure', () => withToolsOff(async () => {
+test('planning JSON: malformed JSON uses a distinct model, while repeated truncation stays an explicit failure', () => withToolsOff(async () => {
   for (const repair of [true, false]) {
     mockProvider(model => model !== 'gemini-3.1-flash-lite' && repair
-      ? success({ reply: 'Пропоную завдання.', tasks: [lottieTask] })
+      ? success({ summary: 'Пропозицію підготовлено.', reply: 'Пропоную завдання.', tasks: [lottieTask] })
       : json({ candidates: [{ content: { parts: [{ text: '{"reply":"Пропоную", "tasks": [' }] } }] }));
-    const result = await chat({ prompt: lottiePrompt, tabs: ['focus'] });
+    const result = await chat({ action: 'generate', prompt: lottiePrompt, tabs: ['focus'] });
     assert.equal(result.status, repair ? 200 : 502);
     assert.equal(calls.length, repair ? 2 : 3);
     if (!repair) assert.deepEqual(result.body.tasks, []);
@@ -670,14 +692,14 @@ test('provider failures in planning, breakdown and recommendations are explicit 
   }
 });
 
-test('missing chat credentials are explicit while the local greeting remains available', async () => {
+test('missing chat credentials are explicit for ordinary chat and greetings', async () => {
   mockProvider(() => { throw new Error('Google must not be called without credentials'); });
   const missing = await invokeDesktopApi('assist', { prompt: 'Допоможи скласти план', action: 'chat', lang: 'uk' });
   assert.equal(missing.status, 503);
   assert.equal(missing.body.code, 'MISSING_API_KEY');
   const greeting = await invokeDesktopApi('assist', { prompt: 'Привіт', action: 'chat', lang: 'uk' });
-  assert.equal(greeting.status, 200);
-  assert.equal(greeting.body.source, 'greeting');
+  assert.equal(greeting.status, 503);
+  assert.equal(greeting.body.code, 'MISSING_API_KEY');
   assert.equal(calls.length, 0);
 });
 
@@ -732,18 +754,19 @@ test('thinking effort maps to settings each model family accepts', () => {
   assert.equal(thinkingConfigForModel('custom-tuned-model', 'low'), undefined);
 });
 
-test('chat sends route thinking settings and reports timing metrics', async () => {
+test('agent chat sends agent thinking (LOW on Lite) and reports metrics across tool and final rounds', async () => {
   mockProvider((_model, body) => {
-    assert.deepEqual(body.generationConfig.thinkingConfig, { thinkingLevel: 'MINIMAL' });
-    return toolCallResponse({ reply: 'Пропоную таймер.', taskUpdates: [{ id: 't1', timerMode: 'countdown', countdownDurationSeconds: 1500 }] },
-      { promptTokenCount: 900, candidatesTokenCount: 40, thoughtsTokenCount: 12 });
+    assert.deepEqual(body.generationConfig.thinkingConfig, { thinkingLevel: 'LOW' });
+    return calls.length === 1 ? agentResponse([agentCall('find_tasks', { query: 'Референси' })], { promptTokenCount: 900, candidatesTokenCount: 40, thoughtsTokenCount: 12 })
+      : calls.length === 2 ? agentResponse([agentCall('set_countdown', { taskId: 't1', minutes: 25, start: false })])
+      : agentResponse([{ text: 'Відлік встановлено.' }]);
   });
-  const result = await chat({ currentTasks: [{ id: 't1', title: 'Референси' }] });
+  const result = await chat({ currentTasks: [persistedTask()] });
   assert.equal(result.status, 200);
-  assert.equal(result.body.aiMetrics.toolCalls, 1);
-  assert.deepEqual(result.body.taskUpdates, [{ id: 't1', timerMode: 'countdown', countdownDurationSeconds: 1500 }]);
+  assert.equal(result.body.aiMetrics.toolCalls, 2);
+  assert.deepEqual(result.body.agent.actions.map((applied: any) => applied.action), [{ type: 'set_countdown', taskId: 't1', minutes: 25, start: false }]);
   assert.equal(result.body.aiMetrics.model, 'gemini-3.1-flash-lite');
-  assert.equal(result.body.aiMetrics.thinking, 'MINIMAL');
+  assert.equal(result.body.aiMetrics.thinking, 'LOW');
   assert.equal(result.body.aiMetrics.promptTokens, 900);
   assert.equal(result.body.aiMetrics.thoughtsTokens, 12);
   assert.equal(typeof result.body.aiMetrics.elapsedMs, 'number');
@@ -763,13 +786,13 @@ test('a model that exhausted its free quota is tried last on the next request', 
   mockProvider(model => model === 'gemini-3.1-flash-lite' ? rejected(429, 'RESOURCE_EXHAUSTED') : success({ reply: 'Готово.', taskUpdates: [] }));
   const first = await chat({ currentTasks: [{ id: 't1', title: 'Референси' }] });
   assert.equal(first.status, 200);
-  assert.deepEqual(calls.map(call => call.model), ['gemini-3.1-flash-lite', 'gemini-3.5-flash-lite']);
+  assert.deepEqual(calls.map(call => call.model), ['gemini-3.1-flash-lite', 'gemini-3.8-flash']);
   // Keep the remembered cooldown for the second request (mockProvider would reset it).
   calls.length = 0;
   const second = await chat({ currentTasks: [{ id: 't1', title: 'Референси' }] });
   assert.equal(second.status, 200);
-  assert.deepEqual(calls.map(call => call.model), ['gemini-3.5-flash-lite']);
-  assert.equal(second.body.usedModel, 'gemini-3.5-flash-lite');
+  assert.deepEqual(calls.map(call => call.model), ['gemini-3.8-flash']);
+  assert.equal(second.body.usedModel, 'gemini-3.8-flash');
   assert.equal(second.body.aiMetrics.selectedModelFailure, 'QUOTA_EXCEEDED');
   // The selected model was demoted by its cooldown, yet another model answered.
   assert.equal(second.body.fallbackUsed, true);
@@ -798,7 +821,7 @@ test('a selected model unknown to the key outranks later quota and overload fail
   assert.equal(result.body.code, 'MODEL_UNAVAILABLE');
   assert.match(result.body.error, /Виберіть іншу модель/);
   assert.deepEqual(result.body.diagnostics.attempts.map((attempt: any) => [attempt.model, attempt.code]), [
-    ['gemini-2.5-flash-lite', 'MODEL_UNAVAILABLE'], ['gemini-3.5-flash-lite', 'PROVIDER_UNAVAILABLE'], ['gemini-3.1-flash-lite', 'QUOTA_EXCEEDED']]);
+    ['gemini-2.5-flash-lite', 'MODEL_UNAVAILABLE'], ['gemini-3.8-flash', 'QUOTA_EXCEEDED'], ['gemini-3.5-flash-lite', 'PROVIDER_UNAVAILABLE']]);
   // Without an explicit selection there is no selected model to blame.
   mockProvider(model => model === 'only-404' ? rejected(404, 'NOT_FOUND') : rejected(429, 'RESOURCE_EXHAUSTED'));
   await assert.rejects(generateGeminiWithFallback({ ai: new GoogleGenAI({ apiKey: 'test-only-fake-key' }), contents: 'Test', config: {}, fallbackModels: ['only-404', 'quota'] }),
@@ -858,7 +881,7 @@ test('attempt records carry quota facts, responded flags and a one-way key label
   const { attempts, keyId } = failed.body.diagnostics;
   assert.match(keyId, /^[a-f0-9]{16}$/);
   assert.deepEqual(attempts.map((attempt: any) => [attempt.model, attempt.code, attempt.responded ?? false]), [
-    ['gemini-3.1-flash-lite', 'QUOTA_EXCEEDED', false], ['gemini-3.5-flash-lite', 'INVALID_AI_RESPONSE', true], ['gemini-3.8-flash', 'PROVIDER_UNAVAILABLE', false]]);
+    ['gemini-3.1-flash-lite', 'QUOTA_EXCEEDED', false], ['gemini-3.8-flash', 'PROVIDER_UNAVAILABLE', false], ['gemini-3.5-flash-lite', 'INVALID_AI_RESPONSE', true]]);
   assert.deepEqual(attempts[0].quota, { violations: [{ unit: 'requests', window: 'day', limit: 20 }], retryAfterMs: 30000 });
   assert.doesNotMatch(JSON.stringify(failed.body), /private-test-key|test-only-fake-key/);
 
@@ -884,40 +907,40 @@ test('a 429 with a quota of 0 means the model is not on this tier, not that a li
   assert.equal(failed.body.code, 'MODEL_TIER_UNAVAILABLE');
   assert.match(failed.body.error, /безкоштовному тарифі/);
   assert.deepEqual(failed.body.diagnostics.attempts.map((attempt: any) => [attempt.model, attempt.code]), [
-    ['gemini-3.1-pro-preview', 'MODEL_TIER_UNAVAILABLE'], ['gemini-3.5-flash-lite', 'QUOTA_EXCEEDED'], ['gemini-3.1-flash-lite', 'PROVIDER_UNAVAILABLE']]);
+    ['gemini-3.1-pro-preview', 'MODEL_TIER_UNAVAILABLE'], ['gemini-3.8-flash', 'PROVIDER_UNAVAILABLE'], ['gemini-3.5-flash-lite', 'QUOTA_EXCEEDED']]);
   assert.deepEqual(failed.body.diagnostics.attempts[0].quota.violations.map((violation: any) => violation.limit), [0, 0]);
 
   mockProvider(model => model === 'gemini-3.1-pro-preview' ? zeroQuota() : success({ reply: 'Готово.', taskUpdates: [] }));
   const answered = await chat({ selectedModel: 'gemini-3.1-pro-preview', currentTasks: [{ id: 't1', title: 'Референси' }] });
-  assert.equal(answered.body.usedModel, 'gemini-3.5-flash-lite');
+  assert.equal(answered.body.usedModel, 'gemini-3.8-flash');
   assert.equal(answered.body.aiMetrics.selectedModelFailure, 'MODEL_TIER_UNAVAILABLE');
   // Remembered like a 404: the next request does not wait on Pro first.
   calls.length = 0;
   const next = await chat({ selectedModel: 'gemini-3.1-pro-preview', currentTasks: [{ id: 't1', title: 'Референси' }] });
-  assert.equal(calls[0].model, 'gemini-3.5-flash-lite');
+  assert.equal(calls[0].model, 'gemini-3.8-flash');
   assert.equal(next.body.aiMetrics.selectedModelFailure, 'MODEL_TIER_UNAVAILABLE');
   // A missing quotaValue is not mistaken for 0.
   assert.deepEqual(quotaInfoFromError({ status: 429, message: JSON.stringify({ error: { details: [{ violations: [{ quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier', quotaValue: '' }] }] } }) }),
     { violations: [{ unit: 'requests', window: 'day' }] });
 });
 
-test('confirmation words accepted by the client also trigger the stale-proposal guard', async () => {
+test('legacy client: confirmation words accepted by the client also trigger the stale-proposal guard', async () => {
   mockProvider(() => success({ reply: 'Should not be called.', taskUpdates: [] }));
   for (const prompt of ['ок', 'Окей!', 'Застосувати', 'застосуй', 'зберегти', 'Збережи.', 'підтверджено']) {
-    const result = await chat({ prompt, lastAssistantProposalStatus: 'stale' });
+    const result = await chat({ prompt, pendingChanges: { tasks: [lottieTask] }, lastAssistantProposalStatus: 'stale' });
     assert.equal(result.status, 200, prompt);
     assert.equal(result.body.source, 'stale-proposal-clarification', prompt);
   }
   assert.equal(calls.length, 0);
 });
 
-test('app-written chat replies follow the person’s ти from recent messages', async () => {
+test('legacy client: app-written chat replies follow the person’s ти from recent messages', async () => {
   mockProvider(() => success({ reply: 'Should not be called.', taskUpdates: [] }));
   const conversation = [{ role: 'user', content: '[13.10 09:00] Слухай, перенеси звіт на завтра' }, { role: 'assistant', content: 'Підготував пропозицію.' }];
-  const stale = await chat({ prompt: 'Так', lastAssistantProposalStatus: 'stale', conversation });
+  const stale = await chat({ prompt: 'Так', pendingChanges: { tasks: [lottieTask] }, lastAssistantProposalStatus: 'stale', conversation });
   assert.equal(stale.body.source, 'stale-proposal-clarification');
   assert.match(stale.body.reply, /Повтори, будь ласка, сам запит або назви/);
-  const staleVy = await chat({ prompt: 'Так', lastAssistantProposalStatus: 'stale' });
+  const staleVy = await chat({ prompt: 'Так', pendingChanges: { tasks: [lottieTask] }, lastAssistantProposalStatus: 'stale' });
   assert.match(staleVy.body.reply, /Повторіть, будь ласка, сам запит або назвіть/, 'no signal: "ви"');
   assert.equal(calls.length, 0);
 });
@@ -940,240 +963,215 @@ test('a rejected thinking level is remembered only for that model and level', as
   assert.equal(low.metrics.thinking, 'LOW');
 });
 
-const turnText = (body: any) => body.contents.flatMap((content: any) => content.parts.map((part: any) => part.text ?? '')).join('\n');
-
-test('missed-start work correction survives the screenshot clarification sequence in JSON and tools', async () => {
-  const cases = [
-    {
-      lang: 'uk', title: 'Робота над анімацією',
-      original: 'зміни таймер на 3 години бо я забув його включити',
-      clarification: 'Про анімацію',
-      assistant: 'Я бачу активне завдання «Робота над анімацією» у вкладці «Фріланс». Ви хочете змінити час у таймері на 3 години чи продовжити роботу над наступними кроками?',
-      repeated: 'зміни таймер на 3 години',
-    },
-    {
-      lang: 'en', title: 'Animation work',
-      original: 'change the timer to 3 hours because I forgot to start the timer',
-      clarification: 'About animation',
-      assistant: 'I see the active task «Animation work» in Freelance. Would you like to change its timer to 3 hours or continue the next steps?',
-      repeated: 'change the timer to 3 hours',
-    },
-  ];
-  for (const tools of [true, false]) {
-    for (const example of cases) {
-      const run = async () => {
-        mockProvider((_model, body) => {
-          const schema = tools
-            ? body.tools[0].functionDeclarations.find((item: any) => item.name === 'propose_update_task').parameters
-            : body.generationConfig.responseSchema.properties.taskUpdates.items;
-          assert.equal(schema.properties.recordedWorkSeconds.minimum, 0);
-          assert.equal(schema.properties.recordedWorkSeconds.maximum, 6000059);
-          assert.match(body.systemInstruction.parts[0].text, /ROUTE task_command/);
-          return success({ reply: 'Proposal: total recorded work is 3 hours.', taskUpdates: [{ id: 'animation', recordedWorkSeconds: 10800 }] });
-        });
-        const result = await chat({
-          lang: example.lang, prompt: example.repeated,
-          conversation: [
-            { role: 'user', content: example.original },
-            { role: 'assistant', content: 'Please specify the task.' },
-            { role: 'user', content: example.clarification },
-            { role: 'assistant', content: example.assistant },
-          ],
-          currentTasks: [
-            { id: 'animation', title: example.title, phase: 'freelance', done: false, timerMode: 'stopwatch', timeSpentSeconds: 600 },
-            { id: 'unrelated', title: 'Read a book', phase: 'personal', done: false },
-          ],
-          tabs: ['freelance', 'personal'],
-        });
-        assert.equal(result.status, 200, `${example.lang}, tools=${tools}`);
-        assert.equal(calls.length, 1, 'the resolved target must not trigger clarification or fallback');
-        assert.deepEqual(result.body.taskUpdates, [{ id: 'animation', recordedWorkSeconds: 10800 }]);
-        assert.deepEqual(result.body.tasks, []);
-        assert.deepEqual(result.body.taskDeletions, []);
-      };
-      if (tools) await run();
-      else await withToolsOff(run);
-    }
-  }
+test('agent recorded-work correction retains values and task context from recent clarification turns', async () => {
+  const original = 'зміни таймер на 3 години бо я забув його включити';
+  mockProvider((_model, body) => {
+    const text = body.contents.flatMap((content: any) => content.parts.map((part: any) => part.text ?? '')).join('\n');
+    assert.match(text, /зміни таймер на 3 години бо я забув його включити/);
+    assert.match(text, /Про анімацію/);
+    if (calls.length === 1) return agentResponse([agentCall('find_tasks', { query: 'анімація' })]);
+    if (calls.length === 2) return agentResponse([agentCall('set_recorded_time', { taskId: 'animation', minutes: 180 })]);
+    assert.equal(responsesIn(body)[0].ok, true);
+    return agentResponse([{ text: 'Зараховано 3 години роботи.' }]);
+  });
+  const result = await chat({ prompt: 'зміни таймер на 3 години', conversation: [
+    { role: 'user', content: original }, { role: 'assistant', content: 'Уточни завдання.' },
+    { role: 'user', content: 'Про анімацію' }, { role: 'assistant', content: 'Йдеться про анімацію.' },
+  ], currentTasks: [{ id: 'animation', title: 'Робота над анімацією', timeSpentSeconds: 600 }] });
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.body.agent.actions.map((applied: any) => applied.action), [{ type: 'set_recorded_time', taskId: 'animation', minutes: 180 }]);
+  assert.equal(calls.length, 3);
 });
 
-test('ordinary countdown requests cannot authorize provider-invented recorded work', async () => {
-  for (const tools of [true, false]) {
-    const run = async () => {
-      mockProvider(() => success({ reply: 'Changed recorded work.', taskUpdates: [{ id: 'animation', recordedWorkSeconds: 10800 }] }));
-      const result = await chat({ prompt: 'Зміни таймер для анімації на 3 години', currentTasks: [
-        { id: 'animation', title: 'Робота над анімацією', timerMode: 'stopwatch', done: false },
-      ] });
-      assert.equal(result.status, 200);
-      assert.deepEqual(result.body.taskUpdates, []);
-      assert.deepEqual(result.body.tasks, []);
-    };
-    if (tools) await run();
-    else await withToolsOff(run);
-  }
-});
-
-test('retrospective timer requests cannot silently become future countdown proposals', async () => {
-  for (const tools of [true, false]) {
-    const run = async () => {
-      mockProvider(() => success({ reply: 'Proposed countdown.', taskUpdates: [{ id: 'animation', timerMode: 'countdown', countdownDurationSeconds: 10800 }] }));
-      const result = await chat({ prompt: 'зміни таймер для анімації на 3 години бо я забув його включити', currentTasks: [
-        { id: 'animation', title: 'Робота над анімацією', timerMode: 'stopwatch', done: false },
-      ] });
-      assert.equal(result.status, 200);
-      assert.deepEqual(result.body.taskUpdates, []);
-      assert.deepEqual(result.body.tasks, []);
-    };
-    if (tools) await run();
-    else await withToolsOff(run);
-  }
-});
-
-test('recorded-work proposal boundaries survive both transports as absolute totals', async () => {
-  for (const tools of [true, false]) {
-    for (const recordedWorkSeconds of [0, 6000059]) {
-      const run = async () => {
-        mockProvider(() => success({ reply: 'Proposed corrected total.', taskUpdates: [{ id: 'animation', recordedWorkSeconds }] }));
-        const result = await chat({ prompt: `Correct recorded time for Animation to ${recordedWorkSeconds} seconds`, lang: 'en', currentTasks: [
-          { id: 'animation', title: 'Animation', timerMode: 'stopwatch', timeSpentSeconds: 900, done: false },
-        ] });
-        assert.equal(result.status, 200);
-        assert.deepEqual(result.body.taskUpdates, [{ id: 'animation', recordedWorkSeconds }], 'existing time must not be added to the requested replacement total');
-      };
-      if (tools) await run();
-      else await withToolsOff(run);
-    }
-  }
-});
-
-test('invalid or mixed recorded-work proposals fail atomically in JSON and tools', async () => {
-  const invalidUpdates = [
-    { recordedWorkSeconds: -1 },
-    { recordedWorkSeconds: 6000060 },
-    { recordedWorkSeconds: 1.5 },
-    { recordedWorkSeconds: '10800' },
-    { recordedWorkSeconds: 10800, timerMode: 'stopwatch' },
-    { recordedWorkSeconds: 10800, countdownDurationSeconds: 10800 },
-    { recordedWorkSeconds: 10800, timerAction: 'start' },
-    { recordedWorkSeconds: 10800, schedule: { startAt: '2026-10-20T10:00:00+03:00', recurrence: 'once', timeZone: 'Europe/Kyiv', leadMinutes: 5 } },
-  ];
-  for (const tools of [true, false]) {
-    for (const update of invalidUpdates) {
-      const run = async () => {
-        mockProvider(() => success({ reply: 'Invalid correction.', taskUpdates: [{ id: 'animation', ...update }] }));
-        const result = await chat({ prompt: 'Зарахуй 3 години роботи для анімації', currentTasks: [
-          { id: 'animation', title: 'Робота над анімацією', timerMode: 'stopwatch', done: false },
-        ] });
-        assert.equal(result.status, 502, JSON.stringify(update));
-        assert.equal(result.body.code, 'INVALID_AI_RESPONSE');
-        assert.deepEqual(result.body.taskUpdates, []);
-        assert.deepEqual(result.body.tasks, []);
-      };
-      if (tools) await run();
-      else await withToolsOff(run);
-    }
-  }
-});
-
-test('future scheduled tasks cannot receive retrospective recorded work', async () => {
-  for (const tools of [true, false]) {
-    const run = async () => {
-      mockProvider(() => success({ reply: 'Invalid future correction.', taskUpdates: [{ id: 'animation', recordedWorkSeconds: 10800 }] }));
-      const result = await chat({ prompt: 'Зарахуй 3 години роботи для анімації', currentTasks: [
-        { id: 'animation', title: 'Робота над анімацією', timerMode: 'stopwatch', done: false, scheduledPending: true,
-          scheduledFor: Date.parse('2026-10-20T10:00:00+03:00') },
-      ] });
-      assert.equal(result.status, 502);
-      assert.equal(result.body.code, 'INVALID_AI_RESPONSE');
-      assert.deepEqual(result.body.taskUpdates, []);
-    };
-    if (tools) await run();
-    else await withToolsOff(run);
-  }
-});
-
-test('a free message gets general coaching with proposal-only tools, not a personal interview or a strategy', async () => {
+test('agent system distinguishes countdown duration from retrospective recorded work', async () => {
   mockProvider((_model, body) => {
     const system = body.systemInstruction.parts[0].text;
-    assert.match(system, /ROUTE general/);
-    assert.doesNotMatch(system, /PERSONAL_DISCOVERY RULES/);
-    // Changes can only be proposed through the propose_* tools; there is no JSON strategy/task schema.
-    assert.equal(body.generationConfig?.responseSchema, undefined);
-    assert.ok(body.tools[0].functionDeclarations.some((declaration: any) => declaration.name === 'propose_create_task'));
-    assert.deepEqual(body.generationConfig.thinkingConfig, { thinkingLevel: 'MINIMAL' });
-    assert.match(turnText(body), /REQUEST ROUTE: general/);
-    assert.doesNotMatch(turnText(body), /PERSONAL_DISCOVERY/);
-    return success({ reply: 'Спробуй почати з короткого блоку без сповіщень.', tasks: [{ title: 'Короткий блок фокусу', phase: 'work', priority: 2, steps: 0 }], strategy: { status: 'ready', narrative: 'FORBIDDEN' } });
+    assert.match(system, /countdown/i);
+    assert.match(system, /зарахуй|забув запустити|вже відпрацював/);
+    if (calls.length === 1) return agentResponse([agentCall('find_tasks', { query: 'анімація' })]);
+    if (calls.length === 2) return agentResponse([agentCall('set_countdown', { taskId: 'animation', minutes: 180, start: false })]);
+    return agentResponse([{ text: 'Відлік змінено на 3 години.' }]);
   });
-  const result = await chat({ prompt: 'Як мені зосередитись після обіду?', strategyContext: { goals: [] }, currentTasks: [{ id: 't', title: 'Study', done: false }], tabs: ['work'] });
+  const result = await chat({ prompt: 'Зміни таймер для анімації на 3 години', currentTasks: [{ id: 'animation', title: 'Робота над анімацією', timerMode: 'countdown', countdownDurationSeconds: 7200, timeSpentSeconds: 600 }] });
   assert.equal(result.status, 200);
-  assert.equal(calls.length, 1);
-  assert.match(result.body.reply, /короткого блоку/);
-  // A proposed new task awaits the person's Apply; no existing task is touched and no strategy is set.
-  assert.deepEqual(result.body.tasks.map((task: any) => task.title), ['Короткий блок фокусу']);
-  assert.deepEqual(result.body.taskUpdates, []);
-  assert.deepEqual(result.body.taskDeletions, []);
-  assert.equal(result.body.strategy, undefined);
-  assert.doesNotMatch(JSON.stringify(result.body), /FORBIDDEN/);
+  assert.equal(result.body.agent.actions[0].action.type, 'set_countdown');
+  assert.equal(result.body.agent.actions[0].action.minutes, 180);
 });
 
-test('chat history is sent as real alternating turns with the dynamic request last', async () => {
+test('agent task creation uses a forty-minute countdown in minutes', async () => {
+  mockProvider(() => calls.length === 1 ? agentResponse([agentCall('create_task', {
+    title: lottieTask.title, phase: 'focus', timerMinutes: 40,
+  })]) : agentResponse([{ text: 'Створено завдання з відліком 40 хвилин.' }]));
+  const result = await chat({ prompt: lottiePrompt, tabs: ['focus'] });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.agent.actions[0].action.type, 'create_task');
+  assert.equal(result.body.agent.actions[0].action.timerMinutes, 40);
+  assert.equal(result.body.agent.actions[0].createdIds.length, 1);
+  assert.deepEqual(result.body.tasks, []);
+});
+
+test('agent recorded-work corrections preserve zero and absolute totals', async () => {
+  for (const seconds of [0, 6000059]) {
+    mockProvider(() => calls.length === 1 ? agentResponse([agentCall('find_tasks', { query: 'Animation' })])
+      : calls.length === 2 ? agentResponse([agentCall('set_recorded_time', { taskId: 'animation', minutes: seconds / 60 })])
+      : agentResponse([{ text: 'Recorded total corrected.' }]));
+    const result = await chat({ prompt: 'Correct recorded time for Animation to ' + seconds + ' seconds', lang: 'en', currentTasks: [{ id: 'animation', title: 'Animation', timeSpentSeconds: 900 }] });
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.body.agent.actions.map((applied: any) => applied.action), [{ type: 'set_recorded_time', taskId: 'animation', minutes: seconds / 60 }]);
+  }
+});
+
+test('invalid or mixed agent arguments return errors without partial actions', async () => {
+  for (const args of [
+    { taskId: 'animation', minutes: -1 }, { taskId: 'animation', minutes: '180' },
+    { taskId: 'animation', minutes: 180, timerMode: 'stopwatch' },
+    { taskId: 'animation', minutes: 180, start: true },
+  ]) {
+    mockProvider((_model, body) => {
+      if (calls.length === 1) return agentResponse([agentCall('set_recorded_time', args)]);
+      assert.equal(responsesIn(body)[0].ok, false);
+      assert.equal(responsesIn(body)[0].code, 'invalid');
+      return agentResponse([{ text: 'Аргументи не вдалося застосувати.' }]);
+    });
+    const result = await chat({ currentTasks: [{ id: 'animation', title: 'Animation' }] });
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.body.agent.actions, []);
+    assert.equal(calls.length, 2);
+  }
+});
+
+test('future scheduled agent tasks reject recorded work through a conflict response', async () => {
+  mockProvider((_model, body) => {
+    if (calls.length === 1) return agentResponse([agentCall('find_tasks', { query: 'анімація' })]);
+    if (calls.length === 2) return agentResponse([agentCall('set_recorded_time', { taskId: 'animation', minutes: 180 })]);
+    assert.equal(responsesIn(body)[0].ok, false);
+    assert.equal(responsesIn(body)[0].code, 'conflict');
+    return agentResponse([{ text: 'Заплановане завдання ще не почалося.' }]);
+  });
+  const result = await chat({ prompt: 'Зарахуй 3 години роботи для анімації', currentTasks: [{
+    id: 'animation', title: 'Робота над анімацією', scheduledPending: true, scheduledFor: Date.parse('2026-10-20T10:00:00+03:00'),
+  }] });
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.body.agent.actions, []);
+});
+
+test('a free message gets agent coaching without an automatic personal interview', async () => {
+  mockProvider((_model, body) => {
+    assert.doesNotMatch(body.systemInstruction.parts[0].text, /PERSONAL_DISCOVERY RULES/);
+    assert.equal(body.generationConfig?.responseSchema, undefined);
+    assert.ok(body.tools[0].functionDeclarations.some((declaration: any) => declaration.name === 'open_personal_coaching'));
+    assert.ok(body.tools[0].functionDeclarations.some((declaration: any) => declaration.name === 'find_tasks'));
+    return agentResponse([{ text: 'Спробуй почати з короткого блоку без сповіщень.' }]);
+  });
+  const result = await chat({ prompt: 'Як мені зосередитись після обіду?', strategyContext: { goals: [] }, currentTasks: [{ id: 't', title: 'Study' }] });
+  assert.equal(result.status, 200);
+  assert.equal(calls.length, 1);
+  assert.match(result.body.text, /короткого блоку/);
+  assert.deepEqual(result.body.agent.actions, []);
+  assert.equal(result.body.strategy, undefined);
+});
+
+test('agent history is sent as real alternating turns with the current request last', async () => {
   mockProvider((_model, body) => {
     assert.deepEqual(body.contents.map((turn: any) => turn.role), ['user', 'model', 'user', 'model', 'user']);
     assert.equal(body.contents[1].parts[0].text, 'HISTORY-WELCOME');
     assert.deepEqual(body.contents[2].parts.map((part: any) => part.text), ['HISTORY-A', 'HISTORY-B']);
     const last = body.contents.at(-1).parts.map((part: any) => part.text).join('\n');
-    assert.match(last, /^REQUEST CONTEXT/);
-    assert.match(last, /CURRENT USER MESSAGE:\nДякую, це допомогло$/);
+    assert.match(last, /Дякую, це допомогло/);
     assert.doesNotMatch(last, /HISTORY-/);
-    return success({ reply: 'Радий допомогти.' });
+    return agentResponse([{ text: 'Радий допомогти.' }]);
   });
   const result = await chat({ prompt: 'Дякую, це допомогло', conversation: [
-    { role: 'assistant', content: 'HISTORY-WELCOME' }, { role: 'user', content: 'HISTORY-A' }, { role: 'user', content: 'HISTORY-B' }, { role: 'assistant', content: 'HISTORY-C' },
+    { role: 'assistant', content: 'HISTORY-WELCOME' }, { role: 'user', content: 'HISTORY-A' },
+    { role: 'user', content: 'HISTORY-B' }, { role: 'assistant', content: 'HISTORY-C' },
   ] });
   assert.equal(result.status, 200);
   assert.equal(calls.length, 1);
 });
 
-test('chat system instructions are static per route and read-only routes omit the action contract', async () => {
-  const systems: Record<string, string[]> = {};
+test('agent policy stays stable while explicit analysis keeps its read-only contract', async () => {
+  const systems: string[] = [];
   mockProvider((_model, body) => {
-    const route = /REQUEST ROUTE: (\w+)/.exec(turnText(body))![1];
-    (systems[route] ||= []).push(body.systemInstruction.parts[0].text);
-    return success({ reply: 'Готово.', tasks: [], taskUpdates: [] });
+    systems.push(body.systemInstruction.parts[0].text);
+    if (body.tools?.[0].functionDeclarations.some((declaration: any) => declaration.name === 'find_tasks')) return agentResponse([{ text: 'Готово.' }]);
+    assert.doesNotMatch(body.systemInstruction.parts[0].text, /APPLICATION ACTION CONTRACT/);
+    return success({ reply: 'Огляд готовий.', tasks: [], taskUpdates: [] });
   });
-  const requests = [
-    { prompt: 'Як запустити таймер?', clientClock: { now: '2026-10-12T09:00:00Z', timeZone: 'Europe/Kyiv' }, currentTasks: [{ id: 'a', title: 'UNIQUE-A' }] },
-    { prompt: 'Як працює меню?', clientClock: { now: '2026-11-01T20:00:00Z', timeZone: 'UTC' }, lang: 'en', currentTasks: [{ id: 'b', title: 'UNIQUE-B' }] },
-    { prompt: 'Проаналізуй поточні завдання', intent: 'analysis', currentTasks: [{ id: 'c', title: 'UNIQUE-C' }] },
-    { prompt: 'Видали завдання UNIQUE-D', currentTasks: [{ id: 'd', title: 'UNIQUE-D' }] },
-  ];
-  for (const request of requests) assert.equal((await chat(request)).status, 200);
-  assert.equal(systems.help.length, 2);
-  assert.equal(systems.help[0], systems.help[1], 'same route, different data: byte-identical system prefix');
-  for (const text of [...systems.help, ...systems.workspace_analysis]) {
-    assert.doesNotMatch(text, /APPLICATION ACTION CONTRACT|strategy\.actions|UNIQUE-|2026-/);
-  }
-  assert.match(systems.task_command[0], /APPLICATION ACTION CONTRACT/);
-  assert.doesNotMatch(systems.task_command[0], /UNIQUE-D|Видали/);
+  assert.equal((await chat({ prompt: 'Як запустити таймер?', clientClock: { now: '2026-10-12T09:00:00Z', timeZone: 'Europe/Kyiv' }, currentTasks: [{ id: 'a', title: 'UNIQUE-A' }] })).status, 200);
+  assert.equal((await chat({ prompt: 'Як працює меню?', clientClock: { now: '2026-11-01T20:00:00Z', timeZone: 'UTC' }, lang: 'en', currentTasks: [{ id: 'b', title: 'UNIQUE-B' }] })).status, 200);
+  assert.equal((await chat({ prompt: 'Проаналізуй поточні завдання', intent: 'analysis' })).status, 200);
+  const prefix = (system: string) => system.split('TASK TEMPORAL CONTEXT:')[0];
+  assert.equal(prefix(systems[0]), prefix(systems[1]));
+  assert.doesNotMatch(prefix(systems[0]), /UNIQUE-|2026-/);
 });
 
-test('each workspace task is sent once with its temporal fields merged in', async () => {
+test('agent prompt stays compact and reads full temporal task data through tools', async () => {
   mockProvider((_model, body) => {
-    const text = turnText(body);
-    assert.equal(text.split('UNIQUE-TASK-TITLE').length - 1, 2, 'once in the workspace record, once in the user message');
-    const context = JSON.parse(/WORKSPACE CONTEXT:\n([\s\S]+?)\n\nCURRENT USER MESSAGE:/.exec(text)![1]);
-    const [task] = context.activeTasks;
-    assert.deepEqual(task.plannedDay, { date: '2026-10-12', relation: 'today', weekday: 'Monday', daysFromToday: 0, week: 'this' });
-    assert.ok(task.statuses.includes('planned_today_unfinished'));
-    assert.equal(task.plannedDate, undefined);
-    const temporal = JSON.parse(/TASK TEMPORAL CONTEXT: (.+)/.exec(text)![1]);
-    assert.equal(temporal.tasks, undefined);
-    assert.equal(temporal.clock.localDate, '2026-10-12');
-    return success({ reply: 'Пропоную таймер.', taskUpdates: [{ id: 't1', timerMode: 'countdown', countdownDurationSeconds: 1500 }] });
+    if (calls.length === 1) {
+      const text = body.systemInstruction.parts[0].text + '\n' + body.contents.flatMap((content: any) => content.parts.map((part: any) => part.text ?? '')).join('\n');
+      assert.equal(text.split('PRIVATE-DETAILED-NOTE').length, 1);
+      assert.match(text, /2026-10-12/);
+      assert.match(text, /UNIQUE-TASK-TITLE/);
+      return agentResponse([agentCall('get_task', { taskId: 't1' })]);
+    }
+    const response = responsesIn(body)[0];
+    assert.equal(response.ok, true);
+    assert.match(JSON.stringify(response), /PRIVATE-DETAILED-NOTE/);
+    assert.match(JSON.stringify(response), /2026-10-12/);
+    return agentResponse([{ text: 'Примітку й дату прочитано.' }]);
   });
-  const result = await chat({ prompt: 'Додай таймер на 25 хвилин до завдання UNIQUE-TASK-TITLE', clientClock: { now: '2026-10-12T09:00:00Z', timeZone: 'Europe/Kyiv' },
-    currentTasks: [{ id: 't1', title: 'UNIQUE-TASK-TITLE', done: false, plannedDate: '2026-10-12' }] });
+  const result = await chat({ prompt: 'Прочитай моє завдання', clientClock: { now: '2026-10-12T09:00:00Z', timeZone: 'Europe/Kyiv' }, currentTasks: [{ id: 't1', title: 'UNIQUE-TASK-TITLE', plannedDate: '2026-10-12', note: 'PRIVATE-DETAILED-NOTE' }] });
   assert.equal(result.status, 200);
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 2);
+});
+
+
+test('function responses follow the unchanged model turn including thought signatures and call ids', async () => {
+  const modelContent = {
+    role: 'model',
+    parts: [
+      { text: 'I should resolve both tasks.', thought: true },
+      { functionCall: { name: 'get_task', args: { taskId: 'first' }, id: 'call-1' }, thoughtSignature: 'c2lnbmF0dXJl' },
+      { functionCall: { name: 'get_task', args: { taskId: 'second' }, id: 'call-2' } },
+    ],
+  };
+  const responses = [{ role: 'user', parts: [
+    { functionResponse: { name: 'get_task', id: 'call-1', response: { ok: true, task: { id: 'first' } } } },
+    { functionResponse: { name: 'get_task', id: 'call-2', response: { ok: false, code: 'not_found', error: 'Task not found.' } } },
+  ] }];
+  mockProvider((_model, body) => {
+    if (calls.length === 1) return json({ candidates: [{ content: modelContent, finishReason: 'STOP' }] });
+    assert.deepEqual(body.contents.map((content: any) => content.role), ['user', 'model', 'user']);
+    assert.deepEqual(body.contents[1], modelContent);
+    assert.deepEqual(body.contents[2], responses[0]);
+    return json({ candidates: [{ content: { role: 'model', parts: [{ text: 'One task found.' }] }, finishReason: 'STOP' }] });
+  });
+  const ai = new GoogleGenAI({ apiKey: 'test-only-fake-key' });
+  const config = { tools: [{ functionDeclarations: [{ name: 'get_task', description: 'Read a task.',
+    parameters: { type: 'OBJECT', properties: { taskId: { type: 'STRING' } }, required: ['taskId'] } }] }] };
+  const first = await generateGeminiWithFallback({ ai, contents: [{ role: 'user', parts: [{ text: 'Find both tasks.' }] }],
+    config, selectedModel: 'gemini-3.8-flash', fallbackModels: [] });
+  assert.equal(first.text, '', 'thought text is never visible');
+  assert.deepEqual(first.functionCalls, [
+    { name: 'get_task', args: { taskId: 'first' }, id: 'call-1' },
+    { name: 'get_task', args: { taskId: 'second' }, id: 'call-2' },
+  ]);
+  assert.deepEqual(first.modelContent, modelContent);
+  const second = await generateGeminiWithFallback({ ai,
+    contents: [{ role: 'user', parts: [{ text: 'Find both tasks.' }] }, first.modelContent, ...responses],
+    config, selectedModel: 'gemini-3.8-flash', fallbackModels: [] });
+  assert.equal(second.text, 'One task found.');
+  assert.equal(calls.length, 2);
+});
+
+test('scripted provider outputs retain function call ids when synthesized as a model turn', () => {
+  const response = { text: 'Checking.', functionCalls: [{ name: 'get_task', args: { taskId: 'one' }, id: 'call-1' }] };
+  assert.deepEqual(responseOutput(response), { text: response.text, functionCalls: response.functionCalls });
+  assert.deepEqual(responseModelContent(response), { role: 'model', parts: [
+    { text: 'Checking.' }, { functionCall: response.functionCalls[0] },
+  ] });
+  const parts = [{ functionCall: response.functionCalls[0], thoughtSignature: 'signed-part' }];
+  const normalized = responseModelContent({ candidates: [{ content: { parts } }] });
+  assert.equal(normalized.role, 'model');
+  assert.equal(normalized.parts, parts);
 });

@@ -62,7 +62,7 @@ export function pauseTaskTimer(task: PSTask, now = Date.now()): PSTask {
 }
 
 /** Resumes a paused session; an expired countdown starts a fresh full interval. */
-export function startTaskTimer(task: PSTask, now = Date.now()): PSTask {
+export function startTaskTimer(task: PSTask, now = Date.now(), newId: () => string = () => crypto.randomUUID()): PSTask {
   const mode = getTaskTimerMode(task);
   if (mode === 'none' || task.done || (mode === 'countdown' && countdownBudget(task) === undefined)) return task;
   const remaining = getTaskRemainingSeconds(task, now);
@@ -73,7 +73,7 @@ export function startTaskTimer(task: PSTask, now = Date.now()): PSTask {
     timerRunning: true,
     startedAt: Number.isFinite(task.startedAt) ? task.startedAt : now,
     timerStartedAt: now,
-    timerSessionId: crypto.randomUUID(),
+    timerSessionId: newId(),
     timerStepId: activeTaskStepId(paused),
     autoPausedOverdue: false,
     ...(remaining === undefined ? {} : {
@@ -83,7 +83,7 @@ export function startTaskTimer(task: PSTask, now = Date.now()): PSTask {
 }
 
 /** Banks any current session before starting the chosen countdown. */
-export function configureTaskCountdown(task: PSTask, durationSeconds: number, now = Date.now()): PSTask {
+export function configureTaskCountdown(task: PSTask, durationSeconds: number, now = Date.now(), newId: () => string = () => crypto.randomUUID()): PSTask {
   const duration = seconds(durationSeconds);
   if (!duration) throw new RangeError('Countdown duration must be at least one second');
   if (task.done) return task;
@@ -95,7 +95,7 @@ export function configureTaskCountdown(task: PSTask, durationSeconds: number, no
     countdownRemainingSeconds: duration,
     timerRunning: true,
     timerStartedAt: now,
-    timerSessionId: crypto.randomUUID(),
+    timerSessionId: newId(),
     timerStepId: activeTaskStepId(task),
     startedAt: Number.isFinite(task.startedAt) ? task.startedAt : now,
     autoPausedOverdue: false,
@@ -111,7 +111,7 @@ export function clearTaskCountdown(task: PSTask, now = Date.now()): PSTask {
 }
 
 /** Extend the remaining budget without erasing work or starting a paused task. */
-export function extendTaskCountdown(task: PSTask, extraSeconds: number, now = Date.now()): PSTask {
+export function extendTaskCountdown(task: PSTask, extraSeconds: number, now = Date.now(), newId: () => string = () => crypto.randomUUID()): PSTask {
   if (task.done || getTaskTimerMode(task) !== 'countdown' || !Number.isInteger(extraSeconds) || extraSeconds <= 0) return task;
   const remaining = getTaskRemainingSeconds(task, now);
   if (remaining === undefined || seconds(task.countdownDurationSeconds) + extraSeconds > 86400) return task;
@@ -123,7 +123,7 @@ export function extendTaskCountdown(task: PSTask, extraSeconds: number, now = Da
     countdownRemainingSeconds: remaining + extraSeconds,
     timerRunning: running,
     timerStartedAt: running ? now : undefined,
-    timerSessionId: running ? crypto.randomUUID() : undefined,
+    timerSessionId: running ? newId() : undefined,
     timerStepId: running ? activeTaskStepId(paused) : undefined,
     autoPausedOverdue: false,
   };

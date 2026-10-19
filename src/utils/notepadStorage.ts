@@ -111,14 +111,19 @@ export const restoreNotepadNote = (notes: NotepadNote[], note: NotepadNote): Not
   notes.some((current) => current.id === note.id) ? notes : [note, ...notes];
 
 // Each tab appends its own atomic record instead of replacing a shared snapshot.
-export type NoteOperation = { id: string; clock: number; noteId: string; before: NotepadNote | null; after: NotepadNote | null };
+export type NoteChange = { noteId: string; before: NotepadNote | null; after: NotepadNote | null };
+export type NoteOperation = { id: string; clock: number } & NoteChange;
+export type NoteBatchOperation = { id: string; clock: number; changes: NoteChange[] };
+const isNoteChange = (change: NoteChange): boolean => !!change && typeof change.noteId === 'string' && !!change.noteId
+  && (change.before === null || isNote(change.before) && change.before.id === change.noteId)
+  && (change.after === null || isNote(change.after) && change.after.id === change.noteId);
 export const notesOperationPrefix = (owner: string | null) => `${ownedNotesKey(owner)}:operation:`;
 type JournalStorage = NoteStorage & Pick<Storage, 'key' | 'length'>;
 const sameNote = (a: NotepadNote | null | undefined, b: NotepadNote | null | undefined) => canonical(a ?? null) === canonical(b ?? null);
 
 export function loadNotepadJournal(storage: JournalStorage, owner: string | null, fallback: NotepadNote[]): NotepadLoadResult & { clock: number } {
   const base = loadOwnedNotepadNotes(storage, owner, fallback);
-  const operations: NoteOperation[] = [];
+  const operations: (NoteOperation | NoteBatchOperation)[] = [];
   try {
     if (base.canPersist && storage.getItem(ownedNotesKey(owner)) === null) {
       const raw = JSON.stringify(base.notes);
@@ -131,24 +136,27 @@ export function loadNotepadJournal(storage: JournalStorage, owner: string | null
       if (!key?.startsWith(prefix)) continue;
       const raw = storage.getItem(key);
       if (raw === null) continue;
-      const op = JSON.parse(raw) as NoteOperation;
+      const op = JSON.parse(raw) as NoteOperation | NoteBatchOperation;
       if (!op || typeof op.id !== 'string' || key !== prefix + op.id || !Number.isSafeInteger(op.clock)
-        || op.clock < 0 || typeof op.noteId !== 'string' || !op.noteId
-        || (op.before !== null && (!isNote(op.before) || op.before.id !== op.noteId))
-        || (op.after !== null && (!isNote(op.after) || op.after.id !== op.noteId))) throw new Error('Invalid note operation');
+        || op.clock < 0 || ('changes' in op
+          ? !Array.isArray(op.changes) || !op.changes.length || !op.changes.every(isNoteChange)
+            || new Set(op.changes.map(change => change.noteId)).size !== op.changes.length
+          : !isNoteChange(op))) throw new Error('Invalid note operation');
       operations.push(op);
     }
     operations.sort((a, b) => a.clock - b.clock || a.id.localeCompare(b.id));
     const notes = new Map(base.notes.map(note => [note.id, note]));
-    for (const op of operations) {
-      const current = notes.get(op.noteId);
-      if (sameNote(current, op.before)) {
-        if (op.after) notes.set(op.noteId, op.after);
-        else notes.delete(op.noteId);
-      } else if (op.after && !sameNote(current, op.after)) {
-        // Preserve both concurrent edits. Stale deletions leave the newer note intact.
-        const conflictId = `${op.noteId}:conflict:${op.id}`;
-        notes.set(conflictId, { ...op.after, id: conflictId });
+    for (const operation of operations) {
+      for (const op of 'changes' in operation ? operation.changes : [operation]) {
+        const current = notes.get(op.noteId);
+        if (sameNote(current, op.before)) {
+          if (op.after) notes.set(op.noteId, op.after);
+          else notes.delete(op.noteId);
+        } else if (op.after && !sameNote(current, op.after)) {
+          // Preserve both concurrent edits. Stale deletions leave the newer note intact.
+          const conflictId = `${op.noteId}:conflict:${operation.id}`;
+          notes.set(conflictId, { ...op.after, id: conflictId });
+        }
       }
     }
     return { ...base, notes: [...notes.values()].sort((a, b) => b.createdAt - a.createdAt), clock: operations.length ? operations[operations.length - 1].clock : 0 };
@@ -157,7 +165,7 @@ export function loadNotepadJournal(storage: JournalStorage, owner: string | null
   }
 }
 
-export function appendNotepadOperation(storage: JournalStorage, owner: string | null, operation: NoteOperation): void {
+export function appendNotepadOperation(storage: JournalStorage, owner: string | null, operation: NoteOperation | NoteBatchOperation): void {
   const key = notesOperationPrefix(owner) + operation.id;
   const raw = JSON.stringify(operation);
   storage.setItem(key, raw);

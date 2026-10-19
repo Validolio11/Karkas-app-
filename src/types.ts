@@ -1,3 +1,4 @@
+import type { AgentAction } from './utils/aiAgentActions';
 import type { WorkspaceSyncOperation } from './utils/syncOperations';
 
 export interface TaskTab {
@@ -164,7 +165,23 @@ export interface AIDeletedTaskRef {
   deletionReason?: 'accidental' | 'cancelled';
 }
 
+export type AgentView = Extract<AgentAction, { type: 'open_view' | 'reveal_task' }>;
+export interface AppliedAgentAction {
+  action: AgentAction;
+  summary: { uk: string; en: string };
+  changedTaskIds: string[];
+  createdIds?: string[];
+}
+export interface AgentResponse {
+  actions: AppliedAgentAction[];
+  pendingConfirmations: AgentAction[];
+  clarification?: { question: string; options: { label: string; message: string }[] };
+  view?: AgentView;
+  handoff?: 'personal';
+}
+
 export interface AIResponse {
+  agent?: AgentResponse;
   /** Server decision about the current unapplied draft; prose alone cannot cancel it. */
   proposalDisposition?: 'cancelled' | 'clarification';
   strategy?: AIStrategyResponse;

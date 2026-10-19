@@ -12,7 +12,10 @@ import {
   AIDeletedTaskRef,
   PersonalStrategyProfile,
   AIIntent,
+  NotepadNote,
 } from '../types';
+import type { AgentWorkspace } from '../utils/aiAgentActions';
+import { buildAgentWorkspaceRequest, describeAgentConfirmation, singlePendingAgentConfirmation, type AgentApplyOptions, type AgentApplyResult } from './aiAgentClient';
 import { sound } from '../utils/audio';
 import { createVoiceDictation, type VoicePhase } from '../utils/voiceDictation';
 import { createVoiceDraft } from '../utils/voiceDraft';
@@ -59,6 +62,10 @@ interface AIAssistantSheetProps {
   onClose: () => void;
   currentTasks: PSTask[];
   deletedTasks?: DeletedTask[];
+  notes?: NotepadNote[];
+  onGetAgentWorkspace?: () => AgentWorkspace | null;
+  onApplyAgentActions?: (input: AgentApplyOptions & { actions: NonNullable<AIResponse['agent']>['actions'] }) => Promise<AgentApplyResult>;
+  onUndoAgentActions?: (token: string) => Promise<{ undone: boolean; conflicts: string[] }>;
   stats?: WorkflowStats;
   adaptiveProfile?: AdaptiveProfile;
   initialPrompt?: string;
@@ -123,6 +130,47 @@ const parseChatOptions = (content: string): { body: string; options: AIChatOptio
   }
 
   return { body: bodyLines.join('\n').replace(/\n{3,}/g, '\n\n').trim(), options };
+};
+
+const ChatOptionButtons: React.FC<{ options: { label: string; message: string }[]; disabled: boolean; onChoose: (message: string) => void }> = ({ options, disabled, onChoose }) => (
+  <div className="flex flex-col gap-2 mt-3">{options.map((option, index) => <button key={index} type="button" disabled={disabled} onClick={() => onChoose(option.message)} className="min-h-11 w-full text-left border border-neutral-700 px-3 py-2 hover:border-white disabled:opacity-40">{option.label}</button>)}</div>
+);
+
+/** What the agent did, what failed, and what still needs the person's decision. */
+const AgentTurnCard: React.FC<{
+  message: AIChatMessage; lang: 'uk' | 'en'; loading: boolean; workspace: AgentWorkspace; canUndo: boolean; isLatest: boolean;
+  onUndo: () => void; onConfirm: (index: number) => void; onDismiss: (index: number) => void; onChoose: (message: string) => void;
+}> = ({ message, lang, loading, workspace, canUndo, isLatest, onUndo, onConfirm, onDismiss, onChoose }) => {
+  const uk = lang === 'uk';
+  const agent = message.response?.agent;
+  const summaries = message.agentSummaries ?? [];
+  const failures = message.agentFailures ?? [];
+  const pending = agent?.pendingConfirmations ?? [];
+  return <>
+    {!!summaries.length && <ul className="mt-3 space-y-1 border-l-2 border-emerald-500/60 pl-3 text-sm text-neutral-200">
+      {summaries.map((summary, index) => <li key={index}>{uk ? summary.uk : summary.en}</li>)}
+    </ul>}
+    {!!failures.length && <ul role="status" className="mt-2 space-y-1 text-sm text-amber-300">
+      {failures.map((failure, index) => <li key={index}>{uk ? 'Не виконано' : 'Not done'}: {failure.error}</li>)}
+    </ul>}
+    {!!summaries.length && (message.agentUndoStatus === 'undone'
+      ? <p role="status" className="mt-2 text-sm text-neutral-400">{uk ? 'Скасовано.' : 'Undone.'}</p>
+      : message.agentUndoStatus === 'conflict'
+        ? <p role="status" className="mt-2 text-sm text-amber-300">{uk ? 'Не скасовано: завдання вже змінено після цього.' : 'Not undone: the items changed since then.'}</p>
+        : canUndo && <button type="button" disabled={loading} onClick={onUndo} className="mt-2 min-h-11 border border-neutral-700 px-3 py-2 text-sm hover:border-white disabled:opacity-40">{uk ? 'Скасувати' : 'Undo'}</button>)}
+    {pending.map((action, index) => {
+      const status = message.agentConfirmationStatus?.[index];
+      return <div key={index} className="mt-3 border border-neutral-700 p-3">
+        <p className="text-sm text-neutral-100">{describeAgentConfirmation(action, workspace, lang)}</p>
+        {status ? <p className="mt-2 text-sm text-neutral-400">{status === 'confirmed' ? (uk ? 'Виконано.' : 'Done.') : (uk ? 'Скасовано.' : 'Dismissed.')}</p>
+          : <div className="mt-2 flex flex-wrap gap-2">
+            <button type="button" disabled={loading} onClick={() => onConfirm(index)} className="min-h-11 bg-white px-3 py-2 text-sm font-semibold text-black hover:bg-neutral-200 disabled:opacity-40">{uk ? 'Так, виконати' : 'Yes, do it'}</button>
+            <button type="button" disabled={loading} onClick={() => onDismiss(index)} className="min-h-11 border border-neutral-700 px-3 py-2 text-sm hover:border-white disabled:opacity-40">{uk ? 'Не треба' : 'No'}</button>
+          </div>}
+      </div>;
+    })}
+    {agent?.clarification && isLatest && <ChatOptionButtons options={agent.clarification.options} disabled={loading} onChoose={onChoose} />}
+  </>;
 };
 
 const isChatModel = (model: string) => {
@@ -240,6 +288,10 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   onClose,
   currentTasks,
   deletedTasks = [],
+  notes = [],
+  onGetAgentWorkspace,
+  onApplyAgentActions,
+  onUndoAgentActions,
   stats,
   adaptiveProfile,
   initialPrompt = '',
@@ -252,6 +304,10 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   onChatWelcome,
   onUndoStrategy,
 }) => {
+  const currentOwnerRef = useRef(accountId);
+  currentOwnerRef.current = accountId;
+  const agentUndoTokensRef = useRef(new Map<string, string>());
+  const agentUndoInFlightRef = useRef(new Set<string>());
   const t = TRANSLATIONS[lang];
   const dragControls = useDragControls();
   useDialogKeyboard(isOpen, onClose, 'ps-ai-sheet');
@@ -509,6 +565,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     hydratedAccountRef.current = accountId;
     skipPersistRef.current = true;
     setChatMessages(loadAIChatHistory(accountId));
+    agentUndoTokensRef.current.clear();
+    agentUndoInFlightRef.current.clear();
     setIntroductionId(null);
     pendingRequest.current = null;
     pendingChatConfirmed.current = false;
@@ -783,6 +841,95 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     }
   }, [initialPrompt, isOpen]);
 
+  const getAgentWorkspace = (): AgentWorkspace | null => onGetAgentWorkspace
+    ? onGetAgentWorkspace() : { tasks: currentTasks, deletedTasks, tabs, notes };
+
+  const applyAgentReply = async (data: AIResponse, options: AgentApplyOptions): Promise<Partial<AIChatMessage>> => {
+    if (!data.agent) return {};
+    const existing = chatMessages.find(message => message.id === options.messageId);
+    if (existing?.agentApplied) return existing;
+    const result = onApplyAgentActions ? await onApplyAgentActions({ ...options, actions: data.agent.actions, view: data.agent.view }) : {
+      applied: [], failed: data.agent.actions.map(({ action }) => ({ action, error: lang === 'uk' ? 'Виконання дій недоступне.' : 'Actions are unavailable.' })),
+    };
+    if (result.undoToken) agentUndoTokensRef.current.set(options.messageId, result.undoToken);
+    return { agentApplied: true, agentSummaries: result.applied, agentFailures: result.failed,
+      ...(result.undoToken ? {} : { agentUndoStatus: 'unavailable' as const }) };
+  };
+
+  const undoAgentMessage = async (message: AIChatMessage) => {
+    const token = message.id && agentUndoTokensRef.current.get(message.id);
+    if (!token || !onUndoAgentActions || !message.id || agentUndoInFlightRef.current.has(message.id) || requestInFlight.current) return;
+    const owner = accountId;
+    agentUndoInFlightRef.current.add(message.id);
+    agentUndoTokensRef.current.delete(message.id);
+    try {
+      const result = await onUndoAgentActions(token);
+      if (currentOwnerRef.current !== owner) return;
+      setChatMessages(previous => previous.map(item => item.id === message.id
+        ? { ...item, agentUndoStatus: result.undone ? 'undone' as const : 'conflict' as const } : item));
+    } catch {
+      if (currentOwnerRef.current === owner) setChatMessages(previous => previous.map(item => item.id === message.id ? { ...item, agentUndoStatus: 'conflict' as const } : item));
+    } finally {
+      agentUndoInFlightRef.current.delete(message.id);
+    }
+  };
+
+  const confirmAgentAction = async (message: AIChatMessage, index: number, userText?: string) => {
+    const action = message.response?.agent?.pendingConfirmations[index];
+    if (!message.id || !action || message.agentConfirmationStatus?.[index] || requestInFlight.current
+      || hydratedAccountRef.current !== accountId || draftAccountRef.current !== accountId) return;
+    const workspace = getAgentWorkspace();
+    if (!workspace) return;
+    const owner = accountId;
+    const generation = requestGeneration.current;
+    const controller = new AbortController();
+    const isCurrent = () => !controller.signal.aborted && assistController.current === controller
+      && generation === requestGeneration.current && currentOwnerRef.current === owner;
+    assistController.current = controller;
+    requestInFlight.current = true;
+    setLoading(true);
+    setRequestError(null);
+    setInterruptedReply(null);
+    if (userText) {
+      setPrompt('');
+      setChatMessages(previous => [...previous, { id: 'confirm-user-' + crypto.randomUUID(), role: 'user', sentAt: Date.now(), content: userText }]);
+    }
+    const clientClock = { now: new Date().toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' };
+    const messageId = 'agent-confirm-' + message.id + '-' + index;
+    let timedOut = false;
+    const timeout = window.setTimeout(() => { timedOut = true; controller.abort(); }, AI_CHAT_CLIENT_TIMEOUT_MS);
+    try {
+      const res = await karkasApiStream('/api/ai/assist', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
+        body: JSON.stringify({ action: 'chat', agentConfirm: action, confirmed: true, lang,
+          ...buildAgentWorkspaceRequest(workspace, clientClock) }),
+      }, () => undefined);
+      const raw: unknown = await res.json().catch(() => { throw new AIRequestError('INVALID_RESPONSE'); });
+      if (!isCurrent()) return;
+      if (!res.ok) throw responseRequestError(raw, res.status);
+      const data = readAIResponse(raw, 'chat');
+      if (!data.agent) throw new AIRequestError('INVALID_RESPONSE');
+      const applied = await applyAgentReply(data, { messageId, ownerId: owner, clientClock, confirmed: true, isCurrent });
+      if (!isCurrent()) return;
+      setChatMessages(previous => [...previous.map(item => item.id === message.id
+        ? { ...item, agentConfirmationStatus: { ...item.agentConfirmationStatus, [index]: 'confirmed' as const } } : item), {
+        id: messageId, role: 'assistant', sentAt: Date.now(), content: data.reply || data.summary, response: data, ...applied,
+      }]);
+    } catch (error) {
+      if (assistController.current === controller && currentOwnerRef.current === owner) {
+        const failure = controller.signal.aborted ? new AIRequestError(timedOut ? 'CLIENT_TIMEOUT' : 'CANCELLED') : error;
+        setRequestError(aiRequestErrorMessage(failure, lang), failure instanceof AIRequestError ? failure.diagnostics : undefined);
+      }
+    } finally {
+      window.clearTimeout(timeout);
+      if (assistController.current === controller) {
+        assistController.current = null;
+        requestInFlight.current = false;
+        setLoading(false);
+      }
+    }
+  };
+
   const handleGenerate = async (queryText?: string, selectedMode?: AIMode, resuming = false, preserveInput = false, planningSource?: AIRequest, internalAlternative = false) => {
     // Keep the dictation session and draft intact until its final transcript arrives.
     if (voiceRef.current || isListening || isTranscribing) return;
@@ -819,6 +966,11 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
     if (!requestText) return;
     if (requestInFlight.current) return;
     const latestAssistantMessage = [...chatMessages].reverse().find(message => message.role === 'assistant' && message.id !== `reply-${currentRequest.turnId}`);
+    const agentConfirmation = parsedCommand.intent === 'auto' ? singlePendingAgentConfirmation(requestText, latestAssistantMessage) : null;
+    if (agentConfirmation && latestAssistantMessage) {
+      await confirmAgentAction(latestAssistantMessage, agentConfirmation.index, requestText);
+      return;
+    }
     const draftMessage = chatMessages.find(message => message.id === latestProposalMessageId.current);
     const ownsDraft = draftMessage?.proposalStatus === 'pending' && pendingChangeCount > 0
       && !pendingChatConfirmed.current && pendingProposalOwnerRef.current === accountId;
@@ -1037,6 +1189,10 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
 
       requestTimeout = window.setTimeout(() => { timedOut = true; controller.abort(); }, AI_CHAT_CLIENT_TIMEOUT_MS);
       const requestedModel = customModelRef.current;
+      const clientClock = { now: new Date().toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' };
+      const workspace = getAgentWorkspace();
+      if (!workspace || currentOwnerRef.current !== requestOwner) throw new AIRequestError('CANCELLED');
+      const isAgentChat = currentRequest.intent === 'auto' && !(inDiscoveryMode && !discoveryHelpTurn);
       const res = await karkasApiStream('/api/ai/assist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1044,7 +1200,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
         body: JSON.stringify({
           stream: true,
           prompt: requestText,
-          clientClock: { now: new Date().toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' },
+          ...buildAgentWorkspaceRequest(workspace, clientClock),
           action: 'chat',
           intent: currentRequest.intent || modeIntent(currentMode),
           strategyContext: strategyProfile,
@@ -1054,17 +1210,15 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
           discoveryMode: inDiscoveryMode && !discoveryHelpTurn,
           lastAssistantProposalStatus: latestAssistantMessage?.proposalStatus,
           lastAssistantMessageId: latestAssistantMessage?.id,
-          pendingProposalId: requestDraft ? draftMessage?.id : undefined,
-          pendingProposalStatus: requestDraft ? (draftWasReady ? 'pending' : 'stale') : undefined,
+          pendingProposalId: !isAgentChat && requestDraft ? draftMessage?.id : undefined,
+          pendingProposalStatus: !isAgentChat && requestDraft ? (draftWasReady ? 'pending' : 'stale') : undefined,
           currentDiscoveryQuestionId: discoveryQuestionIsVisible ? currentQuestion?.id : undefined,
           turnId: currentRequest.turnId,
           lang,
-          tabs: tabs.map((tb) => tb.id),
           adaptiveProfile,
-          currentTasks: currentTasks.map(task => ({ ...task, ...getAITimerContext(task) })),
-          taskSnapshots: currentTasks,
+          taskSnapshots: workspace.tasks,
           conversation: recentAIChatContext(chatMessages, 10, currentRequest.turnId),
-          pendingChanges: requestDraft,
+          pendingChanges: isAgentChat ? undefined : requestDraft,
           allowNewTabs: isTabMutation,
           customApiKey: customEnabled ? customKey : undefined,
           availableModels: window.karkasDesktop || customEnabled ? availableModelsRef.current.filter(isChatModel) : undefined,
@@ -1132,16 +1286,17 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
         const ledger = readAIUsageLedger(localStorage, Date.now());
         if (ledger) { setUsageLedger(ledger); setUsageNow(Date.now()); }
       } catch { /* Usage display is best-effort. */ }
-      if (assistController.current !== controller) return;
+      if (assistController.current !== controller || currentOwnerRef.current !== requestOwner
+        || hydratedAccountRef.current !== requestOwner || draftAccountRef.current !== requestOwner) return;
       if (controller.signal.aborted) throw new AIRequestError(timedOut ? 'CLIENT_TIMEOUT' : 'CANCELLED');
       if (!res.ok) throw responseRequestError(rawData, res.status);
       const data = readAIResponse(rawData, 'chat');
       // The final reply (after server-side guards) replaces the streamed text.
       if (streamBufferRef.current === streamBuffer) settleStreamedReply(false);
       activeRequest.current = null;
-      const hasPendingActions = [data.tasks, data.tabs, data.taskUpdates, data.taskDeletions].some(actions => (actions?.length || 0) > 0);
+      const hasPendingActions = !data.agent && [data.tasks, data.tabs, data.taskUpdates, data.taskDeletions].some(actions => (actions?.length || 0) > 0);
       const hasPendingChatActions = hasPendingActions;
-      const transition = proposalTransition(data, !!requestDraft, draftWasReady);
+      const transition = data.agent ? 'cancel' : proposalTransition(data, !!requestDraft, draftWasReady);
       setRecoverableRequest(hasPendingActions ? { ...currentRequest, purpose: 'proposal' }
         : transition === 'retain' ? recoverableRequest
         : transition === 'suspend' ? (data.proposalDisposition === 'clarification' ? currentRequest : recoverableRequest) : null);
@@ -1159,17 +1314,21 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
           : `Model ${requestedModel} is ${freeTier ? 'not available on the Google free tier' : 'unavailable for this key'}. ${adoptedModel} will be used from now on; you can pick another model in the model menu.`);
       } else if (data.fallbackUsed && data.usedModel) setKeyStatus(lang === 'uk' ? `Відповідь підготувала доступна модель ${data.usedModel}.` : `The response was generated by the available model ${data.usedModel}.`);
       const isDiscoveryResponse = !hasPendingActions && (data.strategy?.status === 'getting_to_know' || data.strategy?.status === 'clarifying');
-      const isPlanningResponse = !isDiscoveryResponse && (!!data.tasks?.length || !!data.taskUpdates?.length || currentRequest.intent === 'plan' || currentRequest.intent === 'steps' || /план|\bplan(?:ning)?\b/iu.test((planningSourceRef.current || currentRequest).text));
+      const isPlanningResponse = !data.agent && !isDiscoveryResponse && (!!data.tasks?.length || !!data.taskUpdates?.length || currentRequest.intent === 'plan' || currentRequest.intent === 'steps' || /план|\bplan(?:ning)?\b/iu.test((planningSourceRef.current || currentRequest).text));
       const messageId = `reply-${currentRequest.turnId}`;
+      const isCurrent = () => !controller.signal.aborted && assistController.current === controller
+        && generation === requestGeneration.current && currentOwnerRef.current === requestOwner;
+      const agentState = await applyAgentReply(data, { messageId, ownerId: requestOwner, clientClock, isCurrent });
+      if (!isCurrent()) return;
       if (transition === 'replace' || transition === 'cancel' || transition === 'none') {
         setChatPlanningRequest(isPlanningResponse ? planningSourceRef.current || currentRequest : null);
         setChatPlanningResponse(isPlanningResponse ? data : null);
         pendingChatConfirmed.current = false;
         pendingProposalOwnerRef.current = hasPendingChatActions ? requestOwner : undefined;
-        setPendingChatTasks(data.tasks || []);
-        setPendingChatTabs((data.tabs || []).map(tb => ({ id: tb.id, name: tb.name, color: tb.color || '#6366f1' })));
-        setPendingChatUpdates(data.taskUpdates || []);
-        setPendingChatDeletions(data.taskDeletions || []);
+        setPendingChatTasks(data.agent ? [] : data.tasks || []);
+        setPendingChatTabs((data.agent ? [] : data.tabs || []).map(tb => ({ id: tb.id, name: tb.name, color: tb.color || '#6366f1' })));
+        setPendingChatUpdates(data.agent ? [] : data.taskUpdates || []);
+        setPendingChatDeletions(data.agent ? [] : data.taskDeletions || []);
         latestProposalMessageId.current = hasPendingChatActions ? messageId : null;
         pendingTaskSnapshotRef.current = hasPendingChatActions ? currentTasks : [];
       }
@@ -1191,6 +1350,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
         sentAt: Date.now(),
         content: data.reply || data.summary,
         response: data,
+        ...agentState,
         proposalStatus: hasPendingActions ? 'pending' : undefined,
         notice: strategyNotice?.notice,
         actionId: strategyNotice?.actionId,
@@ -1388,6 +1548,15 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                     {message.role === 'assistant' ? <AIChatText text={parsed.body} /> : <div className="whitespace-pre-wrap">{parsed.body}</div>}
                     {!!parsed.options.length && <div className="flex flex-col gap-2 mt-3">{parsed.options.map(option => <button key={option.text} type="button" disabled={loading} onClick={() => handleGenerate(option.text, 'chat')} className="min-h-11 w-full text-left border border-neutral-700 px-3 py-2 hover:border-white disabled:opacity-40">{option.label}. {option.text}</button>)}</div>}
                     {message.response && <ChatResponseCards response={message.response} currentTasks={currentTasks} tabs={tabs} lang={lang} />}
+                    {message.role === 'assistant' && message.agentApplied && <AgentTurnCard message={message} lang={lang} loading={loading}
+                      workspace={{ tasks: currentTasks, deletedTasks, tabs, notes }}
+                      canUndo={!!message.id && agentUndoTokensRef.current.has(message.id)}
+                      isLatest={index === visibleConversation.messages.length - 1}
+                      onUndo={() => void undoAgentMessage(message)}
+                      onConfirm={confirmIndex => void confirmAgentAction(message, confirmIndex)}
+                      onDismiss={dismissIndex => setChatMessages(previous => previous.map(item => item.id === message.id
+                        ? { ...item, agentConfirmationStatus: { ...item.agentConfirmationStatus, [dismissIndex]: 'dismissed' as const } } : item))}
+                      onChoose={text => handleGenerate(text, 'chat')} />}
                     {message.proposalStatus === 'stale' && <p className="mt-3 text-sm text-neutral-400">{lang === 'uk' ? 'Ця попередня картка вже неактуальна й не застосовується.' : 'This earlier card is no longer current and cannot be applied.'}</p>}
                     {message.proposalStatus === 'pending' && message.id === latestProposalMessageId.current && chatProposalReady && pendingChangeCount > 0 && !loading && !requestError && <button id="ai-chat-apply-changes-btn" type="button" onClick={confirmChatChanges} className="mt-3 min-h-11 bg-white text-black px-3 py-2 font-semibold hover:bg-neutral-200">{lang === 'uk' ? `Застосувати зміни (${pendingChangeCount})` : `Apply changes (${pendingChangeCount})`}</button>}
                     {message.notice && <p role="status" className="mt-3 text-sm text-emerald-300">{message.notice}</p>}

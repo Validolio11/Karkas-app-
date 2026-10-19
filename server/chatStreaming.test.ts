@@ -13,8 +13,7 @@ const calls: { model: string; streaming: boolean; body: any; signal?: AbortSigna
 before(async () => {
   process.env.KARKAS_SERVER_AUTOSTART = 'false';
   process.env.GEMINI_API_KEY = '';
-  // The real SDK runs; only its HTTP transport is replaced, so the streaming path
-  // (`:streamGenerateContent?alt=sse`) and SSE chunk parsing are exercised.
+  // Keep the real SDK and replace only its HTTP transport; the client-facing SSE protocol is exercised below.
   globalThis.fetch = ((url: any, options: RequestInit) => provider(url, options)) as typeof fetch;
   server = await import('../server.ts');
 });
@@ -40,37 +39,12 @@ function mockProvider(respond: Respond) {
   }) as typeof fetch;
 }
 
-const encoder = new TextEncoder();
-/** A string chunk is one text part; an array chunk lists raw parts (e.g. functionCall). */
-type Chunk = string | any[];
-const chunkFrame = (chunk: Chunk, extra: any = {}) => `data: ${JSON.stringify({ candidates: [{ content: { role: 'model', parts: typeof chunk === 'string' ? [{ text: chunk }] : chunk } }], ...extra })}\r\n\r\n`;
-/** A provider SSE body; `fail` errors the body after the listed chunks, `hang` never ends it. */
-function sseResponse(chunks: Chunk[], { fail, hang, signal }: { fail?: Error; hang?: boolean; signal?: AbortSignal } = {}) {
-  let next = 0;
-  const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      signal?.addEventListener('abort', () => { try { controller.error(new DOMException('aborted', 'AbortError')); } catch { /* closed */ } });
-    },
-    // One provider event per read, so a later failure cannot discard earlier chunks.
-    pull(controller) {
-      if (next < chunks.length) {
-        const index = next++;
-        controller.enqueue(encoder.encode(chunkFrame(chunks[index], index === chunks.length - 1
-          ? { usageMetadata: { promptTokenCount: 120, candidatesTokenCount: 9 } } : {})));
-      } else if (fail) controller.error(fail);
-      else if (!hang) controller.close();
-      else return new Promise<void>(() => {});
-    },
-  });
-  return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
-}
 const json = (data: any, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
 const rejected = (status: number, providerStatus: string) => json({ error: { code: status, status: providerStatus, message: 'private provider detail' } }, status);
 
 const base = { action: 'chat', lang: 'uk', customApiKey: 'test-only-fake-key', selectedModel: 'gemini-3.1-flash-lite',
   clientClock: { now: '2026-10-12T09:00:00.000Z', timeZone: 'Europe/Kyiv' } };
-const GENERAL = 'Як мені краще зосередитись після обіду?';
-// The help route stays prose-only: no proposal tools.
+// Help and general messages use the agent path too.
 const HELP = 'Поясни, що таке техніка помодоро';
 
 /** Minimal Express-like response that records SSE output. */
@@ -101,125 +75,105 @@ const httpAssist = async (body: any, signal?: AbortSignal) => {
   return res;
 };
 
-test('a prose-only route streams plain text deltas, then a done event with the full final body', async () => {
+const agentBase = { ...base, pendingChanges: undefined };
+const agentText = (text: string) => json({ candidates: [{ content: { role: 'model', parts: [{ text }] }, finishReason: 'STOP' }],
+  usageMetadata: { promptTokenCount: 120, candidatesTokenCount: 9 } });
+
+test('ordinary chat sends agent tools and streams one final text delta followed by done', async () => {
   mockProvider(({ streaming, body }) => {
-    assert.equal(streaming, true);
+    assert.equal(streaming, false);
     assert.equal(body.generationConfig?.responseMimeType, undefined);
     assert.equal(body.generationConfig?.responseSchema, undefined);
-    const system = body.systemInstruction.parts[0].text;
-    assert.match(system, /OUTPUT FORMAT: reply directly/);
-    assert.doesNotMatch(system, /Return strictly valid JSON/);
-    assert.doesNotMatch(system, /OPERATION FIELDS/);
-    // Same thinking config as the unary path for this route (general: minimal).
-    assert.deepEqual(body.generationConfig.thinkingConfig, { thinkingLevel: 'MINIMAL' });
-    assert.equal(body.tools, undefined);
-    return sseResponse(['Спробуйте ', 'коротку **прогулянку**', ' після обіду.']);
+    // The selected Flash Lite maps the agent's low effort to its supported minimal setting.
+    assert.deepEqual(body.generationConfig.thinkingConfig, { thinkingLevel: 'LOW' });
+    const names = body.tools[0].functionDeclarations.map((entry: any) => entry.name);
+    assert.ok(names.includes('find_tasks'));
+    assert.ok(names.includes('set_countdown'));
+    assert.ok(!names.some((name: string) => name.startsWith('propose_')));
+    return agentText('Спробуйте коротку **прогулянку** після обіду.');
   });
-  const res = await httpAssist({ ...base, prompt: HELP, stream: true });
+  const res = await httpAssist({ ...agentBase, prompt: HELP, stream: true });
   assert.match(res.headers['content-type'], /text\/event-stream/);
   assert.equal(res.writableEnded, true);
   const events = res.events();
-  assert.deepEqual(events.map((event: AIStreamEvent) => event.event), ['delta', 'delta', 'delta', 'done']);
-  assert.deepEqual(events.slice(0, 3).map((event: AIStreamEvent) => event.data.text), ['Спробуйте ', 'коротку **прогулянку**', ' після обіду.']);
-  const done = events[3].data;
-  assert.equal(done.reply, 'Спробуйте коротку **прогулянку** після обіду.');
-  assert.equal(done.summary, done.reply);
+  assert.deepEqual(events.map((event: AIStreamEvent) => event.event), ['delta', 'done']);
+  assert.equal(events[0].data.text, 'Спробуйте коротку **прогулянку** після обіду.');
+  const done = events[1].data;
+  assert.equal(done.text, events[0].data.text);
+  assert.equal(done.reply, done.text);
+  assert.equal(done.summary, done.text);
+  assert.deepEqual(done.agent.actions, []);
+  assert.deepEqual(done.agent.pendingConfirmations, []);
   assert.deepEqual([done.tasks, done.tabs, done.taskUpdates, done.taskDeletions, done.insights], [[], [], [], [], []]);
   assert.equal(done.source, 'gemini-chat');
   assert.equal(done.usedModel, 'gemini-3.1-flash-lite');
   assert.equal(done.fallbackUsed, false);
   assert.ok(done.workInsights);
-  assert.equal(typeof done.aiMetrics.timeToFirstTokenMs, 'number');
   assert.equal(done.aiMetrics.promptTokens, 120);
-  assert.equal(done.replyReplaced, undefined);
   assert.equal(calls.length, 1);
 });
 
-test('the desktop bridge forwards deltas through its callback and returns the final body', async () => {
-  mockProvider(() => sseResponse(['Таймер ', 'запускається кнопкою.']));
+test('the desktop bridge forwards the agent final delta and returns the same unary text', async () => {
+  mockProvider(() => agentText('Таймер запускається кнопкою.'));
   const deltas: string[] = [];
-  const result = await server.invokeDesktopApi('assist', { ...base, prompt: 'Як працює таймер у застосунку?', stream: true }, { onStreamDelta: text => deltas.push(text) });
+  const result = await server.invokeDesktopApi('assist', { ...agentBase, prompt: 'Як працює таймер у застосунку?', stream: true }, { onStreamDelta: text => deltas.push(text) });
   assert.equal(result.status, 200);
-  assert.deepEqual(deltas, ['Таймер ', 'запускається кнопкою.']);
-  assert.equal(result.body.reply, 'Таймер запускається кнопкою.');
-  // Without a delta callback the bridge keeps the unary JSON path.
+  assert.deepEqual(deltas, ['Таймер запускається кнопкою.']);
+  assert.equal(result.body.text, deltas[0]);
   mockProvider(({ streaming }) => {
     assert.equal(streaming, false);
-    return json({ candidates: [{ content: { role: 'model', parts: [{ text: JSON.stringify({ reply: 'JSON reply' }) }] }, finishReason: 'STOP' }] });
+    return agentText('Звичайна відповідь');
   });
-  const unary = await server.invokeDesktopApi('assist', { ...base, prompt: 'Як працює таймер у застосунку?', stream: true });
-  assert.equal(unary.body.reply, 'JSON reply');
+  const resultWithoutCallback = await server.invokeDesktopApi('assist', { ...agentBase, prompt: 'Як працює таймер у застосунку?', stream: true });
+  assert.equal(resultWithoutCallback.body.text, 'Звичайна відповідь');
 });
 
-test('a model that fails before its first chunk falls back; only the fallback text is streamed', async () => {
-  mockProvider(({ index }) => index === 0 ? rejected(503, 'UNAVAILABLE') : sseResponse(['Відповідь резервної моделі.']));
-  const res = await httpAssist({ ...base, prompt: HELP, stream: true });
+test('an agent provider failure falls back before emitting its single final delta', async () => {
+  mockProvider(({ index }) => index === 0 ? rejected(503, 'UNAVAILABLE') : agentText('Відповідь резервної моделі.'));
+  const res = await httpAssist({ ...agentBase, prompt: HELP, stream: true });
   const events = res.events();
   assert.deepEqual(events.map((event: AIStreamEvent) => event.event), ['delta', 'done']);
-  assert.equal(events[1].data.reply, 'Відповідь резервної моделі.');
+  assert.equal(events[1].data.text, 'Відповідь резервної моделі.');
   assert.equal(events[1].data.fallbackUsed, true);
-  assert.notEqual(events[1].data.usedModel, 'gemini-3.1-flash-lite');
-  assert.deepEqual(calls.map(call => call.streaming), [true, true]);
+  assert.deepEqual(calls.map(call => call.streaming), [false, false]);
 });
 
-test('a failure after text was emitted ends with an error event and never tries another model', async () => {
-  mockProvider(() => sseResponse(['Перша частина відповіді'], { fail: new TypeError('fetch failed') }));
-  const res = await httpAssist({ ...base, prompt: HELP, stream: true });
-  const events = res.events();
-  assert.deepEqual(events.map((event: AIStreamEvent) => event.event), ['delta', 'error']);
-  assert.equal(events[0].data.text, 'Перша частина відповіді');
-  const error = events[1].data;
-  assert.equal(error.code, 'NETWORK_ERROR');
-  assert.equal(error.status, 503);
-  assert.equal(error.partial, true);
-  assert.match(error.error, /Не вдалося підключитися до Google/);
-  assert.doesNotMatch(JSON.stringify(error), /test-only-fake-key|private provider detail/);
-  assert.equal(calls.length, 1);
-});
-
-test('reply guards run on the final text and the done payload carries the replacement', async () => {
-  mockProvider(() => sseResponse(['Я переніс ', 'ваше завдання на завтра.']));
-  const res = await httpAssist({ ...base, prompt: HELP, stream: true });
-  const events = res.events();
-  assert.deepEqual(events.map((event: AIStreamEvent) => event.event), ['delta', 'delta', 'done']);
-  const done = events[2].data;
-  assert.equal(done.replyReplaced, true);
-  assert.doesNotMatch(done.reply, /Я переніс/);
-  assert.match(done.reply, /нічого не застосовано/);
-  assert.deepEqual(done.taskUpdates, []);
-});
-
-test('canned replies and invalid requests return a single final event without calling the provider', async () => {
-  mockProvider(() => assert.fail('A canned reply must not call the provider'));
-  for (const prompt of ['Привіт', 'Котра година?']) {
-    const canned = await httpAssist({ ...base, prompt, stream: true });
-    const events = canned.events();
-    assert.deepEqual(events.map((event: AIStreamEvent) => event.event), ['done'], prompt);
-    assert.ok(events[0].data.reply);
-  }
-  const invalid = await httpAssist({ ...base, prompt: '', stream: true });
+test('clock replies and invalid requests finish without calling the provider', async () => {
+  mockProvider(() => assert.fail('A clock reply must not call the provider'));
+  const clock = await httpAssist({ ...agentBase, prompt: 'Котра година?', stream: true });
+  assert.deepEqual(clock.events().map((event: AIStreamEvent) => event.event), ['done']);
+  assert.equal(clock.events()[0].data.source, 'client-clock');
+  const invalid = await httpAssist({ ...agentBase, prompt: '', stream: true });
   assert.deepEqual(invalid.events().map((event: AIStreamEvent) => [event.event, event.data.status]), [['error', 400]]);
 });
 
-test('a provider rejection before streaming becomes an error event with the safe failure body', async () => {
+test('greetings use the agent path and preserve its final stream contract', async () => {
+  mockProvider(() => agentText('Привіт!'));
+  const res = await httpAssist({ ...agentBase, prompt: 'Привіт', stream: true });
+  assert.deepEqual(res.events().map((event: AIStreamEvent) => event.event), ['delta', 'done']);
+  assert.deepEqual(res.events()[1].data.agent.actions, []);
+  assert.equal(calls.length, 1);
+});
+
+test('an agent provider rejection produces only the safe error event', async () => {
   mockProvider(() => rejected(401, 'UNAUTHENTICATED'));
-  const res = await httpAssist({ ...base, prompt: HELP, stream: true });
+  const res = await httpAssist({ ...agentBase, prompt: HELP, stream: true });
   const events = res.events();
   assert.deepEqual(events.map((event: AIStreamEvent) => event.event), ['error']);
   assert.equal(events[0].data.code, 'INVALID_API_KEY');
   assert.equal(events[0].data.status, 401);
-  assert.equal(events[0].data.partial, undefined);
+  assert.doesNotMatch(JSON.stringify(events), /test-only-fake-key|private provider detail/);
   assert.equal(calls.length, 1);
 });
 
-test('cancelling mid-stream aborts the provider transport and sends no final event', async () => {
+test('cancelling an agent round aborts its transport without a final event', async () => {
   const controller = new AbortController();
-  mockProvider(({ signal }) => sseResponse(['Початок'], { hang: true, signal }));
-  const res = fakeHttpResponse();
-  const write = res.write;
-  res.write = (chunk: string) => { const result = write(chunk); if (chunk.includes('event: delta')) controller.abort(); return result; };
-  await server.assistHandler({ body: { ...base, prompt: HELP, stream: true }, signal: controller.signal, on() {}, removeListener() {} }, res);
-  assert.deepEqual(res.events().map((event: AIStreamEvent) => event.event), ['delta']);
+  mockProvider(({ signal }) => new Promise<Response>((_resolve, reject) => {
+    signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+    controller.abort();
+  }));
+  const res = await httpAssist({ ...agentBase, prompt: HELP, stream: true }, controller.signal);
+  assert.deepEqual(res.events(), []);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].signal?.aborted, true);
 });
@@ -286,332 +240,245 @@ test('an empty stream may fall back, and parent cancellation never starts anothe
   assert.ok(!(new AIRequestError('TIMEOUT') instanceof AIStreamInterruptedError));
 });
 
-// ---- task_command: function calling (stage 3) ----
-const READING = [{ id: 't', title: 'Читання', done: false, phase: 'focus', priority: 2, steps: 0, currentStep: 0, createdAt: 1 },
-  { id: 'x', title: 'Інше', done: false, phase: 'focus', priority: 2, steps: 0, currentStep: 0, createdAt: 1 }];
-const TIMER_PROMPT = 'Додай таймер на 25 хвилин до завдання Читання';
+const READING = [{ id: 't', title: 'Читання', done: false, pinned: false, phase: 'focus', priority: 2, steps: 0, currentStep: 0, createdAt: 1 },
+  { id: 'x', title: 'Інше', done: false, pinned: false, phase: 'focus', priority: 2, steps: 0, currentStep: 0, createdAt: 1 }];
 const call = (name: string, args: any) => ({ functionCall: { name, args } });
-const timerCall = (seconds = 1500) => call('propose_update_task', { id: 't', timerMode: 'countdown', countdownDurationSeconds: seconds });
 const unary = (parts: any[]) => json({ candidates: [{ content: { role: 'model', parts }, finishReason: 'STOP' }], usageMetadata: { promptTokenCount: 50, candidatesTokenCount: 5 } });
-const jsonProposal = (proposal: any) => json({ candidates: [{ content: { role: 'model', parts: [{ text: JSON.stringify(proposal) }] }, finishReason: 'STOP' }] });
-const TIMER_UPDATE = [{ id: 't', timerMode: 'countdown', countdownDurationSeconds: 1500 }];
-async function withToolsOff<T>(run: () => Promise<T>): Promise<T> {
-  const previous = process.env.KARKAS_AI_TOOLS;
-  process.env.KARKAS_AI_TOOLS = 'off';
-  try { return await run(); } finally {
-    if (previous === undefined) delete process.env.KARKAS_AI_TOOLS;
-    else process.env.KARKAS_AI_TOOLS = previous;
+const jsonProposal = (proposal: any) => unary([{ text: JSON.stringify(proposal) }]);
+
+test('agent declarations are static and action tools replace the legacy proposal schema', async () => {
+  const declarations: string[] = [];
+  for (const prompt of ['Додай завдання Ескіз', 'Постав таймер Читання на 25 хвилин']) {
+    mockProvider(({ body }) => {
+      declarations.push(JSON.stringify(body.tools));
+      assert.equal(body.generationConfig.responseSchema, undefined);
+      assert.ok(body.tools[0].functionDeclarations.some((entry: any) => entry.name === 'create_task'));
+      return unary([{ text: 'Гаразд.' }]);
+    });
+    assert.equal((await httpAssist({ ...agentBase, prompt, currentTasks: READING })).statusCode, 200);
   }
-}
+  assert.equal(declarations[0], declarations[1]);
+});
 
-test('task_command declares static tools with the JSON schema constraints and maps calls to the proposal shape', async () => {
-  const declarationSets: string[] = [];
-  mockProvider(({ streaming, body }) => {
-    assert.equal(streaming, false);
-    assert.equal(body.generationConfig?.responseMimeType, undefined);
-    assert.equal(body.generationConfig?.responseSchema, undefined);
-    assert.equal(body.toolConfig.functionCallingConfig.mode, 'AUTO');
-    const declarations = body.tools[0].functionDeclarations;
-    declarationSets.push(JSON.stringify(body.tools));
-    assert.deepEqual(declarations.map((declaration: any) => declaration.name), ['propose_create_task', 'propose_create_tasks', 'propose_update_task', 'propose_delete_task', 'propose_create_tab']);
-    const byName = Object.fromEntries(declarations.map((declaration: any) => [declaration.name, declaration.parameters]));
-    for (const name of ['propose_create_task', 'propose_update_task']) {
-      assert.equal(byName[name].properties.countdownDurationSeconds.minimum, 60);
-      assert.equal(byName[name].properties.countdownDurationSeconds.maximum, 86400);
-      assert.deepEqual(byName[name].properties.schedule.required, ['startAt', 'recurrence', 'timeZone', 'leadMinutes']);
-    }
-    assert.deepEqual(byName.propose_create_task.required, ['title', 'phase', 'priority', 'steps']);
-    assert.deepEqual(byName.propose_update_task.required, ['id']);
-    assert.deepEqual(byName.propose_delete_task.properties.deletionReason.enum, ['accidental', 'cancelled']);
-    const system = body.systemInstruction.parts[0].text;
-    assert.match(system, /APPLICATION ACTION CONTRACT/);
-    assert.match(system, /OPERATIONS ARE TOOL CALLS/);
-    assert.doesNotMatch(system, /Return strictly valid JSON|OPERATION FIELDS/);
-    assert.doesNotMatch(system, /Читання|25 хвилин/);
-    return unary([{ text: 'Пропоную таймер на 25 хвилин для «Читання».' }, timerCall()]);
+test('invalid agent arguments return an error to the same model which can recover', async () => {
+  mockProvider(({ index, body }) => {
+    if (index === 0) return unary([call('set_countdown', { taskId: 't', minutes: -1 })]);
+    const response = body.contents.at(-1).parts[0].functionResponse;
+    assert.equal(response.name, 'set_countdown');
+    assert.equal(response.response.ok, false);
+    assert.equal(response.response.code, 'invalid');
+    return unary([{ text: 'Тривалість має бути додатною.' }]);
   });
-  const result = await server.invokeDesktopApi('assist', { ...base, prompt: TIMER_PROMPT, currentTasks: READING });
-  assert.equal(result.status, 200);
-  assert.equal(result.body.reply, 'Пропоную таймер на 25 хвилин для «Читання».');
-  assert.deepEqual(result.body.taskUpdates, TIMER_UPDATE);
-  assert.deepEqual([result.body.tasks, result.body.tabs, result.body.taskDeletions], [[], [], []]);
-  assert.equal(result.body.aiMetrics.toolCalls, 1);
-  assert.equal(result.body.source, 'gemini-chat');
-  // Different data, same static tool prefix.
-  await server.invokeDesktopApi('assist', { ...base, prompt: 'Додай таймер на 10 хвилин до завдання Інше', currentTasks: READING });
-  assert.equal(declarationSets.length, 2);
-  assert.equal(declarationSets[0], declarationSets[1]);
-});
-
-test('task_command streams its prose, never the tool call, and ends with the validated proposal', async () => {
-  mockProvider(({ streaming, body }) => {
-    assert.equal(streaming, true);
-    assert.ok(body.tools);
-    return sseResponse(['Пропоную ', 'таймер на 25 хвилин.', [timerCall()]]);
-  });
-  const res = await httpAssist({ ...base, prompt: TIMER_PROMPT, currentTasks: READING, stream: true });
-  const events = res.events();
-  assert.deepEqual(events.map((event: AIStreamEvent) => event.event), ['delta', 'delta', 'done']);
-  assert.doesNotMatch(JSON.stringify(events.slice(0, 2)), /propose_|functionCall|countdownDurationSeconds/);
-  const done = events[2].data;
-  assert.equal(done.reply, 'Пропоную таймер на 25 хвилин.');
-  assert.equal(done.replyReplaced, undefined);
-  assert.deepEqual(done.taskUpdates, TIMER_UPDATE);
-  assert.equal(done.aiMetrics.toolCalls, 1);
-  assert.equal(typeof done.aiMetrics.timeToFirstTokenMs, 'number');
-  assert.equal(calls.length, 1);
-});
-
-test('a listed multi-task create arrives as one batch call and keeps every task with its dates and priority', async () => {
-  const MULTI = 'Додай завдання: 1) Анімувати інтро, терміново, дедлайн у п\'ятницю; 2) Зробити анімовані банери, дедлайн 20 жовтня; 3) Змонтувати шоурил 2026; 4) Переписати сайт-портфоліо на Next.js, низький пріоритет';
-  mockProvider(({ body }) => {
-    const system = body.systemInstruction.parts[0].text;
-    assert.match(system, /SEVERAL NEW TASKS: .*ALL of them in ONE propose_create_tasks call/);
-    assert.match(system, /never put a date or the priority only into note or title/i);
-    const batch = body.tools[0].functionDeclarations.find((declaration: any) => declaration.name === 'propose_create_tasks');
-    assert.deepEqual(batch.parameters.required, ['tasks']);
-    assert.deepEqual(batch.parameters.properties.tasks.items.required, ['title', 'phase', 'priority', 'steps']);
-    return sseResponse(['Пропоную чотири нові завдання.', [call('propose_create_tasks', { tasks: [
-      { title: 'Анімувати інтро', phase: 'focus', priority: 1, steps: 0, deadlineDate: '2026-10-16' },
-      { title: 'Зробити анімовані банери', phase: 'focus', priority: 2, steps: 0, deadlineDate: '2026-10-20' },
-      { title: 'Змонтувати шоурил 2026', phase: 'focus', priority: 2, steps: 0 },
-      { title: 'Переписати сайт-портфоліо на Next.js', phase: 'focus', priority: 3, steps: 0 },
-    ] })]]);
-  });
-  const res = await httpAssist({ ...base, prompt: MULTI, tabs: ['focus'], currentTasks: READING, stream: true });
-  const done = res.events().at(-1)!;
-  assert.equal(done.event, 'done');
-  assert.deepEqual(done.data.tasks.map((task: any) => [task.title, task.priority, task.deadlineDate]), [
-    ['Анімувати інтро', 1, '2026-10-16'], ['Зробити анімовані банери', 2, '2026-10-20'],
-    ['Змонтувати шоурил 2026', 2, undefined], ['Переписати сайт-портфоліо на Next.js', 3, undefined],
-  ]);
-  assert.deepEqual([done.data.taskUpdates, done.data.taskDeletions], [[], []]);
-  assert.equal(calls.length, 1);
-});
-
-test('tool calls outside the concrete command scope are dropped by the shared constraints', async () => {
-  mockProvider(() => sseResponse(['Пропоную таймер.', [
-    call('propose_create_task', { title: 'Unrequested', phase: 'focus', priority: 2, steps: 0 }),
-    call('propose_delete_task', { id: 'y' }),
-    call('propose_update_task', { id: 'x', timerMode: 'countdown', countdownDurationSeconds: 600 }),
-    call('propose_update_task', { id: 't', timerMode: 'countdown', countdownDurationSeconds: 1500, title: 'Renamed' }),
-    call('propose_create_tab', { id: 'extra', name: 'Extra' }),
-  ]]));
-  const res = await httpAssist({ ...base, prompt: TIMER_PROMPT, currentTasks: [...READING, { ...READING[1], id: 'y', title: 'Третє' }], stream: true });
-  const done = res.events().at(-1)!;
-  assert.equal(done.event, 'done');
-  // Timer scope keeps only the in-scope task and only its timer fields.
-  assert.deepEqual(done.data.taskUpdates, TIMER_UPDATE);
-  assert.deepEqual([done.data.tasks, done.data.tabs, done.data.taskDeletions], [[], [], []]);
-});
-
-test('invalid tool arguments fall back to another model while no text was shown', async () => {
-  for (const invalid of [[timerCall(40)], [call('propose_launch_rocket', { id: 't' })], [call('propose_update_task', { id: 'missing', done: true })], [call('propose_update_task', null)]]) {
-    mockProvider(({ index }) => index === 0 ? sseResponse([invalid]) : sseResponse(['Пропоную таймер.', [timerCall()]]));
-    const res = await httpAssist({ ...base, prompt: TIMER_PROMPT, currentTasks: READING, stream: true });
-    const events = res.events();
-    assert.deepEqual(events.map((event: AIStreamEvent) => event.event), ['delta', 'done'], JSON.stringify(invalid));
-    assert.equal(events[1].data.fallbackUsed, true);
-    assert.deepEqual(events[1].data.taskUpdates, TIMER_UPDATE);
-    assert.equal(calls.length, 2);
-  }
-});
-
-test('invalid tool arguments after streamed text end with an error and no operations, without another model', async () => {
-  mockProvider(() => sseResponse(['Пропоную таймер на 40 секунд.', [timerCall(40)]]));
-  const res = await httpAssist({ ...base, prompt: TIMER_PROMPT, currentTasks: READING, stream: true });
-  const events = res.events();
-  assert.deepEqual(events.map((event: AIStreamEvent) => event.event), ['delta', 'error']);
-  assert.equal(events[1].data.code, 'INVALID_AI_RESPONSE');
-  assert.equal(events[1].data.partial, true);
-  assert.deepEqual(events[1].data.taskUpdates, []);
-  assert.match(events[1].data.error, /не застосовано/);
-  assert.equal(calls.length, 1);
-  // Non-streaming callers saw no text, so the same output may still be repaired by a fallback model.
-  mockProvider(({ index }) => unary([{ text: 'Пропоную таймер.' }, timerCall(index === 0 ? 40 : 1500)]));
-  const repaired = await server.invokeDesktopApi('assist', { ...base, prompt: TIMER_PROMPT, currentTasks: READING });
-  assert.equal(repaired.status, 200);
-  assert.equal(repaired.body.fallbackUsed, true);
-  assert.deepEqual(repaired.body.taskUpdates, TIMER_UPDATE);
+  const res = await httpAssist({ ...agentBase, prompt: 'Постав таймер Читання', currentTasks: READING, stream: true });
+  assert.deepEqual(res.events().map((event: AIStreamEvent) => event.event), ['delta', 'done']);
+  const done = res.events()[1].data;
+  assert.deepEqual(done.agent.actions, []);
+  assert.equal(done.fallbackUsed, false);
   assert.equal(calls.length, 2);
 });
 
-test('a model that rejects function calling repeats the request on the JSON schema path', async () => {
-  mockProvider(({ body }) => body.tools
-    ? json({ error: { code: 400, status: 'INVALID_ARGUMENT', message: 'Function calling is not enabled for this model.' } }, 400)
-    : jsonProposal({ reply: 'Пропоную таймер.', taskUpdates: TIMER_UPDATE }));
-  const res = await httpAssist({ ...base, prompt: TIMER_PROMPT, currentTasks: READING, stream: true });
-  const events = res.events();
-  assert.deepEqual(events.map((event: AIStreamEvent) => event.event), ['done']);
-  assert.deepEqual(events[0].data.taskUpdates, TIMER_UPDATE);
-  assert.deepEqual(calls.map(entry => [entry.streaming, Boolean(entry.body.tools), Boolean(entry.body.generationConfig?.responseSchema)]), [[true, true, false], [false, false, true]]);
-  assert.match(calls[1].body.systemInstruction.parts[0].text, /Return strictly valid JSON/);
-  // Any other invalid request stays an explicit failure.
-  mockProvider(() => json({ error: { code: 400, status: 'INVALID_ARGUMENT', message: 'Request contains an invalid argument.' } }, 400));
-  const failed = await server.invokeDesktopApi('assist', { ...base, prompt: TIMER_PROMPT, currentTasks: READING });
-  assert.equal(failed.body.code, 'INVALID_AI_REQUEST');
-  assert.equal(calls.length, 1);
-});
-
-test('KARKAS_AI_TOOLS=off forces the forced-JSON path for task commands', () => withToolsOff(async () => {
-  mockProvider(({ streaming, body }) => {
-    assert.equal(streaming, false);
-    assert.equal(body.tools, undefined);
-    assert.ok(body.generationConfig.responseSchema.properties.taskUpdates);
-    assert.match(body.systemInstruction.parts[0].text, /OPERATION FIELDS/);
-    return jsonProposal({ reply: 'Пропоную таймер.', taskUpdates: TIMER_UPDATE });
+test('destructive agent calls remain pending confirmations without applied actions', async () => {
+  mockProvider(({ index, body }) => {
+    if (index === 0) return unary([call('find_tasks', { query: 'Читання' })]);
+    if (index === 1) return unary([call('delete_task', { taskId: 't', reason: 'cancelled' })]);
+    const response = body.contents.at(-1).parts[0].functionResponse.response;
+    assert.equal(response.code, 'needs_confirmation');
+    assert.equal(response.awaitingConfirmation, true);
+    return unary([{ text: 'Підтвердьте видалення «Читання».' }]);
   });
-  const res = await httpAssist({ ...base, prompt: TIMER_PROMPT, currentTasks: READING, stream: true });
-  const events = res.events();
-  assert.deepEqual(events.map((event: AIStreamEvent) => event.event), ['done']);
-  assert.deepEqual(events[0].data.taskUpdates, TIMER_UPDATE);
-  assert.equal(calls.length, 1);
-}));
-
-test('a text-only clarifying answer streams and proposes no operations', async () => {
-  mockProvider(() => sseResponse(['Для якого завдання ', 'додати таймер?']));
-  const res = await httpAssist({ ...base, prompt: 'Додай таймер на 25 хвилин', currentTasks: READING, stream: true });
-  const events = res.events();
-  assert.deepEqual(events.map((event: AIStreamEvent) => event.event), ['delta', 'delta', 'done']);
-  const done = events[2].data;
-  assert.equal(done.reply, 'Для якого завдання додати таймер?');
-  assert.deepEqual([done.tasks, done.tabs, done.taskUpdates, done.taskDeletions], [[], [], [], []]);
-  assert.equal(done.aiMetrics.toolCalls, 0);
+  const result = await server.invokeDesktopApi('assist', { ...agentBase, prompt: 'Видали Читання', currentTasks: READING });
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.body.agent.actions, []);
+  assert.deepEqual(result.body.agent.pendingConfirmations, [{ type: 'delete_task', taskId: 't', reason: 'cancelled' }]);
 });
 
-test('tool calls without text get a summary reply; claims of applied changes are rewritten', async () => {
-  mockProvider(() => unary([{ text: 'Internal reasoning', thought: true }, timerCall()]));
-  const silent = await server.invokeDesktopApi('assist', { ...base, prompt: TIMER_PROMPT, currentTasks: READING });
-  assert.equal(silent.status, 200);
-  assert.match(silent.body.reply, /Пропозиція готова: зміни в завданнях \(1\)/);
-  assert.match(silent.body.reply, /Застосувати зміни/);
-  assert.doesNotMatch(silent.body.reply, /Internal reasoning/);
-  assert.equal(silent.body.summary, silent.body.reply);
-  assert.deepEqual(silent.body.taskUpdates, TIMER_UPDATE);
-
-  mockProvider(() => sseResponse(['Я додав таймер на 25 хвилин.', [timerCall()]]));
-  const res = await httpAssist({ ...base, prompt: TIMER_PROMPT, currentTasks: READING, stream: true });
+test('ask_user returns concrete clarification options and stops before another provider round', async () => {
+  const clarification = { question: 'Для якого завдання?', options: [
+    { label: 'Читання', message: 'Постав таймер на 25 хвилин для «Читання»' },
+    { label: 'Інше', message: 'Постав таймер на 25 хвилин для «Інше»' },
+  ] };
+  mockProvider(() => unary([call('ask_user', clarification)]));
+  const res = await httpAssist({ ...agentBase, prompt: 'Постав таймер на 25 хвилин', currentTasks: READING, stream: true });
   const done = res.events().at(-1)!.data;
-  assert.equal(done.replyReplaced, true);
-  assert.doesNotMatch(done.reply, /Я додав/);
-  assert.deepEqual(done.taskUpdates, TIMER_UPDATE);
+  assert.deepEqual(done.agent.clarification, clarification);
+  assert.equal(done.text, clarification.question);
+  assert.equal(calls.length, 1);
 });
 
-// ---- ordinary conversation: proposals the person asks for or agrees to ----
-const finalUserTurn = (body: any) => body.contents.at(-1).parts.map((part: any) => part.text).join('\n');
-const STEPS_OFFER = 'Почніть з малого:\n1. Відкрити книгу — 15 хв\n2. Прочитати один розділ — 20 хв\n\nДодати ці кроки до завдання «Читання»?';
-
-test('general chat streams prose with the proposal tools; calls stay within the conversational scope', async () => {
-  mockProvider(({ streaming, body }) => {
-    assert.equal(streaming, true);
+test('an accepted offer reaches the agent with the conversation and already stated values', async () => {
+  const offer = 'Додати до «Читання» крок «Відкрити книгу» на 15 хвилин?';
+  mockProvider(({ body }) => {
     assert.ok(body.tools);
-    const system = body.systemInstruction.parts[0].text;
-    assert.match(system, /ROUTE general/);
-    assert.match(system, /never say you are read-only/);
-    assert.match(system, /COACHING:/);
-    assert.doesNotMatch(system, /PERSONAL_DISCOVERY RULES/);
-    assert.match(finalUserTurn(body), /CONCRETE COMMAND SCOPE: \{"operation":"proposal","taskIds":\[\]\}/);
-    return sseResponse(['Спробуйте почати з короткого кроку.', [
-      call('propose_update_task', { id: 't', timerMode: 'countdown', countdownDurationSeconds: 1500 }),
-      call('propose_create_task', { title: 'Прогулянка після обіду', phase: 'focus', priority: 2, steps: 0 }),
-    ]]);
+    const history = JSON.stringify(body.contents);
+    assert.match(history, /Відкрити книгу/);
+    assert.match(history, /15 хвилин/);
+    assert.match(history, /Так, додай/);
+    return unary([{ text: 'Додам крок після уточнення завдання.' }]);
   });
-  const res = await httpAssist({ ...base, prompt: GENERAL, currentTasks: READING, stream: true });
-  const events = res.events();
-  assert.deepEqual(events.map((event: AIStreamEvent) => event.event), ['delta', 'done']);
-  const done = events[1].data;
-  // No task was named, so only the new task survives; nothing is applied until Apply.
-  assert.deepEqual(done.taskUpdates, []);
-  assert.deepEqual(done.tasks.map((task: any) => task.title), ['Прогулянка після обіду']);
-  assert.equal(done.reply, 'Спробуйте почати з короткого кроку.');
+  const result = await server.invokeDesktopApi('assist', { ...agentBase, prompt: 'Так, додай', currentTasks: READING,
+    conversation: [{ role: 'user', content: 'Як почати читати?' }, { role: 'assistant', content: offer }] });
+  assert.equal(result.status, 200);
+  assert.ok(result.body.agent);
+  assert.equal(calls.length, 1);
 });
 
-test('a yes to an offered change becomes a scoped proposal request carrying the offered plan', async () => {
-  mockProvider(({ body }) => {
-    const turn = finalUserTurn(body);
-    assert.match(turn, /REQUEST ROUTE: task_command/);
-    assert.match(turn, /CONCRETE COMMAND SCOPE: \{"operation":"proposal","taskIds":\["t"\]\}/);
-    assert.match(turn, /ACCEPTED OFFER[^\n]*\n[\s\S]*Відкрити книгу — 15 хв/);
-    return sseResponse(['Пропоную додати два кроки до «Читання».', [
-      call('propose_update_task', { id: 't', stepList: [{ title: 'Відкрити книгу — 15 хв' }, { title: 'Прочитати один розділ — 20 хв' }] }),
-    ]]);
+test('agent personal handoff answers the same message through the existing personal flow', async () => {
+  const prompt = 'Мені потрібна допомога з мотивацією';
+  mockProvider(({ index, body }) => {
+    if (index === 0) return unary([call('open_personal_coaching', { reason: 'Motivation and life goals' })]);
+    assert.match(body.systemInstruction.parts[0].text, /PERSONAL_DISCOVERY RULES/);
+    assert.match(JSON.stringify(body.contents), /Мені потрібна допомога з мотивацією/);
+    return jsonProposal({ reply: 'Що зараз найбільше заважає почати?', memoryPatch: { discovery: {} } });
   });
-  const conversation = [{ role: 'user', content: 'Як почати читання?' }, { role: 'assistant', content: STEPS_OFFER }];
-  const res = await httpAssist({ ...base, prompt: 'Так, додай', conversation, currentTasks: READING, stream: true });
-  const done = res.events().at(-1)!;
-  assert.equal(done.event, 'done');
-  assert.deepEqual(done.data.taskUpdates.map((update: any) => [update.id, update.stepList.map((step: any) => step.title)]),
-    [['t', ['Відкрити книгу — 15 хв', 'Прочитати один розділ — 20 хв']]]);
-  // A refusal of the same offer stays an ordinary reply without the accepted plan.
-  mockProvider(({ body }) => {
-    assert.match(finalUserTurn(body), /REQUEST ROUTE: general/);
-    assert.doesNotMatch(finalUserTurn(body), /ACCEPTED OFFER/);
-    return sseResponse(['Добре, залишимо як є.']);
-  });
-  const refused = await httpAssist({ ...base, prompt: 'Ні, не треба', conversation, currentTasks: READING, stream: true });
-  assert.equal(refused.events().at(-1)!.data.reply, 'Добре, залишимо як є.');
-});
-
-test('an offer in a prose reply is kept because a yes can be carried over', async () => {
-  mockProvider(() => sseResponse([STEPS_OFFER]));
-  const res = await httpAssist({ ...base, prompt: HELP, currentTasks: READING, stream: true });
-  const done = res.events().at(-1)!.data;
-  assert.equal(done.reply, STEPS_OFFER);
-  assert.equal(done.replyReplaced, undefined);
+  const result = await server.invokeDesktopApi('assist', { ...agentBase, prompt });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.agent.handoff, 'personal');
+  assert.equal(result.body.aiMetrics.promptTokens, 100);
+  assert.equal(result.body.aiMetrics.toolCalls, 1);
+  assert.ok(result.body.reply);
+  assert.equal(calls.length, 2);
 });
 
 test('the discovery interview runs only in the explicit discovery mode', async () => {
   const prompt = 'В мене жахлива прокрастинація, не можу почати працювати';
-  mockProvider(() => sseResponse(['Почніть з найменшого кроку.']));
-  await httpAssist({ ...base, prompt, currentTasks: READING, stream: true });
+  mockProvider(() => unary([{ text: 'Почніть з найменшого кроку.' }]));
+  await httpAssist({ ...agentBase, prompt, currentTasks: READING, stream: true });
   assert.doesNotMatch(calls[0].body.systemInstruction.parts[0].text, /PERSONAL_DISCOVERY RULES/);
-  assert.match(finalUserTurn(calls[0].body), /REQUEST ROUTE: general/);
+  assert.ok(calls[0].body.tools);
   mockProvider(() => jsonProposal({ memoryPatch: { discovery: {} } }));
-  await httpAssist({ ...base, prompt, currentTasks: READING, stream: true, discoveryMode: true });
+  await httpAssist({ ...agentBase, prompt, currentTasks: READING, stream: true, discoveryMode: true });
   assert.match(calls[0].body.systemInstruction.parts[0].text, /PERSONAL_DISCOVERY RULES/);
-  // A clear command in discovery mode is still handled as a command for that turn.
-  mockProvider(() => sseResponse(['Пропоную кроки.']));
-  await httpAssist({ ...base, prompt: 'Розбий завдання Читання на кроки', currentTasks: READING, stream: true, discoveryMode: true });
-  assert.match(finalUserTurn(calls[0].body), /REQUEST ROUTE: task_command/);
+  // A clear command in discovery mode is still handled by the task agent.
+  mockProvider(() => unary([{ text: 'Додам кроки після читання завдання.' }]));
+  await httpAssist({ ...agentBase, prompt: 'Розбий завдання Читання на кроки', currentTasks: READING, stream: true, discoveryMode: true });
+  assert.ok(calls[0].body.tools[0].functionDeclarations.some((entry: any) => entry.name === 'add_steps'));
 });
 
-test('chat history marks unapplied proposals and the rules forbid describing them as done', async () => {
-  mockProvider(({ body }) => {
-    const system = body.systemInstruction.parts[0].text;
-    assert.match(system, /Only WORKSPACE CONTEXT is the truth/);
-    assert.match(system, /reports doing something that matches a not-done step/);
-    assert.match(system, /timerRunning:true, offer to pause its timer/);
-    // The note follows the assistant reply in the user role, so it opens the final user turn.
-    const finalTurn = body.contents.at(-1);
-    assert.equal(finalTurn.role, 'user');
-    assert.match(finalTurn.parts[0].text, /was NOT applied; none of its changes happened/);
-    assert.match(finalTurn.parts.at(-1).text, /CURRENT USER MESSAGE/);
-    assert.doesNotMatch(JSON.stringify(body.contents.filter((turn: any) => turn.role === 'model')), /App note/);
-    return sseResponse(['Кроки для банерів ще не додані. Додати їх?']);
+// Agent tool rounds stay private; only the final answer is emitted to the client.
+const agentTask = { id: 'agent-task', title: 'Робота над анімацією', phase: 'focus', priority: 2,
+  steps: 3, currentStep: 0, done: false, pinned: false, createdAt: 1,
+  timerMode: 'countdown', countdownDurationSeconds: 3600, countdownRemainingSeconds: 3600, timerRunning: false };
+
+test('agent tool rounds return applied actions in done without streaming intermediate prose', async () => {
+  const actions = [call('set_countdown', { taskId: 'agent-task', minutes: 180, start: false }),
+    call('set_step_done', { taskId: 'agent-task', step: 3, done: true })];
+  mockProvider(({ index, body }) => {
+    assert.equal(calls[index].streaming, false);
+    if (index === 0) return unary([{ text: 'Перевіряю завдання.' }, call('find_tasks', { query: 'анімація' })]);
+    if (index === 1) {
+      assert.equal(body.contents.at(-2).role, 'model');
+      assert.equal(body.contents.at(-1).role, 'user');
+      assert.equal(body.contents.at(-1).parts[0].functionResponse.name, 'find_tasks');
+      return unary(actions);
+    }
+    assert.deepEqual(body.contents.at(-1).parts.map((part: any) => part.functionResponse.name), ['set_countdown', 'set_step_done']);
+    return unary([{ text: 'Встановлено 3 години та завершено третій етап.' }]);
   });
-  const conversation = [
-    { role: 'user', content: 'Розбий банери на кроки' },
-    { role: 'assistant', content: 'Пропоную 5 кроків для «Банери».', proposalStatus: 'not_applied' },
-  ];
-  const res = await httpAssist({ ...base, prompt: 'Не можу почати', conversation, currentTasks: READING, stream: true });
-  assert.equal(res.events().at(-1)!.event, 'done');
-  assert.equal(calls.length, 1);
+  const before = structuredClone(agentTask);
+  const res = await httpAssist({ ...agentBase, prompt: 'Збільш час роботи над анімацією до 3х годин і заверш 3 етап',
+    currentTasks: [agentTask], tabs: [{ id: 'focus', name: 'Робота' }], stream: true });
+  const events = res.events();
+  assert.deepEqual(events.map((event: AIStreamEvent) => event.event), ['delta', 'done']);
+  assert.equal(events[0].data.text, 'Встановлено 3 години та завершено третій етап.');
+  assert.deepEqual(events[1].data.agent.actions.map((entry: any) => entry.action), [
+    { type: 'set_countdown', taskId: 'agent-task', minutes: 180, start: false },
+    { type: 'set_step_done', taskId: 'agent-task', step: 3, done: true },
+  ]);
+  assert.deepEqual(events[1].data.agent.pendingConfirmations, []);
+  assert.deepEqual(agentTask, before);
+  assert.equal(calls.length, 3);
 });
 
-test('a new task note that only repeats its title is dropped, as is a title-echo note in an update', async () => {
-  const title = 'Змонтувати шоурил моушн-дизайну 2026';
-  mockProvider(() => sseResponse(['Пропоную нові завдання.', [call('propose_create_tasks', { tasks: [
-    { title, phase: 'focus', priority: 2, steps: 0, note: title },
-    { title: 'Оновити сайт-портфоліо', phase: 'focus', priority: 3, steps: 0, note: 'Додати три нові кейси' },
-  ] })]]));
-  const res = await httpAssist({ ...base, prompt: `Додай завдання: ${title}; Оновити сайт-портфоліо`, tabs: ['focus'], currentTasks: READING, stream: true });
-  const done = res.events().at(-1)!;
-  assert.equal(done.event, 'done');
-  assert.deepEqual(done.data.tasks.map((task: any) => [task.title, task.note]), [[title, ''], ['Оновити сайт-портфоліо', 'Додати три нові кейси']]);
+test('agentConfirm applies a confirmed action without a model request', async () => {
+  mockProvider(() => assert.fail('Confirmation must not invoke the provider'));
+  const pending = { type: 'delete_task', taskId: 'agent-task', reason: 'cancelled' };
+  const result = await server.invokeDesktopApi('assist', { ...agentBase, customApiKey: undefined, prompt: undefined,
+    agentConfirm: pending, confirmed: true, currentTasks: [agentTask], tabs: [{ id: 'focus', name: 'Робота' }] });
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.body.agent.actions[0].action, pending);
+  assert.deepEqual(result.body.agent.actions[0].changedTaskIds, ['agent-task']);
+  assert.equal(typeof result.body.agent.actions[0].summary.uk, 'string');
+  assert.equal(calls.length, 0);
+});
 
-  mockProvider(() => sseResponse(['Пропоную оновити «Читання».', [call('propose_update_task', { id: 't', note: 'Читання', priority: 1 })]]));
-  const update = await httpAssist({ ...base, prompt: 'Зміни пріоритет завдання Читання на високий', currentTasks: READING, stream: true });
-  const updated = update.events().at(-1)!;
-  assert.equal(updated.event, 'done');
-  assert.deepEqual(updated.data.taskUpdates, [{ id: 't', priority: 1 }]);
+test('agentConfirm rejects missing consent, invalid arguments and malformed workspace before transport', async () => {
+  mockProvider(() => assert.fail('Invalid confirmation must not invoke the provider'));
+  const request = { ...agentBase, prompt: undefined, agentConfirm: { type: 'delete_task', taskId: 'agent-task' },
+    confirmed: true, currentTasks: [agentTask] };
+  for (const patch of [
+    { confirmed: false }, { confirmed: undefined }, { agentConfirm: { type: 'delete_task', taskId: 'agent-task', confirmed: true } },
+    { agentConfirm: { type: 'delete_task', taskId: 12 } }, { deletedTasks: {} }, { notes: [null] },
+    { currentTasks: [{ ...agentTask, pinned: 'yes' }] },
+  ]) {
+    const result = await server.invokeDesktopApi('assist', { ...request, ...patch });
+    assert.equal(result.status, 400, JSON.stringify(patch));
+  }
+  assert.equal(calls.length, 0);
+});
+
+
+test('successful agent actions survive a personal handoff provider failure in the final done event', async () => {
+  mockProvider(({ index }) => {
+    if (index === 0) return unary([call('find_tasks', { query: 'анімація' })]);
+    if (index === 1) return unary([
+      call('set_countdown', { taskId: 'agent-task', minutes: 180, start: false }),
+      call('open_personal_coaching', { reason: 'Help with motivation after updating the task' }),
+    ]);
+    return rejected(401, 'UNAUTHENTICATED');
+  });
+  const res = await httpAssist({ ...agentBase, prompt: 'Збільш час роботи над анімацією до 3 годин і допоможи з мотивацією',
+    currentTasks: [agentTask], stream: true });
+  const events = res.events();
+  assert.deepEqual(events.map((event: AIStreamEvent) => event.event), ['delta', 'done']);
+  const done = events[1].data;
+  assert.equal(res.statusCode, 200);
+  assert.equal(done.agent.handoff, 'personal');
+  assert.deepEqual(done.agent.actions.map((entry: any) => entry.action), [
+    { type: 'set_countdown', taskId: 'agent-task', minutes: 180, start: false },
+  ]);
+  assert.ok(done.text.includes(done.agent.actions[0].summary.uk));
+  assert.match(done.text, /ключ API/);
+  assert.doesNotMatch(done.text, /Зміни не підготовлено й не застосовано|No changes were prepared or applied/);
+  assert.doesNotMatch(done.text, /test-only-fake-key|private provider detail/);
+  assert.equal(calls.length, 3);
+});
+
+test('cancelling in the final personal handoff delta prevents the done event', async () => {
+  const controller = new AbortController();
+  mockProvider(({ index }) => index === 0
+    ? unary([call('open_personal_coaching', { reason: 'Motivation and life goals' })])
+    : jsonProposal({ memoryPatch: { discovery: {} } }));
+  const res = fakeHttpResponse();
+  const write = res.write;
+  res.write = (chunk: string) => {
+    const result = write(chunk);
+    if (chunk.includes('event: delta')) controller.abort(new DOMException('cancelled', 'AbortError'));
+    return result;
+  };
+  await server.assistHandler({ body: { ...agentBase, prompt: 'Мені потрібна допомога з мотивацією', stream: true },
+    signal: controller.signal, on() {}, removeListener() {} }, res);
+  assert.deepEqual(res.events().map((event: AIStreamEvent) => event.event), ['delta']);
+  assert.equal(controller.signal.aborted, true);
+  assert.equal(calls.length, 2);
+});
+
+
+test('personal handoff reads the updated task snapshot and includes successful action summaries', async () => {
+  mockProvider(({ index, body }) => {
+    if (index === 0) return unary([call('find_tasks', { query: 'анімація' })]);
+    if (index === 1) return unary([
+      call('update_task', { taskId: 'agent-task', plannedDate: '2026-10-12' }),
+      call('open_personal_coaching', { reason: 'Motivation after scheduling the task' }),
+    ]);
+    const context = body.contents.flatMap((turn: any) => turn.parts.map((part: any) => part.text ?? '')).join('\n');
+    assert.match(context, /"plannedTodayUnfinished":1/);
+    return jsonProposal({ memoryPatch: { discovery: {} } });
+  });
+  const result = await server.invokeDesktopApi('assist', { ...agentBase,
+    prompt: 'Заплануй анімацію на сьогодні й допоможи з мотивацією', currentTasks: [agentTask] });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.agent.handoff, 'personal');
+  assert.ok(result.body.text.includes(result.body.agent.actions[0].summary.uk));
+  assert.equal(result.body.reply, result.body.text);
+  assert.equal(calls.length, 3);
 });

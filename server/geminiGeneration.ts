@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, type Content, type Part } from '@google/genai';
 import { AI_CHAT_FALLBACK_MODELS } from '../src/utils/aiChatTiming';
 
 // A short one-way label per API key, so the client can keep per-key model usage
@@ -63,7 +63,10 @@ export class AIToolsRejectedError extends AIRequestError {
 }
 
 /** A function call proposed by the model. Arguments are unvalidated provider data. */
-export interface AIFunctionCall { name: string; args: unknown }
+export interface AIFunctionCall { name: string; args: unknown; id?: string }
+export type GeminiContent = Content;
+export type GeminiPart = Part;
+export type GeminiContents = Parameters<GoogleGenAI['models']['generateContent']>[0]['contents'];
 
 /**
  * Visible text and function calls of one response or stream chunk. Thought parts
@@ -72,7 +75,10 @@ export interface AIFunctionCall { name: string; args: unknown }
  */
 export function responseOutput(response: any): { text: string; functionCalls: AIFunctionCall[] } {
   const parts = response?.candidates?.[0]?.content?.parts;
-  const toCall = (call: any): AIFunctionCall => ({ name: typeof call?.name === 'string' ? call.name : '', args: call?.args });
+  const toCall = (call: any): AIFunctionCall => ({
+    name: typeof call?.name === 'string' ? call.name : '', args: call?.args,
+    ...(typeof call?.id === 'string' ? { id: call.id } : {}),
+  });
   if (Array.isArray(parts)) {
     let text = '';
     const functionCalls: AIFunctionCall[] = [];
@@ -87,6 +93,26 @@ export function responseOutput(response: any): { text: string; functionCalls: AI
   try { text = typeof response?.text === 'string' ? response.text : ''; } catch { text = ''; }
   const calls = Array.isArray(response?.functionCalls) ? response.functionCalls : [];
   return { text, functionCalls: calls.map(toCall) };
+}
+
+/**
+ * Replay the provider's complete model turn before function responses. In particular,
+ * thought signatures belong to their original parts and must never be reconstructed.
+ * The synthesized form also supports simple scripted providers without candidates.
+ */
+export function responseModelContent(response: any): GeminiContent {
+  const content = response?.candidates?.[0]?.content;
+  if (Array.isArray(content?.parts)) return content.role === 'model' ? content : { ...content, role: 'model' };
+  const output = responseOutput(response);
+  return {
+    role: 'model',
+    parts: [
+      ...(output.text ? [{ text: output.text }] : []),
+      ...output.functionCalls.map(call => ({ functionCall: {
+        name: call.name, args: call.args as Record<string, unknown>, ...(call.id ? { id: call.id } : {}),
+      } })),
+    ],
+  };
 }
 
 /** Retain an actionable category without exposing provider diagnostics or credentials. */
@@ -155,7 +181,8 @@ export function aiRequestFailure(error: AIRequestError, isUk: boolean) {
  * smallest level every target model accepts; subtle memory/analysis keeps more.
  * 'default' leaves the provider default untouched.
  */
-export type AIThinkingEffort = 'minimal' | 'low' | 'medium' | 'default';
+// 'agent': tool chains need real reasoning on Lite too, without slowing Flash to MEDIUM.
+export type AIThinkingEffort = 'minimal' | 'low' | 'medium' | 'agent' | 'default';
 
 /**
  * Gemini 3.x accepts thinkingLevel; Gemini 2.5 accepts thinkingBudget. Some 3.x
@@ -173,10 +200,10 @@ export function thinkingConfigForModel(model: string, effort: AIThinkingEffort =
       flash: { minimal: 0, low: 512, medium: 2048 },
       pro: { minimal: 128, low: 512, medium: 2048 }, // 2.5 Pro cannot disable thinking.
     };
-    return { thinkingBudget: budgets[legacy[1]][effort] };
+    return { thinkingBudget: budgets[legacy[1]][effort === 'agent' ? 'medium' : effort] };
   }
   const isLite = /^gemini-(?:[3-9]|\d{2,})(?:\.\d+)?-flash-lite(?![a-z])/.test(id) || id === 'gemini-flash-lite-latest';
-  if (isLite) return { thinkingLevel: effort === 'medium' ? 'LOW' : 'MINIMAL' };
+  if (isLite) return { thinkingLevel: effort === 'medium' || effort === 'agent' ? 'LOW' : 'MINIMAL' };
   const isCurrent = /^gemini-(?:[3-9]|\d{2,})(?:\.\d+)?-(?:flash|pro)(?![a-z-]*lite)/.test(id) || id === 'gemini-flash-latest' || id === 'gemini-pro-latest';
   if (isCurrent) return { thinkingLevel: effort === 'medium' ? 'MEDIUM' : 'LOW' };
   return undefined;
@@ -351,7 +378,6 @@ export function resetModelHealthForTests() {
   availableModelsByClient = new WeakMap();
 }
 
-type GeminiContents = Parameters<GoogleGenAI['models']['generateContent']>[0]['contents'];
 interface PlannedAttempt { model: string; applyThinking: boolean; thinkingRetry: boolean; rejectedThinkingKey?: string }
 
 interface FallbackOptions {
@@ -595,7 +621,7 @@ export async function generateGeminiWithFallback({
       }
       plan.succeeded(entry);
       const metrics = plan.metrics(entry, thinkingConfig, (response as any)?.usageMetadata, config?.tools ? { toolCalls: output.functionCalls.length } : {});
-      return { ...response, text: responseText, functionCalls: output.functionCalls, usedModel: model, fallbackUsed: model !== plan.preferredModel, validatedResponse, metrics };
+      return { ...response, text: responseText, functionCalls: output.functionCalls, modelContent: responseModelContent(response), usedModel: model, fallbackUsed: model !== plan.preferredModel, validatedResponse, metrics };
     } catch (error) {
       // Cancelling the parent request must never start another provider attempt.
       if (signal?.aborted) throw signal.reason ?? error;

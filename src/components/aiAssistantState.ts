@@ -1,4 +1,5 @@
 import type { AIResponse } from '../types';
+import { validateAgentResponse } from './aiAgentClient';
 import { looksLikeGeminiApiKey } from '../utils/apiKey';
 import { normalizeTaskSchedule } from '../utils/taskScheduling';
 import type { AIIntent } from '../types';
@@ -211,6 +212,7 @@ export function readAIResponse(value: unknown, mode: AIMode): AIResponse & { use
   const record = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : null;
   if (!record || typeof (mode === 'chat' ? record.reply || record.summary : record.summary) !== 'string'
     || !(mode === 'chat' ? record.reply || record.summary : record.summary).trim()) throw new AIRequestError('INVALID_RESPONSE');
+  if (record.agent !== undefined && !validateAgentResponse(record.agent)) throw new AIRequestError('INVALID_RESPONSE');
   if (record.proposalDisposition !== undefined && !['cancelled', 'clarification'].includes(record.proposalDisposition)) throw new AIRequestError('INVALID_RESPONSE');
   if (record.proposalDisposition && [...['tasks', 'tabs', 'taskUpdates', 'taskDeletions'].map(key => record[key]), record.strategy?.actions]
     .some(actions => Array.isArray(actions) && actions.length)) throw new AIRequestError('INVALID_RESPONSE');

@@ -55,6 +55,8 @@ test("invalid context is rejected as a client error on all AI routes", async () 
     ["assist", { prompt: "Plan", fullAppContext: { activeTasks: [null] } }],
     ["assist", { prompt: "Plan", stats: null }],
     ["assist", { prompt: "Plan", tabs: [{ name: "Missing ID" }] }],
+    ["assist", { prompt: "Plan", action: "chat", notes: [null] }],
+    ["assist", { prompt: "Plan", action: "chat", deletedTasks: {} }],
     ["breakdown-task", { task: { title: "Plan" }, allTasks: "invalid" }],
     ["recommendations", { tasks: [null] }],
     ["recommendations", { periodMetrics: { totalCompleted: -1 } }],
@@ -223,8 +225,8 @@ test("desktop IPC uses the same validation and computes calendar labels for the 
     assert.equal((await invokeDesktopApi('recommendations', null)).status, 400);
     assert.equal((await invokeDesktopApi('missing')).status, 404);
     const greeting = await invokeDesktopApi('assist', { prompt: 'hello', action: 'chat', lang: 'en' });
-    assert.equal(greeting.status, 200);
-    assert.equal(greeting.body.source, 'greeting');
+    assert.equal(greeting.status, 503);
+    assert.equal(greeting.body.code, 'MISSING_API_KEY');
     context.mock.timers.enable({ apis: ['Date'], now: new Date('2028-07-01T12:00:00Z').getTime() });
     const thisYear = await invokeDesktopApi('recommendations', { period: 'THIS_YEAR', lang: 'en' });
     const lastYear = await invokeDesktopApi('recommendations', { period: 'LAST_YEAR', lang: 'en' });
@@ -253,4 +255,28 @@ test('pending plans are excluded from offline productivity counts', async () => 
   const response = await post('recommendations', { lang: 'en', tasks: [{ id: 'future', title: 'Typing', done: false, scheduledPending: true, createdAt: Date.now() }] });
   assert.equal(response.status, 200);
   assert.match(response.data.periodRetrospective, /0 tasks were added/);
+});
+
+
+test('HTTP agentConfirm applies a confirmed deletion without credentials or a prompt', async () => {
+  const currentTasks = [{ id: 't', title: 'Draft', phase: 'focus', priority: 2, steps: 0, currentStep: 0, done: false, pinned: false, createdAt: 1 }];
+  const action = { type: 'delete_task', taskId: 't', reason: 'cancelled' };
+  const result = await post('assist', { action: 'chat', agentConfirm: action, confirmed: true, currentTasks });
+  assert.equal(result.status, 200);
+  assert.equal(result.data.source, 'agent-confirmation');
+  assert.deepEqual(result.data.agent.actions[0].action, action);
+  assert.deepEqual(result.data.agent.actions[0].changedTaskIds, ['t']);
+  assert.deepEqual(result.data.agent.pendingConfirmations, []);
+  assert.equal(typeof result.data.text, 'string');
+});
+
+test('HTTP agentConfirm requires explicit consent and valid action fields', async () => {
+  for (const body of [
+    { agentConfirm: { type: 'clear_completed' } },
+    { agentConfirm: { type: 'clear_completed' }, confirmed: false },
+    { agentConfirm: { type: 'clear_completed', confirmed: true }, confirmed: true },
+    { agentConfirm: { type: 'set_countdown', taskId: 't', minutes: -1 }, confirmed: true },
+  ]) {
+    assert.equal((await post('assist', { action: 'chat', ...body })).status, 400);
+  }
 });

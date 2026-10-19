@@ -1,6 +1,11 @@
 import { pauseTaskTimer, startTaskTimer, configureTaskCountdown, clearTaskCountdown, extendTaskCountdown, getTaskRemainingSeconds } from './utils/taskTimer';
 import { startLimitedStart, finishLimitedStart, needsLimitedStartFinish, latestAttempt, summarizeAttempts } from './utils/limitedStart';
 import { applyAITaskUpdate } from './utils/aiTaskUpdates';
+import { applyAgentAction, type AgentWorkspace } from './utils/aiAgentActions';
+import { captureAgentUndo, undoAgentTurn, type AgentUndoSnapshot } from './utils/agentUndo';
+import { canonical } from './utils/canonical';
+import type { AgentApplyOptions, AgentApplyResult } from './components/aiAgentClient';
+import type { AppliedAgentAction, AgentView } from './types';
 import { applyAITimerSettings, isAITimerSettingsValid } from './utils/aiTaskTimer';
 import { isNewerAppVersion, isValidAppVersion } from './utils/appVersion';
 import React, { useState, useEffect, useMemo } from 'react';
@@ -274,7 +279,7 @@ export default function App() {
 
   const { notes, notesOwner, storageError: notesStorageError, switchOwner: switchNotesOwner,
     addNote: handleAddNote, updateNote: handleUpdateNote, deleteNote: handleDeleteNote,
-    restoreNote: handleRestoreNote } = useAccountNotes(localStorage.getItem('karkas_workspace_owner'),
+    restoreNote: handleRestoreNote, getNotes: getCurrentNotes, replaceNotes: replaceAgentNotes } = useAccountNotes(localStorage.getItem('karkas_workspace_owner'),
       lang === 'uk' ? INITIAL_NOTES_UK : INITIAL_NOTES_EN);
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isAIOpen, setIsAIOpen] = useState(false);
@@ -1778,7 +1783,7 @@ export default function App() {
   // Strategy view task links: show the task in the full list, then scroll to it and flash its frame.
   const [revealTaskId, setRevealTaskId] = useState<string | null>(null);
   const handleRevealTask = (id: string) => {
-    const task = operationalTasks.find(item => item.id === id);
+    const task = latestTasksRef.current.find(item => item.id === id && !item.scheduledPending);
     if (!task) return;
     setSelectedPhase('ALL');
     setActiveFilter(task.done ? 'DONE' : 'ALL');
@@ -1872,31 +1877,44 @@ export default function App() {
     void applyTabSet(preset, moveTo);
   };
 
-  const applyTabSet = async (nextTabs: TaskTab[], moveTo: Record<string, string> = {}): Promise<boolean> => {
+  const applyTabSet = async (nextTabs: TaskTab[], moveTo: Record<string, string> = {}, agentCommit?: {
+    workspace: AgentWorkspace; beforeNotes: NotepadNote[]; isCurrent: () => boolean; profile?: PersonalStrategyProfile;
+  }): Promise<boolean> => {
     if (!strategyReady || tabMigrationBusyRef.current || savingRef.current !== null
       || localStorage.getItem(strategyTransactionKey(strategyOwner)) !== null
       || localStorage.getItem(workspaceTabTransactionKey(strategyOwner)) !== null) return false;
     const owner = strategyOwner;
     const generation = authGenerationRef.current;
-    const isCurrent = () => generation === authGenerationRef.current && owner === workspaceOwnerRef.current && (auth.currentUser?.uid ?? null) === owner;
+    const ownsWorkspace = () => generation === authGenerationRef.current && owner === workspaceOwnerRef.current && (auth.currentUser?.uid ?? null) === owner;
+    const isCurrent = () => ownsWorkspace() && (!agentCommit || agentCommit.isCurrent());
+    if (!isCurrent()) return false;
     const beforeWorkspace = readWorkspace();
     const beforeProfile = personalProfileRef.current;
     const remapped = remapWorkspaceTabs(beforeWorkspace, beforeProfile, nextTabs, moveTo);
     if (!remapped) return false;
+    if (agentCommit) {
+      remapped.workspace = { ...remapped.workspace, tasks: agentCommit.workspace.tasks, deletedTasks: agentCommit.workspace.deletedTasks };
+      if (agentCommit.profile) remapped.profile = agentCommit.profile;
+    }
     remapped.profile = preserveDiscoveryAfterTabMigration(beforeProfile, remapped.profile);
     const discovery = normalizeStrategyDiscovery(remapped.profile);
     remapped.profile = { ...remapped.profile, discovery, phase: discovery.phase,
       onboardingStatus: discovery.phase === 'ready' ? 'complete' : remapped.profile.onboardingStatus === 'new' ? 'new' : 'in_progress' };
     const now = Date.now();
-    remapped.workspace.tasks = annotateTaskChanges(currentTasksRef.current, remapped.workspace.tasks, now);
+    if (!agentCommit) remapped.workspace.tasks = annotateTaskChanges(currentTasksRef.current, remapped.workspace.tasks, now);
     tabMigrationBusyRef.current = true;
     timerWorkspaceReadyRef.current = false;
     setWorkspaceReady(false);
     let staged = false;
+    let committed = false;
     try {
       // Establish a durable baseline, including earlier in-memory profile edits.
       if (!savePersonalStrategy(localStorage, owner, beforeProfile) || !await persistWorkspace()) throw new Error('Migration baseline could not be saved');
       if (!isCurrent() || !sameWorkspace(beforeWorkspace, readWorkspace()) || personalProfileRef.current !== beforeProfile) return false;
+      if (agentCommit) {
+        const liveNotes = getCurrentNotes();
+        if (!liveNotes || canonical(liveNotes) !== canonical(agentCommit.beforeNotes)) return false;
+      }
       // Retain the complete paired state before changing any of its individual storage slots.
       if (!stageWorkspaceTabTransaction(localStorage, owner, beforeWorkspace, remapped.workspace, beforeProfile, remapped.profile)) {
         setActionNotice(lang === 'uk' ? 'Не вдалося зберегти перенесення вкладок або попереднє перенесення ще не завершено. Вкладки не змінено.' : 'Could not save the tab migration or an earlier migration is still pending. Tabs were not changed.');
@@ -1905,14 +1923,23 @@ export default function App() {
       staged = true;
       const journal = localStorage.getItem(workspaceTabTransactionKey(owner));
       if (!savePersonalStrategy(localStorage, owner, remapped.profile)) throw new Error('Goal links could not be saved');
+      if (agentCommit && !replaceAgentNotes(agentCommit.beforeNotes, agentCommit.workspace.notes)) {
+        if (savePersonalStrategy(localStorage, owner, beforeProfile) && localStorage.getItem(workspaceTabTransactionKey(owner)) === journal) {
+          localStorage.removeItem(workspaceTabTransactionKey(owner));
+          staged = false;
+        }
+        throw new Error('Notes could not be saved');
+      }
       personalProfileRef.current = remapped.profile;
       setPersonalProfile(remapped.profile);
       applyWorkspace(remapped.workspace);
+      committed = true;
       if (!isSystemView(selectedPhase) && !nextTabs.some(tab => tab.id === selectedPhase)) setSelectedPhase('ALL');
-      const completed = await completeWorkspaceTabTransaction(localStorage, owner, journal, persistWorkspace(), isCurrent);
+      const completed = await completeWorkspaceTabTransaction(localStorage, owner, journal, persistWorkspace(), ownsWorkspace);
       if (isCurrent()) setWorkspaceStorageError(!completed);
-      if (!completed || !isCurrent()) return false;
-      return true;
+      if (!ownsWorkspace()) return false;
+      // A retained persistence journal must not hide an already committed live agent turn.
+      return agentCommit ? true : completed;
     } catch {
       if (isCurrent()) {
         setWorkspaceStorageError(true);
@@ -1920,15 +1947,128 @@ export default function App() {
           ? (lang === 'uk' ? 'Перенесення вкладок збережено для відновлення. Звільніть місце й натисніть «Повторити збереження».' : 'The tab migration was retained for recovery. Free storage and choose Retry saving.')
           : (lang === 'uk' ? 'Не вдалося зберегти початкові дані. Вкладки не змінено; звільніть місце й повторіть.' : 'Could not save the original data. Tabs were not changed; free storage and retry.'));
       }
-      return false;
+      return !!agentCommit && committed && ownsWorkspace();
     } finally {
       tabMigrationBusyRef.current = false;
-      if (isCurrent() && localStorage.getItem(workspaceTabTransactionKey(owner)) === null) {
+      if (ownsWorkspace() && localStorage.getItem(workspaceTabTransactionKey(owner)) === null) {
         timerWorkspaceReadyRef.current = true;
         setWorkspaceReady(true);
         if (staged || queuedRemoteRef.current !== null) setWorkspaceReloadToken(value => value + 1);
       }
     }
+  };
+
+  const agentAppliedTurnsRef = React.useRef(new Map<string, Promise<AgentApplyResult>>());
+  const agentUndoTurnsRef = React.useRef(new Map<string, {
+    ownerId: string | null; undo: AgentUndoSnapshot; used: boolean;
+    goalLinks: { id: string; before: string[]; after: string[] }[];
+  }>());
+  const agentOwnerIsCurrent = (owner: string | null) => workspaceOwnerRef.current === owner
+    && (auth.currentUser?.uid ?? null) === owner && notesOwner === owner && canPersistWorkspaceRef.current;
+  const handleGetAgentWorkspace = (): AgentWorkspace | null => {
+    const owner = workspaceOwnerRef.current;
+    if (!timerWorkspaceReadyRef.current || tabMigrationBusyRef.current || !agentOwnerIsCurrent(owner)
+      || localStorage.getItem(strategyTransactionKey(owner)) !== null
+      || localStorage.getItem(workspaceTabTransactionKey(owner)) !== null) return null;
+    const liveNotes = getCurrentNotes();
+    return liveNotes ? { tasks: latestTasksRef.current, deletedTasks: currentDeletedTasksRef.current,
+      tabs: currentTabsRef.current, notes: liveNotes } : null;
+  };
+  const commitAgentWorkspace = async (before: AgentWorkspace, after: AgentWorkspace, isCurrent: () => boolean,
+    profile?: PersonalStrategyProfile): Promise<boolean> => {
+    if (!isCurrent()) return false;
+    // Deleting a category also migrates historical records and strategy goal links.
+    if (before.tabs.some(tab => !after.tabs.some(next => next.id === tab.id)) || profile) {
+      return applyTabSet(after.tabs, {}, { workspace: after, beforeNotes: before.notes, isCurrent, profile });
+    }
+    const workspace = migrateSystemCategories(parseWorkspace({ ...readWorkspace(), tasks: after.tasks,
+      deletedTasks: after.deletedTasks, tabs: after.tabs }));
+    if (!isCurrent() || !replaceAgentNotes(before.notes, after.notes)) return false;
+    // applyWorkspace synchronously commits every live ref, setter and existing persistence slot.
+    try {
+      applyWorkspace(workspace);
+      return true;
+    } catch {
+      setWorkspaceStorageError(true);
+      return canonical({ tasks: latestTasksRef.current, deletedTasks: currentDeletedTasksRef.current, tabs: currentTabsRef.current })
+        === canonical({ tasks: workspace.tasks, deletedTasks: workspace.deletedTasks, tabs: workspace.tabs });
+    }
+  };
+  const applyAgentView = (view: AgentView) => {
+    if (view.type === 'reveal_task') { handleRevealTask(view.taskId); return; }
+    const phases = { dashboard: 'DASHBOARD', strategy: 'STRATEGY', notes: 'NOTES', history: 'HISTORY', tasks: 'ALL' };
+    setSelectedPhase(phases[view.view]);
+  };
+  const handleApplyAgentActions = (input: AgentApplyOptions & { actions: AppliedAgentAction[] }): Promise<AgentApplyResult> => {
+    const key = JSON.stringify([input.ownerId, input.messageId]);
+    const previous = agentAppliedTurnsRef.current.get(key);
+    if (previous) return previous;
+    const pending = (async (): Promise<AgentApplyResult> => {
+      const failed: AgentApplyResult['failed'] = [];
+      const applied: AgentApplyResult['applied'] = [];
+      const isCurrent = () => agentOwnerIsCurrent(input.ownerId) && (!input.isCurrent || input.isCurrent());
+      const before = isCurrent() ? handleGetAgentWorkspace() : null;
+      const unavailable = () => ({ applied: [], failed: input.actions.map(({ action }) => ({ action,
+        error: lang === 'uk' ? 'Робочий простір змінився або ще не готовий. Дію не застосовано.' : 'The workspace changed or is not ready. The action was not applied.' })) });
+      if (!before) return unavailable();
+      const beforeProfile = personalProfileRef.current;
+      let workspace = before;
+      const views: AgentView[] = [];
+      for (const entry of input.actions) {
+        let createdIndex = 0;
+        const replay = applyAgentAction(workspace, entry.action, { now: Date.parse(input.clientClock.now),
+          timeZone: input.clientClock.timeZone, confirmed: input.confirmed === true,
+          newId: () => entry.createdIds?.[createdIndex++] ?? crypto.randomUUID() });
+        if (!replay.result.ok) { failed.push({ action: entry.action, error: replay.result.error }); continue; }
+        workspace = replay.workspace;
+        applied.push(replay.result.summary);
+        if (entry.action.type === 'open_view' || entry.action.type === 'reveal_task') views.push(entry.action);
+      }
+      const changed = canonical(before) !== canonical(workspace);
+      if (changed && !await commitAgentWorkspace(before, workspace, isCurrent)) return unavailable();
+      if (!isCurrent() && !changed) return unavailable();
+      let undoToken: string | undefined;
+      if (changed) {
+        undoToken = crypto.randomUUID();
+        const afterProfile = personalProfileRef.current;
+        const goalLinks = beforeProfile.goals.flatMap(goal => {
+          const afterGoal = afterProfile.goals.find(item => item.id === goal.id);
+          return afterGoal && canonical(goal.categoryIds) !== canonical(afterGoal.categoryIds)
+            ? [{ id: goal.id, before: goal.categoryIds, after: afterGoal.categoryIds }] : [];
+        });
+        agentUndoTurnsRef.current.set(undoToken, { ownerId: input.ownerId,
+          undo: captureAgentUndo(before, workspace), used: false, goalLinks });
+      }
+      if (agentOwnerIsCurrent(input.ownerId)) {
+        for (const view of views) applyAgentView(view);
+        if (input.view) applyAgentView(input.view);
+      }
+      return { applied, failed, undoToken };
+    })();
+    agentAppliedTurnsRef.current.set(key, pending);
+    return pending;
+  };
+  const handleUndoAgentActions = async (token: string): Promise<{ undone: boolean; conflicts: string[] }> => {
+    const turn = agentUndoTurnsRef.current.get(token);
+    if (!turn || turn.used || !agentOwnerIsCurrent(turn.ownerId)) return { undone: false, conflicts: ['workspace'] };
+    turn.used = true;
+    const before = handleGetAgentWorkspace();
+    if (!before) return { undone: false, conflicts: ['workspace'] };
+    const result = undoAgentTurn(before, turn.undo);
+    if (!result.undone) return { undone: false, conflicts: result.conflicts.map(conflict => conflict.collection + ':' + conflict.id) };
+    let profile: PersonalStrategyProfile | undefined;
+    if (turn.goalLinks.length) {
+      const currentProfile = personalProfileRef.current;
+      const conflicts = turn.goalLinks.filter(link => canonical(currentProfile.goals.find(goal => goal.id === link.id)?.categoryIds)
+        !== canonical(link.after)).map(link => 'strategy:' + link.id);
+      if (conflicts.length) return { undone: false, conflicts };
+      profile = { ...currentProfile, goals: currentProfile.goals.map(goal => {
+        const link = turn.goalLinks.find(item => item.id === goal.id);
+        return link ? { ...goal, categoryIds: link.before } : goal;
+      }) };
+    }
+    const undone = await commitAgentWorkspace(before, result.workspace, () => agentOwnerIsCurrent(turn.ownerId), profile);
+    return { undone, conflicts: undone ? [] : ['workspace'] };
   };
 
   // Task Actions
@@ -2832,6 +2972,10 @@ export default function App() {
         onClose={() => setIsAIOpen(false)}
         currentTasks={tasks}
         deletedTasks={deletedTasks}
+        notes={notesOwner === strategyOwner ? notes : []}
+        onGetAgentWorkspace={handleGetAgentWorkspace}
+        onApplyAgentActions={handleApplyAgentActions}
+        onUndoAgentActions={handleUndoAgentActions}
         stats={stats}
         adaptiveProfile={adaptiveProfile}
         initialPrompt={aiPromptSeed}

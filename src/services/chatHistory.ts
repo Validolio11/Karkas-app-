@@ -1,4 +1,7 @@
 import type { AIResponse } from '../types';
+import type { AgentAction } from '../utils/aiAgentActions';
+import { validateAgentAction } from '../utils/aiAgentActions';
+import { validAgentSummary } from '../components/aiAgentClient';
 import type { AIApplyOutcome } from '../components/aiTaskProposal';
 import { readAIResponse } from '../components/aiAssistantState';
 import { readAccountStorage, writeAccountStorage, removeAccountStorage } from '../utils/accountStorage';
@@ -15,6 +18,11 @@ export interface PersistedAIChatMessage {
   actionId?: string;
   notice?: string;
   greeting?: boolean;
+  agentApplied?: boolean;
+  agentSummaries?: { uk: string; en: string }[];
+  agentFailures?: { action: AgentAction; error: string }[];
+  agentUndoStatus?: 'undone' | 'conflict' | 'unavailable';
+  agentConfirmationStatus?: Record<number, 'confirmed' | 'dismissed'>;
 }
 
 const STORAGE_PREFIX = 'karkas_ai_chat_history';
@@ -37,7 +45,7 @@ export function loadAIChatHistory(accountId?: string | null): PersistedAIChatMes
       .map(message => {
         let response: AIResponse | undefined;
         try { if (message.response && message.role === 'assistant') response = readAIResponse(message.response, 'chat'); } catch { /* Preserve the conversation even if an old card is malformed. */ }
-        const hasProposal = response && ([response.tasks, response.tabs, response.taskUpdates, response.taskDeletions, response.strategy?.actions].some(actions => (actions?.length || 0) > 0)
+        const hasProposal = response && !response.agent && ([response.tasks, response.tabs, response.taskUpdates, response.taskDeletions, response.strategy?.actions].some(actions => (actions?.length || 0) > 0)
           || message.proposalStatus === 'pending' || message.proposalStatus === 'applied');
         return {
           role: message.role, content: message.content,
@@ -48,6 +56,17 @@ export function loadAIChatHistory(accountId?: string | null): PersistedAIChatMes
           ...(typeof message.actionId === 'string' ? { actionId: message.actionId } : {}),
           ...(typeof message.notice === 'string' ? { notice: message.notice } : {}),
           ...(message.greeting === true ? { greeting: true } : {}),
+          ...(response?.agent ? {
+            // History is descriptive. A saved response must never replay its actions.
+            agentApplied: true,
+            agentSummaries: Array.isArray(message.agentSummaries) ? message.agentSummaries.filter(validAgentSummary) : [],
+            agentFailures: Array.isArray(message.agentFailures) ? message.agentFailures.filter(failure => failure && typeof failure === 'object'
+              && typeof failure.error === 'string' && !('error' in validateAgentAction(failure.action))) : [],
+            agentUndoStatus: message.agentUndoStatus === 'undone' || message.agentUndoStatus === 'conflict' ? message.agentUndoStatus : 'unavailable' as const,
+            agentConfirmationStatus: Object.fromEntries(Object.entries(message.agentConfirmationStatus && typeof message.agentConfirmationStatus === 'object'
+              ? message.agentConfirmationStatus : {}).filter(([index, status]) => /^(0|[1-9]\d*)$/.test(index)
+                && Number(index) < response.agent!.pendingConfirmations.length && (status === 'confirmed' || status === 'dismissed'))),
+          } : {}),
         };
       })
       .slice(-MAX_MESSAGES);

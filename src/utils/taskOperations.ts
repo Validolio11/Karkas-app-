@@ -18,7 +18,7 @@ export function sanitizeTasksTimerSafeguard(taskList: PSTask[], now = Date.now()
     }
     const remaining = getTaskRemainingSeconds(task, now);
     if (remaining !== undefined) return remaining === 0 ? pauseTaskTimer(task, now) : task;
-    const elapsedSeconds = Math.floor((now - task.timerStartedAt) / 1000);
+    const elapsedSeconds = Math.floor((now - task.timerStartedAt!) / 1000);
     if (elapsedSeconds <= MAX_RUNNING_SESSION_SECONDS) return task;
     return {
       ...pauseTaskTimer(task, task.timerStartedAt! + MAX_RUNNING_SESSION_SECONDS * 1000),
@@ -75,10 +75,10 @@ export function createTask(input: NewTaskInput, id: string, now = Date.now()): P
   };
 }
 
-export function startTaskWork(task: PSTask, now = Date.now()): PSTask {
+export function startTaskWork(task: PSTask, now = Date.now(), newId: () => string = () => crypto.randomUUID()): PSTask {
   if (task.done) return task;
   const started = Number.isFinite(task.startedAt) ? task : { ...task, startedAt: now };
-  return startTaskTimer(started, now);
+  return startTaskTimer(started, now, newId);
 }
 
 /** Task completion is independent of its actual checklist progress. */
@@ -105,7 +105,7 @@ export function materializeStepList(task: PSTask, stepLabel = 'Крок'): TaskS
 }
 
 /** Editing a checklist does not change the parent's explicit completion state. */
-export function setTaskSteps(task: PSTask, stepList: TaskStepItem[], now: number): PSTask {
+export function setTaskSteps(task: PSTask, stepList: TaskStepItem[], now: number, newId: () => string = () => crypto.randomUUID()): PSTask {
   const base = task.timerRunning || task.done ? pauseTaskTimer(task, now) : task;
   const recorded = new Map<string, number | undefined>(base.stepList?.map(step => [step.id, step.timeSpentSeconds]));
   const list = stepList.map((step) => {
@@ -123,7 +123,7 @@ export function setTaskSteps(task: PSTask, stepList: TaskStepItem[], now: number
   const next = {
     ...base, stepList: list, steps: list.length, currentStep: completed,
   };
-  return task.timerRunning && !task.done && getTaskRemainingSeconds(base, now) !== 0 ? startTaskTimer(next, now) : next;
+  return task.timerRunning && !task.done && getTaskRemainingSeconds(base, now) !== 0 ? startTaskTimer(next, now, newId) : next;
 }
 
 export function toggleTaskDone(task: PSTask, now: number, _stepLabel = 'Крок'): PSTask {
@@ -157,13 +157,13 @@ export function deleteTaskStep(task: PSTask, index: number, now: number, stepLab
 }
 
 /** Manual totals include live elapsed time without resetting a countdown budget. */
-export function setTaskTimeSpent(task: PSTask, value: number, now: number): PSTask {
+export function setTaskTimeSpent(task: PSTask, value: number, now: number, newId: () => string = () => crypto.randomUUID()): PSTask {
   if (!Number.isFinite(value) || value > Number.MAX_SAFE_INTEGER) return task;
   const remaining = getTaskRemainingSeconds(task, now);
   return {
     ...discardTaskStepAttribution(task), timeSpentSeconds: nonnegativeInteger(value),
     timeResetAt: Math.max(now, (task.timeResetAt ?? 0) + 1),
-    timerSessionId: task.timerRunning ? crypto.randomUUID() : undefined,
+    timerSessionId: task.timerRunning ? newId() : undefined,
     timerStartedAt: task.timerRunning ? now : undefined, autoPausedOverdue: false,
     timerStepId: task.timerRunning ? activeTaskStepId(task) : undefined,
     ...(remaining === undefined ? {} : { countdownRemainingSeconds: remaining }),

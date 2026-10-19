@@ -55,7 +55,44 @@ export function useAccountNotes(initialOwner: string | null, fallback: NotepadNo
       return false;
     }
   };
+  const getNotes = (): NotepadNote[] | null => {
+    if (current.current.owner !== state.owner || current.current.epoch !== state.epoch) return null;
+    const latest = load(state.owner, fallback);
+    if (!latest.canPersist) { setStorageError(true); return null; }
+    const next = { ...current.current, ...latest };
+    current.current = next;
+    if (canonical(next.notes) !== canonical(state.notes)) setState(next);
+    return latest.notes;
+  };
+  const replaceNotes = (before: NotepadNote[], after: NotepadNote[]): boolean => {
+    if (current.current.owner !== state.owner || current.current.epoch !== state.epoch) return false;
+    try {
+      const latest = load(state.owner, fallback);
+      if (!latest.canPersist) throw new Error('Notes cannot be safely saved');
+      const previous = new Map(before.map(note => [note.id, note]));
+      const nextNotes = new Map(after.map(note => [note.id, note]));
+      const changes = [...new Set([...previous.keys(), ...nextNotes.keys()])].flatMap(noteId => {
+        const oldNote = previous.get(noteId) ?? null, newNote = nextNotes.get(noteId) ?? null;
+        return canonical(oldNote) === canonical(newNote) ? [] : [{ noteId, before: oldNote, after: newNote }];
+      });
+      if (changes.some(change => canonical(latest.notes.find(note => note.id === change.noteId) ?? null) !== canonical(change.before))) {
+        const next = { ...current.current, ...latest };
+        current.current = next; setState(next); setStorageError(true);
+        return false;
+      }
+      if (changes.length) appendNotepadOperation(localStorage, state.owner, {
+        id: crypto.randomUUID(), clock: latest.clock + 1, changes,
+      });
+      const next = { ...current.current, ...load(state.owner, fallback) };
+      current.current = next; setState(next); setStorageError(!next.canPersist);
+      return next.canPersist;
+    } catch {
+      setStorageError(true);
+      return false;
+    }
+  };
   return {
+    getNotes, replaceNotes,
     notes: state.notes, notesOwner: state.owner, storageError, switchOwner,
     addNote: (note: Omit<NotepadNote, 'id' | 'createdAt'>) => {
       const value = { ...note, id: `note-${crypto.randomUUID()}`, createdAt: Date.now() };

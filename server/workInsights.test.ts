@@ -96,7 +96,7 @@ function requestText(body: any): string {
 test('chat sends recomputed evidence and preserves priorities for an analysis-only request', async () => {
   providerCalls.length = 0;
   answer = { reply: 'Review the urgent queue.', tasks: [], taskUpdates: [], taskDeletions: [] };
-  const input = requestBody('chat');
+  const input = { ...requestBody('chat'), intent: 'analysis' };
   const original = structuredClone(input);
   const result = await invokeDesktopApi('assist', input);
   assert.equal(result.status, 200);
@@ -158,7 +158,8 @@ test('offline analysis and recommendations expose local evidence with no provide
   assert.equal(recommendations.status, 200);
   assert.equal(recommendations.body.source, 'rule-engine');
   assertEvidence(recommendations.body.workInsights);
-  const greeting = await invokeDesktopApi('assist', { ...input, prompt: 'hello', action: 'chat' });
-  assert.equal(greeting.body.source, 'greeting');
+  const greeting = await invokeDesktopApi('assist', { prompt: 'hello', action: 'chat', lang: 'en' });
+  assert.equal(greeting.status, 503);
+  assert.equal(greeting.body.code, 'MISSING_API_KEY');
   assert.equal(providerCalls.length, 0);
 });

@@ -36,7 +36,7 @@ const genericWords = new Set(`для про або але так все всі �
   item items please can you could help make new set add create edit update rename delete remove mark complete completed done reopen break down split start pause stop
   configure reduce increase change revise cancel reschedule schedule move timer date deadline today tomorrow minutes hours title name client робота роботи зарахуй зарахуйте запиши запишіть record log work`.split(/\s+/u));
 const titleWords = (value: string) => [...new Set((value.toLocaleLowerCase().replace(/['’ʼ]/gu, '')
-  .replace(/\d{4}-\d{2}-\d{2}|\d{1,2}[.:]\d{1,2}(?:[.:]\d{2,4})?/gu, ' ').match(/[\p{L}\p{N}]+/gu) || [])
+  .replace(/\d{4}-\d{2}-\d{2}|\d{1,2}[.:]\d{1,2}(?:[.:]\d{2,4})?/gu, ' ').match(/[\p{L}\p{N}]+/gu) || [] as string[])
   .filter(word => word.length >= 3 && !genericWords.has(word) && !/^(?:під)?(?:завдан|задач)/u.test(word)))];
 // Inflection-tolerant: a shared stem of 4+ characters leaving at most a 3-character ending on the shorter word (банерами ↔ банери).
 const sameStem = (a: string, b: string) => {

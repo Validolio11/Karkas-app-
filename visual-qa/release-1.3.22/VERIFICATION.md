@@ -14,3 +14,5 @@ Change: moving a timed task to another day keeps its hour; new `move_day` bulk a
 Not verified: desktop (Electron) chat with a live key. The live suite covers the phrases above, not every possible wording.
 
 Release tag: 1.3.22 (no v prefix). Publication through the authenticated GitHub CLI with size and SHA256 digest checks.
+
+Publication confirmed: https://github.com/Validolio11/Karkas-app-/releases/tag/1.3.22 (tag 1.3.22 at the release commit, marked latest). All three assets match local sizes and SHA256 digests. The application's resolveTrustedUpdate/verifyUpdateFile accepted the public release and manifest as an update from 1.3.21 and matched the installer SHA512 (publication.json, public-update-verification.json). The update was not installed on the user's machine.

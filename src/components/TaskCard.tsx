@@ -8,6 +8,7 @@ import { Language, TRANSLATIONS } from '../utils/i18n';
 import { AIIcon } from './AIIconTemplates';
 import { TaskTimeDialog } from './TaskTimeDialog';
 import { formatTaskDate, getDeadlineProgress, isTaskDate, taskDateEnd } from '../utils/taskDates';
+import { taskTimeRange } from '../utils/schedulePresentation';
 import {
   Pin,
   Trash2,
@@ -144,11 +145,11 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
   useEffect(() => {
     const refresh = () => setNow(Date.now());
     refresh();
-    if (!task.timerRunning && !task.plannedDate && !task.deadlineDate) return;
+    if (!task.timerRunning && !task.plannedDate && !task.deadlineDate && !Number.isFinite(task.scheduledFor)) return;
     const interval = setInterval(refresh, task.timerRunning ? 1000 : 60000);
     window.addEventListener('focus', refresh);
     return () => { clearInterval(interval); window.removeEventListener('focus', refresh); };
-  }, [task.timerRunning, task.timerStartedAt, task.plannedDate, task.deadlineDate]);
+  }, [task.timerRunning, task.timerStartedAt, task.plannedDate, task.deadlineDate, task.scheduledFor]);
 
   // Compute live seconds spent on task
   const currentElapsedSeconds = getTaskTotalSeconds(task, now);
@@ -158,6 +159,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
   const showTimerWidget = timerMode !== 'none' || !!task.timerRunning;
   const timerValue = formatTime(hasCountdown ? remainingSeconds : currentElapsedSeconds);
   const countdownFinished = hasCountdown && remainingSeconds === 0;
+  const scheduledRange = taskTimeRange(task, now, Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Kyiv', lang);
   const hasStarted = Number.isFinite(task.startedAt) || !!task.timerRunning || currentElapsedSeconds > 0;
   const countdownProgress = hasCountdown
     ? Math.min(100, Math.max(0, (1 - remainingSeconds / task.countdownDurationSeconds!) * 100)) : 0;
@@ -504,7 +506,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   >
                     {task.title}
                   </h3>
-                  {Number.isFinite(task.scheduledFor) && <p className="mt-1 text-sm leading-relaxed text-emerald-300">{lang === 'uk' ? 'Заплановано на' : 'Planned for'} {new Intl.DateTimeFormat(lang === 'uk' ? 'uk-UA' : 'en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(task.scheduledFor)}</p>}
+                  {scheduledRange && <p className="mt-1 text-sm leading-relaxed text-emerald-300"><span className="sr-only">{lang === 'uk' ? 'Заплановано: ' : 'Planned: '}</span><time dateTime={new Date(task.scheduledFor!).toISOString()}>{scheduledRange}</time></p>}
 
                   {task.note && (
                     <div className="mt-1.5 max-w-prose text-sm leading-relaxed break-words [overflow-wrap:anywhere] font-sans text-neutral-400">

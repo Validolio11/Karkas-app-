@@ -1,7 +1,7 @@
 import type { PSTask, TimerMode } from '../types';
 import { activeTaskStepId, bankTaskStepSession, initialTaskPlanSeconds } from './taskWorkTelemetry';
 
-export function getTaskTimerMode(task: PSTask): TimerMode {
+export function getTaskTimerMode(task: Pick<PSTask, 'timerMode' | 'countdownDurationSeconds'>): TimerMode {
   if (task.timerMode === 'none' || task.timerMode === 'stopwatch' || task.timerMode === 'countdown') return task.timerMode;
   return typeof task.countdownDurationSeconds === 'number' && Number.isFinite(task.countdownDurationSeconds) &&
     task.countdownDurationSeconds > 0 ? 'countdown' : 'stopwatch';

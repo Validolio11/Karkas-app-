@@ -33,8 +33,10 @@ export interface AgentTurnResult {
   fallbackUsed: boolean;
 }
 
-export const AGENT_DEFAULT_MODEL = 'gemini-3.8-flash';
-export const AGENT_FALLBACK_MODELS = ['gemini-3.5-flash-lite'];
+// Flash-Lite first: the free Flash tier allows only ~20 requests a day and an agent turn spends 2-4,
+// so Flash-first stalled on quota/high-demand errors. The live scenario suite passes on Flash-Lite.
+export const AGENT_DEFAULT_MODEL = 'gemini-3.5-flash-lite';
+export const AGENT_FALLBACK_MODELS = ['gemini-3.8-flash'];
 export const AGENT_MAX_ROUNDS = 8;
 export const AGENT_SYSTEM_INSTRUCTION = [
   'You are the Karkas task app assistant. Reply warmly and briefly in the person’s language (Ukrainian by default), matching their ти/ви address. No lectures or diagnoses.',
@@ -43,6 +45,7 @@ export const AGENT_SYSTEM_INSTRUCTION = [
   'Give every new or re-planned task a phase chosen by tab NAME from WORKSPACE TABS to match its meaning: learning/courses/typing → a “Навчання”-like tab; rest/home/chores → a personal/home tab; “Робота” only for work. If none fits, use the first tab and briefly offer a suitable new tab, e.g. “Створити вкладку «Особисте»?”. Never create a tab unless the person asks for it.',
   'When a task timer has countdownExpiredAt, “я ще працюю над X” / “ще не закінчив” means continue_after_expiry, not a new countdown. It credits the time since expiry and resumes for extendMinutes (30 by default). “закінчив о 16:10” means finish_after_expiry with workedUntil=16:10; “закінчив” without time clears the expiry without adding work. This response does not complete the task; use complete_task only when requested. State the actual credited time from the tool result. After more than 3 hours do not infer work: ask for the actual finish time or an explicit recorded total, then use finish_after_expiry or set_recorded_time as appropriate.',
   'For “підкоригуй час”, “скоригуй час”, “я не встигаю”, “перебудуй день”, “переплануй решту” and “посунь решту дня” without an amount, use replan_day: it rebuilds all remaining timed blocks today from now (or optional from HH:MM), including missed and paused blocks, while protecting running timers and recorded work. Reply with the new schedule rows from its result. For explicit “посунь план на пів години” / “посунь на N хв” use shift_day minutes=N; fromTime is an optional HH:MM boundary today. Report every overflow block; never move or shorten overflow without a choice.',
+  'For moving all of a day’s tasks (“всі/все/усі завдання … на завтра”, “перекинь день”) call move_day once; never claim tasks moved that the tool did not report.',
   'If replan_day returns overflowTaskIds, immediately call ask_user ONCE with three options: “Перенести на завтра” (update_task with tomorrow date and the same startTime), “Скоротити блоки” (fit the remaining blocks before 23:59 using explicit durationMinutes), “Лишити без часу” (update_task clearTime:true for overflow tasks). Ask one concrete question and include task titles, dates and times in self-contained option messages. Preserve paused timers unless asked to start them. Never silently discard overflow.',
   'When an odd phrase looks like dictation noise and does not concern tasks (e.g. “Париж зараз 1 година…”), and recent context concerned plan times, briefly ask whether it concerns the schedule. Do not switch to an answer about time zones.',
   'Explicit priority words win. Otherwise use priority 1 for a deadline, a promise to others, or something called main/important; 3 for rest/optional; 2 otherwise. Set a priority on every plan_day item.',
@@ -91,6 +94,7 @@ export const AGENT_TOOL_DECLARATIONS = [
     } },
   }, ['items']),
   declaration('replan_day', 'Rebuild all unfinished timed tasks today from now or optional local from HH:MM, rounded up to 5 minutes. Includes missed unstarted and paused blocks; protects running timers, recorded work and countdowns. Paused blocks use remaining countdown, at least 5 minutes. Overflow stays unchanged; immediately ask_user once with tomorrow/smaller blocks/clear time choices.', { from: time }),
+  declaration('move_day', 'Move EVERY unfinished task planned or timed on fromDate (default today) to toDate in one action; timed tasks keep their hour. includeOverdue also moves unfinished tasks from earlier days. Use for “всі завдання на сьогодні перекинь на завтра”, “перенеси все на понеділок”. Never move such a set task by task.', { toDate: date, fromDate: date, includeOverdue: boolean }, ['toDate']),
   declaration('shift_day', 'Shift today’s unfinished timed tasks by an explicit number of minutes, preserving order and duration. Includes missed and paused blocks if their shifted start is not in the past; running timers stay unchanged. fromTime is an optional inclusive local HH:MM boundary. Blocks beyond 24:00 remain in place and are reported as overflow.', { minutes: planMinutes, fromTime: time }, ['minutes']),
   taskTool('complete_task', 'Complete an existing task and bank running work.'),
   taskTool('reopen_task', 'Return a completed task to work.'),
@@ -252,6 +256,9 @@ export async function runAgentTurn(options: AgentTurnOptions): Promise<AgentTurn
     AGENT_SYSTEM_INSTRUCTION, temporalAwarenessSystemPolicy,
     'AGENT EXECUTION OVERRIDE: the legacy proposal-only sentence above does not apply to successful action tool results. Those results are the authoritative changes to report. A pending confirmation is still unapplied.',
     'TASK TEMPORAL CONTEXT: ' + JSON.stringify({ clock: temporal.clock, evidenceLimits: temporal.evidenceLimits }),
+    // Ready-made Ukrainian labels stop the model from guessing month names.
+    'DATE LABELS (use these words when naming days): ' + JSON.stringify(Object.fromEntries([['today', 0], ['tomorrow', 1], ['dayAfterTomorrow', 2]].map(([key, days]) => [key,
+      new Intl.DateTimeFormat(uk ? 'uk-UA' : 'en-GB', { timeZone, weekday: 'long', day: 'numeric', month: 'long' }).format(new Date(Date.parse(temporal.clock.localDate + 'T12:00:00Z') + (days as number) * 86400000))]))),
     'WORKSPACE TABS: ' + JSON.stringify(workspace.tabs),
     'ACTIVE TASK INDEX (use tools for details): ' + JSON.stringify(workspace.tasks.filter(task => !task.done).slice(0, 60).map(({ id, title }) => ({ id, title }))),
   ].join('\n\n');

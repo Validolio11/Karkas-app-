@@ -24,6 +24,7 @@ export type AgentAction =
   | { type: 'plan_day'; date?: string; start?: string; items: AgentDayPlanItem[] }
   | { type: 'shift_day'; minutes: number; fromTime?: string }
   | { type: 'replan_day'; from?: string }
+  | { type: 'move_day'; toDate: string; fromDate?: string; includeOverdue?: boolean }
   | { type: 'continue_after_expiry'; taskId: string; extendMinutes?: number }
   | { type: 'finish_after_expiry'; taskId: string; workedUntil?: string }
   | { type: 'complete_task' | 'reopen_task'; taskId: string }
@@ -81,6 +82,7 @@ const schemas: Record<AgentAction['type'], Schema> = {
   plan_day: { required: { items: planItems }, optional: { date, start: clockTime } },
   shift_day: { required: { minutes: planMinutes }, optional: { fromTime: clockTime } },
   replan_day: { required: {}, optional: { from: clockTime } },
+  move_day: { required: { toDate: date }, optional: { fromDate: date, includeOverdue: boolean } },
   continue_after_expiry: { required: { taskId: nonempty }, optional: { extendMinutes: planMinutes } },
   finish_after_expiry: { required: { taskId: nonempty }, optional: { workedUntil: clockTime } },
   complete_task: taskOnly, reopen_task: taskOnly,
@@ -415,6 +417,24 @@ export function applyAgentAction(ws: AgentWorkspace, input: AgentAction, ctx: Ag
       const summary = (lang: 'uk' | 'en') => schedule.map(block => block.start + '–' + block.end + ' · ' + block.title + ' · ' + (ws.tabs.find(tab => tab.id === block.phase)?.name ?? block.phase) + ' · P' + block.priority + (block.estimated ? lang === 'uk' ? ' (орієнтовно)' : ' (estimated)' : '')).join('\n');
       return success({ ...ws, tasks }, summary('uk'), summary('en'), changedTaskIds, createdIds, schedule);
     }
+    if (action.type === 'move_day') {
+      // One deterministic bulk move: the model cannot forget a task, and timed tasks keep their hour.
+      const fromDate = action.fromDate ?? today();
+      const due = (task: PSTask) => {
+        if (task.done || task.scheduledPending) return false;
+        const day = typeof task.scheduledFor === 'number' ? localClock(task.scheduledFor, timeZone).slice(0, 10) : task.plannedDate;
+        return day === fromDate || !!action.includeOverdue && !!day && day < fromDate;
+      };
+      if (action.toDate === fromDate) return fail('invalid', 'toDate must differ from fromDate.');
+      let moved = ws; const ids: string[] = [], linesUk: string[] = [], linesEn: string[] = [];
+      for (const task of ws.tasks.filter(due)) {
+        const step = applyAgentAction(moved, { type: 'update_task', taskId: task.id, plannedDate: action.toDate }, ctx);
+        if (!step.result.ok) return fail(step.result.code, 'Could not move “' + task.title + '”: ' + step.result.error);
+        moved = step.workspace; ids.push(task.id); linesUk.push(step.result.summary.uk); linesEn.push(step.result.summary.en);
+      }
+      if (!ids.length) return success(ws, 'На ' + fromDate + ' немає незавершених завдань', 'No unfinished tasks on ' + fromDate, []);
+      return success(moved, linesUk.join('\n'), linesEn.join('\n'), ids, undefined, { movedTaskIds: ids, fromDate, toDate: action.toDate });
+    }
     if (action.type === 'replan_day') {
       const from = action.from === undefined ? undefined : localTimeEpoch(today(), action.from, timeZone);
       const replanned = replanRestOfDay(ws, now, timeZone, { from });
@@ -520,10 +540,23 @@ export function applyAgentAction(ws: AgentWorkspace, input: AgentAction, ctx: Ag
       if (pinned !== undefined) next = { ...next, pinned };
       if (durationMinutes !== undefined) next = pausedCountdown(next, durationMinutes, createdIds);
       if (scheduledFor !== undefined) next = { ...next, scheduledFor, scheduledPending: false };
+      // Moving a timed task to another day keeps its wall-clock hour; a stale start would mark it missed.
+      let moved: string | undefined;
+      if (scheduledFor === undefined && !clearTime && typeof task.scheduledFor === 'number' && next.plannedDate) {
+        const wall = localClock(task.scheduledFor, timeZone);
+        if (wall.slice(0, 10) !== next.plannedDate) {
+          next = { ...next, scheduledFor: localTimeEpoch(next.plannedDate, wall.slice(11, 16), timeZone) };
+          moved = next.plannedDate + ' ' + wall.slice(11, 16);
+        }
+      }
       if (next.scheduledFor !== undefined && (durationMinutes !== undefined || scheduledFor !== undefined)) next = { ...next,
         scheduledDurationSeconds: durationMinutes === undefined ? next.scheduledDurationSeconds ?? next.countdownDurationSeconds : durationMinutes * 60 };
       if (clearTime) { next = { ...next }; delete next.scheduledFor; delete next.scheduledDurationSeconds; }
       uk = 'Оновлено завдання «' + next.title + '»'; en = 'Updated task “' + next.title + '”';
+      if (moved) { uk = 'Перенесено «' + next.title + '» на ' + moved; en = 'Moved “' + next.title + '” to ' + moved; }
+      else if (action.date !== undefined || action.plannedDate !== undefined && action.plannedDate !== task.plannedDate) {
+        uk = 'Перенесено «' + next.title + '» на ' + (next.plannedDate ?? 'без дати'); en = 'Moved “' + next.title + '” to ' + (next.plannedDate ?? 'no date');
+      }
     } else if (action.type === 'complete_task' || action.type === 'reopen_task') {
       if (action.type === 'complete_task' && task.scheduledPending) return fail('conflict', 'A pending scheduled task cannot be completed before it materializes.');
       next = action.type === 'complete_task' ? completeTask(finishLimitedStart(task, now), now) : reopenTask(task, now);

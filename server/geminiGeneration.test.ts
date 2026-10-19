@@ -354,10 +354,10 @@ test('retired selected model falls back through the real SDK with agent timer de
   const result = await chat({ selectedModel: 'models/gemini-retired-model', currentTasks: [persistedTask()] });
   assert.equal(result.status, 200);
   assert.equal(result.body.source, 'gemini-chat');
-  assert.equal(result.body.usedModel, 'gemini-3.8-flash');
+  assert.equal(result.body.usedModel, 'gemini-3.5-flash-lite');
   assert.equal(result.body.fallbackUsed, true);
   assert.equal(result.body.aiMetrics.selectedModelFailure, 'MODEL_UNAVAILABLE');
-  assert.deepEqual(calls.map(call => call.model), ['gemini-retired-model', 'gemini-3.8-flash']);
+  assert.deepEqual(calls.map(call => call.model), ['gemini-retired-model', 'gemini-3.5-flash-lite']);
 });
 
 test('fallback attempts each model once, then returns the quota category without raw diagnostics', async () => {
@@ -365,7 +365,7 @@ test('fallback attempts each model once, then returns the quota category without
   const result = await chat();
   assert.equal(result.status, 429);
   assert.equal(result.body.code, 'QUOTA_EXCEEDED');
-  assert.deepEqual(calls.map(call => call.model), ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-3.5-flash-lite']);
+  assert.deepEqual(calls.map(call => call.model), ['gemini-3.1-flash-lite', 'gemini-3.5-flash-lite', 'gemini-3.8-flash']);
   assert.deepEqual(result.body.taskUpdates, []);
   assert.equal(result.body.source, 'ai-error');
   assert.doesNotMatch(JSON.stringify(result.body), /private-test-key|provider-internal-data/);
@@ -811,13 +811,13 @@ test('a model that exhausted its free quota is tried last on the next request', 
   mockProvider(model => model === 'gemini-3.1-flash-lite' ? rejected(429, 'RESOURCE_EXHAUSTED') : success({ reply: 'Готово.', taskUpdates: [] }));
   const first = await chat({ currentTasks: [{ id: 't1', title: 'Референси' }] });
   assert.equal(first.status, 200);
-  assert.deepEqual(calls.map(call => call.model), ['gemini-3.1-flash-lite', 'gemini-3.8-flash']);
+  assert.deepEqual(calls.map(call => call.model), ['gemini-3.1-flash-lite', 'gemini-3.5-flash-lite']);
   // Keep the remembered cooldown for the second request (mockProvider would reset it).
   calls.length = 0;
   const second = await chat({ currentTasks: [{ id: 't1', title: 'Референси' }] });
   assert.equal(second.status, 200);
-  assert.deepEqual(calls.map(call => call.model), ['gemini-3.8-flash']);
-  assert.equal(second.body.usedModel, 'gemini-3.8-flash');
+  assert.deepEqual(calls.map(call => call.model), ['gemini-3.5-flash-lite']);
+  assert.equal(second.body.usedModel, 'gemini-3.5-flash-lite');
   assert.equal(second.body.aiMetrics.selectedModelFailure, 'QUOTA_EXCEEDED');
   // The selected model was demoted by its cooldown, yet another model answered.
   assert.equal(second.body.fallbackUsed, true);
@@ -846,7 +846,7 @@ test('a selected model unknown to the key outranks later quota and overload fail
   assert.equal(result.body.code, 'MODEL_UNAVAILABLE');
   assert.match(result.body.error, /Виберіть іншу модель/);
   assert.deepEqual(result.body.diagnostics.attempts.map((attempt: any) => [attempt.model, attempt.code]), [
-    ['gemini-2.5-flash-lite', 'MODEL_UNAVAILABLE'], ['gemini-3.8-flash', 'QUOTA_EXCEEDED'], ['gemini-3.5-flash-lite', 'PROVIDER_UNAVAILABLE']]);
+    ['gemini-2.5-flash-lite', 'MODEL_UNAVAILABLE'], ['gemini-3.5-flash-lite', 'PROVIDER_UNAVAILABLE'], ['gemini-3.8-flash', 'QUOTA_EXCEEDED']]);
   // Without an explicit selection there is no selected model to blame.
   mockProvider(model => model === 'only-404' ? rejected(404, 'NOT_FOUND') : rejected(429, 'RESOURCE_EXHAUSTED'));
   await assert.rejects(generateGeminiWithFallback({ ai: new GoogleGenAI({ apiKey: 'test-only-fake-key' }), contents: 'Test', config: {}, fallbackModels: ['only-404', 'quota'] }),
@@ -906,7 +906,7 @@ test('attempt records carry quota facts, responded flags and a one-way key label
   const { attempts, keyId } = failed.body.diagnostics;
   assert.match(keyId, /^[a-f0-9]{16}$/);
   assert.deepEqual(attempts.map((attempt: any) => [attempt.model, attempt.code, attempt.responded ?? false]), [
-    ['gemini-3.1-flash-lite', 'QUOTA_EXCEEDED', false], ['gemini-3.8-flash', 'PROVIDER_UNAVAILABLE', false], ['gemini-3.5-flash-lite', 'INVALID_AI_RESPONSE', true]]);
+    ['gemini-3.1-flash-lite', 'QUOTA_EXCEEDED', false], ['gemini-3.5-flash-lite', 'INVALID_AI_RESPONSE', true], ['gemini-3.8-flash', 'PROVIDER_UNAVAILABLE', false]]);
   assert.deepEqual(attempts[0].quota, { violations: [{ unit: 'requests', window: 'day', limit: 20 }], retryAfterMs: 30000 });
   assert.doesNotMatch(JSON.stringify(failed.body), /private-test-key|test-only-fake-key/);
 
@@ -932,17 +932,17 @@ test('a 429 with a quota of 0 means the model is not on this tier, not that a li
   assert.equal(failed.body.code, 'MODEL_TIER_UNAVAILABLE');
   assert.match(failed.body.error, /безкоштовному тарифі/);
   assert.deepEqual(failed.body.diagnostics.attempts.map((attempt: any) => [attempt.model, attempt.code]), [
-    ['gemini-3.1-pro-preview', 'MODEL_TIER_UNAVAILABLE'], ['gemini-3.8-flash', 'PROVIDER_UNAVAILABLE'], ['gemini-3.5-flash-lite', 'QUOTA_EXCEEDED']]);
+    ['gemini-3.1-pro-preview', 'MODEL_TIER_UNAVAILABLE'], ['gemini-3.5-flash-lite', 'QUOTA_EXCEEDED'], ['gemini-3.8-flash', 'PROVIDER_UNAVAILABLE']]);
   assert.deepEqual(failed.body.diagnostics.attempts[0].quota.violations.map((violation: any) => violation.limit), [0, 0]);
 
   mockProvider(model => model === 'gemini-3.1-pro-preview' ? zeroQuota() : success({ reply: 'Готово.', taskUpdates: [] }));
   const answered = await chat({ selectedModel: 'gemini-3.1-pro-preview', currentTasks: [{ id: 't1', title: 'Референси' }] });
-  assert.equal(answered.body.usedModel, 'gemini-3.8-flash');
+  assert.equal(answered.body.usedModel, 'gemini-3.5-flash-lite');
   assert.equal(answered.body.aiMetrics.selectedModelFailure, 'MODEL_TIER_UNAVAILABLE');
   // Remembered like a 404: the next request does not wait on Pro first.
   calls.length = 0;
   const next = await chat({ selectedModel: 'gemini-3.1-pro-preview', currentTasks: [{ id: 't1', title: 'Референси' }] });
-  assert.equal(calls[0].model, 'gemini-3.8-flash');
+  assert.equal(calls[0].model, 'gemini-3.5-flash-lite');
   assert.equal(next.body.aiMetrics.selectedModelFailure, 'MODEL_TIER_UNAVAILABLE');
   // A missing quotaValue is not mistaken for 0.
   assert.deepEqual(quotaInfoFromError({ status: 429, message: JSON.stringify({ error: { details: [{ violations: [{ quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier', quotaValue: '' }] }] } }) }),

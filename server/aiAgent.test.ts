@@ -73,7 +73,7 @@ test('compound request resolves its task, configures a paused countdown and comp
   assert.equal(result.metrics.attempts, 3);
   assert.equal(result.metrics.promptTokens, 30);
   assert.equal(result.metrics.toolCalls, 3);
-  assert.equal(fake.requests[0].selectedModel, 'gemini-3.8-flash');
+  assert.equal(fake.requests[0].selectedModel, 'gemini-3.5-flash-lite');
   assert.equal(fake.requests[0].thinking, 'agent');
   assert.match(fake.requests[0].config.systemInstruction, /2026-10-19 12:00:00/);
 });
@@ -274,11 +274,11 @@ test('read tools validate arguments and use the supplied local date, with compac
     task({ id: 'done', done: true, completedAt: NOW - 1000, timeSpentSeconds: 1800 })] }), generate: fake.generate });
 });
 
-test('an explicitly selected model precedes the default Flash and Lite fallback queue', async () => {
+test('an explicitly selected model precedes the default Lite and Flash fallback queue', async () => {
   const fake = scripted([{ text: 'Гаразд.' }]);
   await runAgentTurn({ ...base, selectedModel: 'gemini-3.1-flash-lite', workspace: workspace(), generate: fake.generate });
   assert.equal(fake.requests[0].selectedModel, 'gemini-3.1-flash-lite');
-  assert.deepEqual(fake.requests[0].fallbackModels, ['gemini-3.8-flash', 'gemini-3.5-flash-lite']);
+  assert.deepEqual(fake.requests[0].fallbackModels, ['gemini-3.5-flash-lite', 'gemini-3.8-flash']);
 });
 
 test('list_notes exposes every note and note updates return only the changed note', async () => {

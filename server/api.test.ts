@@ -225,8 +225,8 @@ test("desktop IPC uses the same validation and computes calendar labels for the 
     assert.equal((await invokeDesktopApi('recommendations', null)).status, 400);
     assert.equal((await invokeDesktopApi('missing')).status, 404);
     const greeting = await invokeDesktopApi('assist', { prompt: 'hello', action: 'chat', lang: 'en' });
-    assert.equal(greeting.status, 503);
-    assert.equal(greeting.body.code, 'MISSING_API_KEY');
+    assert.equal(greeting.status, 200);
+    assert.equal(greeting.body.source, 'greeting');
     context.mock.timers.enable({ apis: ['Date'], now: new Date('2028-07-01T12:00:00Z').getTime() });
     const thisYear = await invokeDesktopApi('recommendations', { period: 'THIS_YEAR', lang: 'en' });
     const lastYear = await invokeDesktopApi('recommendations', { period: 'LAST_YEAR', lang: 'en' });

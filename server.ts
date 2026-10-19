@@ -691,6 +691,14 @@ export async function assistHandler(req: any, rawRes: any) {
     const isUk = lang === "uk" || /[а-яіїєґ]/i.test(prompt);
     const clockReply = action === 'chat' && intent === 'auto' ? currentClockReply(prompt, clientClock, isUk) : null;
     if (clockReply) return res.json({ reply: clockReply, summary: clockReply, tasks: [], tabs: [], taskUpdates: [], taskDeletions: [], source: 'client-clock' });
+    // A bare hello needs no model: it works without a key and spends no quota.
+    const normalizedPrompt = prompt.trim().toLowerCase().replace(/[!?.,]/g, "");
+    if (action === "chat" && !strategyContext && /^(привіт|вітаю|добрий день|доброго ранку|добрий вечір|hello|hi|hey)$/.test(normalizedPrompt)) {
+      const reply = isUk
+        ? "Привіт! Напиши, що зробити: додати чи змінити завдання, поставити таймер, позначити кроки — можна звичайними словами."
+        : "Hi! Tell me what to do: add or change a task, set a timer, mark steps — plain words are fine.";
+      return res.json({ reply, summary: reply, tasks: [], tabs: [], taskUpdates: [], taskDeletions: [], source: "greeting" });
+    }
     // Dynamic AI Client setup
     let ai = getGeminiClient();
     if (customApiKey && typeof customApiKey === "string") {

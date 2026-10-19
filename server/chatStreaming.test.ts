@@ -147,12 +147,13 @@ test('clock replies and invalid requests finish without calling the provider', a
   assert.deepEqual(invalid.events().map((event: AIStreamEvent) => [event.event, event.data.status]), [['error', 400]]);
 });
 
-test('greetings use the agent path and preserve its final stream contract', async () => {
+test('a bare greeting is answered without the provider and keeps the final stream contract', async () => {
   mockProvider(() => agentText('Привіт!'));
   const res = await httpAssist({ ...agentBase, prompt: 'Привіт', stream: true });
-  assert.deepEqual(res.events().map((event: AIStreamEvent) => event.event), ['delta', 'done']);
-  assert.deepEqual(res.events()[1].data.agent.actions, []);
-  assert.equal(calls.length, 1);
+  const events = res.events();
+  assert.equal(events.at(-1).event, 'done');
+  assert.equal(events.at(-1).data.source, 'greeting');
+  assert.equal(calls.length, 0);
 });
 
 test('an agent provider rejection produces only the safe error event', async () => {

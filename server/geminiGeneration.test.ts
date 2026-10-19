@@ -692,14 +692,14 @@ test('provider failures in planning, breakdown and recommendations are explicit 
   }
 });
 
-test('missing chat credentials are explicit for ordinary chat and greetings', async () => {
+test('missing chat credentials are explicit for ordinary chat; a greeting needs none', async () => {
   mockProvider(() => { throw new Error('Google must not be called without credentials'); });
   const missing = await invokeDesktopApi('assist', { prompt: 'Допоможи скласти план', action: 'chat', lang: 'uk' });
   assert.equal(missing.status, 503);
   assert.equal(missing.body.code, 'MISSING_API_KEY');
   const greeting = await invokeDesktopApi('assist', { prompt: 'Привіт', action: 'chat', lang: 'uk' });
-  assert.equal(greeting.status, 503);
-  assert.equal(greeting.body.code, 'MISSING_API_KEY');
+  assert.equal(greeting.status, 200);
+  assert.equal(greeting.body.source, 'greeting');
   assert.equal(calls.length, 0);
 });
 

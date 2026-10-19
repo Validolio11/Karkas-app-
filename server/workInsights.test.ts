@@ -159,7 +159,7 @@ test('offline analysis and recommendations expose local evidence with no provide
   assert.equal(recommendations.body.source, 'rule-engine');
   assertEvidence(recommendations.body.workInsights);
   const greeting = await invokeDesktopApi('assist', { prompt: 'hello', action: 'chat', lang: 'en' });
-  assert.equal(greeting.status, 503);
-  assert.equal(greeting.body.code, 'MISSING_API_KEY');
+  assert.equal(greeting.status, 200);
+  assert.equal(greeting.body.source, 'greeting');
   assert.equal(providerCalls.length, 0);
 });

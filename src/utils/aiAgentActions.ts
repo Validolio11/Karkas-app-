@@ -1,13 +1,16 @@
 import type { AITaskUpdate, DeletedTask, NotepadNote, PSTask, TaskStepItem, TaskTab } from '../types';
 import { applyAITaskUpdate } from './aiTaskUpdates';
 import { completeTask, createTask, materializeStepList, reopenTask, setTaskSteps, setTaskTimeSpent, startTaskWork } from './taskOperations';
-import { clearTaskCountdown, configureTaskCountdown, extendTaskCountdown, getTaskRemainingSeconds, getTaskTimerMode, getTaskTotalSeconds, pauseTaskTimer } from './taskTimer';
+import { clearTaskCountdown, configureTaskCountdown, expireTaskCountdown, extendTaskCountdown, getTaskRemainingSeconds, getTaskTimerMode, getTaskTotalSeconds, pauseTaskTimer } from './taskTimer';
 import { finishLimitedStart, latestAttempt, startLimitedStart } from './limitedStart';
 import { discardTaskStepAttribution } from './taskWorkTelemetry';
 import { isTaskDate } from './taskDates';
 import { annotateTaskChanges } from './taskActivity';
 import { selectArchivedTasks } from './taskArchive';
 import { remapTaskTabs } from './workspaceTabs';
+import { continueAfterExpiry, finishAfterExpiry, MAX_OVERRUN_SECONDS, overrunGapSeconds } from './countdownOverrun';
+import { shiftDay } from './dayPlanShift';
+import { taskScheduledEnd } from './schedulePresentation';
 
 export interface AgentWorkspace { tasks: PSTask[]; deletedTasks: DeletedTask[]; tabs: TaskTab[]; notes: NotepadNote[] }
 type StepRef = number | string;
@@ -19,6 +22,9 @@ export type AgentAction =
   | { type: 'create_task'; title: string; phase?: string; priority?: 1 | 2 | 3; note?: string; plannedDate?: string; deadlineDate?: string; steps?: string[]; timerMinutes?: number; date?: string; startTime?: string; durationMinutes?: number }
   | { type: 'update_task'; taskId: string; title?: string; note?: string; priority?: 1 | 2 | 3; phase?: string; plannedDate?: string | null; deadlineDate?: string | null; pinned?: boolean; date?: string; startTime?: string; durationMinutes?: number; clearTime?: true }
   | { type: 'plan_day'; date?: string; start?: string; items: AgentDayPlanItem[] }
+  | { type: 'shift_day'; minutes: number; fromTime?: string }
+  | { type: 'continue_after_expiry'; taskId: string; extendMinutes?: number }
+  | { type: 'finish_after_expiry'; taskId: string; workedUntil?: string }
   | { type: 'complete_task' | 'reopen_task'; taskId: string }
   | { type: 'add_steps'; taskId: string; titles: string[]; afterStepIndex?: number } // 0 prepends; otherwise after the 1-based row.
   | { type: 'rename_step'; taskId: string; step: StepRef; title: string }
@@ -72,6 +78,9 @@ const schemas: Record<AgentAction['type'], Schema> = {
   create_task: { required: { title: nonempty }, optional: { phase: nonempty, priority, note: text, plannedDate: date, deadlineDate: date, steps: titles, timerMinutes: minutes, date, startTime: clockTime, durationMinutes: planMinutes } },
   update_task: { required: { taskId: nonempty }, optional: { title: nonempty, note: text, priority, phase: nonempty, plannedDate: nullableDate, deadlineDate: nullableDate, pinned: boolean, date, startTime: clockTime, durationMinutes: planMinutes, clearTime: value => value === true } },
   plan_day: { required: { items: planItems }, optional: { date, start: clockTime } },
+  shift_day: { required: { minutes: planMinutes }, optional: { fromTime: clockTime } },
+  continue_after_expiry: { required: { taskId: nonempty }, optional: { extendMinutes: planMinutes } },
+  finish_after_expiry: { required: { taskId: nonempty }, optional: { workedUntil: clockTime } },
   complete_task: taskOnly, reopen_task: taskOnly,
   add_steps: { required: { taskId: nonempty, titles: value => titles(value) && (value as string[]).length > 0 }, optional: { afterStepIndex: integer } },
   rename_step: { required: { taskId: nonempty, step, title: nonempty } },
@@ -195,16 +204,17 @@ function localTimeEpoch(date: string, time: string, timeZone: string): number {
 }
 
 export function describeTask(task: PSTask, now: number, timeZone = 'Europe/Kyiv') {
-  const remaining = getTaskRemainingSeconds(task, now);
+  const remaining = getTaskRemainingSeconds(task, now), end = taskScheduledEnd(task);
   return {
     id: task.id, title: task.title, phase: task.phase, priority: task.priority, done: task.done,
     plannedDate: task.plannedDate ?? null, deadlineDate: task.deadlineDate ?? null,
     ...(task.scheduledFor === undefined ? {} : { date: localClock(task.scheduledFor, timeZone).slice(0, 10), startTime: localClock(task.scheduledFor, timeZone).slice(11, 16),
-      endTime: task.countdownDurationSeconds === undefined ? null : localClock(task.scheduledFor + task.countdownDurationSeconds * 1000, timeZone).slice(11, 16) }),
+      endTime: end === undefined ? null : localClock(end, timeZone).slice(11, 16) }),
     steps: materializeStepList(task).map((item, index) => ({ number: index + 1, id: item.id, title: item.title, done: item.done })),
     timer: { mode: getTaskTimerMode(task), countdownMinutes: task.countdownDurationSeconds === undefined ? null : task.countdownDurationSeconds / 60,
       remainingMinutes: remaining === undefined ? null : remaining / 60, running: !!task.timerRunning,
       recordedMinutes: getTaskTotalSeconds(task, now) / 60,
+      countdownExpiredAt: task.countdownExpiredAt ?? null, overrunMinutes: overrunGapSeconds(task, now) / 60,
       limitedStart: task.limitedStart ? { minutes: task.limitedStart.capSeconds / 60, remainingMinutes: (remaining ?? 0) / 60 } : null },
   };
 }
@@ -234,7 +244,8 @@ function resolveStep(list: TaskStepItem[], ref: StepRef): number {
   if (matches.length > 1) return fail('conflict', 'Ambiguous step. Candidates: ' + matches.map(({ item, index }) => (index + 1) + ': ' + item.title + ' (' + item.id + ')').join(', '));
   return matches[0].index;
 }
-const duration = (minutes: number, lang: 'uk' | 'en') => minutes % 60 === 0 ? minutes / 60 + (lang === 'uk' ? ' год' : ' h') : minutes + (lang === 'uk' ? ' хв' : ' min');
+// Credited time is measured in seconds; show whole minutes.
+const duration = (value: number, lang: 'uk' | 'en') => { const minutes = Math.round(value); return minutes % 60 === 0 && minutes ? minutes / 60 + (lang === 'uk' ? ' год' : ' h') : minutes + (lang === 'uk' ? ' хв' : ' min'); };
 
 /** The sole mutation entry point for both the server snapshot and live client state. */
 export function applyAgentAction(ws: AgentWorkspace, input: AgentAction, ctx: AgentContext): { workspace: AgentWorkspace; result: AgentActionResult } {
@@ -319,7 +330,8 @@ export function applyAgentAction(ws: AgentWorkspace, input: AgentAction, ctx: Ag
       }, id, now);
       if (!task) return fail('invalid', 'Task fields are invalid.');
       let created = action.durationMinutes === undefined ? task : pausedCountdown(task, action.durationMinutes, createdIds);
-      if (scheduledFor !== undefined) created = { ...created, scheduledFor, scheduledPending: false };
+      if (scheduledFor !== undefined) created = { ...created, scheduledFor, scheduledPending: false,
+        ...(created.countdownDurationSeconds === undefined ? {} : { scheduledDurationSeconds: created.countdownDurationSeconds }) };
       created = stamp(created);
       return success({ ...ws, tasks: [created, ...ws.tasks] }, 'Створено завдання «' + created.title + '»', 'Created task “' + created.title + '”', [id], createdIds, describeTask(created, now, timeZone));
     }
@@ -393,13 +405,23 @@ export function applyAgentAction(ws: AgentWorkspace, input: AgentAction, ctx: Ag
             task = setTaskSteps(task, list, now, newId);
           }
         }
-        task = stamp({ ...pausedCountdown(task, item.durationMinutes, createdIds), scheduledFor: block.scheduledFor, scheduledPending: false });
+        task = stamp({ ...pausedCountdown(task, item.durationMinutes, createdIds), scheduledFor: block.scheduledFor, scheduledDurationSeconds: item.durationMinutes * 60, scheduledPending: false });
         tasks = block.task ? tasks.map(current => current.id === task!.id ? task! : current) : [task, ...tasks];
         changedTaskIds.push(task.id);
         return { taskId: task.id, title: task.title, start: block.start, end: block.end, phase: task.phase, priority: task.priority, estimated: !!item.estimated, created: !block.task };
       });
       const summary = (lang: 'uk' | 'en') => schedule.map(block => block.start + '–' + block.end + ' · ' + block.title + ' · ' + (ws.tabs.find(tab => tab.id === block.phase)?.name ?? block.phase) + ' · P' + block.priority + (block.estimated ? lang === 'uk' ? ' (орієнтовно)' : ' (estimated)' : '')).join('\n');
       return success({ ...ws, tasks }, summary('uk'), summary('en'), changedTaskIds, createdIds, schedule);
+    }
+    if (action.type === 'shift_day') {
+      const fromTime = action.fromTime === undefined ? undefined : localTimeEpoch(today(), action.fromTime, timeZone);
+      const shifted = shiftDay(ws, action.minutes, fromTime, now, timeZone);
+      const tasks = shifted.workspace.tasks.map(task => shifted.shiftedTaskIds.includes(task.id) ? stamp(task) : task);
+      const overflow = shifted.overflowTaskIds.map(id => ws.tasks.find(task => task.id === id)!.title);
+      const uk = 'Посунуто блоків: ' + shifted.shiftedTaskIds.length + (overflow.length ? '. Не вміщається до 24:00: ' + overflow.join(', ') : '');
+      const en = 'Shifted blocks: ' + shifted.shiftedTaskIds.length + (overflow.length ? '. Does not fit before 24:00: ' + overflow.join(', ') : '');
+      return success({ ...shifted.workspace, tasks }, uk, en, shifted.shiftedTaskIds, undefined,
+        { minutes: action.minutes, shiftedTaskIds: shifted.shiftedTaskIds, overflowTaskIds: shifted.overflowTaskIds });
     }
     if (action.type === 'create_tab') {
       const tab: TaskTab = { id: newId(), name: action.name.trim(), ...(action.color ? { color: action.color } : {}) };
@@ -458,6 +480,7 @@ export function applyAgentAction(ws: AgentWorkspace, input: AgentAction, ctx: Ag
         'Видалено «' + task.title + '»', 'Deleted “' + task.title + '”', [task.id]);
     }
     let next = task, uk = '', en = '';
+    let creditedSeconds: number | undefined, creditCapped = false;
     const createdIds: string[] = [];
     if (action.type === 'update_task') {
       const phase = action.phase === undefined ? undefined : phaseCheck(action.phase);
@@ -477,7 +500,9 @@ export function applyAgentAction(ws: AgentWorkspace, input: AgentAction, ctx: Ag
       if (pinned !== undefined) next = { ...next, pinned };
       if (durationMinutes !== undefined) next = pausedCountdown(next, durationMinutes, createdIds);
       if (scheduledFor !== undefined) next = { ...next, scheduledFor, scheduledPending: false };
-      if (clearTime) { next = { ...next }; delete next.scheduledFor; }
+      if (next.scheduledFor !== undefined && (durationMinutes !== undefined || scheduledFor !== undefined)) next = { ...next,
+        scheduledDurationSeconds: durationMinutes === undefined ? next.scheduledDurationSeconds ?? next.countdownDurationSeconds : durationMinutes * 60 };
+      if (clearTime) { next = { ...next }; delete next.scheduledFor; delete next.scheduledDurationSeconds; }
       uk = 'Оновлено завдання «' + next.title + '»'; en = 'Updated task “' + next.title + '”';
     } else if (action.type === 'complete_task' || action.type === 'reopen_task') {
       if (action.type === 'complete_task' && task.scheduledPending) return fail('conflict', 'A pending scheduled task cannot be completed before it materializes.');
@@ -500,13 +525,44 @@ export function applyAgentAction(ws: AgentWorkspace, input: AgentAction, ctx: Ag
       }
       next = setTaskSteps(task, list, now, newId);
     } else {
-      const base = finishLimitedStart(task, now);
-      if ((action.type === 'start_timer' || action.type === 'set_countdown' || action.type === 'extend_countdown' || action.type === 'limited_start') && task.done) return fail('conflict', 'Reopen the completed task before starting or configuring its timer.');
-      if (task.scheduledPending && (action.type === 'start_timer' || action.type === 'limited_start' || action.type === 'set_recorded_time' || action.type === 'set_countdown' && action.start)) return fail('conflict', 'A pending scheduled task cannot record work before it materializes.');
+      const base = expireTaskCountdown(finishLimitedStart(task, now), now);
+      if ((action.type === 'start_timer' || action.type === 'continue_after_expiry' || action.type === 'set_countdown' || action.type === 'extend_countdown' || action.type === 'limited_start') && task.done) return fail('conflict', 'Reopen the completed task before starting or configuring its timer.');
+      if (task.scheduledPending && (action.type === 'start_timer' || action.type === 'continue_after_expiry' || action.type === 'finish_after_expiry' || action.type === 'limited_start' || action.type === 'set_recorded_time' || action.type === 'set_countdown' && action.start)) return fail('conflict', 'A pending scheduled task cannot record work before it materializes.');
       switch (action.type) {
         case 'start_timer':
-          next = startTaskWork(getTaskTimerMode(base) === 'none' ? { ...base, timerMode: 'stopwatch' } : base, now, newId);
-          uk = 'Запущено таймер «' + task.title + '»'; en = 'Started timer “' + task.title + '”'; break;
+        case 'continue_after_expiry': {
+          if (base.countdownExpiredAt !== undefined) {
+            if (overrunGapSeconds(base, now) > MAX_OVERRUN_SECONDS) return fail('conflict', 'More than 3 hours have passed since countdown expiry. Ask for the actual workedUntil time or an explicit recorded work total; no time was added.');
+            const extendMinutes = action.type === 'continue_after_expiry' ? action.extendMinutes ?? 30 : 30;
+            next = continueAfterExpiry(base, now, extendMinutes, () => { const id = newId(); createdIds.push(id); return id; });
+            if (next === base) return fail('invalid', 'Task has no valid expired countdown to continue.');
+            creditedSeconds = Math.max(0, getTaskTotalSeconds(next, now) - getTaskTotalSeconds(base, now));
+            uk = 'Дораховано ' + duration(creditedSeconds / 60, 'uk') + ' до «' + task.title + '», відлік продовжено на ' + duration(extendMinutes, 'uk');
+            en = 'Credited ' + duration(creditedSeconds / 60, 'en') + ' to “' + task.title + '”, countdown extended by ' + duration(extendMinutes, 'en');
+          } else {
+            if (action.type === 'continue_after_expiry') return fail('conflict', 'Task has no unresolved countdown expiry.');
+            next = startTaskWork(getTaskTimerMode(base) === 'none' ? { ...base, timerMode: 'stopwatch' } : base, now, newId);
+            uk = 'Запущено таймер «' + task.title + '»'; en = 'Started timer “' + task.title + '”';
+          }
+          break;
+        }
+        case 'finish_after_expiry': {
+          if (base.countdownExpiredAt === undefined) return fail('conflict', 'Task has no unresolved countdown expiry.');
+          let workedUntil: number | undefined;
+          if (action.workedUntil !== undefined) {
+            const expiredClock = localClock(base.countdownExpiredAt, timeZone);
+            let date = expiredClock.slice(0, 10);
+            if (clockMinutes(action.workedUntil) < clockMinutes(expiredClock.slice(11, 16))) date = new Date(Date.parse(date + 'T00:00:00Z') + 86400000).toISOString().slice(0, 10);
+            workedUntil = Math.max(base.countdownExpiredAt, localTimeEpoch(date, action.workedUntil, timeZone));
+            if (workedUntil > now) return fail('invalid', 'workedUntil cannot be in the future.');
+            creditCapped = workedUntil - base.countdownExpiredAt > MAX_OVERRUN_SECONDS * 1000;
+          }
+          next = finishAfterExpiry(base, now, workedUntil, () => { const id = newId(); createdIds.push(id); return id; });
+          creditedSeconds = Math.max(0, getTaskTotalSeconds(next, now) - getTaskTotalSeconds(base, now));
+          uk = (creditedSeconds ? 'Дораховано ' + duration(creditedSeconds / 60, 'uk') + ' до «' + task.title + '»' : 'Без дорахунку для «' + task.title + '»') + (creditCapped ? ' (межа дорахунку — 3 год)' : '') + '. Завершення завдання — окремо';
+          en = (creditedSeconds ? 'Credited ' + duration(creditedSeconds / 60, 'en') + ' to “' + task.title + '”' : 'No credit for “' + task.title + '”') + (creditCapped ? ' (3-hour credit limit)' : '') + '. Task completion is separate';
+          break;
+        }
         case 'pause_timer':
           next = pauseTaskTimer(base, now); uk = 'Таймер «' + task.title + '» на паузі'; en = 'Paused timer “' + task.title + '”'; break;
         case 'set_countdown': {
@@ -538,6 +594,7 @@ export function applyAgentAction(ws: AgentWorkspace, input: AgentAction, ctx: Ag
           next = base; uk = 'Обмежену спробу «' + task.title + '» завершено'; en = 'Finished limited start “' + task.title + '”'; break;
         case 'set_recorded_time':
           next = setTaskTimeSpent(base, action.minutes * 60, now, newId);
+          if (base.countdownExpiredAt !== undefined) { next = { ...next }; delete next.countdownExpiredAt; }
           uk = 'Записаний час «' + task.title + '»: ' + duration(action.minutes, 'uk'); en = 'Recorded time “' + task.title + '”: ' + duration(action.minutes, 'en'); break;
         case 'reset_time':
           next = { ...discardTaskStepAttribution(pauseTaskTimer(base, now)), timeSpentSeconds: 0,
@@ -546,7 +603,7 @@ export function applyAgentAction(ws: AgentWorkspace, input: AgentAction, ctx: Ag
       }
     }
     next = stamp(next);
-    return success({ ...ws, tasks: ws.tasks.map(item => item.id === task.id ? next : item) }, uk, en, [task.id], createdIds, describeTask(next, now, timeZone));
+    return success({ ...ws, tasks: ws.tasks.map(item => item.id === task.id ? next : item) }, uk, en, [task.id], createdIds, { ...describeTask(next, now, timeZone), ...(creditedSeconds === undefined ? {} : { creditedSeconds, creditedMinutes: creditedSeconds / 60, ...(creditCapped ? { creditCapped: true } : {}) }) });
   } catch (error) {
     if (error instanceof ActionError) return { workspace: ws, result: { ok: false, code: error.code, error: error.message } };
     throw error;

@@ -61,6 +61,16 @@ export function pauseTaskTimer(task: PSTask, now = Date.now()): PSTask {
   };
 }
 
+/** Auto-stop at the actual zero crossing, even when a callback arrives late. */
+export function expireTaskCountdown(task: PSTask, now = Date.now()): PSTask {
+  if (!task.timerRunning || getTaskRemainingSeconds(task, now) !== 0) return task;
+  const expiredAt = Number.isFinite(task.timerStartedAt) ? task.timerStartedAt! + (countdownBudget(task) ?? 0) * 1000 : now;
+  return {
+    ...pauseTaskTimer(task, now),
+    ...(!task.done && !task.limitedStart ? { countdownExpiredAt: expiredAt } : {}),
+  };
+}
+
 /** Resumes a paused session; an expired countdown starts a fresh full interval. */
 export function startTaskTimer(task: PSTask, now = Date.now(), newId: () => string = () => crypto.randomUUID()): PSTask {
   const mode = getTaskTimerMode(task);
@@ -93,6 +103,7 @@ export function configureTaskCountdown(task: PSTask, durationSeconds: number, no
     countdownDurationSeconds: duration,
     plannedDurationSeconds: initialTaskPlanSeconds(task, duration),
     countdownRemainingSeconds: duration,
+    countdownExpiredAt: undefined,
     timerRunning: true,
     timerStartedAt: now,
     timerSessionId: newId(),
@@ -107,6 +118,7 @@ export function clearTaskCountdown(task: PSTask, now = Date.now()): PSTask {
   paused.timerMode = 'stopwatch';
   delete paused.countdownDurationSeconds;
   delete paused.countdownRemainingSeconds;
+  delete paused.countdownExpiredAt;
   return paused;
 }
 

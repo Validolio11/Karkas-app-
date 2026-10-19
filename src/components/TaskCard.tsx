@@ -7,6 +7,7 @@ import { formatDigitalDuration as formatTime, formatDurationFull } from '../util
 import { Language, TRANSLATIONS } from '../utils/i18n';
 import { AIIcon } from './AIIconTemplates';
 import { TaskTimeDialog } from './TaskTimeDialog';
+import { CountdownExpiryNotice, type CountdownExpiryActions } from './CountdownExpiryNotice';
 import { formatTaskDate, getDeadlineProgress, isTaskDate, taskDateEnd } from '../utils/taskDates';
 import { taskTimeRange } from '../utils/schedulePresentation';
 import {
@@ -26,7 +27,7 @@ import {
   Pencil,
 } from 'lucide-react';
 
-interface TaskCardProps {
+interface TaskCardProps extends CountdownExpiryActions {
   task: PSTask;
   index: number;
   lang: Language;
@@ -95,6 +96,8 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
   onConfigureCountdown,
   onExtendCountdown,
   onClearCountdown,
+  onContinueAfterExpiry,
+  onFinishAfterExpiry,
 }) => {
   const t = TRANSLATIONS[lang];
   const [isSlashing, setIsSlashing] = useState(false);
@@ -545,7 +548,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   <span aria-hidden="true" className={`h-1.5 w-1.5 ${task.timerRunning ? 'bg-emerald-400' : countdownFinished ? 'bg-amber-400' : hasStarted ? 'bg-neutral-400' : 'bg-neutral-700'}`} />
                   {task.timerRunning ? (lang === 'uk' ? 'Таймер іде' : 'Timer running')
                     : task.done ? (lang === 'uk' ? 'Завершено' : 'Completed')
-                    : countdownFinished ? (lang === 'uk' ? 'Час вийшов' : 'Time is up')
+                    : countdownFinished ? (lang === 'uk' ? 'Відлік закінчився' : 'Countdown ended')
                     : hasStarted ? (lang === 'uk' ? 'На паузі' : 'Paused')
                     : hasCountdown ? (lang === 'uk' ? 'Відлік' : 'Countdown')
                     : (lang === 'uk' ? 'Не розпочато' : 'Not started')}
@@ -572,6 +575,10 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
               </section>
             )}
           </div>
+
+          {Number.isFinite(task.countdownExpiredAt) && <CountdownExpiryNotice task={task} lang={lang}
+            onContinueAfterExpiry={onContinueAfterExpiry} onFinishAfterExpiry={onFinishAfterExpiry}
+            onCorrect={() => { const trigger = document.getElementById('task-time-settings-' + task.id); if (trigger instanceof HTMLButtonElement) openTimeSettings(trigger, true); }} />}
 
           {/* One action row: steps on the left, work actions and tools on the right. */}
           <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-neutral-800/60 pt-3">
@@ -651,7 +658,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   <Square className="h-4 w-4" aria-hidden="true" />
                   {lang === 'uk' ? 'Зупинити' : 'Stop'}
                 </button>}
-                {(task.timerRunning || (hasStarted && !task.done)) && onToggleTimer && !(task.timerRunning && onStopTimer) && <button
+                {!Number.isFinite(task.countdownExpiredAt) && (task.timerRunning || (hasStarted && !task.done)) && onToggleTimer && !(task.timerRunning && onStopTimer) && <button
                   type="button" id={`task-timer-toggle-${task.id}`}
                   onClick={(e) => { e.stopPropagation(); if (allowAction('timer')) onToggleTimer(task.id); }}
                   className={primaryAction}>

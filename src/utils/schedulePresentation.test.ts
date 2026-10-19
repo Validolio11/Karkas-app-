@@ -81,3 +81,15 @@ test('the comparator uses the given time zone for "today"', () => {
   assert.ok(compareTodayTimedFirst(late, plain, WEDNESDAY_MORNING, 'UTC') < 0);
   assert.equal(compareTodayTimedFirst(late, plain, WEDNESDAY_MORNING, KYIV), 0);
 });
+
+test('fixed scheduled duration stays independent of extensions, timer mode and the first work estimate', () => {
+  const fixed = { ...block('2026-10-21T14:30:00+03:00', 90), scheduledDurationSeconds: 3600 };
+  assert.equal(taskTimeRange(fixed, WEDNESDAY_MORNING, KYIV, 'uk'), 'Сьогодні 14:30–15:30');
+  assert.equal(taskTimeRange({ ...fixed, timerMode: 'stopwatch' }, WEDNESDAY_MORNING, KYIV, 'en'), 'Today 14:30–15:30');
+  assert.equal(taskTimeRange({ ...fixed, timerMode: 'none' }, WEDNESDAY_MORNING, KYIV, 'en'), 'Today 14:30–15:30');
+  const replanned: PSTask = { id: 'replanned', title: 'Робота', phase: 'work', priority: 2, steps: 0, currentStep: 0,
+    pinned: false, createdAt: 1, startedAt: 2, plannedDurationSeconds: 3600,
+    ...block('2026-10-21T14:30:00+03:00', 90), scheduledDurationSeconds: 5400 };
+  assert.equal(taskTimeRange(replanned, WEDNESDAY_MORNING, KYIV, 'uk'), 'Сьогодні 14:30–16:00');
+  assert.equal(replanned.plannedDurationSeconds, 3600);
+});

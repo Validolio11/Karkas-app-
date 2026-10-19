@@ -1,6 +1,7 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { ArrowRight, Pause, Play, Plus, Shuffle } from 'lucide-react';
 import { AIIcon } from './AIIconTemplates';
+import { CountdownExpiryNotice, type CountdownExpiryActions } from './CountdownExpiryNotice';
 import type { PSTask, TaskTab } from '../types';
 import { TRANSLATIONS } from '../utils/i18n';
 import { sound } from '../utils/audio';
@@ -27,13 +28,13 @@ const STUCK = [
 const LIMITED_START_CAP_KEY = 'karkas.limited-start-cap.v1';
 const RECENT_ATTEMPT_MS = 30 * 60 * 1000;
 
-export const StrategyNextStep: React.FC<{
+export const StrategyNextStep: React.FC<CountdownExpiryActions & {
   candidates: NextStepCandidate[]; nextAction?: string; tabs: TaskTab[]; lang: 'uk' | 'en'; now: number;
   onStart: (id: string) => void; onPause: (id: string) => void; onChat: (text: string) => void;
   onOpenTask: (id: string) => void; onOpenAdd: () => void;
   onLimitedStart: (id: string, capSeconds: number, options?: { continued?: boolean }) => void;
   onFinishLimitedStart: (id: string) => void; attemptsSummary: { count: number; seconds: number };
-}> = ({ candidates, nextAction, tabs, lang, now, onStart, onPause, onChat, onOpenTask, onOpenAdd, onLimitedStart, onFinishLimitedStart, attemptsSummary }) => {
+}> = ({ candidates, nextAction, tabs, lang, now, onStart, onPause, onChat, onOpenTask, onOpenAdd, onLimitedStart, onFinishLimitedStart, attemptsSummary, onContinueAfterExpiry, onFinishAfterExpiry }) => {
   const uk = lang === 'uk';
   const [pickedId, setPickedId] = useState<string | null>(null);
   const index = Math.max(0, candidates.findIndex(candidate => candidate.task.id === pickedId));
@@ -193,16 +194,19 @@ export const StrategyNextStep: React.FC<{
       </div>
     </div>
 
+    {Number.isFinite(task.countdownExpiredAt) && <CountdownExpiryNotice task={task} lang={lang}
+      onContinueAfterExpiry={onContinueAfterExpiry} onFinishAfterExpiry={onFinishAfterExpiry}
+      onCorrect={() => onChat(uk ? 'Допоможи зарахувати фактичний час після закінчення відліку «' + task.title + '». Запитай, до котрої години я працював.' : 'Help record actual work after the countdown for ' + task.title + '. Ask when I stopped working.')} />}
     {limited && <p className="mt-3 text-xs leading-relaxed text-neutral-400">{uk ? 'Можна зупинитись будь-коли. Від 1 хв — спроба зараховується.' : 'You can stop any time. 1 min or more counts as an attempt.'}</p>}
     {advice}
 
     <div className="mt-6 flex flex-wrap items-center gap-2">
-      {running
+      {!Number.isFinite(task.countdownExpiredAt) && (running
         ? <button type="button" className={primaryBtn} onClick={() => { sound.tick(500); if (limited) onFinishLimitedStart(task.id); else onPause(task.id); }}><Pause className="h-4 w-4" aria-hidden="true" />{limited ? (uk ? 'Досить' : 'Enough') : (uk ? 'Пауза' : 'Pause')}</button>
-        : <button type="button" className={primaryBtn} onClick={() => { sound.activate(); onStart(task.id); }}><Play className="h-4 w-4" aria-hidden="true" />{started ? (uk ? 'Продовжити' : 'Resume') : (uk ? 'Почати' : 'Start')}</button>}
+        : <button type="button" className={primaryBtn} onClick={() => { sound.activate(); onStart(task.id); }}><Play className="h-4 w-4" aria-hidden="true" />{started ? (uk ? 'Продовжити' : 'Resume') : (uk ? 'Почати' : 'Start')}</button>)}
       <button type="button" className={btn} onClick={() => onChat(helpPrompt)}>{uk ? 'Допоможи почати' : 'Help me start'}</button>
       {stuckToggle}
-      {!running && !limited && <div className="flex max-w-full flex-wrap items-center gap-2">
+      {!running && !limited && !Number.isFinite(task.countdownExpiredAt) && <div className="flex max-w-full flex-wrap items-center gap-2">
         <div role="group" aria-label={uk ? 'Тривалість обмеженої спроби' : 'Limited attempt duration'} className="inline-flex min-w-0">
           {LIMITED_START_CAPS.map(cap => <button key={cap} type="button" aria-pressed={limitedCap === cap}
             aria-label={uk ? `${cap / 60} хвилин` : `${cap / 60} minutes`}

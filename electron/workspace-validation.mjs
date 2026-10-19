@@ -83,13 +83,14 @@ function validTask(value, deleted) {
     if (!Array.isArray(value.activityTrail) || value.activityTrail.length > 64 || value.activityTrail.some(event => !validTaskActivity(event)) ||
         new Set(value.activityTrail.map(event => event.id)).size !== value.activityTrail.length) return false;
   }
+  if (!optional(value, 'scheduledDurationSeconds', v => integer(v) && v >= 1 && v <= 86400)) return false;
   if (!optional(value, 'plannedDate', validDate) || !optional(value, 'deadlineDate', validDate)) return false;
   for (const key of ['note', 'timerStepId', 'timerSessionId', 'schedulePlanId', 'scheduleNextStartAt']) if (!optional(value, key, text)) return false;
   if (value.timeSessions !== undefined && (!object(value.timeSessions) || Object.entries(value.timeSessions).some(([key, session]) =>
     !id(key) || ['__proto__', 'constructor', 'prototype'].includes(key) || !object(session) || !number(session.seconds) || !optional(session, 'stepId', id)))) return false;
   for (const key of ['scheduledPending', 'timerRunning', 'autoPausedOverdue']) if (!optional(value, key, v => typeof v === 'boolean')) return false;
   for (const key of ['startedAt', 'completedAt', 'timeSpentSeconds', 'timeResetAt', 'plannedDurationSeconds', 'timerStartedAt',
-    'countdownDurationSeconds', 'countdownRemainingSeconds', 'scheduledFor']) if (!optional(value, key, number)) return false;
+    'countdownDurationSeconds', 'countdownRemainingSeconds', 'countdownExpiredAt', 'scheduledFor']) if (!optional(value, key, number)) return false;
   if (!optional(value, 'timerMode', v => text(v) && ['none', 'stopwatch', 'countdown'].includes(v)) ||
       !optional(value, 'schedule', validSchedule) ||
       !optional(value, 'deletionReason', v => text(v) && ['accidental', 'cancelled'].includes(v))) return false;

@@ -968,3 +968,184 @@ test('Kyiv repeated DST hour uses the first occurrence and day plans reject bloc
   }
   assert.equal(generated, 0);
 });
+
+
+test('expired start_timer credits the gap and resumes for 30 minutes with replayable ids', () => {
+  const now = Date.parse('2026-10-19T13:05:00Z'), expiredAt = now - 35 * 60000;
+  const original = task({ timerMode: 'countdown', countdownDurationSeconds: 3600, countdownRemainingSeconds: 0,
+    timerRunning: false, startedAt: expiredAt - 3600000, timeSpentSeconds: 3600, countdownExpiredAt: expiredAt });
+  const ws = workspace({ tasks: [original] });
+  const output = success(ws, { type: 'start_timer', taskId: original.id }, context({ now }));
+  const changed = output.workspace.tasks[0];
+  assert.equal(changed.timeSpentSeconds, 5700);
+  assert.equal(changed.countdownRemainingSeconds, 1800);
+  assert.equal(changed.countdownDurationSeconds, 5400);
+  assert.equal(changed.timerRunning, true);
+  assert.equal(changed.countdownExpiredAt, undefined);
+  assert.equal((output.result.data as { creditedMinutes: number }).creditedMinutes, 35);
+  assert.match(output.result.summary.uk, /35 хв/);
+  const ids = [...output.result.createdIds!];
+  assert.ok(ids.length);
+  const replay = success(ws, { type: 'start_timer', taskId: original.id }, context({ now, newId: () => ids.shift()! }));
+  assert.deepEqual(replay.workspace, output.workspace);
+  assert.equal(ids.length, 0);
+});
+
+test('continue_after_expiry supports a chosen extension and refuses unconfirmed long gaps', () => {
+  const now = Date.parse('2026-10-19T13:05:00Z');
+  const expired = task({ timerMode: 'countdown', countdownDurationSeconds: 3600, countdownRemainingSeconds: 0,
+    timeSpentSeconds: 3600, countdownExpiredAt: now - 600000 });
+  const output = success(workspace({ tasks: [expired] }), { type: 'continue_after_expiry', taskId: expired.id, extendMinutes: 15 }, context({ now }));
+  assert.equal(output.workspace.tasks[0].timeSpentSeconds, 4200);
+  assert.equal(output.workspace.tasks[0].countdownRemainingSeconds, 900);
+  for (const type of ['start_timer', 'continue_after_expiry'] as const) {
+    const ws = workspace({ tasks: [{ ...expired, countdownExpiredAt: now - 181 * 60000 }] });
+    const rejected = apply(ws, { type, taskId: expired.id }, context({ now }));
+    assert.equal(rejected.workspace, ws);
+    assert.equal(rejected.result.ok, false);
+    if (!rejected.result.ok) assert.match(rejected.result.error, /3 hours/);
+  }
+  const longGap = workspace({ tasks: [{ ...expired, countdownExpiredAt: now - 181 * 60000 }] });
+  const explicit = success(longGap, { type: 'set_recorded_time', taskId: expired.id, minutes: 150 }, context({ now }));
+  assert.equal(explicit.workspace.tasks[0].countdownExpiredAt, undefined);
+  assert.equal(explicit.workspace.tasks[0].timeSpentSeconds, 9000);
+});
+
+test('finish_after_expiry resolves local finish time and keeps completion separate', () => {
+  const now = Date.parse('2026-10-19T13:30:00Z');
+  const expired = task({ timerMode: 'countdown', countdownDurationSeconds: 3600, countdownRemainingSeconds: 0,
+    timeSpentSeconds: 3600, countdownExpiredAt: Date.parse('2026-10-19T12:30:00Z') });
+  const ws = workspace({ tasks: [expired] });
+  const output = success(ws, { type: 'finish_after_expiry', taskId: expired.id, workedUntil: '16:10' }, context({ now }));
+  assert.equal(output.workspace.tasks[0].timeSpentSeconds, 6000);
+  assert.equal(output.workspace.tasks[0].done, false);
+  assert.equal(output.workspace.tasks[0].timerRunning, undefined);
+  assert.equal(output.workspace.tasks[0].countdownExpiredAt, undefined);
+  assert.equal((output.result.data as { creditedMinutes: number }).creditedMinutes, 40);
+  const dismissed = success(ws, { type: 'finish_after_expiry', taskId: expired.id }, context({ now }));
+  assert.equal(dismissed.workspace.tasks[0].timeSpentSeconds, 3600);
+  assert.equal(dismissed.workspace.tasks[0].countdownExpiredAt, undefined);
+  const future = apply(ws, { type: 'finish_after_expiry', taskId: expired.id, workedUntil: '16:45' }, context({ now }));
+  assert.equal(future.result.ok, false);
+  assert.equal(future.workspace, ws);
+});
+
+test('finish_after_expiry handles an overnight finish in the expiry time zone', () => {
+  const now = Date.parse('2026-10-19T22:00:00Z');
+  const expired = task({ timerMode: 'countdown', countdownDurationSeconds: 3600, countdownRemainingSeconds: 0,
+    timeSpentSeconds: 3600, countdownExpiredAt: Date.parse('2026-10-19T20:30:00Z') });
+  const result = success(workspace({ tasks: [expired] }), { type: 'finish_after_expiry', taskId: expired.id, workedUntil: '00:10' }, context({ now }));
+  assert.equal(result.workspace.tasks[0].timeSpentSeconds, 6000);
+});
+
+test('shift_day uses the delayed block by default, reports overflow and supports exact undo', () => {
+  const now = Date.parse('2026-10-19T13:05:00Z');
+  const current = task({ scheduledFor: Date.parse('2026-10-19T11:30:00Z'), timerMode: 'countdown', countdownDurationSeconds: 3600,
+    countdownRemainingSeconds: 0, countdownExpiredAt: Date.parse('2026-10-19T12:30:00Z'), timeSpentSeconds: 3600 });
+  const following = task({ id: 'next', scheduledFor: Date.parse('2026-10-19T12:30:00Z'), timerMode: 'countdown', countdownDurationSeconds: 1800 });
+  const late = task({ id: 'late', scheduledFor: Date.parse('2026-10-19T20:00:00Z'), timerMode: 'countdown', countdownDurationSeconds: 3600 });
+  const ws = workspace({ tasks: [current, following, late] });
+  const output = success(ws, { type: 'shift_day', minutes: 35 }, context({ now }));
+  assert.equal(output.workspace.tasks[0].scheduledFor, current.scheduledFor);
+  assert.equal(output.workspace.tasks[1].scheduledFor, following.scheduledFor! + 35 * 60000);
+  assert.equal(output.workspace.tasks[1].countdownDurationSeconds, 1800);
+  assert.equal(output.workspace.tasks[2].scheduledFor, late.scheduledFor);
+  assert.deepEqual(output.result.changedTaskIds, ['next']);
+  assert.deepEqual((output.result.data as { overflowTaskIds: string[] }).overflowTaskIds, ['late']);
+  assert.match(output.result.summary.uk, /Не вміщається/);
+  const restored = undoAgentTurn(output.workspace, captureAgentUndo(ws, output.workspace));
+  assert.equal(restored.undone, true);
+  assert.deepEqual(restored.workspace.tasks.map(task => task.scheduledFor), ws.tasks.map(task => task.scheduledFor));
+  const boundary = success(ws, { type: 'shift_day', minutes: 10, fromTime: '23:00' }, context({ now }));
+  assert.equal(boundary.workspace.tasks[1].scheduledFor, following.scheduledFor);
+  assert.equal(boundary.workspace.tasks[2].scheduledFor, late.scheduledFor);
+});
+
+test('expiry and shift schemas reject malformed minutes, clock strings and extra arguments', () => {
+  for (const action of [
+    { type: 'continue_after_expiry', taskId: 'task-1', extendMinutes: 0 },
+    { type: 'continue_after_expiry', taskId: 'task-1', extendMinutes: 1.5 },
+    { type: 'continue_after_expiry', taskId: 'task-1', workedUntil: '16:10' },
+    { type: 'finish_after_expiry', taskId: 'task-1', workedUntil: '24:00' },
+    { type: 'finish_after_expiry', taskId: 'task-1', workedUntil: 16 },
+    { type: 'shift_day', minutes: 0 }, { type: 'shift_day', minutes: 30, fromTime: '9:00' },
+    { type: 'shift_day', minutes: 30, taskId: 'task-1' },
+  ]) assert.ok('error' in validateAgentAction(action), JSON.stringify(action));
+  for (const action of [
+    { type: 'continue_after_expiry', taskId: 'task-1', extendMinutes: 15 },
+    { type: 'finish_after_expiry', taskId: 'task-1', workedUntil: '16:10' },
+    { type: 'shift_day', minutes: 35, fromTime: '15:30' },
+  ]) assert.deepEqual(validateAgentAction(action), action);
+});
+
+
+test('start_timer at an unprocessed zero crossing credits from the actual expiry instead of resetting', () => {
+  const now = Date.parse('2026-10-19T13:05:00Z');
+  const original = task({ timerMode: 'countdown', countdownDurationSeconds: 3600, countdownRemainingSeconds: 3600,
+    timerRunning: true, timerStartedAt: now - 95 * 60000, timeSpentSeconds: 0 });
+  const output = success(workspace({ tasks: [original] }), { type: 'start_timer', taskId: original.id }, context({ now }));
+  assert.equal(output.workspace.tasks[0].timeSpentSeconds, 5700);
+  assert.equal(output.workspace.tasks[0].countdownRemainingSeconds, 1800);
+  assert.equal((output.result.data as { creditedMinutes: number }).creditedMinutes, 35);
+});
+
+test('an explicit long finish records at most three hours and reports the cap', () => {
+  const now = Date.parse('2026-10-19T15:30:00Z');
+  const expired = task({ timerMode: 'countdown', countdownDurationSeconds: 3600, countdownRemainingSeconds: 0,
+    timeSpentSeconds: 3600, countdownExpiredAt: Date.parse('2026-10-19T11:00:00Z') });
+  const output = success(workspace({ tasks: [expired] }), { type: 'finish_after_expiry', taskId: expired.id, workedUntil: '18:00' }, context({ now }));
+  assert.equal(output.workspace.tasks[0].timeSpentSeconds, 14400);
+  assert.equal((output.result.data as { creditedMinutes: number }).creditedMinutes, 180);
+  assert.equal((output.result.data as { creditCapped: boolean }).creditCapped, true);
+  assert.match(output.result.summary.uk, /межа дорахунку/);
+});
+
+
+test('explicit replanning updates fixed block duration while preserving first-estimate telemetry', () => {
+  const now = Date.parse('2026-10-19T13:05:00Z');
+  const original = task({ timerMode: 'countdown', countdownDurationSeconds: 7200, plannedDurationSeconds: 7200,
+    countdownRemainingSeconds: 7200, timerRunning: false });
+  const replan = (value: PSTask) => success(workspace({ tasks: [value] }), { type: 'plan_day', date: '2026-10-19', start: '14:30',
+    items: [{ taskId: value.id, durationMinutes: 60 }] }, context({ now }));
+  const planned = replan(original).workspace.tasks[0];
+  assert.equal(planned.plannedDurationSeconds, 7200);
+  assert.equal(planned.scheduledDurationSeconds, 3600);
+  assert.equal(describeTask(planned, now).endTime, '15:30');
+  const started = replan({ ...original, startedAt: now - 600000, timeSpentSeconds: 60 }).workspace.tasks[0];
+  assert.equal(started.plannedDurationSeconds, 7200);
+  assert.equal(started.scheduledDurationSeconds, 3600);
+  assert.equal(describeTask(started, now).endTime, '15:30');
+});
+
+test('continuation keeps the original scheduled end and supports a consumed 24-hour countdown', () => {
+  const now = Date.parse('2026-10-19T13:05:00Z');
+  const expired = task({ scheduledFor: Date.parse('2026-10-19T11:30:00Z'), timerMode: 'countdown', countdownDurationSeconds: 3600,
+    countdownRemainingSeconds: 0, countdownExpiredAt: Date.parse('2026-10-19T12:30:00Z'), timeSpentSeconds: 3600 });
+  const continued = success(workspace({ tasks: [expired] }), { type: 'continue_after_expiry', taskId: expired.id }, context({ now }));
+  assert.equal(describeTask(continued.workspace.tasks[0], now).endTime, '15:30');
+  const fullDay = { ...expired, countdownDurationSeconds: 86400 };
+  const extended = success(workspace({ tasks: [fullDay] }), { type: 'continue_after_expiry', taskId: fullDay.id }, context({ now }));
+  assert.equal(extended.workspace.tasks[0].timerRunning, true);
+  assert.equal(extended.workspace.tasks[0].countdownRemainingSeconds, 1800);
+  assert.equal(extended.workspace.tasks[0].timeSpentSeconds, 5700);
+});
+
+
+test('timed create and update retain fixed durations independently from countdown extensions and clearTime removes them', () => {
+  const now = Date.parse('2026-10-19T13:05:00Z'), ctx = context({ now });
+  const created = success(workspace({ tasks: [] }), { type: 'create_task', title: 'Блок', date: '2026-10-19', startTime: '16:30', durationMinutes: 60 }, ctx);
+  const original = created.workspace.tasks[0];
+  assert.equal(original.scheduledDurationSeconds, 3600);
+  const extended = success(created.workspace, { type: 'extend_countdown', taskId: original.id, minutes: 30 }, ctx);
+  assert.equal(extended.workspace.tasks[0].countdownDurationSeconds, 5400);
+  assert.equal(extended.workspace.tasks[0].scheduledDurationSeconds, 3600);
+  assert.equal(describeTask(extended.workspace.tasks[0], now).endTime, '17:30');
+  const replanned = success(extended.workspace, { type: 'update_task', taskId: original.id, durationMinutes: 45 }, ctx);
+  assert.equal(replanned.workspace.tasks[0].scheduledDurationSeconds, 2700);
+  assert.equal(replanned.workspace.tasks[0].plannedDurationSeconds, 3600);
+  assert.equal(describeTask(replanned.workspace.tasks[0], now).endTime, '17:15');
+  const cleared = success(replanned.workspace, { type: 'update_task', taskId: original.id, clearTime: true }, ctx);
+  assert.equal(cleared.workspace.tasks[0].scheduledFor, undefined);
+  assert.equal(cleared.workspace.tasks[0].scheduledDurationSeconds, undefined);
+  assert.equal(cleared.workspace.tasks[0].plannedDate, '2026-10-19');
+});

@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import type { PSTask } from '../src/types';
 import type { AgentWorkspace } from '../src/utils/aiAgentActions';
 import {
-  AGENT_MAX_ROUNDS, AGENT_TOOL_DECLARATIONS, applyConfirmedAgentAction, runAgentTurn,
+  AGENT_MAX_ROUNDS, AGENT_SYSTEM_INSTRUCTION, AGENT_TOOL_DECLARATIONS, applyConfirmedAgentAction, runAgentTurn,
   type AgentGenerationFunction,
 } from './aiAgent';
 import { AIRequestError, type AIFunctionCall, type GeminiContent } from './geminiGeneration';
@@ -250,7 +250,7 @@ test('tool declarations have a stable unique order and cover every action plus r
   assert.deepEqual(names.slice(0, 7), ['find_tasks', 'get_task', 'list_tasks', 'list_tabs', 'get_stats', 'list_history', 'list_notes']);
   assert.deepEqual(names.slice(-2), ['ask_user', 'open_personal_coaching']);
   for (const name of ['create_task', 'update_task', 'plan_day', 'complete_task', 'reopen_task', 'add_steps', 'rename_step', 'set_step_done',
-    'delete_step', 'start_timer', 'pause_timer', 'clear_countdown', 'finish_limited_start', 'reset_time', 'set_countdown',
+    'delete_step', 'start_timer', 'continue_after_expiry', 'finish_after_expiry', 'shift_day', 'pause_timer', 'clear_countdown', 'finish_limited_start', 'reset_time', 'set_countdown',
     'extend_countdown', 'limited_start', 'set_recorded_time', 'create_tab', 'rename_tab', 'set_tab_color', 'delete_tab',
     'delete_task', 'restore_task', 'permanently_delete_task', 'clear_completed', 'create_note', 'update_note', 'open_view', 'reveal_task']) assert.ok(names.includes(name), name);
 });
@@ -493,4 +493,89 @@ test('day planning tool schemas retain strict item fields and scheduling bounds'
   assert.equal(byName.update_task.properties.clearTime.const, true);
   assert.equal(byName.set_countdown.properties.minutes.type, 'number');
   assert.equal(byName.create_task.properties.timerMinutes.type, 'number');
+});
+
+
+test('expired start_timer and continue_after_expiry report the actual credited time to Gemini', async () => {
+  for (const name of ['start_timer', 'continue_after_expiry']) {
+    const expired = task({ countdownDurationSeconds: 3600, countdownRemainingSeconds: 0,
+      timeSpentSeconds: 3600, countdownExpiredAt: NOW - 35 * 60000 });
+    const fake = scripted([
+      calls(call('get_task', { taskId: 'animation' })),
+      request => {
+        const timer = responses(request)[0].response.task.timer;
+        assert.equal(timer.countdownExpiredAt, expired.countdownExpiredAt);
+        assert.equal(timer.overrunMinutes, 35);
+        return calls(call(name, { taskId: 'animation' }));
+      },
+      request => {
+        const result = responses(request)[0].response;
+        assert.equal(result.ok, true);
+        assert.equal(result.data.creditedMinutes, 35);
+        assert.equal(result.tasks[0].timer.recordedMinutes, 95);
+        assert.equal(result.tasks[0].timer.remainingMinutes, 30);
+        assert.equal(result.tasks[0].timer.countdownExpiredAt, null);
+        assert.equal(result.tasks[0].timer.running, true);
+        return { text: 'Дорахував 35 хв і продовжив відлік на 30 хв.' };
+      },
+    ]);
+    const result = await runAgentTurn({ ...base, userText: 'я ще працюю над анімацією', workspace: workspace({ tasks: [expired] }), generate: fake.generate });
+    assert.equal(result.actions.length, 1);
+    assert.equal(result.actions[0].action.type, name);
+    assert.match(result.actions[0].summary.uk, /35 хв/);
+  }
+});
+
+test('finish_after_expiry credits the named local time and never completes the task itself', async () => {
+  const expired = task({ countdownDurationSeconds: 3600, countdownRemainingSeconds: 0,
+    timeSpentSeconds: 3600, countdownExpiredAt: NOW - 60 * 60000 });
+  const fake = scripted([
+    calls(call('finish_after_expiry', { taskId: 'animation', workedUntil: '11:40' })),
+    request => {
+      const result = responses(request)[0].response;
+      assert.equal(result.ok, true);
+      assert.equal(result.data.creditedMinutes, 40);
+      assert.equal(result.tasks[0].timer.recordedMinutes, 100);
+      assert.equal(result.tasks[0].done, false);
+      assert.equal(result.tasks[0].timer.countdownExpiredAt, null);
+      return { text: 'Дорахував до 11:40: 40 хв.' };
+    },
+  ]);
+  const result = await runAgentTurn({ ...base, userText: 'закінчив об 11:40', workspace: workspace({ tasks: [expired] }), generate: fake.generate });
+  assert.equal(result.actions[0].action.type, 'finish_after_expiry');
+  assert.equal(result.workspace.tasks[0].done, false);
+});
+
+test('shift_day reaches the shared engine locally and reports blocks that do not fit', async () => {
+  const late = task({ id: 'late', title: 'Пізній блок', scheduledFor: Date.parse('2026-10-19T20:00:00Z'), countdownDurationSeconds: 3600 });
+  const next = task({ scheduledFor: NOW + 30 * 60000 });
+  const fake = scripted([
+    calls(call('shift_day', { minutes: 30 })),
+    request => {
+      const result = responses(request)[0].response;
+      assert.equal(result.ok, true);
+      assert.deepEqual(result.changedTaskIds, ['animation']);
+      assert.deepEqual(result.data.overflowTaskIds, ['late']);
+      assert.equal(result.tasks[0].startTime, '13:00');
+      assert.match(result.summary.uk, /Не вміщається.*Пізній блок/);
+      return { text: 'Посунув один блок на 30 хв. Пізній блок не вміщається до 24:00.' };
+    },
+  ]);
+  const result = await runAgentTurn({ ...base, userText: 'посунь решту дня на пів години', workspace: workspace({ tasks: [next, late] }), generate: fake.generate });
+  assert.equal(result.actions[0].action.type, 'shift_day');
+  assert.equal(result.workspace.tasks[1].scheduledFor, late.scheduledFor);
+});
+
+test('expiry and day shift tool schemas and instructions preserve explicit work and tab decisions', () => {
+  const byName = Object.fromEntries(AGENT_TOOL_DECLARATIONS.map(tool => [tool.name, tool.parametersJsonSchema]));
+  assert.deepEqual(byName.continue_after_expiry.required, ['taskId']);
+  assert.equal(byName.continue_after_expiry.properties.extendMinutes.type, 'integer');
+  assert.deepEqual(byName.finish_after_expiry.required, ['taskId']);
+  assert.match(String(byName.finish_after_expiry.properties.workedUntil.pattern), /2\[0-3\]/);
+  assert.deepEqual(byName.shift_day.required, ['minutes']);
+  assert.equal(byName.shift_day.properties.fromTime.pattern, byName.finish_after_expiry.properties.workedUntil.pattern);
+  assert.match(AGENT_SYSTEM_INSTRUCTION, /я ще працюю.*continue_after_expiry/);
+  assert.match(AGENT_SYSTEM_INSTRUCTION, /actual credited time/);
+  assert.match(AGENT_SYSTEM_INSTRUCTION, /Never create a tab unless the person asks/);
+  assert.match(AGENT_SYSTEM_INSTRUCTION, /Створити вкладку «Особисте»/);
 });

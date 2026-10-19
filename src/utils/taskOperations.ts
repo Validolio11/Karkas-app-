@@ -1,7 +1,7 @@
 import type { NewTaskInput, PSTask, TaskStepItem } from '../types';
 import { normalizeTaskSchedule } from './taskScheduling';
 import { isTaskDate } from './taskDates';
-import { getTaskRemainingSeconds, getTaskTimerMode, pauseTaskTimer, startTaskTimer } from './taskTimer';
+import { expireTaskCountdown, getTaskRemainingSeconds, getTaskTimerMode, pauseTaskTimer, startTaskTimer } from './taskTimer';
 import { activeTaskStepId, discardTaskStepAttribution, initialTaskPlanSeconds } from './taskWorkTelemetry';
 
 const MAX_RUNNING_SESSION_SECONDS = 2 * 60 * 60;
@@ -17,7 +17,7 @@ export function sanitizeTasksTimerSafeguard(taskList: PSTask[], now = Date.now()
       return { ...pauseTaskTimer(task, now), autoPausedOverdue: true };
     }
     const remaining = getTaskRemainingSeconds(task, now);
-    if (remaining !== undefined) return remaining === 0 ? pauseTaskTimer(task, now) : task;
+    if (remaining !== undefined) return remaining === 0 ? expireTaskCountdown(task, now) : task;
     const elapsedSeconds = Math.floor((now - task.timerStartedAt!) / 1000);
     if (elapsedSeconds <= MAX_RUNNING_SESSION_SECONDS) return task;
     return {
@@ -84,7 +84,7 @@ export function startTaskWork(task: PSTask, now = Date.now(), newId: () => strin
 /** Task completion is independent of its actual checklist progress. */
 export function completeTask(task: PSTask, now = Date.now()): PSTask {
   return {
-    ...pauseTaskTimer(task, now), done: true,
+    ...pauseTaskTimer(task, now), done: true, countdownExpiredAt: undefined,
     completedAt: task.done && Number.isFinite(task.completedAt) ? task.completedAt : now,
   };
 }

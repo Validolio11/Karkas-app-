@@ -72,6 +72,7 @@ export interface PSTask {
   schedule?: TaskSchedule;
   scheduledPending?: boolean; // Future plan template, excluded from work statistics
   scheduledFor?: number; // Planned start of materialized occurrence
+  scheduledDurationSeconds?: number; // Fixed block length; timer extensions do not move its planned end.
   schedulePlanId?: string; // Stable parent template ID
   scheduleNextStartAt?: string; // Persisted daily cursor, original schedule remains the wall-time anchor
   startedAt?: number; // First explicit start of work; preserved through pauses and reopening
@@ -87,6 +88,7 @@ export interface PSTask {
   timerStartedAt?: number; // Timestamp (ms) when current stopwatch session started
   countdownDurationSeconds?: number; // Configured focus session duration
   countdownRemainingSeconds?: number; // Remaining at the last start/pause; live elapsed is derived
+  countdownExpiredAt?: number; // Exact zero crossing; awaiting an explicit overrun decision.
   limitedStart?: { // Temporary countdown ceiling; restore the user's timer after the attempt.
     id: string; capSeconds: number; startedAt: number; baseSeconds: number; continued?: boolean;
     restore: { timerMode?: TimerMode; countdownDurationSeconds?: number; countdownRemainingSeconds?: number };

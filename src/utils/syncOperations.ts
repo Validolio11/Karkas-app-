@@ -236,7 +236,7 @@ export function applyWorkspaceMutation(remote: WorkspaceState, mutation: Workspa
     const appliesNewReset = patch?.timeResetAt !== undefined && patch.timeResetAt >= (current?.value.timeResetAt ?? 0);
     const obsoleteTime = staleReset || (!sameTimeEpoch && !appliesNewReset);
     const timeFields = new Set(['timeSpentSeconds', 'timeSessions', 'timeResetAt', 'timerRunning', 'timerStartedAt', 'timerSessionId',
-      'timerStepId', 'countdownRemainingSeconds', 'countdownDurationSeconds', 'timerMode', 'autoPausedOverdue', 'limitedStart']);
+      'timerStepId', 'countdownExpiredAt', 'countdownRemainingSeconds', 'countdownDurationSeconds', 'timerMode', 'autoPausedOverdue', 'limitedStart']);
     if (obsoleteTime && patch) for (const field of timeFields) delete (patch as Record<string, unknown>)[field];
     // App-owned chronology is cumulative and cannot be removed by older
     // clients or an undo patch that lacks the newer metadata fields.

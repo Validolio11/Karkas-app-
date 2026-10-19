@@ -8,11 +8,12 @@ import { isPersonalStrategyReady } from '../utils/strategyDiscovery';
 import { discoveryCta, discoveryProgress, needsStrategyOnboarding, rankNextStepCandidates } from './strategyViewModel';
 import { btn, Chip, ghostBtn, monoLabel, panel, primaryBtn, SectionTitle, SegmentBar } from './strategyUi';
 import { StrategyNextStep } from './StrategyNextStep';
+import type { CountdownExpiryActions } from './CountdownExpiryNotice';
 import { StrategyGoals } from './StrategyGoals';
 import { StrategyAudit } from './StrategyAudit';
 import { StrategyMore } from './StrategyMore';
 
-interface StrategyViewProps {
+interface StrategyViewProps extends CountdownExpiryActions {
   ownerId: string | null; profile: PersonalStrategyProfile; tasks: PSTask[]; deletedTasks: DeletedTask[]; tabs: TaskTab[];
   lang: 'uk' | 'en'; insights: WorkInsights; remindersEnabled: boolean;
   onProfileChange: (profile: PersonalStrategyProfile) => void;
@@ -117,6 +118,7 @@ export const StrategyView: React.FC<StrategyViewProps> = (props: StrategyViewPro
 
     <div className="grid items-stretch gap-5 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
       <StrategyNextStep candidates={candidates} nextAction={profile.latestStrategy?.nextAction} tabs={tabs} lang={lang} now={clock}
+        onContinueAfterExpiry={props.onContinueAfterExpiry} onFinishAfterExpiry={props.onFinishAfterExpiry}
         onStart={props.onStart} onPause={props.onPauseTimer} onChat={onChat} onOpenTask={props.onOpenTask} onOpenAdd={props.onOpenAdd}
         onLimitedStart={props.onLimitedStart} onFinishLimitedStart={props.onFinishLimitedStart} attemptsSummary={props.attemptsSummary} />
       {sideCard}

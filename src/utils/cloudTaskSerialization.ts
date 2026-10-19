@@ -22,6 +22,7 @@ export function serializeTaskForCloud<T extends PSTask | DeletedTask>(task: T, n
   if (task.scheduledPending !== undefined) result.scheduledPending = Boolean(task.scheduledPending);
   if (task.scheduleNextStartAt) result.scheduleNextStartAt = task.scheduleNextStartAt;
   if (Number.isFinite(task.scheduledFor)) result.scheduledFor = task.scheduledFor;
+  if (Number.isInteger(task.scheduledDurationSeconds) && task.scheduledDurationSeconds! >= 1 && task.scheduledDurationSeconds! <= 86400) result.scheduledDurationSeconds = task.scheduledDurationSeconds;
   if (task.schedulePlanId) result.schedulePlanId = task.schedulePlanId;
   if (task.completedAt != null) result.completedAt = task.completedAt;
   if (Number.isFinite(task.startedAt)) result.startedAt = task.startedAt;
@@ -36,6 +37,7 @@ export function serializeTaskForCloud<T extends PSTask | DeletedTask>(task: T, n
   if (Number.isFinite(task.timerStartedAt)) result.timerStartedAt = task.timerStartedAt;
   if (Number.isFinite(task.countdownDurationSeconds)) result.countdownDurationSeconds = task.countdownDurationSeconds;
   if (Number.isFinite(task.countdownRemainingSeconds)) result.countdownRemainingSeconds = task.countdownRemainingSeconds;
+  if (Number.isFinite(task.countdownExpiredAt) && task.countdownExpiredAt! >= 0) result.countdownExpiredAt = task.countdownExpiredAt;
   if (isTaskLimitedStart(task.limitedStart)) result.limitedStart = structuredClone(task.limitedStart);
   if (task.autoPausedOverdue !== undefined) result.autoPausedOverdue = Boolean(task.autoPausedOverdue);
   if (Array.isArray(task.stepList)) result.stepList = task.stepList.map(step => ({

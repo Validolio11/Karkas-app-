@@ -1,4 +1,6 @@
-import { pauseTaskTimer, startTaskTimer, configureTaskCountdown, clearTaskCountdown, extendTaskCountdown, getTaskRemainingSeconds } from './utils/taskTimer';
+import { pauseTaskTimer, startTaskTimer, configureTaskCountdown, clearTaskCountdown, extendTaskCountdown, getTaskRemainingSeconds, expireTaskCountdown } from './utils/taskTimer';
+import { continueAfterExpiry, finishAfterExpiry, countdownReminderIndex } from './utils/countdownOverrun';
+import { planDelay } from './utils/dayPlanShift';
 import { startLimitedStart, finishLimitedStart, needsLimitedStartFinish, latestAttempt, summarizeAttempts } from './utils/limitedStart';
 import { applyAITaskUpdate } from './utils/aiTaskUpdates';
 import { applyAgentAction, type AgentWorkspace } from './utils/aiAgentActions';
@@ -179,6 +181,8 @@ export default function App() {
     ? (initialWorkspace.backupPreserved
       ? (lang === 'uk' ? 'Локальні дані потребують відновлення. Початкові записи збережено в резервній копії; пошкоджені дані не застосовано.' : 'Local data needs recovery. Original records were backed up; invalid data was not applied.')
       : (lang === 'uk' ? 'Не вдалося створити резервну копію пошкоджених даних. Збереження заблоковано. Звільніть місце на пристрої та перезапустіть застосунок; початкові записи не перезаписано.' : 'Could not back up damaged data. Saving is blocked. Free device storage and restart the app; original records were not overwritten.')) : null);
+  const [dayShiftNotice, setDayShiftNotice] = useState<{ ownerId: string | null; text: string; undoToken?: string } | null>(null);
+  const dayShiftBusyRef = React.useRef(false);
   const [completedNoticeId, setCompletedNoticeId] = useState<string | null>(null);
   const breakdownRequestRef = React.useRef<AbortController | null>(null);
   useEffect(() => { document.documentElement.lang = lang; }, [lang]);
@@ -235,26 +239,39 @@ export default function App() {
           if (!result.ok && scope === timerNoticeScopeRef.current) setTimerNotice(body + ' ' + (lang === 'uk' ? 'Сповіщення Windows недоступне.' : 'Windows notification unavailable.'));
         }).catch(() => { if (scope === timerNoticeScopeRef.current) setTimerNotice(body); });
       }
-      const expired = latestTasksRef.current.filter(task => !task.done && task.timerRunning && getTaskRemainingSeconds(task, now) === 0);
+      const countdownTasks = latestTasksRef.current.map(task => expireTaskCountdown(task, now));
+      const expired = latestTasksRef.current.filter(task => !task.done && task.limitedStart && task.timerRunning && getTaskRemainingSeconds(task, now) === 0);
       for (const task of expired) {
         const key = `${task.id}:${task.timerStartedAt}`;
         if (notifiedTimersRef.current.has(key)) continue;
         notifiedTimersRef.current.add(key);
-        const limited = task.limitedStart;
-        const title = limited
-          ? (lang === 'uk' ? 'Karkas · Спробу зараховано' : 'Karkas · Attempt counted')
-          : (lang === 'uk' ? 'Karkas · Час вийшов' : 'Karkas · Time is up');
-        const body = limited
-          ? (lang === 'uk' ? `«${task.title}»: ${limited.capSeconds / 60} хв роботи. Можна зупинитись або продовжити.` : `“${task.title}”: ${limited.capSeconds / 60} min of work. You can stop or continue.`)
-          : (lang === 'uk' ? `${task.title}. Завершіть завдання або додайте час.` : `${task.title}. Complete the task or add more time.`);
+        const limited = task.limitedStart!;
+        const title = lang === 'uk' ? 'Karkas · Спробу зараховано' : 'Karkas · Attempt counted';
+        const body = lang === 'uk' ? `«${task.title}»: ${limited.capSeconds / 60} хв роботи. Можна зупинитись або продовжити.` : `“${task.title}”: ${limited.capSeconds / 60} min of work. You can stop or continue.`;
         const noticeScope = timerNoticeScopeRef.current;
-        setTimerNoticeCalm(!!limited);
+        setTimerNoticeCalm(true);
         setTimerNotice(body);
-        if (window.karkasDesktop) {
-          void window.karkasDesktop.system.showNotification({ title, body }).then(result => {
-            if (!result.ok && noticeScope === timerNoticeScopeRef.current) setTimerNotice(`${body} ${lang === 'uk' ? 'Сповіщення Windows недоступне.' : 'Windows notification unavailable.'}`);
-          }).catch(() => { if (noticeScope === timerNoticeScopeRef.current) setTimerNotice(body); });
-        }
+        if (window.karkasDesktop) void window.karkasDesktop.system.showNotification({ title, body }).then(result => {
+          if (!result.ok && noticeScope === timerNoticeScopeRef.current) setTimerNotice(body + ' ' + (lang === 'uk' ? 'Сповіщення Windows недоступне.' : 'Windows notification unavailable.'));
+        }).catch(() => { if (noticeScope === timerNoticeScopeRef.current) setTimerNotice(body); });
+      }
+      for (const task of countdownTasks) {
+        const reminder = countdownReminderIndex(task, now);
+        if (reminder === undefined) continue;
+        const key = `countdown:${task.id}:${task.countdownExpiredAt}:${reminder}`;
+        if (notifiedTimersRef.current.has(key)) continue;
+        notifiedTimersRef.current.add(key);
+        if (!claimPlanningNotice(localStorage, workspaceOwnerRef.current, key, now, true)) continue;
+        const at = new Intl.DateTimeFormat(lang === 'uk' ? 'uk-UA' : 'en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(task.countdownExpiredAt);
+        const title = lang === 'uk' ? 'Karkas · Відлік закінчився' : 'Karkas · Countdown ended';
+        const body = lang === 'uk' ? 'Час вийшов: «' + task.title + '». Ще працюєш? Відкрий Karkas — зарахую час з ' + at
+          : 'Time is up: “' + task.title + '”. Still working? Open Karkas — I will record time since ' + at;
+        const noticeScope = timerNoticeScopeRef.current;
+        setTimerNoticeCalm(true);
+        setTimerNotice(body);
+        if (window.karkasDesktop) void window.karkasDesktop.system.showNotification({ title, body }).then(result => {
+          if (!result.ok && noticeScope === timerNoticeScopeRef.current) setTimerNotice(body + ' ' + (lang === 'uk' ? 'Сповіщення Windows недоступне.' : 'Windows notification unavailable.'));
+        }).catch(() => { if (noticeScope === timerNoticeScopeRef.current) setTimerNotice(body); });
       }
       setTasks(previous => {
         const normalized = previous.map(task => needsLimitedStartFinish(task, now) ? finishLimitedStart(task, now) : task);
@@ -1502,7 +1519,7 @@ export default function App() {
     const interval = setInterval(() => setInsightNow(Date.now()), 30000);
     return () => clearInterval(interval);
   }, []);
-  useEffect(() => { setWorkPlanTaskId(null); }, [currentUser?.uid]);
+  useEffect(() => { setWorkPlanTaskId(null); setDayShiftNotice(null); }, [currentUser?.uid]);
   const workInsights = useMemo(() => buildWorkInsights(tasks, deletedTasks, {
     now: insightNow, lang, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Kyiv',
   }), [tasks, deletedTasks, insightNow, lang]);
@@ -1751,6 +1768,7 @@ export default function App() {
   // Today's timed tasks only change place when the calendar day changes, not on every clock tick.
   const listTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Kyiv';
   const listDayKey = calendarDateKey(insightNow, listTimeZone);
+  const dayDelay = useMemo(() => planDelay(tasks, insightNow, listTimeZone), [tasks, insightNow, listTimeZone]);
 
   // Filtered & Sorted Tasks (Running timers, then today's timed tasks by start, then pinned, priority, creation)
   const filteredTasks = useMemo(() => {
@@ -2078,6 +2096,37 @@ export default function App() {
     return { undone, conflicts: undone ? [] : ['workspace'] };
   };
 
+  const handleShiftDay = async () => {
+    if (dayShiftBusyRef.current) return;
+    const now = Date.now(), ownerId = workspaceOwnerRef.current;
+    const delay = planDelay(latestTasksRef.current, now, listTimeZone);
+    if (!delay.minutes || !delay.tasks.length) return;
+    dayShiftBusyRef.current = true;
+    try {
+      const result = await handleApplyAgentActions({ messageId: 'shift-day:' + crypto.randomUUID(), ownerId,
+        clientClock: { now: new Date(now).toISOString(), timeZone: listTimeZone },
+        actions: [{ action: { type: 'shift_day', minutes: delay.minutes }, summary: { uk: '', en: '' }, changedTaskIds: [] }] });
+      if (!agentOwnerIsCurrent(ownerId)) return;
+      setDayShiftNotice({ ownerId, undoToken: result.undoToken,
+        text: [...result.applied.map(summary => summary[lang]), ...result.failed.map(item => item.error)].join(' · ') });
+    } catch {
+      if (agentOwnerIsCurrent(ownerId)) setDayShiftNotice({ ownerId, text: lang === 'uk' ? 'Не вдалося посунути план. Спробуйте ще раз.' : 'Could not shift the plan. Please try again.' });
+    } finally { dayShiftBusyRef.current = false; }
+  };
+  const handleUndoDayShift = async () => {
+    const notice = dayShiftNotice;
+    if (!notice?.undoToken || dayShiftBusyRef.current) return;
+    dayShiftBusyRef.current = true;
+    try {
+      const result = await handleUndoAgentActions(notice.undoToken);
+      if (!agentOwnerIsCurrent(notice.ownerId)) return;
+      setDayShiftNotice(result.undone ? null : { ownerId: notice.ownerId,
+        text: lang === 'uk' ? 'План уже змінився. Не вдалося скасувати зсув; перегляньте блоки.' : 'The plan has changed. Could not undo the shift; review the blocks.' });
+    } catch {
+      if (agentOwnerIsCurrent(notice.ownerId)) setDayShiftNotice({ ownerId: notice.ownerId, text: lang === 'uk' ? 'Не вдалося скасувати зсув. Перегляньте план.' : 'Could not undo the shift. Review the plan.' });
+    } finally { dayShiftBusyRef.current = false; }
+  };
+
   // Task Actions
   const handleToggleDone = (id: string) => {
     const now = Date.now();
@@ -2095,9 +2144,18 @@ export default function App() {
     }
   };
 
+  const handleContinueAfterExpiry = (id: string) => {
+    const now = Date.now();
+    setTasks(previous => previous.map(task => task.id === id ? continueAfterExpiry(task, now) : task));
+  };
+  // workedUntilNow credits the gap since zero (capped); without it the person was not working.
+  const handleFinishAfterExpiry = (id: string, workedUntilNow = false) => {
+    const now = Date.now();
+    setTasks(previous => previous.map(task => task.id === id ? finishAfterExpiry(task, now, workedUntilNow ? now : undefined) : task));
+  };
   const handleStartTask = (id: string) => {
     const now = Date.now();
-    setTasks(prev => prev.map(task => task.id === id ? startTaskWork(finishLimitedStart(task, now), now) : task));
+    setTasks(prev => prev.map(task => task.id === id ? Number.isFinite(task.countdownExpiredAt) ? continueAfterExpiry(task, now) : startTaskWork(finishLimitedStart(task, now), now) : task));
   };
 
   const handleLimitedStart = (id: string, capSeconds: number, options?: { continued?: boolean }) => {
@@ -2121,7 +2179,7 @@ export default function App() {
     const now = Date.now();
     const shouldPause = tasks.find(task => task.id === id)?.timerRunning;
     setTasks(previous => previous.map(task => task.id === id
-      ? shouldPause ? task.limitedStart ? finishLimitedStart(task, now) : pauseTaskTimer(task, now) : task.done ? task : startTaskTimer(finishLimitedStart(task, now), now)
+      ? shouldPause ? task.limitedStart ? finishLimitedStart(task, now) : pauseTaskTimer(task, now) : task.done ? task : Number.isFinite(task.countdownExpiredAt) ? continueAfterExpiry(task, now) : startTaskTimer(finishLimitedStart(task, now), now)
       : task));
   };
 
@@ -2170,7 +2228,7 @@ export default function App() {
   const handleUpdateTimeSpent = (id: string, seconds: number) => {
     sound.tick(500);
     const now = Date.now();
-    setTasks(prev => prev.map(task => task.id === id ? { ...setTaskTimeSpent(finishLimitedStart(task, now), seconds, now), timeResetAt: Math.max(now, (task.timeResetAt || 0) + 1) } : task));
+    setTasks(prev => prev.map(task => task.id === id ? { ...setTaskTimeSpent(finishAfterExpiry(finishLimitedStart(task, now), now), seconds, now), timeResetAt: Math.max(now, (task.timeResetAt || 0) + 1) } : task));
   };
 
   const handleUpdateStep = (id: string, step: number) => {
@@ -2609,6 +2667,7 @@ export default function App() {
             remindersEnabled={workReminders.enabled} onRemindersChange={workReminders.setEnabled}
             onProfileChange={next => updatePersonalProfile(preserveDiscoveryAfterUserGoalEdit(personalProfileRef.current, next))} onResetMemory={resetPersonalMemory} onChat={openStrategyChat}
             onDeepenDiscovery={() => deepenPersonalDiscovery()}
+            onContinueAfterExpiry={handleContinueAfterExpiry} onFinishAfterExpiry={handleFinishAfterExpiry}
             onStart={handleStartTask} onPauseTimer={handleStopTimer} onOpenTask={handleRevealTask} onOpenAdd={() => setIsAddOpen(true)}
             onLimitedStart={handleLimitedStart} onFinishLimitedStart={handleFinishLimitedStart} attemptsSummary={summarizeAttempts(tasks, Date.now())}
             onUndo={handleUndoStrategy} onApplyPriority={applySuggestedPriority} onEditPlan={setWorkPlanTaskId} />
@@ -2746,6 +2805,16 @@ export default function App() {
               </div>
             )}
 
+            {dayShiftNotice && dayShiftNotice.ownerId === workspaceOwnerRef.current ? <div role="status" className="mb-4 flex flex-wrap items-center gap-3 border border-neutral-700 bg-neutral-900/70 px-4 py-3 text-sm text-neutral-200">
+              <span className="min-w-0 break-words">{dayShiftNotice.text}</span>
+              {dayShiftNotice.undoToken && <button type="button" onClick={() => void handleUndoDayShift()} className="min-h-11 px-3 underline focus-visible:outline-2 focus-visible:outline-white">{lang === 'uk' ? 'Скасувати' : 'Undo'}</button>}
+              <button type="button" onClick={() => setDayShiftNotice(null)} className="min-h-11 px-3 text-neutral-400 hover:text-white">{lang === 'uk' ? 'Закрити' : 'Dismiss'}</button>
+            </div> : dayDelay.minutes > 0 && dayDelay.tasks.length > 0 && <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border border-amber-900/60 px-4 py-3 text-sm">
+              <p className="text-amber-200">{lang === 'uk' ? `Ти відстаєш від плану на ${dayDelay.minutes} хв` : `Your plan is ${dayDelay.minutes} min behind`}</p>
+              <button type="button" onClick={() => void handleShiftDay()} className="min-h-11 border border-neutral-700 px-3 py-2 text-neutral-200 hover:border-white hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
+                {lang === 'uk' ? `Посунути решту дня на +${dayDelay.minutes} хв` : `Shift the rest of today by +${dayDelay.minutes} min`}
+              </button>
+            </div>}
             {/* Tasks List */}
             <div className="flex flex-col gap-4">
               <AnimatePresence initial={false}>
@@ -2776,6 +2845,7 @@ export default function App() {
                       onDeleteStepItem={handleDeleteStepItem}
                       onAIBreakdown={handleAIBreakdownTask}
                       isBreakingDown={breakingDownTaskId === task.id}
+                      onContinueAfterExpiry={handleContinueAfterExpiry} onFinishAfterExpiry={handleFinishAfterExpiry}
                       onConfigureCountdown={handleConfigureCountdown}
                       onExtendCountdown={handleExtendCountdown}
                       onClearCountdown={handleClearCountdown}

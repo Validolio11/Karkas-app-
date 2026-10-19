@@ -12,7 +12,7 @@ export function describeSchedule(schedule: TaskSchedule, lang: 'uk' | 'en', next
   } catch { return lang === 'uk' ? 'Некоректний розклад — уточніть дату й часовий пояс' : 'Invalid schedule — check date and timezone'; }
 }
 
-type TimedTask = Pick<PSTask, 'scheduledFor' | 'timerMode' | 'countdownDurationSeconds'>;
+type TimedTask = Pick<PSTask, 'scheduledFor' | 'scheduledDurationSeconds' | 'timerMode' | 'countdownDurationSeconds'>;
 
 const formatters = new Map<string, Intl.DateTimeFormat>();
 
@@ -48,11 +48,11 @@ function scheduledStart(task: Pick<PSTask, 'scheduledFor'>): number | undefined 
   return typeof task.scheduledFor === 'number' && Number.isFinite(task.scheduledFor) && Math.abs(task.scheduledFor) <= 8.64e15 ? task.scheduledFor : undefined;
 }
 
-/** End of the planned block: start plus the configured countdown, when the task counts down. */
+/** Fixed schedule length survives timer extensions; legacy blocks use their configured countdown. */
 export function taskScheduledEnd(task: TimedTask): number | undefined {
   const start = scheduledStart(task);
-  const duration = task.countdownDurationSeconds;
-  if (start === undefined || getTaskTimerMode(task) !== 'countdown' || typeof duration !== 'number' || !Number.isFinite(duration) || duration <= 0) return undefined;
+  const duration = task.scheduledDurationSeconds ?? (getTaskTimerMode(task) === 'countdown' ? task.countdownDurationSeconds : undefined);
+  if (start === undefined || typeof duration !== 'number' || !Number.isFinite(duration) || duration <= 0) return undefined;
   return start + Math.floor(duration) * 1000;
 }
 

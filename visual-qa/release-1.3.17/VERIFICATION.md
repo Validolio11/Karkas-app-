@@ -15,3 +15,5 @@ Change: hour-by-hour day planning by the AI agent (`plan_day` computes sequentia
 Not verified: desktop (Electron) chat with a live key; Windows start-time notifications for planned blocks in the packaged app; DST-spanning plan blocks are rejected by design.
 
 Release tag: 1.3.17 (no v prefix). Publication through the authenticated GitHub CLI with size and SHA256 digest checks.
+
+Publication confirmed: https://github.com/Validolio11/Karkas-app-/releases/tag/1.3.17 (tag 1.3.17 at the release commit, marked latest). All three assets match local sizes and SHA256 digests. The application's resolveTrustedUpdate/verifyUpdateFile accepted the public release and manifest as an update from 1.3.16 and matched the installer SHA512 (publication.json, public-update-verification.json). The update was not installed on the user's machine.

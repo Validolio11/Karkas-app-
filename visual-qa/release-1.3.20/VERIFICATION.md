@@ -15,3 +15,5 @@ Change: `replan_day` lays today's unfinished timed blocks (missed, paused, futur
 Not verified: desktop (Electron) chat with a live key. The agent reply may repeat the tool summary line once.
 
 Release tag: 1.3.20 (no v prefix). Publication through the authenticated GitHub CLI with size and SHA256 digest checks.
+
+Publication confirmed: https://github.com/Validolio11/Karkas-app-/releases/tag/1.3.20 (tag 1.3.20 at the release commit, marked latest). All three assets match local sizes and SHA256 digests. The application's resolveTrustedUpdate/verifyUpdateFile accepted the public release and manifest as an update from 1.3.19 and matched the installer SHA512 (publication.json, public-update-verification.json). The update was not installed on the user's machine.

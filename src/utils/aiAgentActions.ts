@@ -11,9 +11,14 @@ import { remapTaskTabs } from './workspaceTabs';
 
 export interface AgentWorkspace { tasks: PSTask[]; deletedTasks: DeletedTask[]; tabs: TaskTab[]; notes: NotepadNote[] }
 type StepRef = number | string;
+export interface AgentDayPlanItem {
+  taskId?: string; title?: string; phase?: string; priority?: 1 | 2 | 3; note?: string; steps?: string[];
+  durationMinutes: number; fixedStart?: string; estimated?: boolean; breakAfterMinutes?: number;
+}
 export type AgentAction =
-  | { type: 'create_task'; title: string; phase?: string; priority?: 1 | 2 | 3; note?: string; plannedDate?: string; deadlineDate?: string; steps?: string[]; timerMinutes?: number }
-  | { type: 'update_task'; taskId: string; title?: string; note?: string; priority?: 1 | 2 | 3; phase?: string; plannedDate?: string | null; deadlineDate?: string | null; pinned?: boolean }
+  | { type: 'create_task'; title: string; phase?: string; priority?: 1 | 2 | 3; note?: string; plannedDate?: string; deadlineDate?: string; steps?: string[]; timerMinutes?: number; date?: string; startTime?: string; durationMinutes?: number }
+  | { type: 'update_task'; taskId: string; title?: string; note?: string; priority?: 1 | 2 | 3; phase?: string; plannedDate?: string | null; deadlineDate?: string | null; pinned?: boolean; date?: string; startTime?: string; durationMinutes?: number; clearTime?: true }
+  | { type: 'plan_day'; date?: string; start?: string; items: AgentDayPlanItem[] }
   | { type: 'complete_task' | 'reopen_task'; taskId: string }
   | { type: 'add_steps'; taskId: string; titles: string[]; afterStepIndex?: number } // 0 prepends; otherwise after the 1-based row.
   | { type: 'rename_step'; taskId: string; step: StepRef; title: string }
@@ -54,11 +59,19 @@ const date: Check = value => isTaskDate(value);
 const nullableDate: Check = value => value === null || isTaskDate(value);
 const priority: Check = value => value === 1 || value === 2 || value === 3;
 const color: Check = nonempty;
+const clockTime: Check = value => typeof value === 'string' && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value);
+const planMinutes: Check = value => integer(value) && (value as number) >= 1 && (value as number) <= 1440;
+const breakMinutes: Check = value => integer(value) && (value as number) <= 1440;
+const planItemFields: Record<string, Check> = { taskId: nonempty, title: nonempty, phase: nonempty, priority, note: text, steps: titles,
+  durationMinutes: planMinutes, fixedStart: clockTime, estimated: boolean, breakAfterMinutes: breakMinutes };
+const planItems: Check = value => Array.isArray(value) && value.length >= 1 && value.length <= 20;
+
 type Schema = { required: Record<string, Check>; optional?: Record<string, Check> };
 const taskOnly = { required: { taskId: nonempty } };
 const schemas: Record<AgentAction['type'], Schema> = {
-  create_task: { required: { title: nonempty }, optional: { phase: nonempty, priority, note: text, plannedDate: date, deadlineDate: date, steps: titles, timerMinutes: minutes } },
-  update_task: { required: { taskId: nonempty }, optional: { title: nonempty, note: text, priority, phase: nonempty, plannedDate: nullableDate, deadlineDate: nullableDate, pinned: boolean } },
+  create_task: { required: { title: nonempty }, optional: { phase: nonempty, priority, note: text, plannedDate: date, deadlineDate: date, steps: titles, timerMinutes: minutes, date, startTime: clockTime, durationMinutes: planMinutes } },
+  update_task: { required: { taskId: nonempty }, optional: { title: nonempty, note: text, priority, phase: nonempty, plannedDate: nullableDate, deadlineDate: nullableDate, pinned: boolean, date, startTime: clockTime, durationMinutes: planMinutes, clearTime: value => value === true } },
+  plan_day: { required: { items: planItems }, optional: { date, start: clockTime } },
   complete_task: taskOnly, reopen_task: taskOnly,
   add_steps: { required: { taskId: nonempty, titles: value => titles(value) && (value as string[]).length > 0 }, optional: { afterStepIndex: integer } },
   rename_step: { required: { taskId: nonempty, step, title: nonempty } },
@@ -92,6 +105,21 @@ export function validateAgentAction(raw: unknown): AgentAction | { error: string
     if (key !== 'type' && !fields[key](args[key])) return { error: 'Invalid argument: ' + key };
   }
   for (const key of Object.keys(schema.required)) if (!Object.hasOwn(args, key)) return { error: 'Missing argument: ' + key };
+  if (args.type === 'plan_day') {
+    for (const [index, rawItem] of (args.items as unknown[]).entries()) {
+      if (!rawItem || typeof rawItem !== 'object' || Array.isArray(rawItem)) return { error: 'Invalid plan item: ' + (index + 1) };
+      const item = rawItem as Record<string, unknown>;
+      for (const key of Object.keys(item)) {
+        if (!Object.hasOwn(planItemFields, key)) return { error: 'Unexpected argument: items[' + index + '].' + key };
+        if (!planItemFields[key](item[key])) return { error: 'Invalid argument: items[' + index + '].' + key };
+      }
+      if (!Object.hasOwn(item, 'durationMinutes')) return { error: 'Missing argument: items[' + index + '].durationMinutes' };
+      if (Object.hasOwn(item, 'taskId') === Object.hasOwn(item, 'title')) return { error: 'Each plan item needs exactly one of taskId or title.' };
+    }
+  }
+  if (args.clearTime && args.startTime !== undefined) return { error: 'clearTime cannot be combined with startTime.' };
+  if (args.date !== undefined && args.plannedDate !== undefined && args.date !== args.plannedDate) return { error: 'date and plannedDate must agree.' };
+  if (typeof args.date === 'string' && typeof args.deadlineDate === 'string' && args.date > args.deadlineDate) return { error: 'plannedDate must not be after deadlineDate.' };
   if ((args.type === 'update_task' || args.type === 'update_note') && !Object.keys(schema.optional!).some(key => Object.hasOwn(args, key))) return { error: 'Provide at least one field to update.' };
   if (typeof args.plannedDate === 'string' && typeof args.deadlineDate === 'string' && args.plannedDate > args.deadlineDate) return { error: 'plannedDate must not be after deadlineDate.' };
   return { ...args } as AgentAction;
@@ -144,11 +172,35 @@ function matchScore(title: string, query: string): number {
   return score / wanted.length + (normalize(title) === normalize(query) ? 100 : 0);
 }
 
-export function describeTask(task: PSTask, now: number) {
+const localClock = (at: number, timeZone: string) => {
+  try { return new Intl.DateTimeFormat('sv-SE', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).format(new Date(at)); }
+  catch { return fail('invalid', 'Invalid local timestamp or timeZone: ' + timeZone); }
+};
+const clockMinutes = (value: string) => Number(value.slice(0, 2)) * 60 + Number(value.slice(3, 5));
+const minuteClock = (value: number) => String(Math.floor(value / 60)).padStart(2, '0') + ':' + String(value % 60).padStart(2, '0');
+// Probe both offsets: repeated hours use the first occurrence; missing hours are rejected.
+function localTimeEpoch(date: string, time: string, timeZone: string): number {
+  const target = Date.parse(date + 'T' + time + ':00Z');
+  const candidates = new Set<number>();
+  let probe = target;
+  for (const delta of [0, -172800000, -86400000, 86400000, 172800000, 0, 0]) {
+    const at = delta ? target + delta : probe;
+    const wall = localClock(at, timeZone);
+    const offset = Date.parse(wall.replace(' ', 'T') + 'Z') - at;
+    probe = target - offset; candidates.add(probe);
+  }
+  const expected = date + ' ' + time + ':00';
+  const exact = [...candidates].filter(at => localClock(at, timeZone) === expected).sort((a, b) => a - b);
+  return exact[0] ?? fail('invalid', 'Local time does not exist in ' + timeZone + ': ' + date + ' ' + time + '. Choose a time outside the DST transition.');
+}
+
+export function describeTask(task: PSTask, now: number, timeZone = 'Europe/Kyiv') {
   const remaining = getTaskRemainingSeconds(task, now);
   return {
     id: task.id, title: task.title, phase: task.phase, priority: task.priority, done: task.done,
     plannedDate: task.plannedDate ?? null, deadlineDate: task.deadlineDate ?? null,
+    ...(task.scheduledFor === undefined ? {} : { date: localClock(task.scheduledFor, timeZone).slice(0, 10), startTime: localClock(task.scheduledFor, timeZone).slice(11, 16),
+      endTime: task.countdownDurationSeconds === undefined ? null : localClock(task.scheduledFor + task.countdownDurationSeconds * 1000, timeZone).slice(11, 16) }),
     steps: materializeStepList(task).map((item, index) => ({ number: index + 1, id: item.id, title: item.title, done: item.done })),
     timer: { mode: getTaskTimerMode(task), countdownMinutes: task.countdownDurationSeconds === undefined ? null : task.countdownDurationSeconds / 60,
       remainingMinutes: remaining === undefined ? null : remaining / 60, running: !!task.timerRunning,
@@ -212,11 +264,36 @@ export function applyAgentAction(ws: AgentWorkspace, input: AgentAction, ctx: Ag
     // Same default as the add form: the first tab, or the built-in focus category without custom tabs.
     const defaultPhase = ws.tabs[0]?.id ?? 'focus';
     const phaseCheck = (phase: string | undefined): string => {
-      const value = phase ?? defaultPhase;
-      if (!ws.tabs.some(tab => tab.id === value) && !(ws.tabs.length === 0 && value === 'focus')) {
-        return fail('invalid', 'Unknown phase: ' + String(phase) + '. Valid tab IDs: ' + (ws.tabs.map(tab => tab.id).join(', ') || 'none (omit phase)'));
+      if (phase === undefined || !ws.tabs.length && phase === 'focus') return defaultPhase;
+      const id = ws.tabs.find(tab => tab.id === phase);
+      if (id) return id.id;
+      let matches = ws.tabs.filter(tab => normalize(tab.name) === normalize(phase));
+      if (!matches.length) matches = ws.tabs.filter(tab => matchScore(tab.name, phase) > 0);
+      if (matches.length === 1) return matches[0].id;
+      return fail(matches.length ? 'conflict' : 'invalid', (matches.length ? 'Ambiguous' : 'Unknown') + ' phase: ' + phase + '. Valid tabs: ' + (ws.tabs.map(tab => tab.id + ' — ' + tab.name).join(', ') || 'none: omit phase'));
+    };
+    const timeZone = ctx.timeZone ?? 'Europe/Kyiv';
+    const today = () => {
+      try { return localClock(now, timeZone).slice(0, 10); }
+      catch { return fail('invalid', 'Invalid timeZone: ' + timeZone); }
+    };
+    const pausedCountdown = (task: PSTask, minutes: number, createdIds: string[]) => {
+      if (task.done || task.timerRunning) return fail('conflict', 'Reopen the completed task or pause its running timer before configuring a planned countdown: ' + task.title);
+      const configured = configureTaskCountdown(finishLimitedStart(task, now), minutes * 60, now, () => { const id = newId(); createdIds.push(id); return id; });
+      const next = pauseTaskTimer(configured, now);
+      if (configured.timerSessionId && next.timeSessions) {
+        const sessions = { ...next.timeSessions }; delete sessions[configured.timerSessionId];
+        if (Object.keys(sessions).length) next.timeSessions = sessions;
+        else if (task.timeSessions === undefined) delete next.timeSessions;
+        else next.timeSessions = sessions;
       }
-      return value;
+      if (task.startedAt === undefined) delete next.startedAt;
+      else next.startedAt = task.startedAt;
+      return next;
+    };
+    const checkTimedTask = (task: PSTask) => {
+      if (task.done || task.timerRunning) return fail('conflict', 'Cannot set a time on a completed task or a task with a running timer: ' + task.title);
+      if (task.schedule || task.scheduledPending) return fail('conflict', 'A scheduled template cannot be used as a visible timed task: ' + task.title);
     };
     const archive = (task: PSTask, reason?: DeletedTask['deletionReason']): DeletedTask => {
       const paused = stamp(pauseTaskTimer(finishLimitedStart(task, now), now));
@@ -228,18 +305,101 @@ export function applyAgentAction(ws: AgentWorkspace, input: AgentAction, ctx: Ag
       return success(ws, 'Відкрито розділ «' + names[action.view] + '»', 'Opened view: ' + action.view, [], undefined, action);
     }
     if (action.type === 'create_task') {
-      const phase = phaseCheck(action.phase);
-      const id = newId(), stepIds: string[] = [];
-      const stepList = action.steps?.map(title => { const id = newId(); stepIds.push(id); return { id, title, done: false }; });
+      const phase = phaseCheck(action.phase), plannedDate = action.date ?? (action.startTime === undefined ? action.plannedDate : today());
+      if (action.plannedDate !== undefined && action.startTime !== undefined && action.plannedDate !== plannedDate) return fail('invalid', 'date and plannedDate must agree for a timed task.');
+      if (plannedDate && action.deadlineDate && plannedDate > action.deadlineDate) return fail('invalid', 'plannedDate must not be after deadlineDate.');
+      const scheduledFor = action.startTime === undefined ? undefined : localTimeEpoch(plannedDate!, action.startTime, timeZone);
+      const id = newId(), createdIds: string[] = [id];
+      const stepList = action.steps?.map(title => { const id = newId(); createdIds.push(id); return { id, title, done: false }; });
       const task = createTask({ title: action.title, phase, priority: action.priority ?? 2, steps: stepList?.length ?? 0,
         ...(stepList ? { stepList } : {}), ...(action.note === undefined ? {} : { note: action.note }),
-        ...(action.plannedDate === undefined ? {} : { plannedDate: action.plannedDate }),
+        ...(plannedDate === undefined ? {} : { plannedDate }),
         ...(action.deadlineDate === undefined ? {} : { deadlineDate: action.deadlineDate }),
         ...(action.timerMinutes === undefined ? {} : { timerMode: 'countdown', countdownDurationSeconds: action.timerMinutes * 60 }),
       }, id, now);
       if (!task) return fail('invalid', 'Task fields are invalid.');
-      const created = stamp(task);
-      return success({ ...ws, tasks: [created, ...ws.tasks] }, 'Створено завдання «' + created.title + '»', 'Created task “' + created.title + '”', [id], [id, ...stepIds], describeTask(created, now));
+      let created = action.durationMinutes === undefined ? task : pausedCountdown(task, action.durationMinutes, createdIds);
+      if (scheduledFor !== undefined) created = { ...created, scheduledFor, scheduledPending: false };
+      created = stamp(created);
+      return success({ ...ws, tasks: [created, ...ws.tasks] }, 'Створено завдання «' + created.title + '»', 'Created task “' + created.title + '”', [id], createdIds, describeTask(created, now, timeZone));
+    }
+    if (action.type === 'plan_day') {
+      const date = action.date ?? today();
+      if (!action.start && date !== today()) return fail('invalid', 'Provide a start time for a day other than today.');
+      const localNow = localClock(now, timeZone);
+      let cursor = action.start ? clockMinutes(action.start) : Math.ceil((clockMinutes(localNow.slice(11, 16)) + (now % 60000 ? 1 : 0)) / 15) * 15;
+      const selected = new Set<string>(), pendingTitles = new Set<string>();
+      const prepared: { item: AgentDayPlanItem; task?: PSTask; phase: string; priority: 1 | 2 | 3; title: string; start: string; end: string; scheduledFor: number }[] = [];
+      for (const item of action.items) {
+        let task: PSTask | undefined;
+        if (item.taskId) {
+          task = ws.tasks.find(task => task.id === item.taskId);
+          if (!task) return fail('not_found', 'Task not found: ' + item.taskId);
+        } else {
+          const exact = ws.tasks.filter(task => !task.done && !task.scheduledPending && !task.schedule && normalize(task.title) === normalize(item.title!));
+          if (exact.length > 1) return fail('conflict', 'Ambiguous task title: ' + item.title + '. Use taskId: ' + exact.map(task => task.id + ' — ' + task.title).join(', '));
+          if (exact.length) task = exact[0];
+          else {
+            const strong = findTasks(ws, item.title!).filter(match => match.score >= 60 && ws.tasks.some(task => task.id === match.id && !task.schedule && !task.scheduledPending));
+            if (strong.length === 1) task = ws.tasks.find(task => task.id === strong[0].id);
+          }
+        }
+        if (task) {
+          checkTimedTask(task);
+          if (selected.has(task.id)) return fail('conflict', 'The plan contains the same task twice: ' + task.title + '. Combine its blocks or use distinct tasks.');
+          selected.add(task.id);
+        } else {
+          const key = normalize(item.title!);
+          if (pendingTitles.has(key)) return fail('conflict', 'The plan contains the same new task twice: ' + item.title);
+          pendingTitles.add(key);
+        }
+        const title = item.title?.trim() ?? task!.title, phase = item.phase === undefined && task ? task.phase : phaseCheck(item.phase);
+        const start = item.fixedStart === undefined ? cursor : clockMinutes(item.fixedStart);
+        if (start < cursor) {
+          const previous = prepared[prepared.length - 1];
+          return fail('conflict', 'Time conflict: “' + title + '” at ' + minuteClock(start) + ' precedes ' + (previous ? '“' + previous.title + '” (' + previous.start + '–' + previous.end + ') and its break ending at ' : 'plan start ') + minuteClock(cursor) + '.');
+        }
+        const end = start + item.durationMinutes;
+        if (end > 1440) return fail('invalid', '“' + title + '” (' + minuteClock(start) + '–' + minuteClock(end) + ') ends after 24:00. Shorten the plan or choose an earlier start.');
+        if (task?.deadlineDate && date > task.deadlineDate) return fail('invalid', 'plannedDate must not be after deadlineDate: ' + title);
+        const scheduledFor = localTimeEpoch(date, minuteClock(start), timeZone);
+        const actualEnd = localClock(scheduledFor + item.durationMinutes * 60000, timeZone);
+        const expectedEnd = end === 1440 ? new Date(Date.parse(date + 'T00:00:00Z') + 86400000).toISOString().slice(0, 10) + ' 00:00' : date + ' ' + minuteClock(end);
+        if (actualEnd.slice(0, 16) !== expectedEnd) return fail('invalid', '“' + title + '” crosses a DST clock change. Choose a block outside the clock transition.');
+        prepared.push({ item, task, title, phase, priority: item.priority ?? task?.priority ?? 2, start: minuteClock(start), end: minuteClock(end), scheduledFor });
+        cursor = end + (item.breakAfterMinutes ?? 0);
+      }
+      // Validation above is complete before creating IDs or building a new workspace.
+      let tasks = ws.tasks;
+      const createdIds: string[] = [], changedTaskIds: string[] = [];
+      const schedule = prepared.map(block => {
+        const { item } = block;
+        let task = block.task;
+        if (!task) {
+          const id = newId(); createdIds.push(id);
+          const stepList = item.steps?.map(title => { const id = newId(); createdIds.push(id); return { id, title, done: false }; });
+          task = createTask({ title: block.title, phase: block.phase, priority: block.priority, steps: stepList?.length ?? 0,
+            ...(stepList ? { stepList } : {}), ...(item.note === undefined ? {} : { note: item.note }), plannedDate: date }, id, now) ?? undefined;
+          if (!task) return fail('invalid', 'Task fields are invalid: ' + block.title);
+        } else {
+          task = { ...task, title: block.title, phase: block.phase, priority: block.priority, ...(item.note === undefined ? {} : { note: item.note }), plannedDate: date };
+          if (item.steps !== undefined) {
+            const existing = materializeStepList(task), used = new Set<string>();
+            const list = item.steps.map(title => {
+              const previous = existing.find(step => !used.has(step.id) && normalize(step.title) === normalize(title));
+              if (previous) { used.add(previous.id); return { ...previous, title: title.trim() }; }
+              const id = newId(); createdIds.push(id); return { id, title: title.trim(), done: false };
+            });
+            task = setTaskSteps(task, list, now, newId);
+          }
+        }
+        task = stamp({ ...pausedCountdown(task, item.durationMinutes, createdIds), scheduledFor: block.scheduledFor, scheduledPending: false });
+        tasks = block.task ? tasks.map(current => current.id === task!.id ? task! : current) : [task, ...tasks];
+        changedTaskIds.push(task.id);
+        return { taskId: task.id, title: task.title, start: block.start, end: block.end, phase: task.phase, priority: task.priority, estimated: !!item.estimated, created: !block.task };
+      });
+      const summary = (lang: 'uk' | 'en') => schedule.map(block => block.start + '–' + block.end + ' · ' + block.title + ' · ' + (ws.tabs.find(tab => tab.id === block.phase)?.name ?? block.phase) + ' · P' + block.priority + (block.estimated ? lang === 'uk' ? ' (орієнтовно)' : ' (estimated)' : '')).join('\n');
+      return success({ ...ws, tasks }, summary('uk'), summary('en'), changedTaskIds, createdIds, schedule);
     }
     if (action.type === 'create_tab') {
       const tab: TaskTab = { id: newId(), name: action.name.trim(), ...(action.color ? { color: action.color } : {}) };
@@ -286,7 +446,7 @@ export function applyAgentAction(ws: AgentWorkspace, input: AgentAction, ctx: Ag
       const { deletedAt, deletionReason, ...restored } = task;
       const phase = ws.tabs.some(tab => tab.id === restored.phase) ? restored.phase : phaseCheck(undefined);
       const next = stamp({ ...restored, phase });
-      return success({ ...ws, tasks: [next, ...ws.tasks], deletedTasks }, 'Відновлено «' + task.title + '»', 'Restored “' + task.title + '”', [task.id], undefined, describeTask(next, now));
+      return success({ ...ws, tasks: [next, ...ws.tasks], deletedTasks }, 'Відновлено «' + task.title + '»', 'Restored “' + task.title + '”', [task.id], undefined, describeTask(next, now, timeZone));
     }
     // All remaining actions address a live task by its exact ID.
     const task = ws.tasks.find(item => item.id === action.taskId);
@@ -300,15 +460,24 @@ export function applyAgentAction(ws: AgentWorkspace, input: AgentAction, ctx: Ag
     let next = task, uk = '', en = '';
     const createdIds: string[] = [];
     if (action.type === 'update_task') {
-      if (action.phase !== undefined) phaseCheck(action.phase);
-      const planned = action.plannedDate === undefined ? task.plannedDate : action.plannedDate;
+      const phase = action.phase === undefined ? undefined : phaseCheck(action.phase);
+      if (action.startTime !== undefined) checkTimedTask(task);
+      if (action.durationMinutes !== undefined && (task.done || task.timerRunning)) return fail('conflict', 'Reopen the completed task or pause its running timer before configuring a planned countdown: ' + task.title);
+      const planned = action.date ?? (action.startTime === undefined ? action.plannedDate === undefined ? task.plannedDate : action.plannedDate : today());
       const deadline = action.deadlineDate === undefined ? task.deadlineDate : action.deadlineDate;
+      if (action.plannedDate !== undefined && action.startTime !== undefined && action.plannedDate !== planned) return fail('invalid', 'date and plannedDate must agree for a timed task.');
       if (planned && deadline && planned > deadline) return fail('invalid', 'plannedDate must not be after deadlineDate.');
-      const { type, taskId, pinned, ...fields } = action;
-      const update: AITaskUpdate = { ...fields, id: taskId };
+      const scheduledFor = action.startTime === undefined ? undefined : localTimeEpoch(planned!, action.startTime, timeZone);
+      const { type, taskId, pinned, date: ignoredDate, startTime, durationMinutes, clearTime, ...fields } = action;
+      const update: AITaskUpdate = { ...fields, ...(phase === undefined ? {} : { phase }),
+        ...(action.date === undefined && startTime === undefined ? {} : { plannedDate: planned }), id: taskId };
       next = applyAITaskUpdate(task, update, new Set(ws.tabs.map(tab => tab.id)), now);
       if (next === task) return fail('invalid', 'Task update was rejected by existing task validation. Check task timer and date fields.');
+      if (phase !== undefined) next = { ...next, phase };
       if (pinned !== undefined) next = { ...next, pinned };
+      if (durationMinutes !== undefined) next = pausedCountdown(next, durationMinutes, createdIds);
+      if (scheduledFor !== undefined) next = { ...next, scheduledFor, scheduledPending: false };
+      if (clearTime) { next = { ...next }; delete next.scheduledFor; }
       uk = 'Оновлено завдання «' + next.title + '»'; en = 'Updated task “' + next.title + '”';
     } else if (action.type === 'complete_task' || action.type === 'reopen_task') {
       if (action.type === 'complete_task' && task.scheduledPending) return fail('conflict', 'A pending scheduled task cannot be completed before it materializes.');
@@ -377,7 +546,7 @@ export function applyAgentAction(ws: AgentWorkspace, input: AgentAction, ctx: Ag
       }
     }
     next = stamp(next);
-    return success({ ...ws, tasks: ws.tasks.map(item => item.id === task.id ? next : item) }, uk, en, [task.id], createdIds, describeTask(next, now));
+    return success({ ...ws, tasks: ws.tasks.map(item => item.id === task.id ? next : item) }, uk, en, [task.id], createdIds, describeTask(next, now, timeZone));
   } catch (error) {
     if (error instanceof ActionError) return { workspace: ws, result: { ok: false, code: error.code, error: error.message } };
     throw error;

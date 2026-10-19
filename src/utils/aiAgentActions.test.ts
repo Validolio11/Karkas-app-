@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { PSTask } from '../types';
+import { captureAgentUndo, undoAgentTurn } from './agentUndo';
 import {
   AGENT_DESTRUCTIVE_ACTIONS, applyAgentAction, describeTask, findTasks, validateAgentAction,
   type AgentAction, type AgentContext, type AgentWorkspace,
@@ -550,4 +551,419 @@ test('validation rejects inherited types, sparse arrays and empty updates', () =
     { type: 'start_timer', taskId: 'task-1', extra: undefined }]) {
     assert.ok('error' in validateAgentAction(value));
   }
+});
+
+const PLAN_NOW = Date.parse('2026-10-19T07:07:04Z'); // 10:07 in Kyiv.
+const planContext = (overrides: Partial<AgentContext> = {}) => context({ now: PLAN_NOW, ...overrides });
+const planWorkspace = (overrides: Partial<AgentWorkspace> = {}) => workspace({
+  tabs: [{ id: 'focus', name: 'Робота' }, { id: 'learn', name: 'Навчання' }, { id: 'home', name: 'Особисте' }], ...overrides,
+});
+type ScheduleBlock = { taskId: string; title: string; start: string; end: string; phase: string; priority: 1 | 2 | 3; estimated: boolean; created: boolean };
+const schedule = (result: { data?: unknown }): ScheduleBlock[] => {
+  assert.ok(Array.isArray(result.data));
+  return result.data as ScheduleBlock[];
+};
+const assertPaused = (value: PSTask, minutes: number) => {
+  assert.equal(value.timerMode, 'countdown');
+  assert.equal(value.countdownDurationSeconds, minutes * 60);
+  assert.equal(value.countdownRemainingSeconds, minutes * 60);
+  assert.equal(value.timerRunning, false);
+  assert.equal(value.timerStartedAt, undefined);
+  assert.equal(value.startedAt, undefined);
+};
+
+test('plan_day schedules the spoken example in order, resolves tabs and updates animation without a duplicate', () => {
+  const before = planWorkspace();
+  const action: AgentAction = { type: 'plan_day', date: '2026-10-19', start: '13:00', items: [
+    { title: 'Встановити жалюзі', phase: 'Особисте', priority: 1, durationMinutes: 60, estimated: true },
+    { title: 'Спланувати анімацію', phase: 'Робота', priority: 2, durationMinutes: 30, steps: ['Ідея', 'Сценарій'] },
+    { title: 'Робота над анімацією', phase: 'Робота', priority: 1, durationMinutes: 300, note: 'Головне на сьогодні' },
+    { title: 'Навчання друку', phase: 'Навчання', priority: 2, durationMinutes: 30 },
+    { title: 'Відпочинок', phase: 'Особисте', priority: 3, durationMinutes: 60, estimated: true },
+  ] };
+  const output = success(before, action, planContext());
+  const blocks = schedule(output.result);
+  assert.deepEqual(blocks.map(value => [value.start, value.end]), [
+    ['13:00', '14:00'], ['14:00', '14:30'], ['14:30', '19:30'], ['19:30', '20:00'], ['20:00', '21:00'],
+  ]);
+  assert.deepEqual(blocks.map(value => value.phase), ['home', 'focus', 'focus', 'learn', 'home']);
+  assert.deepEqual(blocks.map(value => value.priority), [1, 2, 1, 2, 3]);
+  assert.deepEqual(blocks.map(value => value.estimated), [true, false, false, false, true]);
+  assert.deepEqual(blocks.map(value => value.created), [true, true, false, true, true]);
+  assert.equal(blocks[2].taskId, 'task-1');
+  assert.equal(output.workspace.tasks.length, 5);
+  assert.equal(output.workspace.tasks.filter(value => value.title === 'Робота над анімацією').length, 1);
+  assert.equal(output.workspace.tasks.find(value => value.id === 'task-1')?.note, 'Головне на сьогодні');
+  assert.deepEqual(new Set(output.result.changedTaskIds), new Set(blocks.map(value => value.taskId)));
+  for (const [index, block] of blocks.entries()) {
+    const value = output.workspace.tasks.find(value => value.id === block.taskId)!;
+    assert.equal(value.plannedDate, '2026-10-19');
+    assert.equal(value.scheduledPending, false);
+    assert.equal(value.schedule, undefined);
+    assertPaused(value, action.items[index].durationMinutes);
+  }
+  assert.equal(output.workspace.tasks.find(value => value.id === blocks[0].taskId)?.scheduledFor, Date.parse('2026-10-19T10:00:00Z'));
+  assert.deepEqual(output.workspace.tasks.find(value => value.id === blocks[1].taskId)?.stepList?.map(value => value.title), ['Ідея', 'Сценарій']);
+  assert.equal(output.result.summary.uk.split('\n').length, 5);
+  assert.match(output.result.summary.uk, /14:00–14:30 · Спланувати анімацію · Робота · P2/);
+  assert.match(output.result.summary.uk, /орієнтовно/);
+  assert.match(output.result.summary.en, /estimated/);
+  const createdTasks = blocks.filter(value => value.created).map(value => value.taskId);
+  assert.deepEqual(output.result.createdIds?.filter(id => createdTasks.includes(id)), createdTasks);
+  let replayIndex = 0;
+  const replayed = success(before, action, planContext({ newId: () => output.result.createdIds![replayIndex++] }));
+  assert.deepEqual(replayed.workspace, output.workspace);
+  assert.deepEqual(replayed.result, output.result);
+  assert.equal(replayIndex, output.result.createdIds?.length);
+});
+
+test('plan_day can reference a taskId and uses one strong active title match but never a completed or archived match', () => {
+  const before = planWorkspace({ tasks: [task(), task({ id: 'done', title: 'Відпочинок', done: true })],
+    deletedTasks: [{ ...task({ id: 'archived', title: 'Купити молоко' }), deletedAt: 5 }] });
+  const byId = success(before, { type: 'plan_day', start: '10:00', items: [
+    { taskId: 'task-1', durationMinutes: 30, phase: 'Навчання', priority: 1 },
+    { title: 'Відпочинок', durationMinutes: 20, priority: 3 },
+    { title: 'Купити молоко', durationMinutes: 15 },
+  ] }, planContext());
+  assert.deepEqual(schedule(byId.result).map(value => value.created), [false, true, true]);
+  assert.equal(byId.workspace.tasks.find(value => value.id === 'task-1')?.phase, 'learn');
+  const fuzzy = success(planWorkspace(), { type: 'plan_day', start: '10:00', items: [
+    { title: 'роботу над анімацією', durationMinutes: 60 },
+  ] }, planContext());
+  assert.equal(fuzzy.workspace.tasks.length, 1);
+  assert.equal(schedule(fuzzy.result)[0].taskId, 'task-1');
+  assert.equal(schedule(fuzzy.result)[0].created, false);
+  const ambiguous = planWorkspace({ tasks: [task({ id: 'a', title: 'Монтаж відео для клієнта' }), task({ id: 'b', title: 'Монтаж відео для каналу' })] });
+  const created = success(ambiguous, { type: 'plan_day', start: '10:00', items: [{ title: 'Монтаж відео', durationMinutes: 30 }] }, planContext());
+  assert.equal(schedule(created.result)[0].created, true);
+  assert.equal(created.workspace.tasks.length, 3);
+});
+
+test('plan_day fixedStart 13:30 shifts later blocks and breakAfterMinutes advances the cursor', () => {
+  const output = success(planWorkspace({ tasks: [] }), { type: 'plan_day', start: '12:30', items: [
+    { title: 'Жалюзі', durationMinutes: 30, breakAfterMinutes: 15 },
+    { title: 'Пів другої', durationMinutes: 45, fixedStart: '13:30', breakAfterMinutes: 10 },
+    { title: 'Друк', durationMinutes: 30, phase: 'Навчання' },
+  ] }, planContext());
+  assert.deepEqual(schedule(output.result).map(value => [value.start, value.end]), [
+    ['12:30', '13:00'], ['13:30', '14:15'], ['14:25', '14:55'],
+  ]);
+});
+
+test('plan_day overlap names both blocks and times and refuses the entire plan atomically', () => {
+  const before = planWorkspace();
+  const output = apply(before, { type: 'plan_day', start: '13:00', items: [
+    { taskId: 'task-1', durationMinutes: 60, priority: 1 },
+    { title: 'Друк', durationMinutes: 30, fixedStart: '13:30' },
+  ] }, planContext());
+  assert.equal(output.workspace, before);
+  assert.equal(output.result.ok, false);
+  if (!output.result.ok) {
+    assert.equal(output.result.code, 'conflict');
+    for (const expected of ['Робота над анімацією', 'Друк', '13:30', '14:00']) assert.ok(output.result.error.includes(expected), output.result.error);
+  }
+});
+
+test('plan_day validates midnight, future-date start and every item before returning any changes', () => {
+  const before = planWorkspace();
+  const cases: AgentAction[] = [
+    { type: 'plan_day', start: '23:30', items: [{ title: 'Пізній блок', durationMinutes: 31 }] },
+    { type: 'plan_day', date: '2026-10-20', items: [{ title: 'Завтра', durationMinutes: 30 }] },
+    { type: 'plan_day', start: '10:00', items: [{ title: 'Нова', durationMinutes: 30 }, { taskId: 'missing', durationMinutes: 30 }] },
+    { type: 'plan_day', start: '10:00', items: [{ title: 'Нова', durationMinutes: 30 }, { taskId: 'task-1', phase: 'unknown', durationMinutes: 30 }] },
+  ];
+  for (const action of cases) {
+    const output = apply(before, action, planContext());
+    assert.equal(output.workspace, before);
+    assert.equal(output.result.ok, false);
+    if (!output.result.ok && action === cases[0]) {
+      assert.equal(output.result.code, 'invalid');
+      assert.match(output.result.error, /24:00|midnight|північ/i);
+    }
+    if (!output.result.ok && action === cases[1]) {
+      assert.equal(output.result.code, 'invalid');
+      assert.match(output.result.error, /start|почат/i);
+    }
+  }
+  const midnight = success(before, { type: 'plan_day', start: '23:30', items: [{ title: 'До опівночі', durationMinutes: 30 }] }, planContext());
+  assert.equal(schedule(midnight.result)[0].end, '24:00');
+});
+
+test('plan_day default start is the next quarter hour in the context time zone and defaults date locally', () => {
+  const action: AgentAction = { type: 'plan_day', items: [{ title: 'Почати', durationMinutes: 30 }] };
+  const output = success(planWorkspace({ tasks: [] }), action, planContext());
+  assert.equal(schedule(output.result)[0].start, '10:15');
+  assert.equal(output.workspace.tasks[0].plannedDate, '2026-10-19');
+  assert.equal(output.workspace.tasks[0].scheduledFor, Date.parse('2026-10-19T07:15:00Z'));
+  const nextDate = success(planWorkspace({ tasks: [] }), action, planContext({ now: Date.parse('2026-10-19T21:07:04Z') }));
+  assert.equal(nextDate.workspace.tasks[0].plannedDate, '2026-10-20');
+  assert.equal(schedule(nextDate.result)[0].start, '00:15');
+});
+
+test('plan_day undo removes every created task and restores the existing task schedule, tab, priority and countdown', () => {
+  const before = planWorkspace({ tasks: [task({ plannedDate: '2026-10-18', scheduledFor: Date.parse('2026-10-18T09:00:00Z'),
+    timerMode: 'countdown', countdownDurationSeconds: 900, countdownRemainingSeconds: 600, timerRunning: false, note: 'До планування' })] });
+  const after = success(before, { type: 'plan_day', start: '13:00', items: [
+    { title: 'Жалюзі', durationMinutes: 60 },
+    { taskId: 'task-1', durationMinutes: 300, phase: 'Навчання', priority: 1, note: 'Новий план' },
+    { title: 'Відпочинок', durationMinutes: 30, priority: 3 },
+  ] }, planContext());
+  const snapshot = captureAgentUndo(before, after.workspace, after.result.changedTaskIds);
+  assert.equal(snapshot.tasks.length, 3);
+  const undone = undoAgentTurn(after.workspace, snapshot);
+  assert.equal(undone.undone, true);
+  assert.deepEqual(undone.conflicts, []);
+  assert.equal(undone.workspace.tasks.length, 1);
+  const stripAudit = (value: PSTask) => {
+    const copy = { ...value };
+    for (const field of ['timeSpentSeconds', 'timeSessions', 'updatedAt', 'activityTrail'] as const) delete copy[field];
+    return copy;
+  };
+  assert.deepEqual(undone.workspace.tasks.map(stripAudit), before.tasks.map(stripAudit));
+  assert.deepEqual(undone.workspace.tabs, before.tabs);
+  assert.deepEqual(undone.workspace.notes, before.notes);
+  assert.deepEqual(undone.workspace.deletedTasks, before.deletedTasks);
+});
+
+test('create_task and update_task timed fields keep tasks visible, paused and on the correct local date', () => {
+  const created = success(planWorkspace({ tasks: [] }), { type: 'create_task', title: 'Друк', startTime: '14:00', durationMinutes: 30, phase: 'Навчання' }, planContext());
+  const value = created.workspace.tasks[0];
+  assert.equal(value.plannedDate, '2026-10-19');
+  assert.equal(value.scheduledFor, Date.parse('2026-10-19T11:00:00Z'));
+  assert.equal(value.scheduledPending, false);
+  assert.equal(value.schedule, undefined);
+  assertPaused(value, 30);
+  const updated = success(created.workspace, { type: 'update_task', taskId: value.id, date: '2026-10-20', startTime: '09:30', durationMinutes: 45 }, planContext());
+  assert.equal(updated.workspace.tasks[0].plannedDate, '2026-10-20');
+  assert.equal(updated.workspace.tasks[0].scheduledFor, Date.parse('2026-10-20T06:30:00Z'));
+  assertPaused(updated.workspace.tasks[0], 45);
+  const cleared = success(updated.workspace, { type: 'update_task', taskId: value.id, clearTime: true }, planContext());
+  assert.equal(cleared.workspace.tasks[0].scheduledFor, undefined);
+  assert.equal(cleared.workspace.tasks[0].plannedDate, '2026-10-20');
+  assertPaused(cleared.workspace.tasks[0], 45);
+  const today = success(updated.workspace, { type: 'update_task', taskId: value.id, startTime: '12:00' }, planContext());
+  assert.equal(today.workspace.tasks[0].plannedDate, '2026-10-19');
+  assert.equal(today.workspace.tasks[0].scheduledFor, Date.parse('2026-10-19T09:00:00Z'));
+});
+
+test('durationMinutes alone configures a paused countdown without inventing a scheduled hour', () => {
+  const created = success(planWorkspace({ tasks: [] }), { type: 'create_task', title: 'Без години', durationMinutes: 25 }, planContext());
+  assertPaused(created.workspace.tasks[0], 25);
+  assert.equal(created.workspace.tasks[0].scheduledFor, undefined);
+  const updated = success(planWorkspace(), { type: 'update_task', taskId: 'task-1', durationMinutes: 40 }, planContext());
+  assertPaused(updated.workspace.tasks[0], 40);
+  assert.equal(updated.workspace.tasks[0].scheduledFor, undefined);
+  const dated = success(planWorkspace(), { type: 'update_task', taskId: 'task-1', date: '2026-10-21' }, planContext());
+  assert.equal(dated.workspace.tasks[0].plannedDate, '2026-10-21');
+  assert.equal(dated.workspace.tasks[0].scheduledFor, undefined);
+});
+
+test('setting a time refuses done or running tasks and keeps plannedDate at or before the deadline', () => {
+  for (const original of [task({ done: true }), task({ timerRunning: true, timerStartedAt: PLAN_NOW - 60_000 })]) {
+    const before = planWorkspace({ tasks: [original] });
+    for (const action of [
+      { type: 'update_task', taskId: 'task-1', startTime: '14:00', durationMinutes: 30 },
+      { type: 'plan_day', start: '14:00', items: [{ title: 'Спочатку нова', durationMinutes: 10 }, { taskId: 'task-1', durationMinutes: 30 }] },
+    ] as AgentAction[]) {
+      const output = apply(before, action, planContext());
+      assert.equal(output.result.ok, false);
+      assert.equal(output.workspace, before);
+    }
+  }
+  const before = planWorkspace({ tasks: [task({ deadlineDate: '2026-10-20' })] });
+  for (const action of [
+    { type: 'create_task', title: 'Пізно', date: '2026-10-21', startTime: '10:00', deadlineDate: '2026-10-20' },
+    { type: 'update_task', taskId: 'task-1', date: '2026-10-21', startTime: '10:00' },
+    { type: 'plan_day', date: '2026-10-21', start: '10:00', items: [{ taskId: 'task-1', durationMinutes: 30 }] },
+  ] as AgentAction[]) {
+    const output = apply(before, action, planContext());
+    assert.equal(output.result.ok, false);
+    assert.equal(output.workspace, before);
+    if (!output.result.ok) assert.equal(output.result.code, 'invalid');
+  }
+});
+
+test('phase accepts ids, normalized names and typos while ambiguity and unknown tabs list candidates', () => {
+  for (const phase of ['learn', '  НАВЧАННЯ  ', 'Навчаня']) {
+    const created = success(planWorkspace({ tasks: [] }), { type: 'create_task', title: 'Друк', phase }, planContext());
+    assert.equal(created.workspace.tasks[0].phase, 'learn');
+    const updated = success(planWorkspace(), { type: 'update_task', taskId: 'task-1', phase }, planContext());
+    assert.equal(updated.workspace.tasks[0].phase, 'learn');
+  }
+  const spaced = planWorkspace({ tabs: [{ id: 'learn', name: 'Навчання та курси' }] });
+  assert.equal(success(spaced, { type: 'create_task', title: 'Друк', phase: ' навчання  та  КУРСИ ' }, planContext()).workspace.tasks[0].phase, 'learn');
+  const ambiguous = planWorkspace({ tabs: [{ id: 'a', name: 'Навчання друку' }, { id: 'b', name: 'Навчання курсів' }] });
+  for (const [before, phase] of [[ambiguous, 'Навчання'], [planWorkspace(), 'Невідома']] as const) {
+    const output = apply(before, { type: 'create_task', title: 'Друк', phase }, planContext());
+    assert.equal(output.result.ok, false);
+    assert.equal(output.workspace, before);
+    if (!output.result.ok) for (const tab of before.tabs) assert.ok(output.result.error.includes(tab.id + ' — ' + tab.name), output.result.error);
+  }
+  const noTabs = planWorkspace({ tabs: [] });
+  const output = apply(noTabs, { type: 'create_task', title: 'Друк', phase: 'Навчання' }, planContext());
+  assert.equal(output.result.ok, false);
+  if (!output.result.ok) assert.match(output.result.error, /none: omit phase/);
+});
+
+test('timed conversion follows context time zone and Kyiv DST transition dates', () => {
+  for (const [date, startTime, expected] of [
+    ['2026-03-29', '01:30', '2026-03-28T23:30:00Z'],
+    ['2026-03-29', '04:30', '2026-03-29T01:30:00Z'],
+    ['2026-10-25', '04:30', '2026-10-25T02:30:00Z'],
+  ]) {
+    const output = success(planWorkspace({ tasks: [] }), { type: 'create_task', title: 'DST', date, startTime, durationMinutes: 30 }, planContext());
+    assert.equal(output.workspace.tasks[0].scheduledFor, Date.parse(expected));
+    assert.equal(output.workspace.tasks[0].plannedDate, date);
+  }
+  const missingHour = planWorkspace({ tasks: [] });
+  const refused = apply(missingHour, { type: 'create_task', title: 'Пропущена година', date: '2026-03-29', startTime: '03:30' }, planContext());
+  assert.equal(refused.workspace, missingHour);
+  assert.equal(refused.result.ok, false);
+  if (!refused.result.ok) assert.equal(refused.result.code, 'invalid');
+  const tokyo = success(planWorkspace({ tasks: [] }), { type: 'create_task', title: 'Токіо', startTime: '09:00', durationMinutes: 30 }, planContext({ now: Date.parse('2026-10-19T18:07:00Z'), timeZone: 'Asia/Tokyo' }));
+  assert.equal(tokyo.workspace.tasks[0].plannedDate, '2026-10-20');
+  assert.equal(tokyo.workspace.tasks[0].scheduledFor, Date.parse('2026-10-20T00:00:00Z'));
+  const fallback = success(planWorkspace({ tasks: [] }), { type: 'create_task', title: 'Київ', date: '2026-10-19', startTime: '14:00' }, planContext({ timeZone: undefined }));
+  assert.equal(fallback.workspace.tasks[0].scheduledFor, Date.parse('2026-10-19T11:00:00Z'));
+});
+
+test('describeTask returns scheduled date, start and countdown end in the requested time zone', () => {
+  const original = freeze(task({ scheduledFor: Date.parse('2026-10-19T11:00:00Z'), plannedDate: '2026-10-19',
+    countdownDurationSeconds: 1800, countdownRemainingSeconds: 600, timerMode: 'countdown' }));
+  const before = structuredClone(original);
+  const description = describeTask(original, PLAN_NOW);
+  assert.equal(description.date, '2026-10-19');
+  assert.equal(description.startTime, '14:00');
+  assert.equal(description.endTime, '14:30');
+  const tokyo = describeTask(original, PLAN_NOW, 'Asia/Tokyo');
+  assert.equal(tokyo.startTime, '20:00');
+  assert.equal(tokyo.endTime, '20:30');
+  assert.deepEqual(original, before);
+});
+
+test('timed and plan_day schemas validate every new field and keep unexpected argument rejection strict', () => {
+  const valid: AgentAction[] = [
+    { type: 'create_task', title: 'Нова', date: '2026-10-19', startTime: '00:00', durationMinutes: 1 },
+    { type: 'update_task', taskId: 'task-1', startTime: '23:59', durationMinutes: 1440 },
+    { type: 'update_task', taskId: 'task-1', clearTime: true },
+    { type: 'plan_day', date: '2026-10-19', start: '12:30', items: [{ taskId: 'task-1', durationMinutes: 150, fixedStart: '13:30', estimated: true, breakAfterMinutes: 5, phase: 'Навчання', priority: 1, note: 'План', steps: ['Крок'] }] },
+    { type: 'plan_day', items: Array.from({ length: 20 }, (_, index) => ({ title: 'Блок ' + index, durationMinutes: 1 })) },
+  ];
+  for (const action of valid) assert.deepEqual(validateAgentAction(action), action);
+  const invalid: unknown[] = [
+    { type: 'create_task', title: 'Нова', date: '2026-02-30' },
+    ...['24:00', '9:30', '12:60', '-1:00', '12:30:00', '', 930].map(startTime => ({ type: 'create_task', title: 'Нова', startTime })),
+    ...[0, -1, 1441, Infinity, '30'].map(durationMinutes => ({ type: 'update_task', taskId: 'task-1', durationMinutes })),
+    { type: 'update_task', taskId: 'task-1', clearTime: false },
+    { type: 'update_task', taskId: 'task-1', clearTime: 'true' },
+    { type: 'plan_day', items: [] }, { type: 'plan_day', items: Array(1) },
+    { type: 'plan_day', items: Array.from({ length: 21 }, () => ({ title: 'Нова', durationMinutes: 1 })) },
+    { type: 'plan_day', items: [{ durationMinutes: 30 }] },
+    { type: 'plan_day', items: [{ taskId: 'task-1', title: 'Нова', durationMinutes: 30 }] },
+    { type: 'plan_day', items: [{ title: 'Нова' }] },
+    { type: 'plan_day', items: [{ title: 'Нова', durationMinutes: 30, fixedStart: '24:00' }] },
+    { type: 'plan_day', items: [{ title: 'Нова', durationMinutes: 30, estimated: 'true' }] },
+    { type: 'plan_day', items: [{ title: 'Нова', durationMinutes: 30, breakAfterMinutes: -1 }] },
+    { type: 'plan_day', items: [{ title: 'Нова', durationMinutes: 30, priority: 4 }] },
+    { type: 'plan_day', items: [{ title: 'Нова', durationMinutes: 30, steps: [''] }] },
+    { type: 'plan_day', date: '2026-02-30', items: [{ title: 'Нова', durationMinutes: 30 }] },
+    { type: 'plan_day', start: '25:00', items: [{ title: 'Нова', durationMinutes: 30 }] },
+  ];
+  for (const value of invalid) assert.ok('error' in validateAgentAction(value), JSON.stringify(value));
+  for (const value of [
+    { type: 'create_task', title: 'Нова', fixedStart: '14:00' },
+    { type: 'update_task', taskId: 'task-1', clearTime: true, extra: undefined },
+    { type: 'plan_day', items: [{ title: 'Нова', durationMinutes: 30 }], extra: true },
+    { type: 'plan_day', items: [{ title: 'Нова', durationMinutes: 30, extra: true }] },
+  ]) {
+    const result = validateAgentAction(value);
+    assert.ok('error' in result);
+    if ('error' in result) assert.match(result.error, /Unexpected argument/);
+  }
+});
+
+test('duration-only and plan_day countdown updates replay the complete createdIds sequence on the client', () => {
+  const before = planWorkspace({ tasks: [task({ timerMode: 'countdown', countdownDurationSeconds: 900,
+    countdownRemainingSeconds: 600, timerRunning: false })] });
+  const actions: AgentAction[] = [
+    { type: 'update_task', taskId: 'task-1', durationMinutes: 45 },
+    { type: 'plan_day', start: '10:00', items: [
+      { title: 'Планування', durationMinutes: 30, steps: ['Ідея', 'Сценарій'] },
+      { taskId: 'task-1', durationMinutes: 300 },
+    ] },
+  ];
+  for (const action of actions) {
+    const server = success(before, action, planContext());
+    assert.ok(server.result.createdIds?.length);
+    const ids = [...server.result.createdIds!];
+    let used = 0;
+    const client = success(before, action, planContext({ newId: () => {
+      assert.ok(used < ids.length, 'every generated id must be returned for client replay');
+      return ids[used++];
+    } }));
+    assert.equal(used, ids.length);
+    assert.deepEqual(client.workspace, server.workspace);
+    assert.deepEqual(client.result, server.result);
+  }
+});
+
+test('plan_day preflight errors consume no generated ids, including errors in a later item', () => {
+  const before = planWorkspace();
+  const actions: AgentAction[] = [
+    { type: 'plan_day', start: '13:00', items: [
+      { title: 'Нова справа', durationMinutes: 60 }, { title: 'Друк', durationMinutes: 30, fixedStart: '13:30' },
+    ] },
+    { type: 'plan_day', start: '10:00', items: [
+      { title: 'Нова справа', durationMinutes: 30 }, { taskId: 'missing', durationMinutes: 30 },
+    ] },
+    { type: 'plan_day', start: '10:00', items: [
+      { title: 'Нова справа', durationMinutes: 30 }, { taskId: 'task-1', phase: 'unknown', durationMinutes: 30 },
+    ] },
+  ];
+  for (const action of actions) {
+    let generated = 0;
+    const output = apply(before, action, planContext({ newId: () => 'preflight-' + ++generated }));
+    assert.equal(output.result.ok, false);
+    assert.equal(output.workspace, before);
+    assert.equal(generated, 0);
+  }
+});
+
+test('planned countdowns preserve historical sessions and startedAt without recording a temporary session', () => {
+  const original = task({ startedAt: PLAN_NOW - 86400000, timeSpentSeconds: 40,
+    timerMode: 'countdown', countdownDurationSeconds: 900, countdownRemainingSeconds: 600, timerRunning: false,
+    timeSessions: { historical: { seconds: 40 } } });
+  const before = planWorkspace({ tasks: [original] });
+  for (const action of [
+    { type: 'update_task', taskId: 'task-1', durationMinutes: 45 },
+    { type: 'update_task', taskId: 'task-1', startTime: '14:00', durationMinutes: 30 },
+    { type: 'plan_day', start: '14:00', items: [{ taskId: 'task-1', durationMinutes: 300 }] },
+  ] as AgentAction[]) {
+    const output = success(before, action, planContext());
+    const value = output.workspace.tasks[0];
+    assert.equal(value.startedAt, original.startedAt);
+    assert.equal(value.timeSpentSeconds, 40);
+    assert.deepEqual(value.timeSessions, original.timeSessions);
+    assert.equal(value.timerRunning, false);
+    assert.equal(value.timerSessionId, undefined);
+  }
+  const created = success(planWorkspace({ tasks: [] }), { type: 'create_task', title: 'Новий відлік', startTime: '14:00', durationMinutes: 30 }, planContext());
+  assert.deepEqual(Object.keys(created.workspace.tasks[0].timeSessions ?? {}), []);
+});
+
+test('Kyiv repeated DST hour uses the first occurrence and day plans reject blocks crossing a clock change', () => {
+  const repeated = success(planWorkspace({ tasks: [] }), { type: 'create_task', title: 'Повторена година', date: '2026-10-25', startTime: '03:30', durationMinutes: 15 }, planContext());
+  assert.equal(repeated.workspace.tasks[0].scheduledFor, Date.parse('2026-10-25T00:30:00Z'));
+  const before = planWorkspace();
+  let generated = 0;
+  const crossing = apply(before, { type: 'plan_day', date: '2026-03-29', start: '02:30', items: [
+    { taskId: 'task-1', durationMinutes: 120 },
+  ] }, planContext({ newId: () => 'dst-' + ++generated }));
+  assert.equal(crossing.workspace, before);
+  assert.equal(crossing.result.ok, false);
+  if (!crossing.result.ok) {
+    assert.equal(crossing.result.code, 'invalid');
+    assert.match(crossing.result.error, /DST/);
+  }
+  assert.equal(generated, 0);
 });

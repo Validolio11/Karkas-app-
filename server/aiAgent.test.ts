@@ -249,7 +249,7 @@ test('tool declarations have a stable unique order and cover every action plus r
   }
   assert.deepEqual(names.slice(0, 7), ['find_tasks', 'get_task', 'list_tasks', 'list_tabs', 'get_stats', 'list_history', 'list_notes']);
   assert.deepEqual(names.slice(-2), ['ask_user', 'open_personal_coaching']);
-  for (const name of ['create_task', 'update_task', 'complete_task', 'reopen_task', 'add_steps', 'rename_step', 'set_step_done',
+  for (const name of ['create_task', 'update_task', 'plan_day', 'complete_task', 'reopen_task', 'add_steps', 'rename_step', 'set_step_done',
     'delete_step', 'start_timer', 'pause_timer', 'clear_countdown', 'finish_limited_start', 'reset_time', 'set_countdown',
     'extend_countdown', 'limited_start', 'set_recorded_time', 'create_tab', 'rename_tab', 'set_tab_color', 'delete_tab',
     'delete_task', 'restore_task', 'permanently_delete_task', 'clear_completed', 'create_note', 'update_note', 'open_view', 'reveal_task']) assert.ok(names.includes(name), name);
@@ -359,4 +359,138 @@ test('empty final prose still names the exact pending destructive action', async
   const result = await runAgentTurn({ ...base, workspace: workspace(), generate: fake.generate });
   assert.match(result.text, /підтвердження/);
   assert.match(result.text, /видалити завдання «Робота над анімацією»/);
+});
+
+test('day planning uses one five-item action, tab names and the existing animation task, then replies with the tool schedule', async () => {
+  const userText = 'сплануй мені день, 1 потрібно встановити жалюзі, спланувати анімацію 30хв, після планування перейти до анімації 5 годин, пізніше навчання друку 30 хв, відпочинок';
+  const original = workspace({ tabs: [{ id: 'focus', name: 'Робота' }, { id: 'learn', name: 'Навчання' }, { id: 'home', name: 'Особисте' }] });
+  const items = [
+    { title: 'Встановити жалюзі', phase: 'Особисте', priority: 1, durationMinutes: 60, estimated: true },
+    { title: 'Спланувати анімацію', phase: 'Робота', priority: 2, durationMinutes: 30 },
+    { taskId: 'animation', phase: 'Робота', priority: 1, durationMinutes: 300 },
+    { title: 'Навчання друку', phase: 'Навчання', priority: 2, durationMinutes: 30 },
+    { title: 'Відпочинок', phase: 'Особисте', priority: 3, durationMinutes: 60, estimated: true },
+  ];
+  const fake = scripted([
+    request => {
+      assert.equal((request.contents as GeminiContent[]).at(-1)!.parts![0].text, userText);
+      assert.match(request.config.systemInstruction, /call plan_day ONCE/);
+      assert.match(request.config.systemInstruction, /пів другої.*13:30/);
+      assert.match(request.config.systemInstruction, /о другій.*14:00/);
+      assert.match(request.config.systemInstruction, /tab NAME from WORKSPACE TABS/);
+      assert.match(request.config.systemInstruction, /Set a priority on every plan_day item/);
+      assert.match(request.config.systemInstruction, /ACTIVE TASK INDEX.*animation.*Робота над анімацією/);
+      return calls(call('plan_day', { date: '2026-10-19', start: '13:00', items }));
+    },
+    request => {
+      const response = responses(request)[0].response;
+      assert.equal(response.ok, true);
+      assert.deepEqual(response.data.map((block: any) => [block.start, block.end]), [
+        ['13:00', '14:00'], ['14:00', '14:30'], ['14:30', '19:30'], ['19:30', '20:00'], ['20:00', '21:00'],
+      ]);
+      assert.equal(response.data[2].taskId, 'animation');
+      assert.equal(response.data[2].created, false);
+      assert.equal(response.data[3].phase, 'learn');
+      assert.equal(response.data[4].priority, 3);
+      assert.deepEqual(response.createdIds.filter((id: string) => response.data.some((block: any) => block.created && block.taskId === id)),
+        response.data.filter((block: any) => block.created).map((block: any) => block.taskId));
+      assert.match(response.summary.uk, /14:00–14:30.*Спланувати анімацію.*Робота.*P2/);
+      assert.match(response.summary.uk, /19:30–20:00.*Навчання друку.*Навчання/);
+      assert.match(response.summary.uk, /орієнтовно/);
+      return { text: response.summary.uk };
+    },
+  ]);
+  const result = await runAgentTurn({ ...base, userText, workspace: original, generate: fake.generate });
+  assert.equal(result.actions.length, 1);
+  assert.equal(result.actions[0].action.type, 'plan_day');
+  assert.equal(result.actions[0].changedTaskIds.length, 5);
+  assert.equal(result.actions[0].createdIds?.filter(id => result.workspace.tasks.some(item => item.id === id)).length, 4);
+  assert.equal(result.workspace.tasks.length, 5);
+  assert.equal(result.workspace.tasks.filter(item => item.title === 'Робота над анімацією').length, 1);
+  assert.equal(result.workspace.tasks.find(item => item.title === 'Навчання друку')?.phase, 'learn');
+  assert.equal(result.text, result.actions[0].summary.uk);
+  assert.deepEqual(original.tasks, [task()]);
+});
+
+test('plan_day conflicts reach the model as functionResponse and leave the workspace unchanged', async () => {
+  const original = workspace(), before = structuredClone(original);
+  const clarification = { question: 'Перенести друк на 14:00?', options: [
+    { label: 'На 14:00', message: 'Сплануй жалюзі з 13:00 на годину, а друк з 14:00 на 30 хвилин.' },
+    { label: 'Скоротити жалюзі', message: 'Сплануй жалюзі з 13:00 на 30 хвилин, а друк з 13:30 на 30 хвилин.' },
+  ] };
+  const fake = scripted([
+    calls(call('plan_day', { start: '13:00', items: [
+      { title: 'Жалюзі', durationMinutes: 60, priority: 2 },
+      { title: 'Друк', durationMinutes: 30, fixedStart: '13:30', priority: 2 },
+    ] })),
+    request => {
+      const part = responses(request)[0];
+      assert.equal(part.name, 'plan_day');
+      assert.equal(part.response.ok, false);
+      assert.equal(part.response.code, 'conflict');
+      assert.match(part.response.error, /Жалюзі/);
+      assert.match(part.response.error, /Друк/);
+      assert.match(part.response.error, /13:30/);
+      assert.match(part.response.error, /14:00/);
+      return calls(call('ask_user', clarification));
+    },
+  ]);
+  const result = await runAgentTurn({ ...base, userText: 'Жалюзі з 13:00 на годину, друк о пів другої.', workspace: original, generate: fake.generate });
+  assert.deepEqual(result.actions, []);
+  assert.deepEqual(result.workspace, before);
+  assert.deepEqual(original, before);
+  assert.deepEqual(result.clarification, clarification);
+});
+
+test('timed create/update arguments reach the engine and clearTime preserves the chosen day', async () => {
+  let createdId = '';
+  const fake = scripted([
+    calls(call('create_task', { title: 'Навчання друку', phase: 'Навчання', date: '2026-10-20', startTime: '13:30', durationMinutes: 30 })),
+    request => {
+      const response = responses(request)[0].response;
+      assert.equal(response.ok, true);
+      createdId = response.createdIds[0];
+      assert.equal(response.tasks[0].date, '2026-10-20');
+      assert.equal(response.tasks[0].startTime, '13:30');
+      assert.equal(response.tasks[0].endTime, '14:00');
+      assert.equal(response.tasks[0].timer.countdownMinutes, 30);
+      assert.equal(response.tasks[0].timer.running, false);
+      return calls(call('update_task', { taskId: createdId, clearTime: true }));
+    },
+    request => {
+      const response = responses(request)[0].response;
+      assert.equal(response.ok, true);
+      assert.equal(response.tasks[0].plannedDate, '2026-10-20');
+      assert.equal(response.tasks[0].startTime, undefined);
+      return { text: 'Час прибрано, день залишено.' };
+    },
+  ]);
+  const result = await runAgentTurn({ ...base, workspace: workspace({ tabs: [{ id: 'learn', name: 'Навчання' }] }), generate: fake.generate });
+  assert.deepEqual(result.actions.map(item => item.action.type), ['create_task', 'update_task']);
+  assert.equal(result.workspace.tasks.find(item => item.id === createdId)?.scheduledFor, undefined);
+});
+
+test('day planning tool schemas retain strict item fields and scheduling bounds', () => {
+  const byName = Object.fromEntries(AGENT_TOOL_DECLARATIONS.map(tool => [tool.name, tool.parametersJsonSchema]));
+  const items = byName.plan_day.properties.items as Record<string, any>;
+  assert.equal(items.minItems, 1);
+  assert.equal(items.maxItems, 20);
+  assert.equal(items.items.additionalProperties, false);
+  assert.deepEqual(items.items.oneOf, [{ required: ['taskId'] }, { required: ['title'] }]);
+  assert.deepEqual(items.items.required, ['durationMinutes']);
+  assert.equal(items.items.properties.durationMinutes.type, 'integer');
+  assert.equal(items.items.properties.breakAfterMinutes.type, 'integer');
+  assert.equal(items.items.properties.breakAfterMinutes.minimum, 0);
+  assert.equal(items.items.properties.breakAfterMinutes.maximum, 1440);
+  assert.equal(items.items.properties.durationMinutes.minimum, 1);
+  assert.equal(items.items.properties.durationMinutes.maximum, 1440);
+  assert.match(items.items.properties.phase.description, /tab name from WORKSPACE TABS/i);
+  for (const name of ['create_task', 'update_task']) {
+    for (const field of ['date', 'startTime', 'durationMinutes']) assert.ok(Object.hasOwn(byName[name].properties, field));
+    assert.equal(byName[name].properties.durationMinutes.type, 'integer');
+    assert.match(String(byName[name].properties.phase.description), /tab name from WORKSPACE TABS/i);
+  }
+  assert.equal(byName.update_task.properties.clearTime.const, true);
+  assert.equal(byName.set_countdown.properties.minutes.type, 'number');
+  assert.equal(byName.create_task.properties.timerMinutes.type, 'number');
 });

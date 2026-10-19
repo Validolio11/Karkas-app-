@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildTaskTemporalContext } from './taskTemporalContext';
+import { buildTaskTemporalContext, temporalAwarenessSystemPolicy } from './taskTemporalContext';
 
 // Monday 2026-10-12, 12:00 in Kyiv.
 const clock = { now: '2026-10-12T09:00:00Z', timeZone: 'Europe/Kyiv' };
@@ -65,4 +65,10 @@ test('credited attempts are described neutrally without claiming task completion
   assert.equal(context.tasks[0].recentActivity?.[0].description, 'обмежена спроба: 5 хв із 15');
   assert.equal(context.tasks[0].done, false);
   assert.equal(context.tasks[0].recentActivity?.[0].attemptOutcome, 'stopped');
+});
+
+test('temporal policy permits requested hourly plans while preserving calendar-only grounding', () => {
+  assert.match(temporalAwarenessSystemPolicy, /Do not invent an hour for a calendar-only date in general/);
+  assert.match(temporalAwarenessSystemPolicy, /Exact hours are allowed when the person asks for an hourly plan or names times/);
+  assert.match(temporalAwarenessSystemPolicy, /Do not treat an obsolete recurring template start as a missed daily occurrence/);
 });

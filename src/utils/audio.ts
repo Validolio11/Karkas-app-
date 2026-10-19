@@ -66,6 +66,34 @@ class TactileSound {
     }
   }
 
+  // Soft two-note lock-in at the end of a focus session.
+  sessionComplete() {
+    if (!this.enabled) return;
+    try {
+      this.init();
+      if (!this.ctx) return;
+      const ctx = this.ctx;
+      const start = ctx.currentTime;
+      [520, 780].forEach((frequency, index) => {
+        const at = start + index * 0.1;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(frequency, at);
+        gain.gain.setValueAtTime(0, at);
+        gain.gain.linearRampToValueAtTime(0.045, at + 0.012);
+        gain.gain.exponentialRampToValueAtTime(0.001, at + 0.09);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.onended = () => { osc.disconnect(); gain.disconnect(); };
+        osc.start(at);
+        osc.stop(at + 0.09);
+      });
+    } catch {
+      // Audio is optional.
+    }
+  }
+
   // Success tone when queue finishes or item is un-slashed
   activate() {
     if (!this.enabled) return;

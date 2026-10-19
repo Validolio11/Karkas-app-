@@ -17,6 +17,20 @@ function subscribe(channel, callback) {
   return () => ipcRenderer.removeListener(channel, listener);
 }
 
+function subscribeCommands(callback) {
+  if (typeof callback !== 'function') return () => {};
+  return subscribe('karkas:command', (command) => {
+    if (command === 'new-task' || command === 'open-settings') {
+      callback(command);
+      return;
+    }
+    if (!command || typeof command !== 'object' || Array.isArray(command)) return;
+    if (!['toggle-timer', 'complete-task', 'start-task'].includes(command.type)) return;
+    if (typeof command.taskId !== 'string' || !command.taskId.trim() || command.taskId.length > 128) return;
+    callback({ type: command.type, taskId: command.taskId });
+  });
+}
+
 // Keep native unsaved-draft prompts in the renderer's current UI language.
 if (typeof window !== 'undefined') {
   window.addEventListener('DOMContentLoaded', () => {
@@ -37,7 +51,7 @@ contextBridge.exposeInMainWorld('karkasDesktop', {
     getState: () => invoke('karkas:window:get-state'),
     setZoomFactor,
     onStateChanged: (callback) => subscribe('karkas:window:state', callback),
-    onCommand: (callback) => subscribe('karkas:command', callback),
+    onCommand: subscribeCommands,
   },
   workspace: {
     loadAccount: (ownerId) => invoke('karkas:workspace:load-account', { ownerId }),
@@ -80,6 +94,7 @@ contextBridge.exposeInMainWorld('karkasDesktop', {
   },
   system: {
     getAppVersion: () => invoke('karkas:system:get-version'),
+    setPresence: (presence) => ipcRenderer.send('karkas:system:presence', presence),
     openExternal: (url) => invoke('karkas:system:open-external', { url }),
     showNotification: (input) => invoke('karkas:system:notify', input),
     onNotificationClick: (callback) => subscribe('karkas:system:notification-click', callback),

@@ -402,7 +402,7 @@ declare global {
         getState: () => Promise<DesktopResult<DesktopWindowState>>;
         setZoomFactor: (factor: number) => void;
         onStateChanged: (callback: (state: DesktopWindowState) => void) => () => void;
-        onCommand: (callback: (command: 'new-task' | 'open-settings') => void) => () => void;
+        onCommand: (callback: (command: 'new-task' | 'open-settings' | { type: 'toggle-timer' | 'complete-task' | 'start-task'; taskId: string }) => void) => () => void;
       };
       workspace: {
         loadAccount: (ownerId: string | null) => Promise<DesktopResult<DesktopAccountSnapshot | null>>;
@@ -447,6 +447,7 @@ declare global {
       };
       system: {
         getAppVersion: () => Promise<DesktopResult<string>>;
+        setPresence?: (presence: unknown) => void;
         openExternal: (url: string) => Promise<DesktopResult<void>>;
         showNotification: (input: { title: string; body: string; target?: { view: 'STRATEGY'; ownerId: string | null; taskId?: string } }) => Promise<DesktopResult<void>>;
         onNotificationClick: (callback: (target: { view: 'STRATEGY'; ownerId: string | null; taskId?: string }) => void) => () => void;

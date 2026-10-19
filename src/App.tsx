@@ -12,7 +12,7 @@ import { applyAITimerSettings, isAITimerSettingsValid } from './utils/aiTaskTime
 import { isNewerAppVersion, isValidAppVersion } from './utils/appVersion';
 import React, { useState, useEffect, useMemo } from 'react';
 import { PSTask, DeletedTask, TaskTab, FilterMode, WorkflowStats, TaskStepItem, AdaptiveProfile, AITaskUpdate, AITimerSettings, AIDeletedTaskRef, NotepadNote, NewTaskInput } from './types';
-import { isTaskDate, taskDateEnd } from './utils/taskDates';
+import { isTaskDate, localTaskDate, taskDateEnd } from './utils/taskDates';
 import { annotateTaskChanges } from './utils/taskActivity';
 import { isCompletedArchivedTask, selectRelevantArchivedTasks } from './utils/taskArchive';
 import { TaskCard } from './components/TaskCard';
@@ -29,6 +29,9 @@ import { AIAssistantSheet } from './components/AIAssistantSheet';
 import { ManageTabsModal } from './components/ManageTabsModal';
 import { FireParticlesBackground } from './components/FireParticlesBackground';
 import { sound } from './utils/audio';
+import { detectEndedSessions, type EndedSession } from './utils/sessionSummary';
+import { SessionSummaryCard } from './components/SessionSummaryCard';
+import { useDesktopPresence, subscribeDesktopCommands, type DesktopCommandHandlers } from './components/useDesktopPresence';
 import {
   Language,
   TRANSLATIONS,
@@ -206,6 +209,9 @@ export default function App() {
   const timerNoticeScopeRef = React.useRef(0);
   const timerWorkspaceReadyRef = React.useRef(false);
   const [workspaceReady, setWorkspaceReady] = useState(false);
+  const previousSessionTasksRef = React.useRef<{ tasks: PSTask[]; ownerId: string | null; ready: boolean } | null>(null);
+  const [sessionSummary, setSessionSummary] = useState<{ session: EndedSession; task: PSTask; ownerId: string | null; shownAt: number } | null>(null);
+  const dismissSessionSummary = React.useCallback(() => setSessionSummary(null), []);
   const [timerNotice, setTimerNotice] = useState<string | null>(null);
   const [timerNoticeCalm, setTimerNoticeCalm] = useState(false);
   const notifiedSchedulesRef = React.useRef(new Set<string>());
@@ -264,10 +270,10 @@ export default function App() {
         if (notifiedTimersRef.current.has(key)) continue;
         notifiedTimersRef.current.add(key);
         if (!claimPlanningNotice(localStorage, workspaceOwnerRef.current, key, now, true)) continue;
-        const at = new Intl.DateTimeFormat(lang === 'uk' ? 'uk-UA' : 'en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(task.countdownExpiredAt);
-        const title = lang === 'uk' ? 'Karkas · Відлік закінчився' : 'Karkas · Countdown ended';
-        const body = lang === 'uk' ? 'Час вийшов: «' + task.title + '». Ще працюєш? Відкрий Karkas — зарахую час з ' + at
-          : 'Time is up: “' + task.title + '”. Still working? Open Karkas — I will record time since ' + at;
+        const minutes = Number.isFinite(task.countdownDurationSeconds) && task.countdownDurationSeconds! >= 60 ? Math.floor(task.countdownDurationSeconds! / 60) : null;
+        const title = 'Karkas · ' + (minutes === null ? (lang === 'uk' ? 'Сесія фокусу' : 'Focus session') : (lang === 'uk' ? minutes + ' хв фокусу' : minutes + ' min of focus'));
+        const body = lang === 'uk' ? '«' + task.title + '»: час сесії вийшов. Відкрий Karkas — запишемо результат.'
+          : '“' + task.title + '”: the session is over. Open Karkas — let’s record the result.';
         const noticeScope = timerNoticeScopeRef.current;
         setTimerNoticeCalm(true);
         setTimerNotice(body);
@@ -856,6 +862,32 @@ export default function App() {
 
   // Account snapshots retain unsent edits across reloads and sign-out.
   const workspaceOwnerRef = React.useRef<string | null>(localStorage.getItem('karkas_workspace_owner'));
+  useEffect(() => {
+    const ownerId = workspaceOwnerRef.current;
+    const previous = previousSessionTasksRef.current;
+    const ready = workspaceReady && timerWorkspaceReadyRef.current && ownerId === (currentUser?.uid ?? null);
+    previousSessionTasksRef.current = { tasks, ownerId, ready };
+    if (!ready || !previous?.ready || previous.ownerId !== ownerId) {
+      setSessionSummary(null);
+      return;
+    }
+    const now = Date.now();
+    const ended = detectEndedSessions(previous.tasks, tasks, now).at(-1);
+    const task = ended && tasks.find(item => item.id === ended.taskId);
+    if (!ended || !task) {
+      setSessionSummary(current => {
+        if (!current) return current;
+        const live = tasks.find(item => item.id === current.session.taskId);
+        return !live || live.timerRunning || live.done !== current.task.done
+          || current.session.reason === 'countdownEnded' && live.countdownExpiredAt !== current.task.countdownExpiredAt ? null : current;
+      });
+      return;
+    }
+    setSessionSummary({ session: ended, task, ownerId, shownAt: now });
+    if (ended.reason === 'completed') setCompletedNoticeId(id => id === ended.taskId ? null : id);
+    sound.sessionComplete();
+  }, [tasks, workspaceReady, currentUser?.uid]);
+
   const desktopWorkspaceReadyRef = React.useRef(!window.karkasDesktop);
   const baseWorkspaceRef = React.useRef<(WorkspaceState & { revision?: number }) | null>(undefined);
   if (baseWorkspaceRef.current === undefined) {
@@ -901,9 +933,11 @@ export default function App() {
         .then(result => result.ok).catch(() => false);
     } catch { return Promise.resolve(false); }
   };
-  const applyWorkspace = (input: WorkspaceState) => {
+  const applyWorkspace = (input: WorkspaceState, localSessionChange = false) => {
     if (!canPersistWorkspaceRef.current) throw new Error('Recovery backup failed; workspace writes are blocked');
     const value = migrateSystemCategories(parseWorkspace(input));
+    // A loaded or merged snapshot becomes the baseline, never a local session ending.
+    if (!localSessionChange) previousSessionTasksRef.current = { tasks: value.tasks, ownerId: workspaceOwnerRef.current, ready: timerWorkspaceReadyRef.current };
     ++timerNoticeScopeRef.current;
     setTimerNotice(null);
     latestTasksRef.current = value.tasks;
@@ -1035,6 +1069,8 @@ export default function App() {
       latestTasksRef.current = [];
       timerWorkspaceReadyRef.current = false;
       setWorkspaceReady(false);
+      setSessionSummary(null);
+      previousSessionTasksRef.current = null;
       setIsAIOpen(false);
       setIsAddOpen(false);
       setIsManageTabsOpen(false);
@@ -2027,7 +2063,7 @@ export default function App() {
     if (!isCurrent() || !replaceAgentNotes(before.notes, after.notes)) return false;
     // applyWorkspace synchronously commits every live ref, setter and existing persistence slot.
     try {
-      applyWorkspace(workspace);
+      applyWorkspace(workspace, true);
       return true;
     } catch {
       setWorkspaceStorageError(true);
@@ -2171,6 +2207,40 @@ export default function App() {
       setActiveFilter('ALL');
       setSearchQuery('');
     }
+  };
+
+  const handleReopenCompletedTask = (id: string) => {
+    const now = Date.now();
+    setTasks(previous => previous.map(task => task.id === id ? reopenTask(task, now) : task));
+    setCompletedNoticeId(null);
+    setSelectedPhase('ALL');
+    setActiveFilter('ALL');
+    setSearchQuery('');
+  };
+
+  const handlePlanTomorrow = (id: string) => {
+    const task = latestTasksRef.current.find(item => item.id === id);
+    if (!task || task.done) return;
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const date = localTaskDate(tomorrow.getTime());
+    if (task.deadlineDate && task.deadlineDate < date) return;
+    handleEditTask(id, task.title, task.note || '', {
+      title: task.title, note: task.note || '', plannedDate: task.plannedDate, deadlineDate: task.deadlineDate,
+    }, { plannedDate: date, deadlineDate: task.deadlineDate });
+  };
+
+  const handleContinueSummaryCountdown = (id: string) => {
+    const now = Date.now();
+    setTasks(previous => previous.map(task => {
+      if (task.id !== id || task.done || !Number.isFinite(task.countdownExpiredAt)) return task;
+      const settled = finishAfterExpiry(task, now);
+      const paused = Number.isFinite(task.scheduledFor) && task.scheduledDurationSeconds === undefined
+        ? { ...settled, scheduledDurationSeconds: task.countdownDurationSeconds } : settled;
+      const extended = extendTaskCountdown(paused, 600, now);
+      // A consumed 24h budget needs a fresh interval instead of an extension.
+      return extended === paused ? configureTaskCountdown(paused, 600, now) : startTaskTimer(extended, now);
+    }));
   };
 
   const handleContinueAfterExpiry = (id: string) => {
@@ -2549,6 +2619,26 @@ export default function App() {
     setSoundEnabled(!soundEnabled);
   };
 
+  // Taskbar progress and the live tray mirror the running session; tray quick actions use the latest handlers.
+  useDesktopPresence(tasks, lang, workspaceReady);
+  const desktopCommandHandlersRef = React.useRef<DesktopCommandHandlers | null>(null);
+  desktopCommandHandlersRef.current = {
+    toggleTimer: id => { if (latestTasksRef.current.some(task => task.id === id && !task.done)) handleToggleTimer(id); },
+    completeTask: id => { if (latestTasksRef.current.some(task => task.id === id && !task.done)) handleToggleDone(id); },
+    startTask: id => { if (latestTasksRef.current.some(task => task.id === id && !task.done)) handleStartTask(id); },
+  };
+  useEffect(() => subscribeDesktopCommands({
+    toggleTimer: id => desktopCommandHandlersRef.current?.toggleTimer(id),
+    completeTask: id => desktopCommandHandlersRef.current?.completeTask(id),
+    startTask: id => desktopCommandHandlersRef.current?.startTask(id),
+  }), []);
+
+  const summaryTask = sessionSummary && tasks.find(task => task.id === sessionSummary.session.taskId);
+  const showSessionSummary = workspaceReady && sessionSummary && summaryTask && !summaryTask.timerRunning
+    && sessionSummary.ownerId === workspaceOwnerRef.current && sessionSummary.ownerId === (currentUser?.uid ?? null)
+    && summaryTask.done === sessionSummary.task.done
+    && (sessionSummary.session.reason !== 'countdownEnded' || summaryTask.countdownExpiredAt === sessionSummary.task.countdownExpiredAt);
+
   const recentlyDeletedArchive = recentlyDeleted ? deletedTasks.find(task => task.id === recentlyDeleted.id) : undefined;
 
   return (
@@ -2607,14 +2697,7 @@ export default function App() {
         <div role="status" className="relative z-20 w-full px-5 py-3 bg-emerald-950/30 border-b border-emerald-900 text-emerald-100 flex flex-wrap items-center justify-center gap-3 text-sm">
           <span>{lang === 'uk' ? 'Завдання завершено й збережено в історії.' : 'Task completed and saved in history.'}</span>
           <button type="button" onClick={() => setSelectedPhase('HISTORY')} className="min-h-11 underline">{lang === 'uk' ? 'Відкрити історію' : 'Open history'}</button>
-          <button type="button" onClick={() => {
-            const now = Date.now();
-            setTasks(prev => prev.map(task => task.id === completedNoticeId ? reopenTask(task, now) : task));
-            setCompletedNoticeId(null);
-            setSelectedPhase('ALL');
-            setActiveFilter('ALL');
-            setSearchQuery('');
-          }} className="min-h-11 underline">{lang === 'uk' ? 'Повернути в роботу' : 'Reopen task'}</button>
+          <button type="button" onClick={() => handleReopenCompletedTask(completedNoticeId)} className="min-h-11 underline">{lang === 'uk' ? 'Повернути в роботу' : 'Reopen task'}</button>
           <button type="button" onClick={() => setCompletedNoticeId(null)} className="min-h-11" aria-label={lang === 'uk' ? 'Закрити повідомлення' : 'Dismiss notice'}><X className="w-4 h-4" /></button>
         </div>
       )}
@@ -2666,7 +2749,7 @@ export default function App() {
           <p>{lang === 'uk' ? `Знайдено збережений простір: ${recoveryCandidate.workspace.tasks.length} завдань, ${recoveryCandidate.workspace.tabs.length} категорій, ${recoveryCandidate.workspace.deletedTasks.length} в архіві.` : `Retained workspace found: ${recoveryCandidate.workspace.tasks.length} tasks, ${recoveryCandidate.workspace.tabs.length} categories, ${recoveryCandidate.workspace.deletedTasks.length} archived.`}</p>
           <button type="button" onClick={restoreRetainedWorkspace} className="mt-3 min-h-11 border border-amber-800 px-3">{lang === 'uk' ? 'Відновити збережений простір' : 'Restore retained workspace'}</button>
         </div>}
-        {timerNotice && <div role="status" className={`mb-5 flex flex-wrap items-center gap-3 border p-3 text-sm leading-relaxed ${timerNoticeCalm ? 'border-neutral-700 bg-neutral-950/80 text-neutral-200' : 'border-amber-800 bg-amber-950/20 text-amber-200'}`}>
+        {timerNotice && !(showSessionSummary && sessionSummary?.session.reason === 'countdownEnded') && <div role="status" className={`mb-5 flex flex-wrap items-center gap-3 border p-3 text-sm leading-relaxed ${timerNoticeCalm ? 'border-neutral-700 bg-neutral-950/80 text-neutral-200' : 'border-amber-800 bg-amber-950/20 text-amber-200'}`}>
           <span className="min-w-0 flex-1 break-words">{timerNotice}</span>
           <button type="button" onClick={() => openStrategyChat(lang === 'uk' ? `Обговорімо це повідомлення: ${timerNotice}` : `Discuss this notice: ${timerNotice}`)} className={`min-h-11 shrink-0 border px-3 text-xs ${timerNoticeCalm ? 'border-neutral-700' : 'border-amber-800'}`}>{lang === 'uk' ? 'ШІ-чат' : 'AI chat'}</button>
           <button type="button" aria-label={lang === 'uk' ? 'Закрити сповіщення' : 'Dismiss notification'} onClick={() => setTimerNotice(null)} className="flex h-11 w-11 shrink-0 items-center justify-center hover:bg-white/10"><X className="h-5 w-5" /></button>
@@ -3000,6 +3083,13 @@ export default function App() {
         </AnimatePresence>
       </main>
       {workPlanTask && timerWorkspaceReadyRef.current && workspaceOwnerRef.current === (currentUser?.uid || null) && <TaskWorkPlanDialog key={`${currentUser?.uid || 'guest'}:${workPlanTask.id}`} task={workPlanTask} lang={lang} onClose={() => setWorkPlanTaskId(null)} onSave={saveWorkPlan} />}
+
+      {showSessionSummary && sessionSummary && summaryTask && <SessionSummaryCard
+        key={sessionSummary.session.taskId + ':' + sessionSummary.session.endedAt + ':' + (sessionSummary.session.sessionId ?? '')}
+        session={sessionSummary.session} task={summaryTask} allTasks={tasks} now={sessionSummary.shownAt} lang={lang}
+        onDismiss={dismissSessionSummary} onStart={handleStartTask} onResume={handleStartTask}
+        onPlanTomorrow={handlePlanTomorrow} onFinishAfterExpiry={id => { setTimerNotice(null); handleFinishAfterExpiry(id); }}
+        onContinueTenMinutes={id => { setTimerNotice(null); handleContinueSummaryCountdown(id); }} onReopen={handleReopenCompletedTask} />}
 
       {/* All bottom controls share the same responsive layout. */}
       <footer className="fixed bottom-0 left-0 right-0 z-30 bg-[#060608]/95 backdrop-blur-md border-t border-neutral-800/80 px-3 sm:px-4 py-2.5 app-no-drag pointer-events-auto">

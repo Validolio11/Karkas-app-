@@ -684,11 +684,11 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                 aria-label={lang === 'uk' ? 'Час завдання' : 'Task time'}
                 className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1 sm:block sm:text-right"
               >
-                <p role="status" className={`inline-flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-wider sm:flex sm:justify-end ${task.timerRunning ? 'text-emerald-300' : countdownFinished ? 'text-amber-300' : hasStarted ? 'text-neutral-400' : 'text-neutral-500'}`}>
-                  <span aria-hidden="true" className={`h-1.5 w-1.5 ${task.timerRunning ? 'bg-emerald-400' : countdownFinished ? 'bg-amber-400' : hasStarted ? 'bg-neutral-400' : 'bg-neutral-700'}`} />
+                <p role="status" className={`inline-flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-wider sm:flex sm:justify-end ${task.timerRunning ? 'text-emerald-300' : countdownFinished ? 'text-neutral-200' : hasStarted ? 'text-neutral-400' : 'text-neutral-500'}`}>
+                  <span aria-hidden="true" className={`h-1.5 w-1.5 ${task.timerRunning ? 'bg-emerald-400' : countdownFinished ? 'bg-emerald-400' : hasStarted ? 'bg-neutral-400' : 'bg-neutral-700'}`} />
                   {task.timerRunning ? (lang === 'uk' ? 'Таймер іде' : 'Timer running')
                     : task.done ? (lang === 'uk' ? 'Завершено' : 'Completed')
-                    : countdownFinished ? (lang === 'uk' ? 'Відлік закінчився' : 'Countdown ended')
+                    : countdownFinished ? (lang === 'uk' ? 'Сесію завершено' : 'Session complete')
                     : hasStarted ? (lang === 'uk' ? 'На паузі' : 'Paused')
                     : hasCountdown ? (lang === 'uk' ? 'Відлік' : 'Countdown')
                     : (lang === 'uk' ? 'Не розпочато' : 'Not started')}
@@ -702,7 +702,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                     hasCountdown ? `${lang === 'uk' ? 'Тривалість' : 'Duration'}: ${formatDurationFull(task.countdownDurationSeconds!, lang)} · ${lang === 'uk' ? 'Всього витрачено' : 'Total spent'}: ${formatTime(currentElapsedSeconds)}` : '',
                   ].filter(Boolean).join('\n')}
                   onClick={event => { event.stopPropagation(); openTimeSettings(event.currentTarget); }}
-                  className={`min-h-11 sm:mt-1.5 sm:min-h-0 whitespace-nowrap font-mono text-2xl font-semibold leading-none tabular-nums tracking-tight decoration-dotted underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white sm:text-[28px] ${task.timerRunning ? 'text-emerald-300' : countdownFinished ? 'text-amber-300' : hasStarted || hasCountdown ? 'text-neutral-100' : 'text-neutral-600 hover:text-neutral-300'}`}>
+                  className={`min-h-11 sm:mt-1.5 sm:min-h-0 whitespace-nowrap font-mono text-2xl font-semibold leading-none tabular-nums tracking-tight decoration-dotted underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white sm:text-[28px] ${task.timerRunning ? 'text-emerald-300' : countdownFinished ? 'text-neutral-100' : hasStarted || hasCountdown ? 'text-neutral-100' : 'text-neutral-600 hover:text-neutral-300'}`}>
                   {timerValue}
                 </button>
                 {hasCountdown && <div role="progressbar"
@@ -710,7 +710,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                   aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(countdownProgress)}
                   aria-valuetext={lang === 'uk' ? `Залишилось ${formatDurationFull(remainingSeconds, lang)}` : `${formatDurationFull(remainingSeconds, lang)} remaining`}
                   className="h-1 w-full basis-full overflow-hidden bg-neutral-800 sm:mt-2.5 sm:ml-auto sm:w-36">
-                  <div style={{ width: `${countdownProgress}%` }} className={`h-full transition-[width] duration-500 ${countdownFinished ? 'bg-amber-400' : 'bg-emerald-400'}`} />
+                  <div style={{ width: `${countdownProgress}%` }} className="h-full bg-emerald-400 transition-[width] duration-500" />
                 </div>}
               </section>
             )}

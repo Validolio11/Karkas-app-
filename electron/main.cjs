@@ -14,6 +14,7 @@ const { beginBrowserGoogleLogin } = require('./browser-auth.cjs');
 const { createDesktopStorage } = require('./storage.cjs');
 const { createSecretStore } = require('./secrets.cjs');
 const { resolveIconPaths } = require('./app-icons.cjs');
+const { sanitizePresence, progressFor, tooltipFor, trayMenuModel } = require('./presence.cjs');
 
 const APP_SCHEME = 'karkas';
 const LEGACY_PORT = 14141;
@@ -46,6 +47,10 @@ let updateInProgress = false;
 let activeUpdate = null;
 let approvedUpdateUnload = null;
 let uiLanguage = 'uk';
+let desktopPresence = { lang: 'uk' };
+let presenceMenuJson = null;
+let runningOverlayIcon = null;
+let presenceBeforeQuit = null;
 
 const ok = (value) => ({ ok: true, value });
 const fail = (error) => ({
@@ -120,8 +125,12 @@ function showAndFocusWindow() {
 }
 
 function sendCommand(command) {
-  showAndFocusWindow();
-  mainWindow?.webContents.send('karkas:command', command);
+  try {
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
+    // Task commands are quick tray actions and must preserve the window state.
+    if (typeof command === 'string') showAndFocusWindow();
+    mainWindow.webContents.send('karkas:command', command);
+  } catch (error) { console.error('Unable to send desktop command', error); }
 }
 
 function quitApplication() {
@@ -149,6 +158,11 @@ function confirmLeavingDrafts(window, forUpdate = false) {
   }
   isQuitting = false;
   approvedUpdateUnload = null;
+  if (presenceBeforeQuit) {
+    desktopPresence = { ...presenceBeforeQuit, lang: uiLanguage };
+    presenceBeforeQuit = null;
+    applyDesktopPresence();
+  }
   showAndFocusWindow();
   return false;
 }
@@ -177,19 +191,75 @@ function validSavedBounds(bounds) {
   return intersects ? bounds : null;
 }
 
+function timerOverlayIcon() {
+  if (runningOverlayIcon) return runningOverlayIcon;
+  const pixels = Buffer.alloc(16 * 16 * 4);
+  for (let y = 0; y < 16; y += 1) {
+    for (let x = 0; x < 16; x += 1) {
+      if ((x - 7.5) ** 2 + (y - 7.5) ** 2 > 25) continue;
+      const offset = (y * 16 + x) * 4;
+      // Windows nativeImage bitmaps use BGRA; emerald #10b981.
+      pixels[offset] = 0x81;
+      pixels[offset + 1] = 0xb9;
+      pixels[offset + 2] = 0x10;
+      pixels[offset + 3] = 0xff;
+    }
+  }
+  runningOverlayIcon = nativeImage.createFromBitmap(pixels, { width: 16, height: 16, scaleFactor: 1 });
+  return runningOverlayIcon;
+}
+
+function runTrayCommand(command) {
+  try {
+    if (command === 'open') showAndFocusWindow();
+    else if (command === 'quit') quitApplication();
+    else sendCommand(command);
+  } catch (error) { console.error('Unable to run tray command', error); }
+}
+
+function applyDesktopPresence() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try {
+      const { value, mode } = progressFor(desktopPresence);
+      mainWindow.setProgressBar(value, { mode });
+    } catch (error) { console.error('Unable to update taskbar progress', error); }
+    if (process.platform === 'win32') {
+      try {
+        const running = desktopPresence.active?.state === 'running';
+        mainWindow.setOverlayIcon(running ? timerOverlayIcon() : null,
+          running ? (desktopPresence.lang === 'uk' ? 'Таймер іде' : 'Timer running') : '');
+      } catch (error) { console.error('Unable to update taskbar overlay', error); }
+    }
+  }
+  if (!tray || tray.isDestroyed()) return;
+  try { tray.setToolTip(tooltipFor(desktopPresence)); }
+  catch (error) { console.error('Unable to update tray tooltip', error); }
+  try {
+    const model = trayMenuModel(desktopPresence);
+    const encoded = JSON.stringify(model);
+    if (encoded === presenceMenuJson) return;
+    const template = model.map(item => item.label === ''
+      ? { type: 'separator' }
+      : {
+        label: item.label, enabled: item.enabled,
+        ...(item.command ? { click: () => runTrayCommand(item.command) } : {}),
+      });
+    tray.setContextMenu(Menu.buildFromTemplate(template));
+    presenceMenuJson = encoded;
+  } catch (error) { console.error('Unable to update tray menu', error); }
+}
+
+function clearDesktopPresence() {
+  desktopPresence = { lang: uiLanguage };
+  applyDesktopPresence();
+}
+
 function createTray() {
   if (tray) return;
   // Pass ICO directly on Windows so the shell selects the matching DPI frame.
   tray = new Tray(appIcons().tray);
-  tray.setToolTip('Karkas');
-  tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Відкрити Karkas', click: showAndFocusWindow },
-    { type: 'separator' },
-    { label: 'Нова задача', click: () => sendCommand('new-task') },
-    { label: 'Налаштування', click: () => sendCommand('open-settings') },
-    { type: 'separator' },
-    { label: 'Вийти', click: quitApplication },
-  ]));
+  presenceMenuJson = null;
+  applyDesktopPresence();
   tray.on('click', showAndFocusWindow);
   tray.on('double-click', showAndFocusWindow);
 }
@@ -360,8 +430,18 @@ function registerIpc() {
   on('karkas:window:hide', () => mainWindow?.hide());
   handle('karkas:window:quit', () => { quitApplication(); });
   handle('karkas:window:get-state', getWindowState);
-  on('karkas:system:ui-language', ({ lang }) => {
-    if (lang === 'uk' || lang === 'en') uiLanguage = lang;
+  on('karkas:system:ui-language', (payload) => {
+    const lang = payload?.lang;
+    if (lang === 'uk' || lang === 'en') {
+      uiLanguage = lang;
+      desktopPresence = { ...desktopPresence, lang };
+      applyDesktopPresence();
+    }
+  });
+  on('karkas:system:presence', (payload) => {
+    desktopPresence = isQuitting ? { lang: uiLanguage } : sanitizePresence(payload);
+    uiLanguage = desktopPresence.lang;
+    applyDesktopPresence();
   });
 
   handle('karkas:workspace:load-account', ({ ownerId }) => storage.loadAccount(ownerId ?? null));
@@ -561,6 +641,8 @@ async function createWindow() {
   });
   const window = mainWindow;
   const renderer = window.webContents;
+  renderer.on('did-start-loading', clearDesktopPresence);
+  renderer.on('render-process-gone', clearDesktopPresence);
   renderer.on('will-prevent-unload', (event) => {
     if (approvedUpdateUnload === renderer) {
       approvedUpdateUnload = null;
@@ -614,6 +696,8 @@ async function createWindow() {
 app.on('second-instance', showAndFocusWindow);
 app.on('before-quit', () => {
   isQuitting = true;
+  presenceBeforeQuit ??= desktopPresence;
+  clearDesktopPresence();
   loginController?.abort();
   if (activeUpdate?.phase === 'downloading') activeUpdate.controller.abort(updateDownloadError('UPDATE_DOWNLOAD_CANCELLED', 'Update download cancelled'));
 });

@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import type { PSTask } from '../src/types';
 import type { AgentWorkspace } from '../src/utils/aiAgentActions';
 import {
-  AGENT_MAX_ROUNDS, AGENT_SYSTEM_INSTRUCTION, AGENT_TOOL_DECLARATIONS, applyConfirmedAgentAction, runAgentTurn,
+  AGENT_MAX_ROUNDS, AGENT_SYSTEM_INSTRUCTION, AGENT_TOOL_DECLARATIONS, applyConfirmedAgentAction, runAgentTurn, withoutRepeatedSummaries,
   type AgentGenerationFunction,
 } from './aiAgent';
 import { AIRequestError, type AIFunctionCall, type GeminiContent } from './geminiGeneration';
@@ -167,7 +167,7 @@ test('eight-round cap returns successful actions and honestly reports unfinished
   const result = await runAgentTurn({ ...base, workspace: workspace(), generate: fake.generate });
   assert.equal(fake.requests.length, 8);
   assert.equal(result.actions.length, 1);
-  assert.match(result.text, /3 год/);
+  assert.match(result.actions[0].summary.uk, /3 год/); assert.doesNotMatch(result.text, /3 год/);
   assert.match(result.text, /не вдалося/);
   assert.doesNotMatch(result.text, /Unknown|Invalid|Missing/);
 });
@@ -193,7 +193,7 @@ test('a continuation failure returns already applied actions with an honest fail
   ]);
   const result = await runAgentTurn({ ...base, workspace: workspace(), generate: fake.generate });
   assert.equal(result.actions.length, 1);
-  assert.match(result.text, /3 год/);
+  assert.match(result.actions[0].summary.uk, /3 год/); assert.doesNotMatch(result.text, /3 год/);
   assert.match(result.text, /TIMEOUT/);
   assert.equal(result.metrics.attempts, 2);
   assert.equal(result.metrics.failedAttempts?.[0].code, 'TIMEOUT');
@@ -361,7 +361,7 @@ test('empty final prose still names the exact pending destructive action', async
   assert.match(result.text, /видалити завдання «Робота над анімацією»/);
 });
 
-test('day planning uses one five-item action, tab names and the existing animation task, then replies with the tool schedule', async () => {
+test('day planning uses one five-item action, tab names and the existing animation task, then replies briefly above the tool schedule', async () => {
   const userText = 'сплануй мені день, 1 потрібно встановити жалюзі, спланувати анімацію 30хв, після планування перейти до анімації 5 годин, пізніше навчання друку 30 хв, відпочинок';
   const original = workspace({ tabs: [{ id: 'focus', name: 'Робота' }, { id: 'learn', name: 'Навчання' }, { id: 'home', name: 'Особисте' }] });
   const items = [
@@ -408,7 +408,7 @@ test('day planning uses one five-item action, tab names and the existing animati
   assert.equal(result.workspace.tasks.length, 5);
   assert.equal(result.workspace.tasks.filter(item => item.title === 'Робота над анімацією').length, 1);
   assert.equal(result.workspace.tasks.find(item => item.title === 'Навчання друку')?.phase, 'learn');
-  assert.equal(result.text, result.actions[0].summary.uk);
+  assert.equal(result.text, 'Ось розклад:'); assert.match(result.actions[0].summary.uk, /13:00–14:00 · Встановити жалюзі/);
   assert.deepEqual(original.tasks, [task()]);
 });
 
@@ -600,7 +600,7 @@ test('replan_day exposes a timed schedule and replays through the shared action 
   assert.deepEqual(result.actions.map(applied => applied.action), [{ type: 'replan_day', from: '12:05' }]);
   assert.equal(result.workspace.tasks[0].scheduledFor, NOW + 5 * 60000);
   assert.equal(result.workspace.tasks[0].countdownRemainingSeconds, 1800);
-  assert.match(result.text, /12:05–12:35 · Робота над анімацією/);
+  assert.match(result.actions[0].summary.uk, /12:05–12:35 · Робота над анімацією/); assert.doesNotMatch(result.text, /12:05–12:35/);
   assert.equal(result.clarification, undefined);
 });
 
@@ -632,7 +632,7 @@ test('replan_day overflow always asks one question with tomorrow, shorten and cl
     assert.match(result.clarification!.options[0].message, /2026-10-20.*Навчання друку.*22:00/);
     assert.match(result.clarification!.options[1].message, /23:59/);
     assert.match(result.clarification!.options[2].message, /Прибери час.*Навчання друку/);
-    assert.match(result.text, /18:30–19:00/);
+    assert.match(result.actions[0].summary.uk, /18:30–19:00/); assert.doesNotMatch(result.text, /18:30–19:00/);
     assert.equal(fake.requests.length, 2);
   }
 });
@@ -646,4 +646,34 @@ test('replan_day declaration and instructions distinguish adjustment from explic
   assert.match(AGENT_SYSTEM_INSTRUCTION, /посунь на N хв.*shift_day/);
   assert.match(AGENT_SYSTEM_INSTRUCTION, /overflowTaskIds.*ask_user ONCE/);
   assert.match(AGENT_SYSTEM_INSTRUCTION, /Париж зараз 1 година.*schedule.*time zones/);
+});
+
+test('repeated action summaries are removed from the reply text while other prose stays', () => {
+  const summaries = ['Таймер «Робота над анімацією»: 2 год → 3 год', '18:45–19:15 · Спланувати анімацію\nНе вміщається сьогодні: Навчання друку'];
+  const text = ['Готово, підлаштував розклад.', '', '**Таймер «Робота над анімацією»: 2 год → 3 год**', '- 18:45 – 19:15 · Спланувати анімацію.',
+    '1. Не вміщається сьогодні: Навчання друку', '', 'Перенести друк на завтра?'].join('\n');
+  assert.equal(withoutRepeatedSummaries(text, summaries), 'Готово, підлаштував розклад.\n\nПеренести друк на завтра?');
+  // A sentence that only mentions a task is not a summary line and stays.
+  assert.equal(withoutRepeatedSummaries('Таймер для «Робота над анімацією» тепер довший.', summaries), 'Таймер для «Робота над анімацією» тепер довший.');
+  assert.equal(withoutRepeatedSummaries('Нічого не змінено.', []), 'Нічого не змінено.');
+});
+
+test('an agent reply that only copies the applied summaries becomes a short confirmation', async () => {
+  const fake = scripted([
+    calls(call('set_countdown', { taskId: 'animation', minutes: 180, start: false }), call('set_step_done', { taskId: 'animation', step: 3, done: true })),
+    request => {
+      const summaries = responses(request).map(part => part.response.summary?.uk ?? '');
+      assert.equal(summaries.length, 2);
+      return { text: ['Готово!', ...summaries.map(line => '- ' + line)].join('\n') };
+    },
+  ]);
+  const result = await runAgentTurn({ ...base, workspace: workspace(), generate: fake.generate });
+  assert.equal(result.actions.length, 2);
+  assert.equal(result.text, 'Готово!');
+  const copiedOnly = scripted([
+    calls(call('set_countdown', { taskId: 'animation', minutes: 180, start: false })),
+    request => ({ text: responses(request)[0].response.summary?.uk ?? '' }),
+  ]);
+  const short = await runAgentTurn({ ...base, workspace: workspace(), generate: copiedOnly.generate });
+  assert.equal(short.text, 'Готово.');
 });

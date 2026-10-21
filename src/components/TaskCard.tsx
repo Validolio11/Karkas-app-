@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence, useMotionValue, useTransform, useDragControls } from 'motion/react';
-import { PSTask, TaskTab } from '../types';
+import { GrowthSkill, PSTask, TaskTab } from '../types';
 import { sound } from '../utils/audio';
 import { getTaskTotalSeconds, getTaskRemainingSeconds, getTaskTimerMode } from '../utils/taskTimer';
 import { formatDigitalDuration as formatTime, formatDurationFull } from '../utils/taskTimeStats';
@@ -36,6 +36,7 @@ interface TaskCardProps extends CountdownExpiryActions {
   index: number;
   lang: Language;
   tabs?: TaskTab[];
+  skills?: GrowthSkill[];
   timeZone?: string;
   onApplyAgentActions?: (actions: AgentAction[]) => void | Promise<void>;
   onReplanDay?: () => void;
@@ -82,6 +83,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
   task,
   lang,
   tabs = [],
+  skills = [],
   timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Kyiv',
   onApplyAgentActions,
   onReplanDay,
@@ -189,6 +191,8 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
     : task.done ? (lang === 'uk' ? 'Спершу поверніть завдання в роботу' : 'Reopen the task before starting its timer')
     : countdownFinished ? (lang === 'uk' ? 'Повторити таймер' : 'Restart countdown')
     : (lang === 'uk' ? 'Продовжити' : 'Resume');
+  const linkedSkill = task.skillId ? skills.find(skill => skill.id === task.skillId) : undefined;
+  const skillChip = linkedSkill ? <span className="inline-flex min-h-7 max-w-full items-center rounded-full bg-[#6408fa] px-3 text-xs font-extrabold text-white break-words">{linkedSkill.title}</span> : null;
   const matchedTab = tabs.find((tb) => tb.id === task.phase);
   const phaseLabel = (t.phases as any)[task.phase] || matchedTab?.name || task.phase;
   const phaseStyle = KNOWN_PHASE_COLORS[task.phase] || {
@@ -406,7 +410,8 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
         }}
         style={{ x, rotate: x.get() < 0 ? rotateLeft : rotateRight }}
         whileTap={{ cursor: 'grabbing' }}
-        className={`relative z-10 bg-[#0c0c0d] border transition-all duration-200 ${isCompact ? 'px-3 py-2' : 'p-4 sm:p-5'} cursor-grab ${
+        data-compact={isCompact}
+        className={`pulse-task-card relative z-10 border transition-all duration-200 ${isCompact ? 'px-3 py-2' : 'p-4 sm:p-5'} cursor-grab ${
           task.timerRunning
             ? 'border-emerald-500/90 task-timer-glow'
             : task.done
@@ -442,6 +447,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
                 {task.note && <p title={task.note} className="truncate text-xs text-neutral-500">{task.note}</p>}
               </div>
               <div className="flex min-w-0 basis-full flex-wrap items-center gap-x-2 gap-y-1 text-[11px] sm:basis-auto sm:justify-end">
+                {skillChip}
                 <button type="button" id={`task-phase-btn-${task.id}`}
                   onClick={event => { event.stopPropagation(); sound.tick(700); onCyclePhase(task.id); }}
                   title={lang === 'uk' ? 'Натисніть для зміни вкладки/категорії' : 'Tap to cycle category'}
@@ -481,6 +487,7 @@ const TaskCardComponent: React.FC<TaskCardProps> = ({
           <div className={`grid min-w-0 gap-x-6 gap-y-3 ${showTimerWidget ? 'sm:grid-cols-[minmax(0,1fr)_auto]' : ''}`}>
             <div className="min-w-0">
               <div className="-ml-1.5 -mt-1.5 flex flex-wrap items-center gap-x-0.5">
+                {skillChip && <span className="mx-1.5">{skillChip}</span>}
                 <button
                   id={`task-phase-btn-${task.id}`}
                   type="button"

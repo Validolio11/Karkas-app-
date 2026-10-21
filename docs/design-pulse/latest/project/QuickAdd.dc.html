@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<title>Швидке додавання</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300..900&amp;display=swap">
+<style>
+body{margin:0;background:#090a0a}
+button,input{font-family:inherit}
+input::placeholder{color:#8e8e93}
+@keyframes kDrop{from{opacity:0;transform:translateY(-18px) scale(.97)}to{opacity:1;transform:none}}
+@keyframes kFade{from{opacity:0}to{opacity:1}}
+@keyframes kPop{0%{opacity:0;transform:scale(.6)}70%{opacity:1;transform:scale(1.06)}100%{opacity:1;transform:scale(1)}}
+@keyframes kUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+.veil{animation:kFade .3s ease both}
+.panel{animation:kDrop .45s cubic-bezier(.2,.8,.2,1) both}
+.chip{animation:kPop .3s cubic-bezier(.2,.8,.2,1) backwards}
+.chip:nth-child(2){animation-delay:.04s}.chip:nth-child(3){animation-delay:.08s}
+.row{animation:kUp .35s cubic-bezier(.2,.8,.2,1) backwards}
+.panel button,.panel a{transition:transform .15s ease,background-color .2s ease}.panel button:hover{transform:translateY(-1px)}.panel button:active,.panel a:active{transform:scale(.96)}
+html{scrollbar-width:thin;scrollbar-color:#3a3a3c transparent}
+@media (prefers-reduced-motion: reduce){*,*::before,*::after{animation:none !important;transition:none !important}}
+.swap{animation:kUp .3s cubic-bezier(.2,.8,.2,1) both}
+</style>
+</helmet>
+<div style="position: relative; min-height: 1000px; background: #090a0a; color: #ffffff; font-family: 'SF Pro Display', Inter, ui-sans-serif, system-ui, sans-serif; overflow: hidden">
+
+<div aria-hidden="true" style="position: absolute; inset: 0; filter: blur(7px); opacity: 0.4; pointer-events: none">
+<div style="height: 76px; display: flex; align-items: center; justify-content: space-between; padding: 0 24px">
+<span style="width: 44px; height: 44px; border-radius: 22px; background: #f4f4f2"></span>
+<span style="display: flex; gap: 8px"><span style="width: 120px; height: 44px; border-radius: 22px; background: #f4f4f2"></span><span style="width: 80px; height: 44px; border-radius: 22px; background: #1f1f1f"></span><span style="width: 90px; height: 44px; border-radius: 22px; background: #1f1f1f"></span></span>
+<span style="width: 300px; height: 44px; border-radius: 22px; background: #1f1f1f"></span>
+</div>
+<div style="max-width: 1280px; margin: 0 auto; padding: 24px 32px; display: flex; gap: 24px">
+<div style="flex: 2; display: flex; flex-direction: column; gap: 12px">
+<span style="font-size: 80px; line-height: 0.92; font-weight: 800; text-transform: uppercase; letter-spacing: -0.035em">Вівторок<br>20 жовтня</span>
+<span style="height: 196px; border-radius: 48px; background: #13f287"></span>
+<span style="height: 76px; border-radius: 38px; background: #f4f4f2"></span>
+<span style="height: 92px; border-radius: 40px; background: #1f1f1f"></span>
+<span style="height: 92px; border-radius: 40px; background: #1f1f1f"></span>
+</div>
+<div style="flex: 1; display: flex; flex-direction: column; gap: 12px"><span style="height: 260px; border-radius: 44px; background: #6408fa"></span><span style="height: 380px; border-radius: 44px; background: #1f1f1f"></span></div>
+</div>
+</div>
+<div class="veil" aria-hidden="true" style="position: absolute; inset: 0; background: rgba(9,10,10,0.55)"></div>
+
+<section class="panel" role="dialog" aria-label="Швидке додавання задачі" style="position: relative; width: 780px; max-width: calc(100% - 32px); margin: 150px auto 0; box-sizing: border-box; padding: 14px; border-radius: 48px; background: #1f1f1f; box-shadow: 0 0 0 1px #2c2c2e, 0 40px 90px rgba(0,0,0,0.6); display: flex; flex-direction: column; gap: 14px">
+
+<label style="height: 84px; box-sizing: border-box; border-radius: 42px; background: #f4f4f2; color: #090a0a; padding: 0 12px 0 14px; display: flex; align-items: center; gap: 14px">
+<span style="flex-shrink: 0; width: 56px; height: 56px; border-radius: 28px; background: #13f287; color: #090a0a; display: flex; align-items: center; justify-content: center"><svg width="22" height="23" viewBox="240 210 600 660" aria-hidden="true"><path d="{{k}}" fill="currentColor"></path></svg></span>
+<input type="text" data-qa="1" autofocus aria-label="Нова задача" placeholder="Задача, дата, час, #категорія" value="Підготувати звіт для клієнта в пт о 15 #робота" style="flex: 1; min-width: 0; border: none; outline: none; background: transparent; color: #090a0a; font-size: 22px; font-weight: 800; letter-spacing: -0.01em; padding: 0">
+<button type="button" onClick="{{add}}" aria-label="Додати задачу" style="flex-shrink: 0; width: 60px; height: 60px; border: none; border-radius: 30px; background: #090a0a; color: #ffffff; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button>
+</label>
+
+<sc-if value="{{hasQ}}" hint-placeholder-val="{{true}}">
+<span style="padding: 4px 14px 0; font-size: 26px; line-height: 1.15; font-weight: 800; letter-spacing: -0.02em">{{title}}</span>
+</sc-if>
+<div style="display: flex; flex-wrap: wrap; gap: 6px; padding: 0 10px">
+<sc-for list="{{chips}}" as="c" hint-placeholder-count="3">
+<button type="button" aria-expanded="{{c.open}}" onClick="{{c.pick}}" style="height: 40px; border: none; border-radius: 20px; padding: 0 12px 0 14px; background: {{c.bg}}; color: {{c.ink}}; box-shadow: {{c.ring}}; font-size: 14px; font-weight: 800; display: flex; align-items: center; gap: 8px; cursor: pointer; transition: background-color .2s ease, box-shadow .2s ease"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{c.icon}}"></path></svg>{{c.label}}<span style="font-weight: 600; opacity: 0.6">{{c.note}}</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="opacity: 0.6; transform: {{c.rot}}; transition: transform .2s ease"><path d="m6 9 6 6 6-6"></path></svg></button>
+</sc-for>
+</div>
+<sc-if value="{{hasPicker}}" hint-placeholder-val="{{false}}">
+<div class="swap" key="{{pickerLabel}}" role="listbox" aria-label="{{pickerLabel}}" data-drag="1" style="cursor: grab; user-select: none; -webkit-user-select: none; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 2px 10px 4px; -webkit-mask-image: linear-gradient(to right, transparent 0, #000 var(--fl, 0px), #000 calc(100% - var(--fr, 48px)), transparent 100%); mask-image: linear-gradient(to right, transparent 0, #000 var(--fl, 0px), #000 calc(100% - var(--fr, 48px)), transparent 100%)">
+<sc-for list="{{picker}}" as="o" hint-placeholder-count="7">
+<button type="button" role="option" aria-selected="{{o.sel}}" onClick="{{o.pick}}" style="flex-shrink: 0; min-width: {{o.w}}; height: {{o.h}}; border: none; border-radius: {{o.r}}; padding: 0 14px; background: {{o.bg}}; color: {{o.ink}}; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; cursor: inherit">
+<sc-if value="{{o.top}}" hint-placeholder-val="{{false}}"><span style="font-size: 11px; font-weight: 700; opacity: 0.7">{{o.top}}</span></sc-if>
+<span style="font-size: {{o.fs}}; font-weight: 800; letter-spacing: -0.02em; line-height: 1">{{o.main}}</span>
+<sc-if value="{{o.bottom}}" hint-placeholder-val="{{false}}"><span style="font-size: 11px; font-weight: 700; opacity: 0.7">{{o.bottom}}</span></sc-if>
+</button>
+</sc-for>
+</div>
+</sc-if>
+
+<div style="display: flex; flex-direction: column; gap: 6px; padding: 8px 0 0">
+<sc-for list="{{added}}" as="a" hint-placeholder-count="1">
+<div class="row" style="display: flex; align-items: center; gap: 12px; height: 56px; box-sizing: border-box; padding: 0 20px 0 12px; border-radius: 28px; background: #090a0a">
+<span style="flex-shrink: 0; width: 32px; height: 32px; border-radius: 16px; background: #13f287; color: #090a0a; display: flex; align-items: center; justify-content: center"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span>
+<span style="flex: 1; min-width: 0; font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{a.title}}</span>
+<span style="font-size: 13px; font-weight: 600; color: #8e8e93">{{a.meta}}</span>
+</div>
+</sc-for>
+</div>
+
+<div style="display: flex; align-items: center; gap: 18px; padding: 6px 14px 4px; font-size: 13px; font-weight: 600; color: #8e8e93">
+<span style="flex: 1"></span>
+<a href="Today.dc.html" data-close="1" style="text-decoration: none; height: 56px; box-sizing: border-box; padding: 0 28px 0 22px; border-radius: 28px; background: #f4f4f2; color: #090a0a; font-size: 16px; font-weight: 800; display: flex; align-items: center; gap: 10px; box-shadow: 0 10px 28px rgba(0,0,0,0.35)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg>Готово</a>
+</div>
+
+</section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = {
+      q: 'Підготувати звіт для клієнта в пт о 15 #робота',
+      added: [{ title: 'Купити продукти', meta: 'Сьогодні · Дім' }]
+    };
+  }
+  componentDidMount() {
+    var self = this;
+    var r = document.documentElement.style;
+    r.colorScheme = 'dark'; r.background = '#090a0a';
+    r.scrollbarWidth = 'thin'; r.scrollbarColor = '#3a3a3c #090a0a';
+    var qa = function (e) {
+      var el = e.composedPath ? e.composedPath()[0] : e.target;
+      return el && el.getAttribute && el.getAttribute('data-qa') ? el : null;
+    };
+    this.onInput = function (e) { var el = qa(e); if (el) { self.inp = el; self.setState({ q: el.value }); } };
+    this.onKey = function (e) {
+      var el = qa(e);
+      if (e.key === 'Escape' && self.state.open) { e.preventDefault(); self.setState({ open: null }); return; }
+      if (el && e.key === 'Enter') { e.preventDefault(); self.inp = el; self.addTask(); }
+      else if (e.key === 'Escape') { var c = document.querySelector('a[data-close]'); if (c) c.click(); }
+      else if ((e.ctrlKey || e.metaKey) && (e.code === 'KeyN' || /^[nNтТ]$/.test(e.key))) { e.preventDefault(); self.focusInput(); }
+    };
+    document.addEventListener('input', this.onInput, true);
+    document.addEventListener('keydown', this.onKey, true);
+    var dragEl = function (e) {
+      var path = e.composedPath ? e.composedPath() : [e.target];
+      for (var i = 0; i < path.length; i++) if (path[i].getAttribute && path[i].getAttribute('data-drag')) return path[i];
+      return null;
+    };
+    this.onDown = function (e) {
+      if (e.button !== 0) return;
+      var el = dragEl(e);
+      if (el) self.drag = { el: el, id: e.pointerId, x: e.clientX, left: el.scrollLeft, moved: false };
+    };
+    this.onMove = function (e) {
+      var d = self.drag;
+      if (!d) return;
+      var dx = e.clientX - d.x;
+      if (!d.moved && Math.abs(dx) > 4) {
+        d.moved = true;
+        d.el.style.cursor = 'grabbing';
+        try { d.el.setPointerCapture(d.id); } catch (err) {}
+      }
+      if (d.moved) { e.preventDefault(); d.el.scrollLeft = d.left - dx; }
+    };
+    this.onUp = function () {
+      var d = self.drag;
+      if (!d) return;
+      d.el.style.cursor = '';
+      self.drag = null;
+      if (d.moved) self.dragEnd = Date.now();
+    };
+    this.onClickCap = function (e) {
+      if (self.dragEnd && Date.now() - self.dragEnd < 300 && dragEl(e)) { e.preventDefault(); e.stopPropagation(); }
+    };
+    this.onWheel = function (e) {
+      var el = dragEl(e);
+      if (el && Math.abs(e.deltaY) > Math.abs(e.deltaX)) { e.preventDefault(); el.scrollLeft += e.deltaY; }
+    };
+    this.onScroll = function (e) {
+      var el = e.target;
+      if (!el || !el.getAttribute || !el.getAttribute('data-drag')) return;
+      var end = el.scrollWidth - el.clientWidth - el.scrollLeft;
+      el.style.setProperty('--fl', el.scrollLeft > 2 ? '48px' : '0px');
+      el.style.setProperty('--fr', end > 2 ? '48px' : '0px');
+    };
+    document.addEventListener('scroll', this.onScroll, true);
+    document.addEventListener('pointerdown', this.onDown, true);
+    document.addEventListener('pointermove', this.onMove, true);
+    document.addEventListener('pointerup', this.onUp, true);
+    document.addEventListener('pointercancel', this.onUp, true);
+    document.addEventListener('click', this.onClickCap, true);
+    document.addEventListener('wheel', this.onWheel, { capture: true, passive: false });
+    this.ft = setTimeout(function () { self.focusInput(); }, 350);
+  }
+  componentWillUnmount() {
+    document.removeEventListener('input', this.onInput, true);
+    document.removeEventListener('keydown', this.onKey, true);
+    document.removeEventListener('scroll', this.onScroll, true);
+    document.removeEventListener('pointerdown', this.onDown, true);
+    document.removeEventListener('pointermove', this.onMove, true);
+    document.removeEventListener('pointerup', this.onUp, true);
+    document.removeEventListener('pointercancel', this.onUp, true);
+    document.removeEventListener('click', this.onClickCap, true);
+    document.removeEventListener('wheel', this.onWheel, { capture: true });
+    clearTimeout(this.ft);
+  }
+  focusInput() {
+    var el = this.inp || document.querySelector('[data-qa]');
+    if (el) { this.inp = el; try { el.focus({ preventScroll: true }); } catch (e) {} }
+  }
+  parseTask(q) {
+    var M = ['січ', 'лют', 'бер', 'квіт', 'трав', 'черв', 'лип', 'серп', 'вер', 'жовт', 'лист', 'груд'];
+    var MF = ['січня', 'лютого', 'березня', 'квітня', 'травня', 'червня', 'липня', 'серпня', 'вересня', 'жовтня', 'листопада', 'грудня'];
+    var D = ['Нд', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+    var WD = [/^(нд|неділ[яюі])$/, /^(пн|понеділ(ок|ка))$/, /^(вт|вівтор(ок|ка))$/, /^(ср|серед[аиу])$/, /^(чт|четвер(га)?)$/, /^(пт|п[ʼ'’]?ятниц[яюі])$/, /^(сб|субот[аиу])$/];
+    var cats = { 'робота': 'Робота', 'навчання': 'Навчання', 'дім': 'Дім', 'дом': 'Дім' };
+    var base = new Date(2026, 9, 20);
+    var tk = String(q || '').split(/\s+/).filter(Boolean);
+    var used = tk.map(function () { return false; });
+    var low = function (i) { return (tk[i] || '').toLowerCase().replace(/[,.!?]+$/, ''); };
+    var off = null, time = null, cat = null, auto = false, m;
+    for (var i = 0; i < tk.length; i++) {
+      var t = low(i);
+      var pre = i > 0 && /^(о|об)$/.test(low(i - 1));
+      if (t.charAt(0) === '#' && cats[t.slice(1)]) { cat = cats[t.slice(1)]; used[i] = true; continue; }
+      if (t === 'сьогодні') { off = 0; used[i] = true; continue; }
+      if (t === 'завтра') { off = 1; used[i] = true; continue; }
+      if (t === 'післязавтра') { off = 2; used[i] = true; continue; }
+      if (t === 'через' && /^\d+$/.test(low(i + 1)) && /^(дн|день)/.test(low(i + 2))) { off = +low(i + 1); used[i] = used[i + 1] = used[i + 2] = true; i += 2; continue; }
+      var w = -1;
+      for (var k = 0; k < 7; k++) if (WD[k].test(t)) w = k;
+      if (w >= 0) { off = (w - base.getDay() + 7) % 7 || 7; used[i] = true; if (i > 0 && /^(в|у|до)$/.test(low(i - 1))) used[i - 1] = true; continue; }
+      if ((m = t.match(/^(\d{1,2})(?:[:.](\d{2}))?$/)) && (pre || t.indexOf(':') > 0) && +m[1] < 24) {
+        time = ('0' + m[1]).slice(-2) + ':' + (m[2] || '00'); used[i] = true; if (pre) used[i - 1] = true; continue;
+      }
+      var mi = /^\d{1,2}$/.test(t) ? Math.max(MF.indexOf(low(i + 1)), M.indexOf(low(i + 1))) : -1;
+      if (mi >= 0 || ((m = t.match(/^(\d{1,2})\.(\d{1,2})$/)) && +m[2] >= 1 && +m[2] <= 12)) {
+        var dd = mi >= 0 ? +t : +m[1], mm = mi >= 0 ? mi : +m[2] - 1;
+        var dt = new Date(2026, mm, dd);
+        if (dt < base) dt = new Date(2027, mm, dd);
+        off = Math.round((dt - base) / 864e5); used[i] = true; if (mi >= 0) { used[i + 1] = true; i++; }
+        var pj = i - (mi >= 0 ? 2 : 1);
+        if (pj >= 0 && /^(на|до)$/.test(low(pj))) used[pj] = true;
+        continue;
+      }
+    }
+    var title = tk.filter(function (x, j) { return !used[j]; }).join(' ');
+    title = title.charAt(0).toUpperCase() + title.slice(1);
+    if (!cat) {
+      var s = title.toLowerCase();
+      if (/дзвін|подзвон|клієнт|звіт|зустріч|договір|рахун|презентац|лист/.test(s)) cat = 'Робота';
+      else if (/вивч|прочита|курс|урок|англійськ|конспект/.test(s)) cat = 'Навчання';
+      else if (/купи|прибра|оплат|продукт|ремонт|прати|готува/.test(s)) cat = 'Дім';
+      auto = !!cat;
+    }
+    var label = null;
+    if (off !== null) {
+      var d = new Date(2026, 9, 20 + off);
+      label = off === 0 ? 'Сьогодні' : off === 1 ? 'Завтра' : D[d.getDay()] + ', ' + d.getDate() + ' ' + M[d.getMonth()];
+    }
+    return { title: title, off: off, dateLabel: label, time: time, cat: cat, auto: auto };
+  }
+  labelOf(off) {
+    var M = ['січ', 'лют', 'бер', 'квіт', 'трав', 'черв', 'лип', 'серп', 'вер', 'жовт', 'лист', 'груд'];
+    var D = ['Нд', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+    var d = new Date(2026, 9, 20 + off);
+    return off === 0 ? 'Сьогодні' : off === 1 ? 'Завтра' : D[d.getDay()] + ', ' + d.getDate() + ' ' + M[d.getMonth()];
+  }
+  effOf(p) {
+    var st = this.state;
+    var off = st.pDate !== null && st.pDate !== undefined ? st.pDate : p.off;
+    return { title: p.title, off: off, dateLabel: off === null ? null : this.labelOf(off),
+      time: st.pTime || p.time, cat: st.pCat || p.cat, auto: !st.pCat && p.auto };
+  }
+  chipsOf(e, base) {
+    var self = this, open = this.state.open;
+    var CAL = 'M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z';
+    var CLOCK = 'M12 6v6l4 2M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z';
+    var TAG = 'M12.6 2.6A2 2 0 0 0 11.2 2H4a2 2 0 0 0-2 2v7.2a2 2 0 0 0 .6 1.4l8.7 8.7a2.4 2.4 0 0 0 3.4 0l6.6-6.6a2.4 2.4 0 0 0 0-3.4zM7.5 7.5h.01';
+    var mk = function (k, icon, set, label, note, bg, ink) {
+      var on = open === k;
+      return { icon: icon, label: label, note: note, bg: set ? bg : base, ink: set ? ink : '#d1d1d6',
+        ring: on ? 'inset 0 0 0 2px #f4f4f2' : 'none', open: on ? 'true' : 'false', rot: on ? 'rotate(180deg)' : 'none',
+        pick: function () { self.setState({ open: self.state.open === k ? null : k }); } };
+    };
+    return [
+      mk('date', CAL, e.off !== null, e.off !== null ? e.dateLabel : 'Дата', '', '#13f287', '#090a0a'),
+      mk('time', CLOCK, !!e.time, e.time || 'Час', '', '#f4f4f2', '#090a0a'),
+      mk('cat', TAG, !!e.cat, e.cat || 'Категорія', e.auto ? 'авто' : '', '#6408fa', '#ffffff')
+    ];
+  }
+  pickerOf(e, base) {
+    var self = this, open = this.state.open, items = [], i;
+    var M = ['січ', 'лют', 'бер', 'квіт', 'трав', 'черв', 'лип', 'серп', 'вер', 'жовт', 'лист', 'груд'];
+    var D = ['нд', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
+    var pick = function (patch) {
+      return function () { patch.open = null; self.setState(patch); self.focusInput(); };
+    };
+    var item = function (o, on, bg, ink) {
+      o.sel = on ? 'true' : 'false'; o.bg = on ? bg : base; o.ink = on ? ink : '#ffffff';
+      return o;
+    };
+    if (open === 'date') {
+      for (i = 0; i < 14; i++) {
+        var d = new Date(2026, 9, 20 + i);
+        items.push(item({ top: i === 0 ? 'сьогодні' : i === 1 ? 'завтра' : D[d.getDay()], main: String(d.getDate()),
+          bottom: i === 0 || d.getDate() === 1 ? M[d.getMonth()] : '', w: '64px', h: '72px', r: '24px', fs: '22px',
+          pick: pick({ pDate: i }) }, e.off === i, '#13f287', '#090a0a'));
+      }
+      return { label: 'Дата', items: items };
+    }
+    if (open === 'time') {
+      for (i = 8; i <= 21; i++) {
+        var t = ('0' + i).slice(-2) + ':00';
+        items.push(item({ top: i < 12 ? 'ранок' : i < 17 ? 'день' : 'вечір', main: String(i), bottom: ':00', w: '64px', h: '72px', r: '24px', fs: '22px', pick: pick({ pTime: t }) }, e.time === t, '#f4f4f2', '#090a0a'));
+      }
+      return { label: 'Час', items: items };
+    }
+    if (open === 'cat') {
+      [['Робота', '3 задачі'], ['Навчання', '2 задачі'], ['Дім', '1 задача']].forEach(function (c) {
+        items.push(item({ top: c[1], main: c[0], bottom: '', w: '64px', h: '72px', r: '24px', fs: '17px', pick: pick({ pCat: c[0] }) }, e.cat === c[0], '#6408fa', '#ffffff'));
+      });
+      items.push(item({ top: 'категорія', main: '+ Нова', bottom: '', w: '64px', h: '72px', r: '24px', fs: '17px', pick: pick({}) }, false, '', ''));
+      return { label: 'Категорія', items: items };
+    }
+    return null;
+  }
+  metaOf(p) {
+    return [p.dateLabel || 'Сьогодні', p.time, p.cat].filter(Boolean).join(' · ');
+  }
+  addTask() {
+    var p = this.effOf(this.parseTask(this.state.q));
+    if (!p.title) { this.focusInput(); return; }
+    this.setState({ pDate: null, pTime: null, pCat: null, open: null,
+      q: '', added: [{ title: p.title, meta: this.metaOf(p) }].concat(this.state.added).slice(0, 4) });
+    if (this.inp) this.inp.value = '';
+    this.focusInput();
+  }
+  renderVals() {
+    var self = this;
+    var p = this.parseTask(this.state.q);
+    var e = this.effOf(p);
+    var pk = this.pickerOf(e, '#090a0a');
+    return {
+      k: 'M271.942 219.415L404.957 219.433C422.53 219.359 443.586 218.322 461.004 219.748C464.585 220.026 470.468 224.229 471.281 227.599C474.687 241.912 473.545 264.483 473.642 279.259L474.648 368.86C474.881 385.654 475.074 402.486 475.906 419.243C476.603 433.371 493.847 432.426 495.434 419.502C496.672 412.669 495.55 405.541 495.763 398.69C496.307 381.359 493.572 360.175 495.469 342.556C495.846 339.054 497.151 335.607 499.67 333.145C502.607 330.275 506.619 328.821 510.714 328.511C530.128 327.042 553.065 329.442 572.653 328.457C595.781 327.291 607.064 334.864 607.296 305.608C607.45 288.551 606.576 269.837 606.675 252.054C606.747 239.199 610.007 222.176 622.856 221.785C634.042 221.452 645.267 221.6 656.453 221.6L718.209 221.637L775.592 221.489C786.507 221.452 798.177 221.137 808.996 221.84C814.337 222.174 818.846 222.47 821.924 226.655C823.859 229.265 825.33 232.321 825.485 235.561C826.239 252.744 825.949 270.779 826.162 287.981C826.452 309.922 826.607 331.846 826.627 353.788C826.646 365.064 826.956 377.192 825.969 388.413C825.096 397.996 812.065 399.708 802.443 399.738C776.916 399.818 733.402 398.781 725.622 402.652C721.19 404.837 719.138 409.448 718.209 413.892C714.281 432.723 722.08 474.255 716.448 490.845C715.268 494.345 713.178 497.437 709.655 499.122C693.224 506.955 623.94 495.66 608.109 504.27C605.225 505.825 603.464 507.917 602.67 510.991C600.541 519.175 600.677 568.577 604.954 574.298C607.605 577.854 611.999 578.909 616.295 579.576C623.398 580.649 630.945 580.131 638.106 580.094C659.472 580.001 684.709 577.928 705.63 581.038C706.484 581.172 707.301 581.488 708.01 581.983C709.2 582.816 710.087 583.504 710.88 584.207C714.001 586.973 715.705 591.007 716.058 595.162C716.67 602.39 716.562 610.44 716.681 617.164C716.874 634.421 717.358 651.826 716.777 669.083C716.119 688.007 735.627 686.637 749.852 686.544C766.747 686.415 783.682 686.304 800.596 686.155C802.526 686.169 804.536 686.217 806.569 686.282C813.468 686.501 821.591 687.518 824.788 693.636C826.801 697.487 827.381 702.302 827.672 706.56C828.62 721.151 827.207 736.335 827.265 751C827.381 780.718 828.581 810.789 827.11 840.47C826.936 843.97 826.781 848.562 825.175 851.71C823.762 854.524 819.775 857.431 816.64 858.209C805.686 860.931 761.774 859.45 747.801 859.468C707.314 859.468 666.014 860.949 625.604 858.968C622.604 858.82 617.476 858.876 615.037 857.135C611.399 854.524 609.192 851.025 608.128 846.821C606.58 840.6 607.218 833.286 607.218 826.879C607.18 809.289 609.038 786.403 606.348 769.608C605.651 765.183 604.509 760.758 600.483 758.054C585.62 748.074 514.226 762.183 500.311 751.222C496.982 748.574 495.86 744.482 495.26 740.538C494.156 733.52 494.795 725.836 494.853 718.744C494.989 701.987 495.976 683.378 493.75 666.861C493.169 662.603 491.873 657.048 487.692 654.641C482.514 651.662 476.554 657.022 475.145 662.827C471.803 676.598 473.487 701.586 473.487 711.504L473.448 810.048C473.448 821.861 474.184 835.545 472.868 847.173C472.287 852.321 467.991 855.098 463.791 857.857C463.032 858.354 462.151 858.633 461.244 858.663C413.027 860.236 363.524 857.83 315.235 858.857C299.017 859.209 282.277 859.227 266.097 858.524C259.885 858.246 253.227 849.747 253.963 843.822C253.711 810.789 253.673 777.719 253.44 744.667L252.937 519.546L252.744 322.014C252.686 294.35 252.453 266.724 252.008 239.061C251.757 224.062 257.272 219.859 271.942 219.415Z',
+      hasQ: !!p.title,
+      title: p.title,
+      sig: [e.dateLabel, e.time, e.cat].join('|'),
+      chips: this.chipsOf(e, '#090a0a'),
+      hasPicker: !!pk, picker: pk ? pk.items : [], pickerLabel: pk ? pk.label : '',
+      added: this.state.added,
+      add: function () { self.addTask(); }
+    };
+  }
+}
+</script>
+</body>
+</html>

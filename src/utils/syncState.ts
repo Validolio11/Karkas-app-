@@ -3,7 +3,7 @@ import type { UserCloudState } from '../services/firebase';
 import { applyWorkspaceMutation, diffWorkspaceMutation } from './syncOperations';
 import { migrateSystemCategories } from './systemViews';
 
-export type WorkspaceState = Pick<UserCloudState, 'tasks' | 'tabs' | 'deletedTasks' | 'settings'>;
+export type WorkspaceState = Pick<UserCloudState, 'tasks' | 'tabs' | 'deletedTasks' | 'settings' | 'skills' | 'measurements' | 'practiceSessions'>;
 
 export interface MergeWorkspaceOptions {
   /** A new device has no account baseline, so its UI defaults are not user edits. */
@@ -78,7 +78,8 @@ export function recordSyncMutation(
 
 export function sameWorkspace(left: WorkspaceState, right: WorkspaceState): boolean {
   return (['tasks', 'tabs', 'deletedTasks', 'settings'] as const)
-    .every((key) => canonical(left[key]) === canonical(right[key]));
+    .every((key) => canonical(left[key]) === canonical(right[key]))
+    && (['skills', 'measurements', 'practiceSessions'] as const).every(key => canonical(left[key] ?? []) === canonical(right[key] ?? []));
 }
 
 /** Replay only local edits since the last acknowledged cloud state onto fresh remote data. */

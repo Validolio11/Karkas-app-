@@ -89,6 +89,7 @@ function validTask(value, deleted) {
   }
   if (!optional(value, 'scheduledDurationSeconds', v => integer(v) && v >= 1 && v <= 86400)) return false;
   if (!optional(value, 'plannedDate', validDate) || !optional(value, 'deadlineDate', validDate)) return false;
+  for (const key of ['skillId', 'subskillId']) if (!optional(value, key, id)) return false;
   for (const key of ['note', 'timerStepId', 'timerSessionId', 'schedulePlanId', 'scheduleNextStartAt']) if (!optional(value, key, text)) return false;
   if (value.timeSessions !== undefined && (!object(value.timeSessions) || Object.entries(value.timeSessions).some(([key, session]) =>
     !id(key) || ['__proto__', 'constructor', 'prototype'].includes(key) || !object(session) || !number(session.seconds) || !optional(session, 'stepId', id)))) return false;
@@ -108,6 +109,35 @@ function validTask(value, deleted) {
     }
   }
   return true;
+}
+
+/** @param {unknown} value */
+const finite = value => typeof value === 'number' && Number.isFinite(value);
+
+/** @param {string} kind @param {unknown} value */
+export function validGrowthEntity(kind, value) {
+  if (!object(value) || !id(value.id) || !optional(value, 'deletedAt', number)) return false;
+  if (kind === 'skill') {
+    if (!text(value.title) || !number(value.createdAt) || !optional(value, 'updatedAt', number) ||
+        !optional(value, 'archivedAt', number) || !optional(value, 'sourceGoalId', id) ||
+        !optional(value, 'needsSetup', v => typeof v === 'boolean') || !Array.isArray(value.subskills) ||
+        value.subskills.length > 1000 || value.subskills.some(sub => !object(sub) || !id(sub.id) || !text(sub.title)) ||
+        new Set(value.subskills.map(sub => sub.id)).size !== value.subskills.length) return false;
+    if (value.needsSetup === true && ['metric', 'start', 'goal', 'measure'].every(key => value[key] === undefined)) return true;
+    return object(value.metric) && text(value.metric.label) && text(value.metric.unit) &&
+      (value.metric.direction === 'up' || value.metric.direction === 'down') && object(value.start) && finite(value.start.value) && validDate(value.start.date) &&
+      object(value.goal) && finite(value.goal.value) && validDate(value.goal.date) && optional(value.goal, 'label', text) &&
+      object(value.measure) && integer(value.measure.weekday) && value.measure.weekday <= 6 &&
+      number(value.measure.minutes) && optional(value.measure, 'how', text) &&
+      optional(value.measure, 'time', v => typeof v === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(v));
+  }
+  if (!id(value.skillId) || !number(value.at)) return false;
+  if (kind === 'measurement') return finite(value.value) && optional(value, 'note', text) && optional(value, 'sessionId', id);
+  if (kind !== 'practiceSession' || (value.difficulty !== 'easy' && value.difficulty !== 'edge' && value.difficulty !== 'hard') ||
+      !optional(value, 'durationSeconds', number) || !optional(value, 'lesson', text)) return false;
+  for (const key of ['subskillId', 'taskId', 'measurementId']) if (!optional(value, key, id)) return false;
+  return value.result === undefined || object(value.result) && number(value.result.done) &&
+    number(value.result.of) && value.result.of > 0 && value.result.done <= value.result.of;
 }
 
 /** @param {unknown} value @returns {Record<string, unknown>} */
@@ -132,6 +162,15 @@ export function parseWorkspace(value) {
         }
         fail(`Workspace.${key} contains an invalid or duplicate record`);
       }
+      seen.add(entry.id);
+    }
+  }
+  for (const [key, kind] of [['skills', 'skill'], ['measurements', 'measurement'], ['practiceSessions', 'practiceSession']]) {
+    if (value[key] === undefined) continue;
+    if (!Array.isArray(value[key]) || value[key].length > 50000) fail('Workspace.' + key + ' must be a bounded array');
+    const seen = new Set();
+    for (const entry of value[key]) {
+      if (!validGrowthEntity(kind, entry) || seen.has(entry.id)) fail('Workspace.' + key + ' contains an invalid or duplicate record');
       seen.add(entry.id);
     }
   }

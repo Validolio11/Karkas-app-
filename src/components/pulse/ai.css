@@ -1,0 +1,101 @@
+/* Karkas AI island. Values from docs/design-pulse AI.dc.html. */
+.kai-layer { position: fixed; inset: 0; z-index: 50; display: flex; align-items: flex-end; justify-content: center; pointer-events: auto; }
+.kai-backdrop { position: fixed; inset: 0; background: rgba(9, 10, 10, 0.55); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); animation: kaiFade .4s ease both; }
+.kai-island { position: relative; z-index: 1; width: 920px; max-width: calc(100% - 32px); height: 860px; max-height: calc(100% - 48px); margin-bottom: 24px; box-sizing: border-box; border-radius: 40px; background: #141414; color: #ffffff; box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6), inset 0 0 0 1px #2c2c2e; display: flex; flex-direction: column; overflow: hidden; transform-origin: bottom center; animation: kaiIsland .6s cubic-bezier(.2, .9, .25, 1) .1s both; }
+.kai-island > * { animation: kaiInner .3s ease .45s both; }
+.kai-island button { font-family: inherit; border: none; cursor: pointer; }
+.kai-island button:disabled { cursor: default; }
+.kai-island button:focus-visible { outline: 2px solid #13f287; outline-offset: 3px; }
+
+/* Header */
+.kai-head { flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 18px 18px 14px 22px; border-bottom: 1px solid #1f1f1f; }
+.kai-avatar { flex-shrink: 0; width: 44px; height: 44px; border-radius: 22px; background: #13f287; color: #090a0a; display: flex; align-items: center; justify-content: center; animation: kaiPop .45s cubic-bezier(.2, .8, .2, 1) .55s both, kaiGlow 2.4s ease-out 1.4s infinite; }
+.kai-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; margin-left: 4px; }
+.kai-title > span:first-child { font-size: 20px; font-weight: 800; letter-spacing: -0.02em; }
+.kai-title > span:last-child:not(:first-child) { font-size: 12px; font-weight: 600; color: #8e8e93; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kai-title #ai-discovery-mode-chip { color: #13f287; }
+.kai-pill { flex-shrink: 0; height: 44px; border-radius: 22px; padding: 0 16px; background: #1f1f1f; color: #ffffff; font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 8px; transition: transform .15s ease, background-color .2s ease; }
+.kai-pill:disabled { opacity: .4; }
+.kai-round { flex-shrink: 0; width: 44px; height: 44px; border-radius: 22px; background: #1f1f1f; color: #ffffff; display: flex; align-items: center; justify-content: center; padding: 0; transition: transform .15s ease; }
+.kai-pill:hover:not(:disabled), .kai-round:hover { transform: scale(1.06); }
+.kai-pill:active:not(:disabled), .kai-round:active { transform: scale(.94); }
+
+/* Conversation */
+.kai-feed { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 20px 32px 16px; scrollbar-width: thin; scrollbar-color: #3a3a3c transparent; }
+.kai-feed-inner { display: flex; flex-direction: column; gap: 16px; }
+.kai-island .karkas-ai-conversation { gap: 16px; }
+.kai-island .karkas-ai-message { font-size: 17px; line-height: 1.5; letter-spacing: 0; animation: kaiUp .5s cubic-bezier(.2, .8, .2, 1) both; }
+.kai-island .karkas-ai-message.is-user { align-self: flex-end; width: fit-content; max-width: min(560px, 92%); box-sizing: border-box; padding: 16px 22px; border: none; border-radius: 26px 26px 8px 26px; background: #f4f4f2; color: #090a0a; font-weight: 600; line-height: 1.45; }
+.kai-island .karkas-ai-message.is-assistant { align-self: flex-start; width: fit-content; max-width: min(640px, 100%); box-sizing: border-box; padding: 16px 22px; border-radius: 8px 26px 26px 26px; background: #1f1f1f; color: #e5e5ea; font-weight: 500; }
+.kai-island .karkas-ai-message .karkas-ai-chat-text { line-height: 1.5; }
+.kai-island .karkas-ai-message-author { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.kai-island .karkas-ai-typing { gap: 10px; min-height: 24px; color: #a1a1a6; font-size: 14px; }
+.kai-island .karkas-ai-typing-dots { gap: 6px; }
+.kai-island .karkas-ai-typing-dots span { width: 8px; height: 8px; border-radius: 4px; background: #a1a1a6; animation: kaiDot 1.2s ease-in-out infinite; }
+.kai-island .karkas-ai-typing-dots span:nth-child(2) { animation-delay: .15s; }
+.kai-island .karkas-ai-typing-dots span:nth-child(3) { animation-delay: .3s; }
+
+/* Commands and composer */
+.kai-foot { flex-shrink: 0; padding: 12px 18px 18px; border-top: 1px solid #1f1f1f; }
+.kai-foot-inner { display: flex; flex-direction: column; gap: 10px; }
+.kai-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.kai-chips-spacer { flex: 1; }
+.kai-chip { height: 38px; border-radius: 19px; padding: 0 14px; background: #1f1f1f; color: #d1d1d6; font-size: 13px; font-weight: 700; transition: transform .2s ease, background-color .2s ease, color .2s ease; }
+.kai-chip[aria-pressed="true"] { background: #f4f4f2; color: #090a0a; }
+.kai-chip:hover:not(:disabled) { transform: translateY(-2px); }
+.kai-chip:disabled { opacity: .4; }
+.kai-chips .karkas-ai-model-select { max-width: 240px; }
+.kai-chips .karkas-ai-model-trigger { height: 38px; min-height: 38px; border-radius: 19px; padding: 0 14px; background: #1f1f1f; color: #d1d1d6; font-size: 13px; font-weight: 700; }
+.kai-chips .karkas-ai-model-trigger:hover, .kai-chips .karkas-ai-model-trigger:focus-visible { background: #3a3a3c; color: #ffffff; }
+.kai-chips .karkas-ai-model-list { left: auto; right: 0; border: none; border-radius: 20px; padding: 6px; background: #1f1f1f; box-shadow: 0 0 0 1px #2c2c2e, 0 18px 40px rgba(0, 0, 0, .5); }
+.kai-chips .karkas-ai-model-option { border-radius: 14px; }
+
+.kai-composer { min-height: 76px; box-sizing: border-box; border-radius: 38px; background: #f4f4f2; color: #090a0a; padding: 12px 10px; display: flex; align-items: center; gap: 8px; }
+.kai-composer .karkas-ai-command-menu { flex-shrink: 0; }
+.kai-composer .karkas-ai-plus { width: 52px; height: 52px; border-radius: 26px; background: #e5e5e3; color: #090a0a; transition: transform .15s ease, background-color .2s ease; }
+.kai-composer .karkas-ai-plus:hover:not(:disabled), .kai-composer .karkas-ai-plus[aria-expanded="true"] { background: #d1d1d6; color: #090a0a; transform: scale(1.06); }
+.kai-composer .karkas-ai-command-list { bottom: calc(100% + 14px); border: none; border-radius: 22px; padding: 6px; background: #1f1f1f; box-shadow: 0 0 0 1px #2c2c2e, 0 18px 40px rgba(0, 0, 0, .5); }
+.kai-composer .karkas-ai-command-list button { border-radius: 16px; }
+.kai-composer .karkas-ai-command-list button:hover, .kai-composer .karkas-ai-command-list button:focus-visible { background: #3a3a3c; }
+.kai-field { flex: 1; min-width: 0; max-height: 140px; border: none; outline: none; box-shadow: none; resize: none; background: transparent; color: #090a0a; font-family: inherit; font-size: 18px; font-weight: 700; line-height: 1.4; padding: 11px 6px; }
+.kai-field:focus, .kai-field:focus-visible { outline: none !important; box-shadow: none !important; }
+.kai-field::placeholder { color: #6e6e73; }
+.kai-mode { flex-shrink: 0; display: flex; align-items: center; gap: 4px; height: 36px; padding: 0 4px 0 12px; border-radius: 18px; background: #090a0a; color: #ffffff; font-size: 13px; font-weight: 800; }
+.kai-mode button { width: 28px; height: 28px; border-radius: 14px; background: transparent; color: #a1a1a6; display: flex; align-items: center; justify-content: center; padding: 0; }
+.kai-mic, .kai-send { flex-shrink: 0; width: 52px; height: 52px; border-radius: 26px; display: flex; align-items: center; justify-content: center; padding: 0; transition: transform .15s ease, background-color .2s ease; }
+.kai-mic { background: #e5e5e3; color: #090a0a; }
+.kai-mic.is-recording { background: #13f287; animation: kaiRec 1.4s ease-out infinite; }
+.kai-send { background: #090a0a; color: #ffffff; }
+.kai-send:disabled { background: #c7c7cc; color: #f4f4f2; }
+.kai-mic:disabled { opacity: .45; }
+.kai-mic:hover:not(:disabled), .kai-send:hover:not(:disabled) { transform: scale(1.06); }
+.kai-mic:active:not(:disabled), .kai-send:active:not(:disabled) { transform: scale(.94); }
+.kai-composer .kai-mic:focus-visible, .kai-composer .kai-send:focus-visible, .kai-composer .karkas-ai-plus:focus-visible { outline-color: #6408fa; }
+
+.kai-rec { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 0 10px; transform-origin: left center; animation: kaiRecIn .35s cubic-bezier(.2, .8, .2, 1) both; }
+.kai-rec-dot { flex-shrink: 0; width: 10px; height: 10px; border-radius: 5px; background: #ff4d4f; animation: kaiBlink 1s ease-in-out infinite; }
+.kai-rec-time { flex-shrink: 0; min-width: 36px; font-size: 16px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.kai-wave { flex: 1; min-width: 0; height: 40px; display: flex; align-items: center; gap: 3px; overflow: hidden; }
+.kai-wave span { flex: 0 0 4px; border-radius: 2px; background: #090a0a; transition: height 90ms linear; }
+.kai-rec-label { flex-shrink: 0; font-size: 13px; font-weight: 700; color: #48484a; }
+
+@keyframes kaiFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes kaiIsland { 0% { opacity: .9; transform: translateY(4px) scale(.3, .1); border-radius: 300px; } 55% { opacity: 1; border-radius: 60px; } 100% { transform: none; border-radius: 40px; } }
+@keyframes kaiInner { from { opacity: 0; } to { opacity: 1; } }
+@keyframes kaiUp { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+@keyframes kaiPop { 0% { opacity: 0; transform: scale(.4); } 70% { opacity: 1; transform: scale(1.12); } 100% { opacity: 1; transform: scale(1); } }
+@keyframes kaiGlow { 0% { box-shadow: 0 0 0 0 rgba(19, 242, 135, .55); } 70%, 100% { box-shadow: 0 0 0 12px rgba(19, 242, 135, 0); } }
+@keyframes kaiDot { 0%, 80%, 100% { transform: translateY(0); opacity: .35; } 40% { transform: translateY(-6px); opacity: 1; } }
+@keyframes kaiRec { 0% { box-shadow: 0 0 0 0 rgba(19, 242, 135, .6), 0 0 0 0 rgba(19, 242, 135, .3); } 100% { box-shadow: 0 0 0 14px rgba(19, 242, 135, 0), 0 0 0 28px rgba(19, 242, 135, 0); } }
+@keyframes kaiBlink { 50% { opacity: .2; } }
+@keyframes kaiRecIn { from { opacity: 0; transform: scaleX(.6); } to { opacity: 1; transform: none; } }
+
+@media (max-width: 639px) {
+  .kai-island { width: 100%; max-width: 100%; height: 100%; max-height: 100%; margin-bottom: 0; border-radius: 28px 28px 0 0; }
+  .kai-feed { padding: 16px; }
+  .kai-head { padding: 14px 12px 12px 16px; }
+  .kai-pill { padding: 0 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kai-layer *, .kai-backdrop { animation: none !important; transition: none !important; }
+}

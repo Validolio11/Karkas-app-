@@ -11,6 +11,7 @@ export interface QuickAddDraft {
   title: string;
   note: string;
   phase: string;
+  proposedCategoryName?: string;
   priority: 1 | 2 | 3;
   steps: number;
   customSteps: string[];
@@ -102,6 +103,7 @@ function parseQuickAddDraft(raw: string | null): QuickAddDraft | null {
       title: typeof input.title === 'string' ? input.title : '',
       note: typeof input.note === 'string' ? input.note : '',
       phase: typeof input.phase === 'string' && !isSystemView(input.phase) ? input.phase : '',
+      ...(typeof input.proposedCategoryName === 'string' && input.proposedCategoryName.trim() ? { proposedCategoryName: input.proposedCategoryName.trim() } : {}),
       priority: input.priority === 1 || input.priority === 3 ? input.priority : DEFAULT_QUICK_ADD_PRIORITY,
       steps: typeof input.steps === 'number' && Number.isSafeInteger(input.steps) && input.steps >= 0 ? Math.min(input.steps, 12) : 0,
       customSteps: Array.isArray(input.customSteps) ? input.customSteps.filter((step): step is string => typeof step === 'string') : [],

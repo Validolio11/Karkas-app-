@@ -1,25 +1,30 @@
-import React, { useId, useState } from 'react';
-import type { PSTask } from '../types';
+import React, { useEffect, useId, useState } from 'react';
+import { ArrowRight, Pause, Play, X } from 'lucide-react';
+import type { PSTask, TaskTab } from '../types';
 import { formatDayFocus, type DaySummary, type morningRecap } from '../utils/dayRecap';
 import { formatTaskDate, localTaskDate, taskDateEnd } from '../utils/taskDates';
+import { getTaskRemainingSeconds, getTaskTotalSeconds } from '../utils/taskTimer';
 import { rankNextStepCandidates, type NextStepCandidate } from './strategyViewModel';
+import './pulse/QuickEntry.css';
 
 interface NowStripProps {
   tasks: readonly PSTask[];
+  tabs?: readonly TaskTab[];
   lang: 'uk' | 'en';
   now: number;
   todaySummary: DaySummary;
   offerDayClose: boolean;
+  dayClosed?: boolean;
   recap: ReturnType<typeof morningRecap>;
   recapNote?: string;
   onOpenDayClose: () => void;
   onDismissRecap: () => void;
   onReveal: (id: string) => void;
   onStart: (id: string) => void;
+  onPause?: (id: string) => void;
+  onComplete?: (id: string) => void;
   onMoveDeadline: (task: PSTask, date: string) => void;
 }
-
-const action = 'min-h-9 [@media(pointer:coarse)]:min-h-11 focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2';
 
 function reasonLabel(candidate: NextStepCandidate, lang: 'uk' | 'en', now: number): string {
   const { task, reason } = candidate;
@@ -50,69 +55,78 @@ function overdueLabel(deadline: string, today: string, lang: 'uk' | 'en'): strin
   return `Прострочено на ${days} ${unit}`;
 }
 
-export const NowStrip: React.FC<NowStripProps> = ({ tasks, lang, now, todaySummary, offerDayClose, recap, recapNote, onOpenDayClose, onDismissRecap, onReveal, onStart, onMoveDeadline }) => {
+function timerLabel(seconds: number) {
+  const value = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(value / 60);
+  return (minutes >= 60 ? Math.floor(minutes / 60) + ':' + String(minutes % 60).padStart(2, '0') : String(minutes).padStart(2, '0')) + ':' + String(value % 60).padStart(2, '0');
+}
+
+export const NowStrip: React.FC<NowStripProps> = ({ tasks, tabs, lang, now, todaySummary, offerDayClose, dayClosed = false, recap, recapNote, onOpenDayClose, onDismissRecap, onReveal, onStart, onPause, onComplete, onMoveDeadline }) => {
   const [candidateIndex, setCandidateIndex] = useState(0);
   const [overdueOpen, setOverdueOpen] = useState(false);
   const overdueId = useId();
+  const uk = lang === 'uk';
   const activeTasks = tasks.filter(task => !task.done && !task.scheduledPending);
   const candidates = rankNextStepCandidates(activeTasks, undefined, now);
   const index = candidates.length ? candidateIndex % candidates.length : 0;
+  const runningTask = activeTasks.find(task => task.timerRunning);
+  const [liveClock, setLiveClock] = useState(() => Date.now());
+  const hasRunningTimer = !!runningTask;
+  useEffect(() => {
+    if (!hasRunningTimer) return;
+    setLiveClock(Date.now());
+    const timer = window.setInterval(() => setLiveClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [hasRunningTimer]);
+  // Summary/ranking dates keep the parent snapshot; only a live timer needs a second hand.
+  const timerNow = runningTask ? Math.max(now, liveClock) : now;
   const candidate = candidates[index];
-  const running = activeTasks.some(task => task.timerRunning);
+  const current = runningTask || candidate?.task;
   const today = localTaskDate(now);
-  const tomorrow = new Date(now);
-  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrow = new Date(now); tomorrow.setDate(tomorrow.getDate() + 1);
   const tomorrowDate = localTaskDate(tomorrow.getTime());
   const doneToday = tasks.filter(task => task.done && Number.isFinite(task.completedAt) && localTaskDate(task.completedAt!) === today).length;
   const plannedToday = activeTasks.filter(task => task.plannedDate === today || task.deadlineDate === today).length;
-  const overdue = activeTasks.filter(task => {
-    const end = task.deadlineDate ? taskDateEnd(task.deadlineDate) : null;
-    return end !== null && end < now;
-  }).sort((a, b) => a.deadlineDate!.localeCompare(b.deadlineDate!));
+  const overdue = activeTasks.filter(task => { const end = task.deadlineDate ? taskDateEnd(task.deadlineDate) : null; return end !== null && end < now; }).sort((a, b) => a.deadlineDate!.localeCompare(b.deadlineDate!));
+  const category = current && tabs?.find(tab => tab.id === current.phase)?.name;
+  const showRecap = !runningTask && !offerDayClose && !!recap;
+  const showClose = !runningTask && offerDayClose;
 
-  if (!activeTasks.length && !offerDayClose && !recap) return null;
-
-  return <section aria-label={lang === 'uk' ? 'Зараз' : 'Now'} className="mb-3 border border-neutral-800 bg-[#0c0c0d] px-3 py-1 text-sm">
-    {!running && candidate && <div className="flex min-w-0 flex-wrap items-center gap-x-2 sm:flex-nowrap">
-      <div className="flex min-w-0 basis-full items-center gap-2 sm:basis-auto sm:flex-1">
-        <span className="shrink-0 text-[11px] uppercase text-neutral-500">{lang === 'uk' ? 'Далі' : 'Next'}</span>
-        <button type="button" className={`${action} min-w-0 flex-1 truncate text-left text-neutral-200 hover:text-white`} title={candidate.task.title} onClick={() => onReveal(candidate.task.id)}>{candidate.task.title}</button>
+  return <section aria-label={uk ? 'Зараз' : 'Now'} className="pulse-now">
+    {!runningTask && dayClosed ? <div className="pulse-day-state pulse-day-state--closed">
+      <span className="pulse-now-eyebrow">{uk ? 'День закрито' : 'Day closed'}</span>
+      <h2>{uk ? 'До завтра' : 'See you tomorrow'}</h2>
+      <p>{formatDayFocus(todaySummary.focusSeconds, lang)} · {uk ? 'Завершено задач: ' : 'Tasks completed: '}{todaySummary.completed.length}</p>
+    </div> : showClose ? <div className="pulse-day-state">
+      <span className="pulse-now-eyebrow">{uk ? 'Підсумок сьогодні' : 'Today’s recap'}</span>
+      <h2>{uk ? 'Закрити день' : 'Close the day'}</h2>
+      <p>{formatDayFocus(todaySummary.focusSeconds, lang)} · {uk ? 'Завершено задач: ' : 'Tasks completed: '}{todaySummary.completed.length}</p>
+      <button type="button" className="pulse-now-primary" onClick={onOpenDayClose} aria-label={uk ? 'Закрити день' : 'Close the day'}>{uk ? 'Закрити день' : 'Close the day'}<ArrowRight size={17} aria-hidden="true" /></button>
+    </div> : showRecap ? <div className="pulse-day-state pulse-day-state--morning">
+      <div className="pulse-day-state-top"><span className="pulse-now-eyebrow">{recapNote ? (uk ? 'Вчора ви вирішили' : 'Yesterday you decided') : (uk ? 'Новий день' : 'A new day')}</span><button type="button" className="pulse-now-icon" aria-label={uk ? 'Приховати підсумок учора' : 'Dismiss yesterday’s recap'} onClick={onDismissRecap}><X size={18} aria-hidden="true" /></button></div>
+      <h2>{recapNote || (uk ? 'Продовжуємо рости' : 'Keep growing')}</h2>
+      <p>{uk ? 'Вчора: ' : 'Yesterday: '}{formatDayFocus(recap!.focusSeconds, lang)}{recap!.completedTitle && <> · {uk ? 'завершено «' : 'completed “'}{recap!.completedTitle}{uk ? '»' : '”'}{recap!.remainingCompleted > 0 && (uk ? ' і ще ' : ' and ') + recap!.remainingCompleted + (uk ? '' : ' more')}</>}</p>
+      {current && <button type="button" className="pulse-now-primary" aria-label={(uk ? 'Почати: ' : 'Start: ') + current.title} onClick={() => onStart(current.id)}>{uk ? 'Почати день' : 'Start the day'}<ArrowRight size={17} aria-hidden="true" /></button>}
+    </div> : current ? <div className="pulse-now-card">
+      <div className="pulse-now-copy">
+        <span className="pulse-now-eyebrow">{runningTask ? (uk ? 'Зараз' : 'Now') : (uk ? 'Наступний крок' : 'Next step')}</span>
+        <button type="button" className="pulse-now-title" aria-label={(uk ? 'Відкрити задачу: ' : 'Open task: ') + current.title} onClick={() => onReveal(current.id)}>{current.title}</button>
+        {category && <span className="pulse-now-category">{category}</span>}
       </div>
-      <span className="max-w-[45%] shrink-0 truncate border border-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-400" title={reasonLabel(candidate, lang, now)}>{reasonLabel(candidate, lang, now)}</span>
-      <button type="button" className={`${action} ml-auto shrink-0 bg-white px-2 sm:ml-0 text-xs font-bold text-black hover:bg-neutral-200`} onClick={() => onStart(candidate.task.id)}>{Number.isFinite(candidate.task.startedAt) || (candidate.task.timeSpentSeconds || 0) > 0 ? (lang === 'uk' ? 'Продовжити' : 'Resume') : (lang === 'uk' ? 'Почати' : 'Start')}</button>
-      {candidates.length > 1 && <button type="button" className={`${action} shrink-0 px-1 text-xs text-neutral-400 hover:text-white`} onClick={() => setCandidateIndex((index + 1) % candidates.length)}>
-        {lang === 'uk' ? 'Інше' : 'Other'} <span className="text-[10px] tabular-nums text-neutral-500">{index + 1}/{candidates.length}</span>
-      </button>}
-    </div>}
-    <div className="flex min-h-9 flex-wrap items-center gap-x-3 text-xs text-neutral-400">
-      {offerDayClose ? <>
-        <span className="min-w-0 flex-1">{lang === 'uk' ? 'Сьогодні: ' : 'Today: '}{formatDayFocus(todaySummary.focusSeconds, lang)} · {lang === 'uk' ? 'закрито ' : 'completed '}{todaySummary.completed.length}</span>
-        <button type="button" className={action + ' shrink-0 bg-white px-2 font-bold text-black hover:bg-neutral-200'} onClick={onOpenDayClose}>{lang === 'uk' ? 'Закрити день' : 'Close the day'}</button>
-      </> : recap ? <>
-        <p className="min-w-0 flex-1 truncate" title={recapNote}>
-          {lang === 'uk' ? 'Вчора: ' : 'Yesterday: '}{formatDayFocus(recap.focusSeconds, lang)}
-          {recap.completedTitle && <> · {lang === 'uk' ? 'закрито «' : 'completed “'}{recap.completedTitle}{lang === 'uk' ? '»' : '”'}{recap.remainingCompleted > 0 && (lang === 'uk' ? ' і ще ' : ' and ')+recap.remainingCompleted+(lang === 'uk' ? '' : ' more')}</>}
-          {recapNote && <> — <i>{recapNote}</i></>}
-        </p>
-        <button type="button" className={action + ' shrink-0 px-2 text-lg hover:text-white'} aria-label={lang === 'uk' ? 'Приховати підсумок учора' : 'Dismiss yesterday’s recap'} onClick={onDismissRecap}>×</button>
-      </> : doneToday + plannedToday === 0 && overdue.length === 0
-        ? <span className="text-neutral-500">{lang === 'uk' ? 'На сьогодні нічого не заплановано' : 'Nothing planned for today'}</span>
-        : <span>{lang === 'uk' ? `Сьогодні: ${doneToday} з ${doneToday + plannedToday}` : `Today: ${doneToday} of ${doneToday + plannedToday}`}</span>}
-      {overdue.length > 0 && <button type="button" className={`${action} text-red-400 hover:text-red-300`} aria-expanded={overdueOpen} aria-controls={overdueId} onClick={() => setOverdueOpen(value => !value)}>
-        {lang === 'uk' ? `${overdue.length} прострочено` : `${overdue.length} overdue`}
-      </button>}
+      <div className="pulse-now-clock">
+        <span className="pulse-now-time" aria-label={(uk ? 'Таймер: ' : 'Timer: ') + timerLabel(getTaskRemainingSeconds(current, timerNow) ?? getTaskTotalSeconds(current, timerNow))}>{timerLabel(getTaskRemainingSeconds(current, timerNow) ?? getTaskTotalSeconds(current, timerNow))}</span>
+        <div className="pulse-now-actions">
+          {runningTask && onPause ? <button type="button" className="pulse-now-icon" aria-label={uk ? 'Пауза' : 'Pause'} data-tip={uk ? 'Пауза' : 'Pause'} onClick={() => onPause(current.id)}><Pause size={19} fill="currentColor" aria-hidden="true" /></button> : <button type="button" className="pulse-now-icon" aria-label={uk ? 'Почати задачу' : 'Start task'} data-tip={uk ? 'Почати задачу' : 'Start task'} onClick={() => onStart(current.id)}><Play size={19} fill="currentColor" aria-hidden="true" /></button>}
+          {runningTask && onComplete ? <button type="button" className="pulse-now-primary" aria-label={(uk ? 'Завершити: ' : 'Complete: ') + current.title} onClick={() => onComplete(current.id)}>{uk ? 'Завершити' : 'Complete'}</button> : <button type="button" className="pulse-now-primary" aria-label={(uk ? 'Почати: ' : 'Start: ') + current.title} onClick={() => onStart(current.id)}>{Number.isFinite(current.startedAt) || (current.timeSpentSeconds || 0) > 0 ? (uk ? 'Продовжити' : 'Resume') : (uk ? 'Почати' : 'Start')}</button>}
+          {!runningTask && candidates.length > 1 && <button type="button" className="pulse-now-other" aria-label={uk ? 'Інша наступна задача' : 'Another next task'} onClick={() => setCandidateIndex((index + 1) % candidates.length)}>{uk ? 'Інше' : 'Other'}<span>{index + 1}/{candidates.length}</span></button>}
+        </div>
+      </div>
+    </div> : <div className="pulse-now-card pulse-now-card--empty"><div className="pulse-now-copy"><span className="pulse-now-eyebrow">{uk ? 'Почнімо' : 'Let’s begin'}</span><h2>{uk ? 'Що зробите сьогодні?' : 'What will you do today?'}</h2></div></div>}
+    <div className="pulse-now-footer">
+      <span>{doneToday + plannedToday > 0 ? (uk ? 'Сьогодні: ' : 'Today: ') + doneToday + (uk ? ' з ' : ' of ') + (doneToday + plannedToday) : (uk ? 'Додайте задачу та зробіть перший крок' : 'Add a task and take the first step')}</span>
+      {runningTask && offerDayClose && <button type="button" onClick={onOpenDayClose} aria-label={uk ? 'Закрити день' : 'Close the day'}>{uk ? 'Закрити день' : 'Close the day'}</button>}
+      {overdue.length > 0 && <button type="button" className="pulse-now-overdue" aria-label={uk ? 'Показати прострочені задачі' : 'Show overdue tasks'} aria-expanded={overdueOpen} aria-controls={overdueId} onClick={() => setOverdueOpen(value => !value)}>{uk ? overdue.length + ' прострочено' : overdue.length + ' overdue'}</button>}
     </div>
-    {overdueOpen && overdue.length > 0 && <ul id={overdueId} className="border-t border-neutral-800 py-1">
-      {overdue.slice(0, 5).map(task => <li key={task.id} className="flex flex-wrap items-center gap-x-3 text-xs">
-        <div className="flex min-w-0 flex-1 basis-48 items-center gap-2">
-          <button type="button" className={`${action} min-w-0 flex-1 truncate text-left text-neutral-300 hover:text-white`} title={task.title} onClick={() => onReveal(task.id)}>{task.title}</button>
-          <span className="shrink-0 text-[10px] text-neutral-500">{overdueLabel(task.deadlineDate!, today, lang)}</span>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <button type="button" className={`${action} px-1 text-neutral-400 hover:text-white`} aria-label={`${task.title}: ${lang === 'uk' ? 'дедлайн сьогодні' : 'deadline today'}`} onClick={() => onMoveDeadline(task, today)}>{lang === 'uk' ? 'Дедлайн → сьогодні' : 'Deadline → today'}</button>
-          <button type="button" className={`${action} px-1 text-neutral-400 hover:text-white`} aria-label={`${task.title}: ${lang === 'uk' ? 'дедлайн завтра' : 'deadline tomorrow'}`} onClick={() => onMoveDeadline(task, tomorrowDate)}>{lang === 'uk' ? '→ завтра' : '→ tomorrow'}</button>
-        </div>
-      </li>)}
-    </ul>}
+    {overdueOpen && overdue.length > 0 && <ul id={overdueId} className="pulse-now-overdue-list">{overdue.slice(0, 5).map(task => <li key={task.id}><div><button type="button" aria-label={(uk ? 'Відкрити: ' : 'Open: ') + task.title} onClick={() => onReveal(task.id)}>{task.title}</button><span>{overdueLabel(task.deadlineDate!, today, lang)}</span></div><div className="pulse-overdue-actions"><button type="button" aria-label={task.title + ': ' + (uk ? 'дедлайн сьогодні' : 'deadline today')} onClick={() => onMoveDeadline(task, today)}>{uk ? 'Дедлайн → сьогодні' : 'Deadline → today'}</button><button type="button" aria-label={task.title + ': ' + (uk ? 'дедлайн завтра' : 'deadline tomorrow')} onClick={() => onMoveDeadline(task, tomorrowDate)}>{uk ? '→ завтра' : '→ tomorrow'}</button></div></li>)}</ul>}
   </section>;
 };

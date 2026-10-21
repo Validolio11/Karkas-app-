@@ -94,8 +94,8 @@ export function useAccountNotes(initialOwner: string | null, fallback: NotepadNo
   return {
     getNotes, replaceNotes,
     notes: state.notes, notesOwner: state.owner, storageError, switchOwner,
-    addNote: (note: Omit<NotepadNote, 'id' | 'createdAt'>) => {
-      const value = { ...note, id: `note-${crypto.randomUUID()}`, createdAt: Date.now() };
+    addNote: (note: Omit<NotepadNote, 'id' | 'createdAt'> & { id?: string }) => {
+      const value = { ...note, id: note.id ?? `note-${crypto.randomUUID()}`, createdAt: Date.now() };
       return commit(value.id, null, value);
     },
     updateNote: (id: string, updates: Partial<NotepadNote>) => {

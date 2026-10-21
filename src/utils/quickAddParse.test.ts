@@ -69,10 +69,19 @@ test('exact category names and ids take precedence over name prefixes', () => {
   assert.equal(parse('Task #home #робота').phase, 'work');
 });
 
-test('unknown categories and non-whole tokens remain title text', () => {
-  const title = 'Task #unknown # !4 !12 urgent!1 !1, today, tomorrow-ish 19.10.2026x';
+test('unknown categories become proposals without staying in the title', () => {
+  assert.deepEqual(parseQuickAdd('Звіт #робота', [], now), {
+    title: 'Звіт', proposedCategoryName: 'Робота',
+    tokens: [{ kind: 'category_proposal', raw: '#робота', value: 'Робота' }],
+  });
+  assert.equal(parse('Task #unknown').proposedCategoryName, 'Unknown');
+  assert.equal(parse('Task #unknown #робота').proposedCategoryName, undefined);
+  assert.equal(parse('Task #unknown #робота').phase, 'work');
+});
+
+test('non-whole or invalid category tokens remain title text', () => {
+  const title = 'Task # #work, !4 !12 urgent!1 !1, today, tomorrow-ish 19.10.2026x';
   assert.deepEqual(parse(title), { title, tokens: [] });
-  assert.deepEqual(parseQuickAdd('Task #work', [], now), { title: 'Task #work', tokens: [] });
 });
 
 test('relative dates are case insensitive and use the local calendar', () => {

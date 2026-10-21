@@ -1,1514 +1,457 @@
-import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
-import { NotepadNote, NoteSortOption } from '../types';
-import { Language, TRANSLATIONS } from '../utils/i18n';
-import { sound } from '../utils/audio';
-import { karkasApiFetch } from '../utils/desktopApi';
-import { loadNotepadDrafts, markNotepadDraftCleanup, noteDraftBase, noteDraftMatches, saveNotepadDrafts, type NoteDraftBase } from '../utils/notepadDrafts';
-import {
-  NotebookPen,
-  Search,
-  Plus,
-  Trash2,
-  Edit3,
-  Copy,
-  Check,
-  Pin,
-  PinOff,
-  Mic,
-  Square,
-  Loader2,
-  ArrowUpDown,
-  X,
-  Palette,
-  LayoutGrid,
-  List,
-  AlertTriangle,
-  RotateCcw,
-} from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
-import { readWebApiKey } from '../utils/webApiKey';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { NoteDoc, NoteSeg, NoteSegStyle, NotepadNote } from '../types';
+import type { Language } from '../utils/i18n';
+import { docText, noteDoc, numberLabels, tidySegs } from '../utils/noteDoc';
+import { KarkasLogo } from './pulse/KarkasLogo';
+import './notepad.css';
 
 interface NotepadViewProps {
   ownerId?: string | null;
   lang: Language;
   notes: NotepadNote[];
-  onAddNote: (note: Omit<NotepadNote, 'id' | 'createdAt'>) => boolean;
+  onAddNote: (note: Omit<NotepadNote, 'id' | 'createdAt'> & { id?: string }) => boolean;
   onUpdateNote: (id: string, updates: Partial<NotepadNote>) => boolean;
   onDeleteNote: (id: string) => boolean;
   onRestoreNote: (note: NotepadNote) => boolean;
+  onMakeTasks?: (note: NotepadNote) => void;
   storageError?: boolean;
 }
 
-interface NoteVoiceSession {
-  target: 'content' | 'title';
-  noteId: string | null;
-  abortController: AbortController;
-  stopping: boolean;
+type Kind = 'lesson' | 'idea';
+type Filter = 'all' | Kind;
+interface Menu { text: string; seg: number; x: number; y: number; chip?: number; fseg?: number }
+interface Toast { text: string; undo?: () => void }
+
+const COPY = {
+  uk: {
+    title: ['Мій', 'блокнот'], filter: 'Фільтр', filters: { all: 'Усі', lesson: 'Висновки', idea: 'Ідеї' } as Record<Filter, string>,
+    search: 'Пошук', searchLabel: 'Пошук нотаток', newNote: 'Нова нотатка', untitled: 'Без назви', pinned: 'Закріплено', note: 'Нотатка',
+    kinds: { lesson: 'Висновок', idea: 'Ідея' } as Record<Kind, string>, kindLabel: 'Тип нотатки', append: 'Дописати', titleLabel: 'Назва нотатки',
+    appendLabel: 'Дописати текст', appendPlaceholder: 'Пишіть тут…', emptyPage: 'Порожня сторінка', makeTasks: 'Зробити задачі',
+    pages: 'Сторінки', page: 'Сторінка', addPage: 'Нова сторінка', pin: 'Закріпити', unpin: 'Відкріпити', remove: 'Видалити',
+    menu: 'Дії з виділеним', font: 'Шрифт', fontSearch: 'Пошук шрифту', fonts: 'Шрифти', size: 'Розмір шрифту', smaller: 'Менше', bigger: 'Більше',
+    weight: 'Товщина', weights: ['Тонкий', 'Звичайний', 'Жирний'], numbering: 'Нумерація', copy: 'Копіювати', paste: 'Вставити',
+    chip: 'Кнопка копіювання', plain: 'Звичайний текст', undo: 'Скасувати',
+    copied: 'Скопійовано', pasted: 'Вставлено', chipAdded: 'Кнопку додано', chipRemoved: 'Кнопку прибрано', deleted: 'Видалено',
+    numbersOn: 'Нумерацію додано', numbersOff: 'Нумерацію прибрано', pinnedTop: 'Закріплено вгорі', unpinned: 'Відкріплено', noteDeleted: 'Нотатку видалено',
+    now: 'Щойно', today: 'Сьогодні', yesterday: 'Вчора', empty: 'Тут поки порожньо', saveFailed: 'Не вдалося зберегти нотатку',
+    storage: 'Нотатки не зберігаються на цьому пристрої. Перевір місце у сховищі.',
+  },
+  en: {
+    title: ['My', 'notebook'], filter: 'Filter', filters: { all: 'All', lesson: 'Lessons', idea: 'Ideas' } as Record<Filter, string>,
+    search: 'Search', searchLabel: 'Search notes', newNote: 'New note', untitled: 'Untitled', pinned: 'Pinned', note: 'Note',
+    kinds: { lesson: 'Lesson', idea: 'Idea' } as Record<Kind, string>, kindLabel: 'Note type', append: 'Write more', titleLabel: 'Note title',
+    appendLabel: 'Write more text', appendPlaceholder: 'Write here…', emptyPage: 'Empty page', makeTasks: 'Make tasks',
+    pages: 'Pages', page: 'Page', addPage: 'New page', pin: 'Pin', unpin: 'Unpin', remove: 'Delete',
+    menu: 'Selection actions', font: 'Font', fontSearch: 'Search fonts', fonts: 'Fonts', size: 'Font size', smaller: 'Smaller', bigger: 'Bigger',
+    weight: 'Weight', weights: ['Light', 'Regular', 'Bold'], numbering: 'Numbering', copy: 'Copy', paste: 'Paste',
+    chip: 'Copy button', plain: 'Plain text', undo: 'Undo',
+    copied: 'Copied', pasted: 'Pasted', chipAdded: 'Button added', chipRemoved: 'Button removed', deleted: 'Deleted',
+    numbersOn: 'Numbering added', numbersOff: 'Numbering removed', pinnedTop: 'Pinned to top', unpinned: 'Unpinned', noteDeleted: 'Note deleted',
+    now: 'Just now', today: 'Today', yesterday: 'Yesterday', empty: 'Nothing here yet', saveFailed: 'Could not save the note',
+    storage: 'Notes are not being saved on this device. Check the available storage.',
+  },
+};
+
+const UK_MONTHS = ['січ', 'лют', 'бер', 'квіт', 'трав', 'черв', 'лип', 'сер', 'вер', 'жовт', 'лист', 'груд'];
+const EN_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const BASE_FONTS = ['Inter', 'Segoe UI', 'Segoe UI Variable', 'Arial', 'Bahnschrift', 'Calibri', 'Cambria', 'Candara', 'Comic Sans MS', 'Consolas',
+  'Constantia', 'Corbel', 'Courier New', 'Franklin Gothic Medium', 'Gabriola', 'Georgia', 'Impact', 'Lucida Console', 'Lucida Sans Unicode',
+  'Palatino Linotype', 'Segoe Print', 'Segoe Script', 'Sitka Text', 'Sylfaen', 'Tahoma', 'Times New Roman', 'Trebuchet MS', 'Verdana'];
+const WEIGHTS = [300, 500, 800];
+const ICONS = {
+  copy: 'M8 8h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2zM16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2',
+  check: 'M20 6 9 17l-5-5',
+  trash: 'M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2',
+  paste: 'M9 3h6a1 1 0 0 1 1 1v2H8V4a1 1 0 0 1 1-1zM8 5H6a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2',
+  text: 'M4 7V5h16v2M9 19h6M12 5v14',
+  list: 'M10 6h11M10 12h11M10 18h11M4 6h1v4M4 10h2M6 18H4c0-1 2-2 2-3s-1-1.5-2-1',
+};
+const CHIP_ICON = ICONS.copy + 'M14 11v6M11 14h6';
+const PIN_PATH = 'M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z';
+
+const fontFamily = (name?: string) => !name || name === 'Inter' ? "'SF Pro Display', Inter, sans-serif" : "'" + name.replace(/'/g, '') + "', 'Segoe UI', sans-serif";
+const kindOf = (note: NotepadNote): Kind => note.kind ?? 'idea';
+const Path = ({ d, size = 18, width = 2 }: { d: string; size?: number; width?: number }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={width} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>;
+
+function noteDate(at: number, now: number, lang: Language) {
+  const copy = COPY[lang];
+  const date = new Date(at), today = new Date(now);
+  const day = (value: Date) => new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
+  if (now - at < 60_000) return copy.now;
+  const diff = Math.round((day(today) - day(date)) / 864e5);
+  if (diff === 0) return copy.today + ', ' + date.toLocaleTimeString(lang === 'uk' ? 'uk-UA' : 'en-GB', { hour: '2-digit', minute: '2-digit' });
+  if (diff === 1) return copy.yesterday;
+  return lang === 'uk' ? date.getDate() + ' ' + UK_MONTHS[date.getMonth()] : EN_MONTHS[date.getMonth()] + ' ' + date.getDate();
 }
 
-export const NOTE_COLOR_PRESETS = [
-  { label: 'Sky', hex: '#38bdf8' },
-  { label: 'Emerald', hex: '#34d399' },
-  { label: 'Amber', hex: '#fbbf24' },
-  { label: 'Rose', hex: '#f43f5e' },
-  { label: 'Purple', hex: '#c084fc' },
-  { label: 'Cyan', hex: '#22d3ee' },
-  { label: 'Orange', hex: '#fb923c' },
-  { label: 'White', hex: '#e2e8f0' },
-];
+export const NotepadView: React.FC<NotepadViewProps> = ({ lang, notes, onAddNote, onUpdateNote, onDeleteNote, onRestoreNote, onMakeTasks, storageError = false }: NotepadViewProps) => {
+  const copy = COPY[lang];
+  const [filter, setFilter] = useState<Filter>('all');
+  const [query, setQuery] = useState('');
+  const [selectedId, setSelectedId] = useState<string>();
+  const [freshId, setFreshId] = useState<string>();
+  const [justAdded, setJustAdded] = useState<string>();
+  const [pageOf, setPageOf] = useState<Record<string, number>>({});
+  const [editing, setEditing] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+  const [menu, setMenu] = useState<Menu | null>(null);
+  const [fontsOpen, setFontsOpen] = useState(false);
+  const [fontQuery, setFontQuery] = useState('');
+  const [fontNames, setFontNames] = useState<string[]>();
+  const [copiedSeg, setCopiedSeg] = useState(-1);
+  const [toast, setToast] = useState<Toast | null>(null);
+  const [now, setNow] = useState(Date.now());
+  const sectionRef = useRef<HTMLElement>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
+  const appendRef = useRef<HTMLTextAreaElement>(null);
+  const titleRef = useRef<HTMLInputElement>(null);
+  const history = useRef<{ id: string; doc: NoteDoc }[]>([]);
+  const toastTimer = useRef<number>();
+  const copyTimer = useRef<number>();
+  useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 30_000); return () => window.clearInterval(timer); }, []);
+  useEffect(() => () => { window.clearTimeout(toastTimer.current); window.clearTimeout(copyTimer.current); }, []);
 
-export const NotepadView: React.FC<NotepadViewProps> = ({
-  ownerId = null,
-  lang,
-  notes,
-  onAddNote,
-  onUpdateNote,
-  onDeleteNote,
-  onRestoreNote,
-  storageError = false,
-}) => {
-  const t = TRANSLATIONS[lang];
-  const nv = t.notepadView;
-  const [initialDrafts] = useState(() => {
-    try { return loadNotepadDrafts(localStorage, ownerId); }
-    catch { return loadNotepadDrafts(undefined, ownerId); }
+  const shown = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return notes.filter(note => (filter === 'all' || kindOf(note) === filter)
+      && (!needle || note.title.toLowerCase().includes(needle) || note.content.toLowerCase().includes(needle)))
+      .slice().sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt));
+  }, [notes, filter, query]);
+  const current = shown.find(note => note.id === selectedId) ?? shown[0];
+  const doc = current ? noteDoc(current) : { pages: [[]] };
+  const page = current ? Math.min(pageOf[current.id] ?? 0, doc.pages.length - 1) : 0;
+  const segs = doc.pages[page] ?? [];
+
+  const flash = (next: Toast | null, long = false) => {
+    window.clearTimeout(toastTimer.current);
+    setToast(next);
+    if (next) toastTimer.current = window.setTimeout(() => setToast(null), long ? 4000 : 1600);
+  };
+  const saveDoc = (note: NotepadNote, next: NoteDoc, remember = true) => {
+    if (remember) history.current = [...history.current, { id: note.id, doc: noteDoc(note) }].slice(-20);
+    const ok = onUpdateNote(note.id, { doc: next, content: docText(next), updatedAt: Date.now() });
+    if (!ok) flash({ text: copy.saveFailed });
+    return ok;
+  };
+  const savePage = (nextSegs: NoteSeg[], message?: string) => {
+    if (!current) return;
+    const pages = doc.pages.map((value, index) => index === page ? tidySegs(nextSegs) : value);
+    if (saveDoc(current, { pages }) && message) flash({ text: message, undo }, true);
+  };
+  const undo = () => {
+    const last = history.current.pop();
+    const note = last && notes.find(item => item.id === last.id);
+    if (!last || !note) return;
+    saveDoc(note, last.doc, false);
+    setMenu(null); flash(null);
+  };
+  const dropEmptyFresh = () => {
+    const fresh = freshId && notes.find(note => note.id === freshId);
+    if (fresh && !fresh.title.trim() && !fresh.content.trim()) onDeleteNote(fresh.id);
+    setFreshId(undefined);
+  };
+  const commitTitle = () => {
+    if (current && editing && titleDraft !== current.title) onUpdateNote(current.id, { title: titleDraft, updatedAt: Date.now() });
+  };
+  const appendText = (keepFocus: boolean) => {
+    const box = appendRef.current;
+    if (!box || !current) return;
+    const text = box.value.replace(/\s+$/, '');
+    if (!text.trim()) return;
+    const lines = text.split('\n').flatMap((line, index) => index ? [{ t: 'br', v: '' } as NoteSeg, { t: 'text', v: line } as NoteSeg] : [{ t: 'text', v: line } as NoteSeg]);
+    savePage([...segs, ...(segs.length ? [{ t: 'br', v: '' } as NoteSeg] : []), ...lines]);
+    box.value = ''; box.style.height = 'auto';
+    if (keepFocus) box.focus();
+  };
+  const stopEditing = () => { appendText(false); commitTitle(); setEditing(false); };
+  const select = (id: string) => {
+    if (editing) stopEditing();
+    if (freshId && freshId !== id) dropEmptyFresh();
+    setSelectedId(id); setEditing(false); setMenu(null);
+  };
+  const startEditing = (focusTitle = false) => {
+    if (!current) return;
+    setTitleDraft(current.title); setEditing(true); setMenu(null);
+    window.setTimeout(() => (focusTitle ? titleRef.current : appendRef.current)?.focus({ preventScroll: true }), 60);
+  };
+  const newNote = () => {
+    if (editing) stopEditing();
+    dropEmptyFresh();
+    const id = 'note-' + crypto.randomUUID();
+    if (!onAddNote({ id, title: '', content: '', kind: 'idea', doc: { pages: [[]] }, updatedAt: Date.now() })) { flash({ text: copy.saveFailed }); return; }
+    setFilter('all'); setQuery(''); setSelectedId(id); setFreshId(id); setJustAdded(id); setTitleDraft(''); setEditing(true); setMenu(null);
+    window.setTimeout(() => titleRef.current?.focus({ preventScroll: true }), 60);
+  };
+  const addPage = () => {
+    if (!current) return;
+    if (editing) appendText(false);
+    if (!saveDoc(current, { pages: [...doc.pages, []] })) return;
+    setPageOf(previous => ({ ...previous, [current.id]: doc.pages.length }));
+    setTitleDraft(current.title); setEditing(true); setMenu(null);
+    window.setTimeout(() => appendRef.current?.focus({ preventScroll: true }), 60);
+  };
+  const togglePin = () => {
+    if (!current) return;
+    const was = !!current.pinned;
+    if (onUpdateNote(current.id, { pinned: !was })) flash({ text: was ? copy.unpinned : copy.pinnedTop });
+  };
+  const removeNote = () => {
+    if (!current) return;
+    const note = current;
+    setEditing(false); setMenu(null); setFreshId(undefined);
+    if (onDeleteNote(note.id)) flash({ text: copy.noteDeleted, undo: () => { onRestoreNote(note); setSelectedId(note.id); flash(null); } }, true);
+  };
+
+  // Ctrl+Z undoes the last edit made through the selection menu.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const tag = (event.target as HTMLElement | null)?.tagName;
+      if ((event.ctrlKey || event.metaKey) && !event.shiftKey && (event.code === 'KeyZ') && tag !== 'INPUT' && tag !== 'TEXTAREA' && history.current.length) {
+        event.preventDefault(); undo();
+      }
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
   });
-  const [draftStorageError, setDraftStorageError] = useState(!initialDrafts.canPersist);
-  const [draftCanPersist, setDraftCanPersist] = useState(initialDrafts.canPersist);
-  const [draftSaveAttempt, setDraftSaveAttempt] = useState(0);
-  const [draftCleanupError, setDraftCleanupError] = useState(Boolean(initialDrafts.cleanupPending));
-  const draftCleanupPending = useRef(Boolean(initialDrafts.cleanupPending));
 
-  // Search & Filter state
-  const [searchQuery, setSearchQuery] = useState('');
-  const [sortOption, setSortOption] = useState<NoteSortOption>('NEWEST');
-  const [selectedColorFilter, setSelectedColorFilter] = useState<string | 'ALL'>('ALL');
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
-
-  // New Note Composer state
-  const [title, setTitle] = useState(initialDrafts.drafts.composer?.title || '');
-  const [content, setContent] = useState(initialDrafts.drafts.composer?.content || '');
-  const [selectedColor, setSelectedColor] = useState<string>(initialDrafts.drafts.composer?.color || NOTE_COLOR_PRESETS[0].hex);
-  const [isComposerOpen, setIsComposerOpen] = useState(Boolean(initialDrafts.drafts.composer));
-  const [voiceTarget, setVoiceTarget] = useState<'content' | 'title'>('content');
-
-  // Inline edit state
-  const [hasEditDraft, setHasEditDraft] = useState(Boolean(initialDrafts.drafts.edit));
-  const [editBase, setEditBase] = useState<NoteDraftBase | null>(initialDrafts.drafts.edit?.base || null);
-  const [editingNoteId, setEditingNoteId] = useState<string | null>(() => {
-    const base = initialDrafts.drafts.edit?.base;
-    return base && noteDraftMatches(base, notes.find(note => note.id === base.id)) ? base.id : null;
-  });
-  const [editTitle, setEditTitle] = useState(initialDrafts.drafts.edit?.title || '');
-  const [editContent, setEditContent] = useState(initialDrafts.drafts.edit?.content || '');
-  const [editColor, setEditColor] = useState<string>(initialDrafts.drafts.edit?.color || NOTE_COLOR_PRESETS[0].hex);
-
-  // Copied feedback state
-  const [copiedId, setCopiedId] = useState<string | null>(null);
-
-  // Undo delete safety state
-  const [recentlyDeletedNote, setRecentlyDeletedNote] = useState<NotepadNote | null>(null);
-  const [restoreFailed, setRestoreFailed] = useState(false);
-  const [pendingDelete, setPendingDelete] = useState<NotepadNote | null>(null);
-  const deleteDialogRef = useRef<HTMLDialogElement | null>(null);
-  const [actionNotice, setActionNotice] = useState<string | null>(() => initialDrafts.recovered
-    ? initialDrafts.canPersist
-      ? (lang === 'uk' ? 'Доступний текст чернеток відновлено. Початкову пошкоджену копію збережено окремо.' : 'Available draft text was recovered. The original damaged copy was kept separately.')
-      : (lang === 'uk' ? 'Доступний текст чернеток відновлено. Початкову пошкоджену копію не змінено.' : 'Available draft text was recovered. The original damaged copy was left unchanged.')
-    : initialDrafts.drafts.composer || initialDrafts.drafts.edit
-      ? (lang === 'uk' ? 'Незбережені зміни відновлено з чернеток.' : 'Unsaved changes were restored from drafts.') : null);
-  const [noteSaveError, setNoteSaveError] = useState(false);
-  const newNoteSaveLock = useRef(false);
-  const editSaveLock = useRef(false);
-  const voiceDraftWriteSequenceRef = useRef(0);
-  const pendingVoiceDraftWriteRef = useRef<number | null>(null);
-  const [committedVoiceDraftRevision, setCommittedVoiceDraftRevision] = useState(0);
-  const editRecoveryRef = useRef<HTMLDivElement | null>(null);
-  const composerToggleRef = useRef<HTMLButtonElement | null>(null);
-  const editedNote = editBase ? notes.find(note => note.id === editBase.id) : undefined;
-  const editDraftIsCurrent = hasEditDraft && noteDraftMatches(editBase, editedNote);
-
-  // Persist each committed text change before navigation can unmount this view.
-  // Composer and edit drafts are independent; saving one never clears the other.
-  useLayoutEffect(() => {
-    const drafts = {
-      composer: title || content ? { title, content, color: selectedColor } : null,
-      edit: hasEditDraft ? { title: editTitle, content: editContent, color: editColor, base: editBase } : null,
-    };
-    let saved = false;
-    try { saved = saveNotepadDrafts(localStorage, drafts, draftCanPersist, ownerId); }
-    catch { saved = saveNotepadDrafts(undefined, drafts, false, ownerId); }
-    setDraftStorageError(!saved);
-    setDraftCleanupError(draftCleanupPending.current && !saved);
-    if (saved) draftCleanupPending.current = false;
-    // saveNotepadDrafts installs the session unload guard on a failed write.
-    // An older render must not release protection for newer accepted speech.
-    if (pendingVoiceDraftWriteRef.current === committedVoiceDraftRevision) pendingVoiceDraftWriteRef.current = null;
-  }, [ownerId, title, content, selectedColor, hasEditDraft, editTitle, editContent, editColor, editBase, draftCanPersist, draftSaveAttempt, committedVoiceDraftRevision]);
-
-  useLayoutEffect(() => {
-    if (title || content) newNoteSaveLock.current = false;
-  }, [title, content]);
-  useLayoutEffect(() => {
-    if (hasEditDraft) editSaveLock.current = false;
-  }, [hasEditDraft, editTitle, editContent, editColor]);
-
+  // The selection menu opens under the selected text; a chip opens its own menu.
+  const openMenu = (event: React.MouseEvent) => {
+    const section = sectionRef.current;
+    if (!section || (event.target as HTMLElement).closest('[data-copy]')) return;
+    const box = section.getBoundingClientRect();
+    const chip = (event.target as HTMLElement).closest('[data-chip]');
+    if (chip) {
+      const rect = chip.getBoundingClientRect();
+      setMenu({ chip: Number(chip.getAttribute('data-chip')), seg: -1, text: segs[Number(chip.getAttribute('data-chip'))]?.v ?? '',
+        x: Math.max(16, Math.min(rect.left - box.left, section.offsetWidth - 256)), y: rect.bottom - box.top + 10 });
+      return;
+    }
+    window.setTimeout(() => {
+      const selection = window.getSelection();
+      const text = selection ? String(selection).trim() : '';
+      if (!text || !selection?.rangeCount) { setMenu(null); return; }
+      const anchor = selection.anchorNode && (selection.anchorNode.nodeType === 3 ? selection.anchorNode.parentElement : selection.anchorNode as HTMLElement);
+      const segEl = anchor?.closest?.('[data-seg]');
+      const rect = selection.getRangeAt(0).getBoundingClientRect();
+      let y = rect.bottom - box.top + 10;
+      if (y + 380 > section.offsetHeight) y = Math.max(16, rect.top - box.top - 390);
+      setMenu({ text, seg: segEl ? Number(segEl.getAttribute('data-seg')) : -1, x: Math.max(16, Math.min(rect.left - box.left, section.offsetWidth - 256)), y });
+      setFontsOpen(false);
+    }, 0);
+  };
   useEffect(() => {
-    if (pendingDelete) deleteDialogRef.current?.showModal();
-    else deleteDialogRef.current?.close();
-  }, [pendingDelete]);
+    if (!menu) return;
+    const onDown = (event: MouseEvent) => { if (!(event.target as HTMLElement).closest('[data-menu]')) { setMenu(null); setFontsOpen(false); setFontQuery(''); } };
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') { setMenu(null); setFontsOpen(false); } };
+    document.addEventListener('mousedown', onDown, true);
+    document.addEventListener('keydown', onKey, true);
+    return () => { document.removeEventListener('mousedown', onDown, true); document.removeEventListener('keydown', onKey, true); };
+  }, [menu]);
 
-  // Voice recording state
-  const [isListening, setIsListening] = useState(false);
-  const [isTranscribing, setIsTranscribing] = useState(false);
-  const [isVoiceStarting, setIsVoiceStarting] = useState(false);
-  const [recordingDuration, setRecordingDuration] = useState(0);
-  const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
-
-  const recognitionRef = useRef<any>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const voiceSessionRef = useRef<NoteVoiceSession | null>(null);
-  const voiceMountedRef = useRef(true);
-
-  useLayoutEffect(() => {
-    const protectUnfinishedVoiceWork = (event: BeforeUnloadEvent) => {
-      if (!voiceSessionRef.current && pendingVoiceDraftWriteRef.current === null) return;
-      event.preventDefault();
-      event.returnValue = '';
-    };
-    // Native update preparation dispatches this same cancelable event.
-    // Staying leaves the recording/transcription session running unchanged.
-    window.addEventListener('beforeunload', protectUnfinishedVoiceWork);
-    return () => window.removeEventListener('beforeunload', protectUnfinishedVoiceWork);
-  }, []);
-
-  const titleInputRef = useRef<HTMLInputElement | null>(null);
-  const contentTextareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const searchInputRef = useRef<HTMLInputElement | null>(null);
-  const editTitleInputRef = useRef<HTMLInputElement | null>(null);
-
-  // Auto-dismiss undo note toast after 8 seconds
-  useEffect(() => {
-    if (!recentlyDeletedNote || restoreFailed) return;
-    const timer = setTimeout(() => {
-      setRecentlyDeletedNote(null);
-    }, 8000);
-    return () => clearTimeout(timer);
-  }, [recentlyDeletedNote, restoreFailed]);
-
-  // Voice recording duration timer
-  useEffect(() => {
-    if (!isListening) {
-      setRecordingDuration(0);
-      return;
-    }
-    const interval = setInterval(() => {
-      setRecordingDuration((prev) => prev + 1);
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [isListening]);
-
-  // Clean up recording on unmount
-  useEffect(() => {
-    voiceMountedRef.current = true;
-    return () => {
-      voiceMountedRef.current = false;
-      cancelVoiceInput();
-    };
-  }, []);
-
-  // Keyboard navigation shortcuts within NotepadView
-  useEffect(() => {
-    const handleLocalKeyDown = (e: KeyboardEvent) => {
-      if (pendingDelete) return;
-      const targetTag = (e.target as HTMLElement)?.tagName?.toLowerCase();
-      const isInput = targetTag === 'input' || targetTag === 'textarea' || (e.target as HTMLElement)?.isContentEditable;
-
-      if (e.key === 'Escape') {
-        if (isListening) {
-          stopVoiceInput();
-          return;
-        }
-        if (editingNoteId) {
-          handlePauseEdit();
-          return;
-        }
-        if (isComposerOpen) {
-          handleCloseComposer();
-          return;
-        }
-        if (searchQuery) {
-          setSearchQuery('');
-          return;
-        }
-      }
-
-      if (e.key === '/' && !isInput) {
-        e.preventDefault();
-        sound.tick(500);
-        searchInputRef.current?.focus();
-      }
-    };
-
-    window.addEventListener('keydown', handleLocalKeyDown);
-    return () => window.removeEventListener('keydown', handleLocalKeyDown);
-  }, [isListening, editingNoteId, isComposerOpen, searchQuery, pendingDelete]);
-
-  const isVoiceBusy = () => voiceSessionRef.current !== null;
-
-  const isCurrentVoiceSession = (session: NoteVoiceSession) =>
-    voiceMountedRef.current && voiceSessionRef.current === session;
-
-  const releaseMicrophone = () => {
-    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
-    mediaStreamRef.current = null;
+  const findSeg = (target: Menu) => {
+    const has = (seg?: NoteSeg) => seg?.t === 'text' && seg.v.includes(target.text);
+    return has(segs[target.seg]) ? target.seg : segs.findIndex(seg => has(seg));
   };
-
-  const finishVoiceSession = (session: NoteVoiceSession) => {
-    if (!isCurrentVoiceSession(session)) return;
-    voiceSessionRef.current = null;
-    recognitionRef.current = null;
-    mediaRecorderRef.current = null;
-    releaseMicrophone();
-    setIsListening(false);
-    setIsVoiceStarting(false);
-    setIsTranscribing(false);
+  /** Splits the run holding the selection into before / selected / after. */
+  const splitAt = (target: Menu): (NoteSeg & { sel?: boolean })[] | null => {
+    const index = findSeg(target);
+    if (index < 0) return null;
+    const seg = segs[index], at = seg.v.indexOf(target.text);
+    return [...segs.slice(0, index), { t: 'text', v: seg.v.slice(0, at), s: seg.s }, { t: 'text', v: target.text, s: seg.s, sel: true },
+      { t: 'text', v: seg.v.slice(at + target.text.length), s: seg.s }, ...segs.slice(index + 1)];
   };
-
-  // Cancellation invalidates callbacks before stopping devices. A delayed permission
-  // prompt or desktop transcription response must never write into another draft.
-  const cancelVoiceInput = () => {
-    const session = voiceSessionRef.current;
-    voiceSessionRef.current = null;
-    session?.abortController.abort();
-    const recognition = recognitionRef.current;
-    recognitionRef.current = null;
-    try { recognition?.abort(); } catch {}
-    const recorder = mediaRecorderRef.current;
-    mediaRecorderRef.current = null;
-    if (recorder && recorder.state !== 'inactive') {
-      try { recorder.stop(); } catch {}
-    }
-    releaseMicrophone();
-    if (voiceMountedRef.current) {
-      setIsListening(false);
-      setIsVoiceStarting(false);
-      setIsTranscribing(false);
-    }
+  const done = (nextSegs: NoteSeg[] | null, message: string) => {
+    window.getSelection()?.removeAllRanges();
+    setMenu(null); setFontsOpen(false);
+    if (nextSegs) savePage(nextSegs, message); else if (message) flash({ text: message });
   };
-
-  const stopVoiceInput = () => {
-    const session = voiceSessionRef.current;
-    if (!session || session.stopping) return;
-    session.stopping = true;
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.stop();
-        setIsTranscribing(true);
-      } catch { finishVoiceSession(session); }
-    } else if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      try {
-        setIsTranscribing(true);
-        mediaRecorderRef.current.stop();
-      } catch { finishVoiceSession(session); }
-      releaseMicrophone();
-    } else {
-      cancelVoiceInput();
-    }
-    setIsListening(false);
+  const writeClipboard = (text: string) => { navigator.clipboard?.writeText(text).catch(() => undefined); };
+  const chipMenu = !!menu && menu.chip !== undefined && segs[menu.chip]?.t === 'chip';
+  const single = !!menu && !chipMenu && !menu.text.includes('\n');
+  const target = single && menu!.fseg !== undefined && segs[menu!.fseg]?.v === menu!.text ? menu!.fseg : -1;
+  const style: NoteSegStyle = target >= 0 ? segs[target].s ?? {} : single && findSeg(menu!) >= 0 ? segs[findSeg(menu!)].s ?? {} : {};
+  const size = style.size ?? 18, weight = style.weight ?? 400, font = style.font ?? 'Inter';
+  const applyStyle = (patch: NoteSegStyle) => {
+    if (!menu || !current) return;
+    let next: (NoteSeg & { sel?: boolean })[] | null;
+    if (target >= 0) next = segs.map((seg, index) => index === target ? { ...seg, s: { ...seg.s, ...patch }, sel: true } : seg);
+    else next = splitAt(menu)?.map(seg => seg.sel ? { ...seg, s: { ...seg.s, ...patch } } : seg) ?? null;
+    if (!next) return;
+    // Keep the styled run apart so the next change applies to the same text.
+    const kept = next.filter(seg => !(seg.t === 'text' && !seg.v));
+    const markIndex = kept.findIndex(seg => seg.sel);
+    const before = tidySegs(kept.slice(0, markIndex)), after = tidySegs(kept.slice(markIndex + 1));
+    const { sel: _sel, ...marked } = kept[markIndex];
+    savePage([...before, marked, ...after]);
+    setMenu({ ...menu, fseg: before.length });
   };
-
-  const transcribeRecordedAudio = async (blob: Blob, session: NoteVoiceSession) => {
-    if (!isCurrentVoiceSession(session)) return;
-    setIsTranscribing(true);
-    try {
-      const reader = new FileReader();
-      const base64Promise = new Promise<string>((resolve, reject) => {
-        reader.onloadend = () => resolve(reader.result as string);
-        reader.onerror = reject;
-      });
-      reader.readAsDataURL(blob);
-      const audioBase64 = await base64Promise;
-      if (!isCurrentVoiceSession(session)) return;
-
-      const rawBase64 = audioBase64.includes(',') ? audioBase64.split(',')[1] : audioBase64;
-      const customApiKey = readWebApiKey() || undefined;
-      const customModel = localStorage.getItem('karkas_custom_model') || undefined;
-      const res = await karkasApiFetch('/api/ai/transcribe-audio', {
-        method: 'POST',
-        signal: session.abortController.signal,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          audioBase64: rawBase64,
-          mimeType: blob.type || 'audio/webm',
-          lang,
-          customApiKey,
-          model: customModel,
-        }),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        if (!isCurrentVoiceSession(session)) return;
-        if (data.text) {
-          applyTranscribedText(data.text.trim(), session);
-          sound.tick(800);
-        } else {
-          setVoiceNotice(lang === 'uk' ? 'Мовлення не виявлено. Спробуйте ще раз.' : 'No speech detected. Please try again.');
-          sound.tick(300);
-        }
-      } else {
-        const errData = await res.json().catch(() => ({}));
-        if (!isCurrentVoiceSession(session)) return;
-        setVoiceNotice(errData.error || (lang === 'uk' ? 'Помилка транскрипції аудіо' : 'Audio transcription error'));
-        sound.tick(300);
-      }
-    } catch (err: any) {
-      if (!isCurrentVoiceSession(session)) return;
-      console.error('Audio transcription error:', err);
-      setVoiceNotice(lang === 'uk' ? 'Помилка розпізнавання аудіо' : 'Audio transcription error');
-      sound.tick(300);
-    } finally {
-      finishVoiceSession(session);
-    }
-  };
-
-  const applyTranscribedText = (spoken: string, session: NoteVoiceSession) => {
-    const text = spoken.trim();
-    if (!text || !isCurrentVoiceSession(session)) return;
-    const revision = ++voiceDraftWriteSequenceRef.current;
-    pendingVoiceDraftWriteRef.current = revision;
-    setCommittedVoiceDraftRevision(revision);
-    if (session.noteId) {
-      setEditContent((prev) => (prev ? `${prev} ${text}` : text));
-      return;
-    }
-    if (session.target === 'title') {
-      setTitle((prev) => (prev ? `${prev} ${text}` : text));
-    } else {
-      setContent((prev) => (prev ? `${prev} ${text}` : text));
-    }
-  };
-
-  const startMediaRecorderFallback = async (session: NoteVoiceSession) => {
-    if (!isCurrentVoiceSession(session)) return;
-    setIsVoiceStarting(true);
-    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
-      setVoiceNotice(lang === 'uk' ? 'Мікрофон не підтримується цим середовищем' : 'Microphone is not supported');
-      sound.tick(300);
-      finishVoiceSession(session);
-      return;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          sampleRate: 16000,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
-      if (!isCurrentVoiceSession(session)) {
-        stream.getTracks().forEach((track) => track.stop());
-        return;
-      }
-      mediaStreamRef.current = stream;
-      const audioChunks: Blob[] = [];
-
-      let mimeType = '';
-      if (typeof MediaRecorder !== 'undefined') {
-        if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) mimeType = 'audio/webm;codecs=opus';
-        else if (MediaRecorder.isTypeSupported('audio/webm')) mimeType = 'audio/webm';
-        else if (MediaRecorder.isTypeSupported('audio/mp4')) mimeType = 'audio/mp4';
-      }
-
-      const recorderOptions: MediaRecorderOptions = {
-        audioBitsPerSecond: 32000,
-      };
-      if (mimeType) {
-        recorderOptions.mimeType = mimeType;
-      }
-
-      const recorder = new MediaRecorder(stream, recorderOptions);
-      mediaRecorderRef.current = recorder;
-
-      recorder.ondataavailable = (e) => {
-        if (isCurrentVoiceSession(session) && e.data.size > 0) audioChunks.push(e.data);
-      };
-
-      recorder.onstop = async () => {
-        if (!isCurrentVoiceSession(session)) return;
-        setIsListening(false);
-        mediaRecorderRef.current = null;
-        releaseMicrophone();
-        const audioBlob = new Blob(audioChunks, { type: recorder.mimeType || 'audio/webm' });
-        if (audioBlob.size > 200) {
-          await transcribeRecordedAudio(audioBlob, session);
-        } else {
-          setVoiceNotice(lang === 'uk' ? 'Запис занадто короткий' : 'Recording too short');
-          sound.tick(300);
-          finishVoiceSession(session);
-        }
-      };
-
-      recorder.onerror = () => {
-        if (!isCurrentVoiceSession(session)) return;
-        setVoiceNotice(lang === 'uk' ? 'Помилка запису аудіо' : 'Audio recording error');
-        cancelVoiceInput();
-      };
-
-      recorder.start(250);
-      setIsVoiceStarting(false);
-      setIsListening(true);
-      sound.tick(750);
-    } catch (err) {
-      if (!isCurrentVoiceSession(session)) return;
-      console.error('Microphone access failed:', err);
-      setVoiceNotice(lang === 'uk' ? 'Доступ до мікрофона заблоковано' : 'Microphone access blocked');
-      sound.tick(300);
-      finishVoiceSession(session);
-    }
-  };
-
-  const handleToggleVoiceInput = (target: 'content' | 'title' = 'content', noteId: string | null = null) => {
-    // The ref guards rapid clicks before React commits the busy state.
-    if (voiceSessionRef.current) {
-      if (isListening) {
-        sound.tick(400);
-        stopVoiceInput();
-      }
-      return;
-    }
-
-    const session: NoteVoiceSession = { target, noteId, abortController: new AbortController(), stopping: false };
-    voiceSessionRef.current = session;
-    setVoiceTarget(target);
-    setIsVoiceStarting(true);
-    setVoiceNotice(null);
-
-    const isDesktop = Boolean((window as any).karkasDesktop);
-
-    // In Electron Desktop, Google Web Speech API is not supported by Chromium.
-    // Use MediaRecorder with Gemini transcription directly.
-    if (!isDesktop) {
-      const SpeechRecognition =
-        (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-
-      if (SpeechRecognition) {
-        try {
-          const recognition = new SpeechRecognition();
-          recognition.lang = lang === 'uk' ? 'uk-UA' : 'en-US';
-          recognition.continuous = true;
-          recognition.interimResults = false;
-          recognition.maxAlternatives = 1;
-
-          recognition.onstart = () => {
-            if (!isCurrentVoiceSession(session) || recognitionRef.current !== recognition) return;
-            setIsVoiceStarting(false);
-            setIsListening(true);
-            sound.tick(750);
-          };
-
-          recognition.onresult = (event: any) => {
-            if (!isCurrentVoiceSession(session) || recognitionRef.current !== recognition) return;
-            const finalTranscripts: string[] = [];
-            for (let i = event.resultIndex; i < event.results.length; ++i) {
-              const transcript = event.results[i][0].transcript;
-              if (event.results[i].isFinal) {
-                finalTranscripts.push(transcript.trim());
-              }
-            }
-            // Append finalized speech to the latest text so typing while dictating
-            // is preserved instead of replacing it with a stale initial value.
-            applyTranscribedText(finalTranscripts.join(' '), session);
-          };
-
-          recognition.onerror = (event: any) => {
-            if (!isCurrentVoiceSession(session) || recognitionRef.current !== recognition) return;
-            console.warn('Speech recognition error, falling back to MediaRecorder:', event.error);
-            recognitionRef.current = null;
-            try { recognition.abort(); } catch {}
-            setIsListening(false);
-            if (event.error !== 'no-speech' && !session.stopping) {
-              startMediaRecorderFallback(session);
-            } else {
-              finishVoiceSession(session);
-            }
-          };
-
-          recognition.onend = () => {
-            if (recognitionRef.current !== recognition) return;
-            finishVoiceSession(session);
-          };
-
-          recognitionRef.current = recognition;
-          recognition.start();
-          return;
-        } catch (e) {
-          const recognition = recognitionRef.current;
-          recognitionRef.current = null;
-          try { recognition?.abort(); } catch {}
-          console.warn('SpeechRecognition failed, falling back to MediaRecorder', e);
-        }
+  const toggleNumbers = () => {
+    if (!menu) return;
+    const pieces = menu.text.split(/\n+/).map(piece => piece.trim()).filter(Boolean);
+    const starts: number[] = [];
+    let from = 0;
+    for (const piece of pieces) for (let i = from; i < segs.length; i++) {
+      if (segs[i].t === 'text' && segs[i].v.includes(piece)) {
+        let start = i;
+        while (start > 0 && segs[start - 1].t !== 'br') start--;
+        if (!starts.includes(start)) starts.push(start);
+        from = i; break;
       }
     }
-
-    startMediaRecorderFallback(session);
-  };
-
-  const handleCloseComposer = () => {
-    cancelVoiceInput();
-    setIsComposerOpen(false);
-    setTimeout(() => composerToggleRef.current?.focus(), 0);
-  };
-
-  const handleSaveNewNote = () => {
-    if (isVoiceBusy() || newNoteSaveLock.current) return;
-    if (!title.trim() && !content.trim()) return;
-    newNoteSaveLock.current = true;
-    const finalTitle = title.trim() || (lang === 'uk' ? 'Без назви' : 'Untitled note');
-    let saved = false;
-    try {
-      saved = onAddNote({ title: finalTitle, content: content.trim(), color: selectedColor, pinned: false });
-    } catch { /* Keep the draft if the caller cannot commit the saved note. */ }
-    if (!saved) {
-      newNoteSaveLock.current = false;
-      setNoteSaveError(true);
-      return;
-    }
-    sound.tick(700);
-    setNoteSaveError(false);
-    markNotepadDraftCleanup(ownerId);
-    draftCleanupPending.current = true;
-    setTitle('');
-    setContent('');
-    setSelectedColor(NOTE_COLOR_PRESETS[0].hex);
-    setIsComposerOpen(false);
-    cancelVoiceInput();
-    setTimeout(() => composerToggleRef.current?.focus(), 0);
-  };
-
-  const handleDiscardNewDraft = () => {
-    if ((title || content) && !window.confirm(lang === 'uk' ? 'Видалити чернетку нової нотатки? Незбережений текст буде втрачено.' : 'Discard the new note draft? Unsaved text will be lost.')) return;
-    cancelVoiceInput();
-    markNotepadDraftCleanup(ownerId);
-    draftCleanupPending.current = true;
-    setTitle('');
-    setContent('');
-    setSelectedColor(NOTE_COLOR_PRESETS[0].hex);
-    setIsComposerOpen(false);
-    setNoteSaveError(false);
-    setTimeout(() => composerToggleRef.current?.focus(), 0);
-  };
-
-  const handleStartEdit = (note: NotepadNote) => {
-    if (hasEditDraft) {
-      if (editBase?.id === note.id && noteDraftMatches(editBase, note)) {
-        setEditingNoteId(note.id);
-        setSearchQuery('');
-        setSelectedColorFilter('ALL');
-        setTimeout(() => editTitleInputRef.current?.focus(), 100);
-      } else {
-        setActionNotice(lang === 'uk' ? 'Спочатку збережіть або видаліть наявну чернетку редагування.' : 'Save or discard the existing edit draft first.');
-        if (editingNoteId && editDraftIsCurrent) editTitleInputRef.current?.focus();
-        else editRecoveryRef.current?.focus();
-      }
-      return;
-    }
-    cancelVoiceInput();
-    setActionNotice(null);
-    setNoteSaveError(false);
-    sound.tick(500);
-    setHasEditDraft(true);
-    setEditBase(noteDraftBase(note));
-    setEditingNoteId(note.id);
-    setEditTitle(note.title);
-    setEditContent(note.content);
-    setEditColor(note.color || NOTE_COLOR_PRESETS[0].hex);
-    setTimeout(() => {
-      editTitleInputRef.current?.focus();
-    }, 100);
-  };
-
-  const handlePauseEdit = () => {
-    sound.tick(400);
-    setEditingNoteId(null);
-    cancelVoiceInput();
-    setTimeout(() => editRecoveryRef.current?.focus(), 100);
-  };
-
-  const clearEditDraft = () => {
-    markNotepadDraftCleanup(ownerId);
-    draftCleanupPending.current = true;
-    setHasEditDraft(false);
-    setEditBase(null);
-    setEditingNoteId(null);
-    setEditTitle('');
-    setEditContent('');
-    setEditColor(NOTE_COLOR_PRESETS[0].hex);
-    cancelVoiceInput();
-    setTimeout(() => composerToggleRef.current?.focus(), 0);
-  };
-
-  const handleRetryDraftSave = () => {
-    let canPersist = false;
-    try { canPersist = loadNotepadDrafts(localStorage, ownerId).canPersist; }
-    catch { /* Never overwrite a draft store that cannot be read safely. */ }
-    setDraftCanPersist(canPersist);
-    setDraftSaveAttempt(attempt => attempt + 1);
-  };
-
-  const handleDiscardEdit = () => {
-    if (!window.confirm(lang === 'uk' ? 'Видалити чернетку редагування? Збережена нотатка залишиться без цих змін.' : 'Discard the edit draft? These changes will not be added to the saved note.')) return;
-    clearEditDraft();
-    setNoteSaveError(false);
-  };
-
-  const handleSaveEdit = () => {
-    if (isVoiceBusy() || editSaveLock.current || !hasEditDraft) return;
-    if (!editTitle.trim() && !editContent.trim()) return;
-    if (!editBase || !noteDraftMatches(editBase, notes.find(note => note.id === editBase.id))) {
-      setEditingNoteId(null);
-      cancelVoiceInput();
-      setTimeout(() => editRecoveryRef.current?.focus(), 100);
-      return;
-    }
-    editSaveLock.current = true;
-    let saved = false;
-    try {
-      saved = onUpdateNote(editBase.id, {
-        title: editTitle.trim() || (lang === 'uk' ? 'Без назви' : 'Untitled note'),
-        content: editContent.trim(), color: editColor, updatedAt: Date.now(),
-      });
-    } catch { /* An unsuccessful save must leave the edit draft intact. */ }
-    if (!saved) {
-      editSaveLock.current = false;
-      setNoteSaveError(true);
-      return;
-    }
-    sound.tick(700);
-    setNoteSaveError(false);
-    clearEditDraft();
-  };
-
-  const handleSaveRecoveredEdit = () => {
-    if (isVoiceBusy() || editSaveLock.current || !hasEditDraft || (!editTitle.trim() && !editContent.trim())) return;
-    editSaveLock.current = true;
-    let saved = false;
-    try {
-      saved = onAddNote({
-        title: editTitle.trim() || (lang === 'uk' ? 'Без назви' : 'Untitled note'),
-        content: editContent.trim(), color: editColor, pinned: false,
-      });
-    } catch { /* Keep this recovery draft independent from the new-note draft. */ }
-    if (!saved) {
-      editSaveLock.current = false;
-      setNoteSaveError(true);
-      return;
-    }
-    sound.tick(700);
-    setNoteSaveError(false);
-    clearEditDraft();
-  };
-
-  const handleConfirmDelete = () => {
-    if (!pendingDelete) return;
-    if (restoreFailed && recentlyDeletedNote) {
-      setPendingDelete(null);
-      setActionNotice(lang === 'uk' ? 'Спочатку повторіть відновлення попередньої нотатки або закрийте її підказку.' : 'Retry restoring the previous note first, or dismiss its Undo notice.');
-      return;
-    }
-    const note = notes.find((item) => item.id === pendingDelete.id);
-    setPendingDelete(null);
-    if (!note) return;
-    let deleted = false;
-    try { deleted = onDeleteNote(note.id); } catch { /* Keep the stored note on failure. */ }
-    if (!deleted) {
-      setActionNotice(lang === 'uk' ? 'Не вдалося видалити нотатку. Вона збережена; спробуйте ще раз.' : 'The note could not be deleted. It is retained; try again.');
-      return;
-    }
-    sound.tick(400);
-    setRestoreFailed(false);
-    setRecentlyDeletedNote(note);
-  };
-
-  const handleRestoreDeletedNote = () => {
-    if (!recentlyDeletedNote) return;
-    sound.tick(700);
-    let restored = false;
-    try { restored = onRestoreNote(recentlyDeletedNote); } catch { /* Keep Undo available on failure. */ }
-    if (!restored) {
-      setRestoreFailed(true);
-      setActionNotice(lang === 'uk' ? 'Не вдалося відновити нотатку. Кнопка «Скасувати» залишиться доступною для повторної спроби.' : 'The note could not be restored. Undo will stay available so you can retry.');
-      return;
-    }
-    setRestoreFailed(false);
-    setRecentlyDeletedNote(null);
-  };
-
-  const handleCopyNote = async (note: NotepadNote) => {
-    sound.tick(600);
-    const textToCopy = `${note.title}\n\n${note.content}`.trim();
-    try {
-      if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
-      await navigator.clipboard.writeText(textToCopy);
-    } catch {
-      setActionNotice(lang === 'uk' ? 'Не вдалося скопіювати нотатку. Перевірте дозвіл на доступ до буфера обміну.' : 'Could not copy the note. Check clipboard permission.');
-      return;
-    }
-    setActionNotice(null);
-    setCopiedId(note.id);
-    setTimeout(() => {
-      setCopiedId((curr) => (curr === note.id ? null : curr));
-    }, 1800);
-  };
-
-  const formatDate = (timestamp: number): string => {
-    const d = new Date(timestamp);
-    // The year is noise for this year's notes; older notes keep it.
-    return d.toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-US', {
-      day: 'numeric',
-      month: 'short',
-      ...(d.getFullYear() !== new Date().getFullYear() ? { year: 'numeric' as const } : {}),
-      hour: '2-digit',
-      minute: '2-digit',
+    if (!starts.length) { done(null, ''); return; }
+    const allOn = starts.every(start => segs[start].t === 'num');
+    const next: NoteSeg[] = [];
+    segs.forEach((seg, index) => {
+      if (starts.includes(index)) { if (allOn && seg.t === 'num') return; if (!allOn && seg.t !== 'num') next.push({ t: 'num', v: '' }); }
+      next.push(seg);
     });
+    done(next, allOn ? copy.numbersOff : copy.numbersOn);
   };
+  const menuItems = !menu ? [] : chipMenu ? [
+    { label: copy.copy, icon: ICONS.copy, danger: false, act: () => { writeClipboard(segs[menu.chip!].v); done(null, copy.copied); } },
+    { label: copy.plain, icon: ICONS.text, danger: false, act: () => done(segs.map((seg, index) => index === menu.chip ? { t: 'text', v: seg.v } : seg), copy.chipRemoved) },
+    { label: copy.remove, icon: ICONS.trash, danger: true, act: () => done(segs.filter((_, index) => index !== menu.chip), copy.deleted) },
+  ] : [
+    { label: copy.numbering, icon: ICONS.list, danger: false, act: toggleNumbers },
+    { label: copy.copy, icon: ICONS.copy, danger: false, act: () => { writeClipboard(menu.text); done(null, copy.copied); } },
+    { label: copy.paste, icon: ICONS.paste, danger: false, act: () => {
+      const put = (text: string) => { const split = text ? splitAt(menu) : null; done(split ? split.map(seg => seg.sel ? { t: 'text', v: text, s: seg.s } : seg) : null, split ? copy.pasted : ''); };
+      navigator.clipboard?.readText().then(put, () => put('')) ?? put('');
+    } },
+    { label: copy.chip, icon: CHIP_ICON, accent: true, danger: false, act: () => { const split = splitAt(menu); done(split ? split.map(seg => seg.sel ? { t: 'chip', v: seg.v.trim() } : seg) : null, split ? copy.chipAdded : ''); } },
+    { label: copy.remove, icon: ICONS.trash, danger: true, act: () => { const split = splitAt(menu); done(split ? split.filter(seg => !seg.sel) : null, split ? copy.deleted : ''); } },
+  ];
+  const loadFonts = () => {
+    if (fontNames) return;
+    setFontNames(BASE_FONTS);
+    const query = (window as Window & { queryLocalFonts?: () => Promise<{ family: string }[]> }).queryLocalFonts;
+    query?.().then(list => {
+      const families = Array.from(new Set(list.map(item => item.family).filter(name => name && name !== 'Inter'))).sort((a, b) => a.localeCompare(b));
+      if (families.length) setFontNames(['Inter', ...families]);
+    }, () => undefined);
+  };
+  const labels = numberLabels(segs);
+  const copyChip = (index: number, value: string) => {
+    writeClipboard(value);
+    window.clearTimeout(copyTimer.current);
+    setCopiedSeg(index);
+    copyTimer.current = window.setTimeout(() => setCopiedSeg(-1), 1400);
+  };
+  useLayoutEffect(() => { setCopiedSeg(-1); }, [current?.id, page]);
 
-  // Filter and Sort notes
-  const filteredAndSortedNotes = useMemo(() => {
-    let result = [...notes];
-
-    // Search query filter
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase().trim();
-      result = result.filter(
-        (n) => n.title.toLowerCase().includes(q) || n.content.toLowerCase().includes(q)
-      );
-    }
-
-    // Color filter
-    if (selectedColorFilter !== 'ALL') {
-      result = result.filter((n) => (n.color || NOTE_COLOR_PRESETS[0].hex) === selectedColorFilter);
-    }
-
-    // Sorting: Pinned notes always stay on top
-    result.sort((a, b) => {
-      if (a.pinned && !b.pinned) return -1;
-      if (!a.pinned && b.pinned) return 1;
-
-      if (sortOption === 'NEWEST') {
-        return b.createdAt - a.createdAt;
-      } else if (sortOption === 'OLDEST') {
-        return a.createdAt - b.createdAt;
-      } else if (sortOption === 'DATE') {
-        // Sort by last activity / update timestamp
-        const timeA = a.updatedAt || a.createdAt;
-        const timeB = b.updatedAt || b.createdAt;
-        return timeB - timeA;
-      }
-      return 0;
-    });
-
-    return result;
-  }, [notes, searchQuery, selectedColorFilter, sortOption]);
-
-  const pinnedCount = useMemo(() => notes.filter((n) => n.pinned).length, [notes]);
-  const hasFilters = Boolean(searchQuery.trim()) || selectedColorFilter !== 'ALL';
-
-  const segment = (selected: boolean) => `inline-flex min-h-11 sm:min-h-8 items-center gap-2 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider transition-colors ${selected ? 'bg-neutral-800 text-white' : 'text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200'}`;
-  const noteAction = 'inline-flex h-11 w-11 sm:h-8 sm:w-8 items-center justify-center text-neutral-500 transition-colors hover:bg-neutral-900 hover:text-neutral-200';
-
-  return (
-    <div className="w-full space-y-5">
-      {storageError && (
-        <p role="alert" className="border border-rose-800 bg-rose-950/20 p-3 text-xs text-rose-200">
-          {lang === 'uk' ? 'Не вдалося зберегти нотатки на пристрої. Скопіюйте важливий текст перед закриттям додатка.' : 'Notes could not be saved on this device. Copy important text before closing the app.'}
-        </p>
-      )}
-      {draftStorageError && (
-        <div role="alert" className="border border-rose-800 bg-rose-950/20 p-3 space-y-2 text-xs text-rose-200">
-          <p>{draftCleanupError
-            ? (lang === 'uk' ? 'Стару чернетку не вдалося прибрати зі сховища. У цьому сеансі вона не відновиться; після перезапуску може з’явитися знову. Повторіть збереження чернеток перед виходом.' : 'The old draft could not be removed from storage. It will not return in this session, but may return after restarting. Retry saving drafts before quitting.')
-            : (lang === 'uk' ? 'Чернетки доступні в цьому сеансі, але не збережені на пристрої. Скопіюйте важливий незбережений текст перед перезапуском або виходом.' : 'Drafts remain available in this session but are not saved on this device. Copy important unsaved text before restarting or quitting.')}</p>
-          <button type="button" onClick={handleRetryDraftSave} className="min-h-11 border border-rose-700 px-3 py-2 text-xs text-rose-100 hover:bg-rose-950/50">
-            {lang === 'uk' ? 'Повторити збереження чернеток' : 'Retry saving drafts'}
-          </button>
-        </div>
-      )}
-      {noteSaveError && (
-        <p role="alert" className="border border-rose-800 bg-rose-950/20 p-3 text-xs text-rose-200">
-          {lang === 'uk' ? 'Нотатку не збережено. Введений текст залишився у формі; спробуйте зберегти ще раз.' : 'The note was not saved. Your text remains in the form; try saving again.'}
-        </p>
-      )}
-      {actionNotice && (
-        <div role="status" className="flex items-center justify-between gap-3 border border-amber-800 bg-amber-950/20 p-3 text-xs text-amber-200">
-          <span>{actionNotice}</span>
-          <button type="button" onClick={() => setActionNotice(null)} aria-label={lang === 'uk' ? 'Закрити' : 'Close'}><X className="w-4 h-4" /></button>
-        </div>
-      )}
-      {!isComposerOpen && (isVoiceStarting || isListening || isTranscribing || voiceNotice) && (
-        <p role="status" className="border border-neutral-700 p-3 text-xs text-neutral-300">
-          {voiceNotice || (isVoiceStarting
-            ? (lang === 'uk' ? 'Запуск мікрофона…' : 'Starting microphone…')
-            : isTranscribing
-            ? (lang === 'uk' ? 'Розпізнавання голосу… Дочекайтеся завершення перед збереженням.' : 'Transcribing… Wait for completion before saving.')
-            : (lang === 'uk' ? 'Триває запис. Зупиніть його перед збереженням.' : 'Recording. Stop before saving.'))}
-        </p>
-      )}
-      {/* 1. Primary Hierarchy: Search Bar & New Note Trigger (Matches KARKAS App-wide Pattern) */}
-      <div className="flex items-center gap-2.5">
-        <div className="relative flex-1">
-          <Search className="w-3.5 h-3.5 text-neutral-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-          <input
-            ref={searchInputRef}
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder={nv.searchPlaceholder}
-            className="w-full pl-9 pr-8 py-2.5 bg-[#09090d] border border-neutral-800 text-neutral-200 placeholder-neutral-500 text-base leading-[1.6] font-sans focus:outline-none focus:border-neutral-500 transition-colors shadow-inner"
-          />
-          {searchQuery && (
-            <button
-              type="button"
-              onClick={() => setSearchQuery('')}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-neutral-500 hover:text-white p-0.5 cursor-pointer"
-            >
-              <X className="w-3 h-3" />
-            </button>
-          )}
-        </div>
-
-        <button
-          ref={composerToggleRef}
-          type="button"
-          onClick={() => {
-            sound.tick(600);
-            cancelVoiceInput();
-            setIsComposerOpen((prev) => !prev);
-            setTimeout(() => {
-              if (!isComposerOpen) titleInputRef.current?.focus();
-            }, 100);
-          }}
-          className="px-3.5 py-2.5 bg-white hover:bg-neutral-200 text-black font-extrabold text-xs font-sans tracking-wider uppercase transition-all flex items-center gap-1.5 shrink-0 active:scale-95 cursor-pointer shadow-sm"
-        >
-          {isComposerOpen ? <X className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
-          <span>{isComposerOpen ? (lang === 'uk' ? 'Закрити' : 'Close') : nv.newNote}</span>
-        </button>
-      </div>
-
-      {/* 2. Filters, sorting and view: one quiet rail of segmented controls. */}
-      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <div role="group" aria-label={lang === 'uk' ? 'Фільтр за кольором' : 'Filter by color'} className="inline-flex flex-wrap items-center gap-0.5 border border-neutral-800 p-0.5">
-            <button
-              type="button"
-              aria-pressed={selectedColorFilter === 'ALL'}
-              onClick={() => {
-                sound.tick(500);
-                setSelectedColorFilter('ALL');
-              }}
-              className={segment(selectedColorFilter === 'ALL')}
-            >
-              <span className="sm:hidden">{lang === 'uk' ? 'Всі' : 'All'}</span>
-              <span className="hidden sm:inline">{nv.allColors}</span>
-              <span className="font-mono font-normal tabular-nums text-neutral-500">{notes.length}</span>
-            </button>
-            {NOTE_COLOR_PRESETS.map((c) => {
-              const isSelected = selectedColorFilter === c.hex;
-              return (
-                <button
-                  key={c.hex}
-                  type="button"
-                  aria-pressed={isSelected}
-                  aria-label={c.label}
-                  title={c.label}
-                  onClick={() => {
-                    sound.tick(400);
-                    setSelectedColorFilter(isSelected ? 'ALL' : c.hex);
-                  }}
-                  className={`inline-flex h-11 w-7 sm:h-8 items-center justify-center transition-colors ${isSelected ? 'bg-neutral-800' : 'hover:bg-neutral-900'}`}
-                >
-                  <span
-                    aria-hidden="true"
-                    className={`h-3 w-3 transition-opacity ${isSelected ? 'ring-1 ring-white ring-offset-2 ring-offset-neutral-800' : 'opacity-70'}`}
-                    style={{ backgroundColor: c.hex }}
-                  />
-                </button>
-              );
-            })}
-          </div>
-
-          {pinnedCount > 0 && (
-            <span title={lang === 'uk' ? 'Закріплені нотатки' : 'Pinned notes'} className="hidden sm:inline-flex items-center gap-1.5 font-mono text-[11px] tabular-nums text-neutral-500">
-              <Pin className="h-3 w-3" aria-hidden="true" />
-              {pinnedCount}
-            </span>
-          )}
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <div role="group" aria-label={nv.sortLabel.replace(':', '')} className="inline-flex items-center gap-0.5 border border-neutral-800 p-0.5">
-            <ArrowUpDown className="mx-1.5 h-3.5 w-3.5 text-neutral-500" aria-hidden="true" />
-            {(['NEWEST', 'OLDEST', 'DATE'] as NoteSortOption[]).map((opt) => (
-              <button
-                key={opt}
-                type="button"
-                aria-pressed={sortOption === opt}
-                onClick={() => {
-                  sound.tick(500);
-                  setSortOption(opt);
-                }}
-                className={segment(sortOption === opt)}
-              >
-                {opt === 'NEWEST' ? nv.sortNewest : opt === 'OLDEST' ? nv.sortOldest : nv.sortDate}
-              </button>
-            ))}
-          </div>
-
-          {/* On phones the grid is one column anyway, so the view switch only appears from sm. */}
-          <div role="group" aria-label={lang === 'uk' ? 'Вигляд' : 'View'} className="hidden sm:inline-flex items-center gap-0.5 border border-neutral-800 p-0.5">
-            <button
-              type="button"
-              aria-pressed={viewMode === 'grid'}
-              onClick={() => setViewMode('grid')}
-              aria-label={lang === 'uk' ? 'Сіткою' : 'Grid view'}
-              title={lang === 'uk' ? 'Сіткою' : 'Grid view'}
-              className={`${segment(viewMode === 'grid')} px-2`}
-            >
-              <LayoutGrid className="h-4 w-4" aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              aria-pressed={viewMode === 'list'}
-              onClick={() => setViewMode('list')}
-              aria-label={lang === 'uk' ? 'Списком' : 'List view'}
-              title={lang === 'uk' ? 'Списком' : 'List view'}
-              className={`${segment(viewMode === 'list')} px-2`}
-            >
-              <List className="h-4 w-4" aria-hidden="true" />
-            </button>
-          </div>
+  const isFresh = !!current && current.id === freshId && editing;
+  const kind = current ? kindOf(current) : 'idea';
+  return <div className="pulse-page-shell notes-view">
+    <div className="pulse-page-head">
+      <div className="pulse-page-head-copy">
+        <h1 className="pulse-page-title"><span className="pulse-page-title-light">{copy.title[0]}</span><span className="pulse-page-title-heavy">{copy.title[1]}</span></h1>
+        <div className="nv-switch" role="group" aria-label={copy.filter}>
+          {(['all', 'lesson', 'idea'] as Filter[]).map(value => <button key={value} type="button" aria-pressed={filter === value} onClick={() => setFilter(value)}>{copy.filters[value]}</button>)}
         </div>
       </div>
-
-      {/* Note Composer (Styled clean and disciplined like QuickAddDrawer) */}
-      <AnimatePresence>
-        {isComposerOpen && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={{ duration: 0.18, ease: 'easeOut' }}
-            className="overflow-hidden"
-          >
-            <div className="border border-neutral-800 bg-[#0a0a0d] p-4 font-sans space-y-3 shadow-lg">
-              {/* Top status of composer */}
-              <div className="flex items-center justify-between pb-2 border-b border-neutral-800/80 text-xs">
-                <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: selectedColor }} />
-                  <span className="font-bold uppercase tracking-wider text-neutral-300">
-                    {nv.newNote}
-                  </span>
-                </div>
-                <div className="text-[10px] text-neutral-500">
-                  <span>{lang === 'uk' ? 'Ctrl + Enter для збереження' : 'Ctrl + Enter to save'}</span>
-                </div>
-              </div>
-
-              {/* Title input with dictation & color dot */}
-              <div className="flex flex-col sm:flex-row gap-2.5 items-stretch sm:items-center">
-                <div className="relative flex-1">
-                  <input
-                    ref={titleInputRef}
-                    type="text"
-                    value={title}
-                    aria-label={lang === 'uk' ? 'Назва нової нотатки' : 'New note title'}
-                    onChange={(e) => setTitle(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.nativeEvent.isComposing) return;
-                      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-                        e.preventDefault();
-                        handleSaveNewNote();
-                      } else if (e.key === 'Enter') {
-                        e.preventDefault();
-                        contentTextareaRef.current?.focus();
-                      }
-                    }}
-                    placeholder={nv.titlePlaceholder}
-                    style={{ color: selectedColor }}
-                    className="w-full bg-[#060608] border border-neutral-800 text-base leading-[1.6] font-sans font-bold pl-3 pr-9 py-2 focus:outline-none focus:border-neutral-500 transition-colors"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => handleToggleVoiceInput('title')}
-                    title={lang === 'uk' ? 'Надиктувати назву' : 'Dictate title'}
-                    className={`absolute right-2 top-1/2 -translate-y-1/2 p-1 transition-colors cursor-pointer ${
-                      isListening && voiceTarget === 'title'
-                        ? 'text-red-400 animate-pulse'
-                        : 'text-neutral-500 hover:text-white'
-                    }`}
-                  >
-                    <Mic className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-
-                {/* Color Palette Selector */}
-                <div className="flex items-center gap-1.5 bg-[#060608] border border-neutral-800 px-2.5 py-1.5 shrink-0">
-                  <Palette className="w-3 h-3 text-neutral-500 mr-0.5" />
-                  {NOTE_COLOR_PRESETS.map((preset) => (
-                    <button
-                      key={preset.hex}
-                      type="button"
-                      onClick={() => {
-                        sound.tick(400);
-                        setSelectedColor(preset.hex);
-                      }}
-                      title={preset.label}
-                      aria-label={preset.label}
-                      aria-pressed={selectedColor === preset.hex}
-                      style={{ backgroundColor: preset.hex }}
-                      className={`w-3.5 h-3.5 transition-all cursor-pointer ${
-                        selectedColor === preset.hex
-                          ? 'ring-1.5 ring-white scale-125'
-                          : 'opacity-65 hover:opacity-100'
-                      }`}
-                    />
-                  ))}
-                </div>
-              </div>
-
-              {/* Note Content Textarea */}
-              <div className="relative">
-                <textarea
-                  ref={contentTextareaRef}
-                  value={content}
-                  aria-label={lang === 'uk' ? 'Текст нової нотатки' : 'New note text'}
-                  onChange={(e) => setContent(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (!e.nativeEvent.isComposing && (e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); handleSaveNewNote(); }
-                  }}
-                  placeholder={nv.contentPlaceholder}
-                  rows={3}
-                  className="w-full bg-[#060608] border border-neutral-800 text-neutral-200 placeholder:text-neutral-500 text-base leading-[1.6] font-sans p-3 focus:outline-none focus:border-neutral-500 transition-colors"
-                />
-              </div>
-
-              {/* Voice Recording Live Feedback */}
-              {(isVoiceStarting || isListening || isTranscribing || voiceNotice) && (
-                <div className="flex items-center justify-between px-3 py-1.5 bg-[#060608] border border-neutral-800 text-xs font-sans">
-                  {voiceNotice ? (
-                    <div className="flex items-center gap-2 text-amber-400">
-                      <AlertTriangle className="w-3 h-3 shrink-0" />
-                      <span className="text-[11px]">{voiceNotice}</span>
-                    </div>
-                  ) : isTranscribing || isVoiceStarting ? (
-                    <div className="flex items-center gap-2 text-neutral-300">
-                      <Loader2 className="w-3 h-3 animate-spin text-neutral-400" />
-                      <span className="text-[11px]">{isVoiceStarting ? (lang === 'uk' ? 'Запуск мікрофона…' : 'Starting microphone…') : (lang === 'uk' ? 'ШІ транскрибує голос...' : 'Transcribing voice...')}</span>
-                    </div>
-                  ) : (
-                    <div className="flex items-center justify-between w-full">
-                      <div className="flex items-center gap-2">
-                        <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-                        <span className="text-[11px] text-red-400 font-bold uppercase tracking-wider">
-                          {nv.voiceListening} ({voiceTarget === 'title' ? (lang === 'uk' ? 'в заголовок' : 'to title') : (lang === 'uk' ? 'в текст' : 'to body')})
-                        </span>
-                        <span className="text-[10px] text-neutral-400 font-sans">
-                          {Math.floor(recordingDuration / 60).toString().padStart(2, '0')}:
-                          {(recordingDuration % 60).toString().padStart(2, '0')}
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={stopVoiceInput}
-                        className="px-2 py-0.5 text-[10px] uppercase font-bold text-red-400 hover:text-white border border-red-900/60 bg-red-950/40 transition-colors cursor-pointer"
-                      >
-                        {nv.voiceStop}
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Bottom Actions */}
-              <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => handleToggleVoiceInput('content')}
-                  className={`px-2.5 py-1.5 border font-sans text-xs uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer ${
-                    isListening && voiceTarget === 'content'
-                      ? 'border-red-500 bg-red-950/40 text-red-400'
-                      : 'border-neutral-800 bg-[#060608] text-neutral-400 hover:text-white hover:border-neutral-600'
-                  }`}
-                >
-                  {isListening && voiceTarget === 'content' ? (
-                    <>
-                      <Square className="w-3 h-3 fill-current text-red-400" />
-                      <span>{nv.voiceStop}</span>
-                    </>
-                  ) : (
-                    <>
-                      <Mic className="w-3 h-3 text-neutral-400" />
-                      <span>{nv.voiceDictation}</span>
-                    </>
-                  )}
-                </button>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <button type="button" onClick={handleDiscardNewDraft} className="min-h-11 px-3 py-1.5 border border-neutral-800 text-neutral-400 hover:text-rose-300 text-xs font-sans transition-colors cursor-pointer">
-                    {lang === 'uk' ? 'Видалити чернетку' : 'Discard draft'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleCloseComposer}
-                    className="min-h-11 px-3 py-1.5 border border-neutral-800 text-neutral-400 hover:text-white text-xs font-sans uppercase tracking-wider transition-colors cursor-pointer"
-                  >
-                    {lang === 'uk' ? 'Закрити' : 'Close'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleSaveNewNote()}
-                    disabled={isVoiceStarting || isListening || isTranscribing || (!title.trim() && !content.trim())}
-                    className="min-h-11 px-3.5 py-1.5 bg-white text-black font-extrabold text-xs font-sans uppercase tracking-wider hover:bg-neutral-200 disabled:opacity-40 transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
-                  >
-                    <Check className="w-3 h-3" />
-                    <span>{nv.saveNote}</span>
-                  </button>
-                </div>
-              </div>
-              <p className="text-xs leading-relaxed text-neutral-500">
-                {draftStorageError
-                  ? (lang === 'uk' ? 'Чернетка залишиться доступною до завершення цього сеансу.' : 'The draft remains available until this session ends.')
-                  : (lang === 'uk' ? 'Закриття й перехід до іншого розділу зберігають чернетку.' : 'Closing this form or moving to another section keeps the draft.')}
-              </p>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {hasEditDraft && (!editingNoteId || !editDraftIsCurrent || !filteredAndSortedNotes.some(note => note.id === editingNoteId)) && (
-        <div ref={editRecoveryRef} tabIndex={-1} role="region" aria-labelledby="notepad-edit-draft-title" className="border border-amber-800 bg-[#0a0a0d] p-4 space-y-3 font-sans">
-          <h2 id="notepad-edit-draft-title" className="text-sm font-bold text-neutral-100">
-            {lang === 'uk' ? 'Чернетка редагування' : 'Edit draft'}
-          </h2>
-          <p role="status" className="text-xs leading-relaxed text-neutral-300">
-            {editDraftIsCurrent
-              ? (lang === 'uk' ? 'Незбережені зміни залишилися в чернетці. Продовжіть редагування або видаліть чернетку.' : 'Your unsaved changes remain in this draft. Resume editing or discard the draft.')
-              : editedNote
-                ? (lang === 'uk' ? 'Збережена нотатка змінилася після початку редагування. Чернетка її не перезапише; збережіть цей текст як нову нотатку.' : 'The saved note changed after editing began. This draft will not overwrite it; save this text as a new note.')
-                : (lang === 'uk' ? 'Початкової нотатки немає або її не вдалося визначити. Відновлений текст можна зберегти як нову нотатку.' : 'The original note is missing or could not be identified. You can save the recovered text as a new note.')}
-          </p>
-          <label htmlFor="notepad-edit-draft-name" className="block text-xs text-neutral-400">
-            {lang === 'uk' ? 'Назва з чернетки' : 'Draft title'}
-            <input id="notepad-edit-draft-name" value={editTitle} onChange={event => setEditTitle(event.target.value)} className="mt-1 w-full bg-[#060608] border border-neutral-800 px-3 py-2 text-base text-neutral-100 focus:outline-none focus:border-neutral-500" />
-          </label>
-          <label htmlFor="notepad-edit-draft-content" className="block text-xs text-neutral-400">
-            {lang === 'uk' ? 'Текст з чернетки' : 'Draft text'}
-            <textarea id="notepad-edit-draft-content" value={editContent} onChange={event => setEditContent(event.target.value)} rows={4} className="mt-1 w-full bg-[#060608] border border-neutral-800 px-3 py-2 text-base leading-[1.6] text-neutral-200 focus:outline-none focus:border-neutral-500" />
-          </label>
-          <div className="flex flex-wrap gap-2">
-            {editDraftIsCurrent && editedNote ? (
-              <button type="button" onClick={() => handleStartEdit(editedNote)} className="min-h-11 bg-white px-3 py-2 text-xs font-bold text-black hover:bg-neutral-200">
-                {lang === 'uk' ? 'Продовжити редагування' : 'Resume editing'}
-              </button>
-            ) : (
-              <button type="button" onClick={handleSaveRecoveredEdit} disabled={isVoiceStarting || isListening || isTranscribing || (!editTitle.trim() && !editContent.trim())} className="min-h-11 bg-white px-3 py-2 text-xs font-bold text-black hover:bg-neutral-200 disabled:opacity-40">
-                {lang === 'uk' ? 'Зберегти як нову нотатку' : 'Save as a new note'}
-              </button>
-            )}
-            <button type="button" onClick={handleDiscardEdit} className="min-h-11 border border-neutral-700 px-3 py-2 text-xs text-neutral-300 hover:text-rose-300">
-              {lang === 'uk' ? 'Видалити чернетку' : 'Discard draft'}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* 3. Notes Stream / Cards Grid */}
-      {filteredAndSortedNotes.length === 0 ? (
-        <div className="border border-dashed border-neutral-800 bg-[#08080a] py-14 px-6 text-center space-y-2.5 my-2">
-          <div className="w-8 h-8 mx-auto mb-2 border border-neutral-800 bg-neutral-900/60 flex items-center justify-center text-neutral-500">
-            <NotebookPen className="w-4 h-4" />
-          </div>
-          <h3 className="text-xs font-sans font-bold uppercase tracking-wider text-neutral-200">
-            {hasFilters ? nv.emptySearch : nv.emptyTitle}
-          </h3>
-          <p className="text-xs font-sans text-neutral-500 max-w-sm mx-auto">
-            {hasFilters ? nv.emptySearchDesc : nv.emptyDesc}
-          </p>
-          {hasFilters ? (
-            <button
-              type="button"
-              onClick={() => { setSearchQuery(''); setSelectedColorFilter('ALL'); }}
-              className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 bg-neutral-800 border border-neutral-700 text-white font-bold text-xs font-sans tracking-wider hover:bg-neutral-700 transition-colors cursor-pointer"
-            >
-              {lang === 'uk' ? 'Скинути фільтри' : 'Reset filters'}
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => {
-                sound.tick(600);
-                setIsComposerOpen(true);
-                setTimeout(() => titleInputRef.current?.focus(), 100);
-              }}
-              className="mt-3 inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-white text-black font-extrabold text-xs font-sans uppercase tracking-wider hover:bg-neutral-200 transition-all cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>{nv.newNote}</span>
-            </button>
-          )}
-        </div>
-      ) : (
-        <div
-          className={`grid gap-4 ${
-            viewMode === 'grid'
-              ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
-              : 'grid-cols-1'
-          }`}
-        >
-          {filteredAndSortedNotes.map((note) => {
-            const isEditing = editingNoteId === note.id && editDraftIsCurrent;
-            const noteColor = note.color || NOTE_COLOR_PRESETS[0].hex;
-
-            if (isEditing) {
-              return (
-                <div
-                  key={note.id}
-                  className="border border-neutral-600 bg-[#0a0a0d] p-3.5 space-y-3 col-span-full shadow-lg font-sans"
-                >
-                  <div className="flex items-center justify-between pb-2 border-b border-neutral-800">
-                    <span className="text-xs font-sans font-bold uppercase text-white">
-                      {nv.editNote}
-                    </span>
-                    <div className="flex items-center gap-1">
-                      {NOTE_COLOR_PRESETS.map((preset) => (
-                        <button
-                          key={preset.hex}
-                          type="button"
-                          onClick={() => setEditColor(preset.hex)}
-                          aria-label={preset.label}
-                          aria-pressed={editColor === preset.hex}
-                          style={{ backgroundColor: preset.hex }}
-                          className={`w-3.5 h-3.5 transition-transform cursor-pointer ${
-                            editColor === preset.hex ? 'scale-125 ring-1.5 ring-white' : 'opacity-60'
-                          }`}
-                        />
-                      ))}
-                    </div>
-                  </div>
-
-                  <input
-                    ref={editTitleInputRef}
-                    type="text"
-                    value={editTitle}
-                    aria-label={lang === 'uk' ? 'Назва нотатки' : 'Note title'}
-                    onChange={(e) => setEditTitle(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (!e.nativeEvent.isComposing && (e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); handleSaveEdit(); }
-                    }}
-                    style={{ color: editColor }}
-                    className="w-full bg-[#060608] border border-neutral-800 text-base leading-[1.6] font-sans font-bold px-3 py-2 focus:outline-none focus:border-neutral-500"
-                  />
-
-                  <textarea
-                    value={editContent}
-                    aria-label={lang === 'uk' ? 'Текст нотатки' : 'Note text'}
-                    onChange={(e) => setEditContent(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (!e.nativeEvent.isComposing && (e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); handleSaveEdit(); }
-                    }}
-                    rows={4}
-                    className="w-full bg-[#060608] border border-neutral-800 text-neutral-200 text-base leading-[1.6] font-sans p-2.5 focus:outline-none focus:border-neutral-500"
-                  />
-
-                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                    <button
-                      type="button"
-                      onClick={() => handleToggleVoiceInput('content', note.id)}
-                      className={`px-2.5 py-1 border text-xs font-sans uppercase flex items-center gap-1.5 cursor-pointer ${
-                        isListening
-                          ? 'border-red-500 bg-red-950/40 text-red-400'
-                          : 'border-neutral-800 bg-[#060608] text-neutral-400 hover:text-white'
-                      }`}
-                    >
-                      <Mic className="w-3 h-3" />
-                      <span>{isListening ? nv.voiceStop : nv.voiceDictation}</span>
-                    </button>
-
-                    <div className="flex flex-wrap items-center gap-2">
-                      <button type="button" onClick={handleDiscardEdit} className="min-h-11 px-2.5 py-1 border border-neutral-800 text-neutral-400 hover:text-rose-300 text-xs font-sans cursor-pointer">
-                        {lang === 'uk' ? 'Видалити чернетку' : 'Discard draft'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handlePauseEdit}
-                        className="min-h-11 px-2.5 py-1 border border-neutral-800 text-neutral-400 hover:text-white text-xs font-sans uppercase cursor-pointer"
-                      >
-                        {lang === 'uk' ? 'Закрити' : 'Close'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleSaveEdit}
-                        disabled={isVoiceStarting || isListening || isTranscribing || (!editTitle.trim() && !editContent.trim())}
-                        className="min-h-11 px-3 py-1 bg-white text-black font-extrabold text-xs font-sans uppercase hover:bg-neutral-200 disabled:opacity-40 cursor-pointer"
-                      >
-                        {nv.updateNote}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              );
-            }
-
-            return (
-              <article
-                key={note.id}
-                className={`group relative flex min-w-0 flex-col border border-neutral-800 bg-[#09090d] p-4 sm:p-5 transition-colors hover:border-neutral-700 ${
-                  viewMode === 'list' ? 'sm:flex-row sm:items-start sm:gap-6' : ''
-                }`}
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-start justify-between gap-3">
-                    {/* The note colour appears once, as a small swatch; the title stays readable white. */}
-                    <h3 className="flex min-w-0 items-baseline gap-2.5 text-base font-semibold leading-snug text-neutral-100">
-                      <span aria-hidden="true" className="h-2 w-2 shrink-0 -translate-y-px" style={{ backgroundColor: noteColor }} />
-                      <span className="min-w-0 break-words line-clamp-2">{note.title}</span>
-                    </h3>
-                    {note.pinned && (
-                      <Pin className="mt-1 h-3.5 w-3.5 shrink-0 fill-amber-400 text-amber-400" aria-label={lang === 'uk' ? 'Закріплено' : 'Pinned'} />
-                    )}
-                  </div>
-
-                  <div className="mt-2.5 whitespace-pre-wrap break-words text-sm leading-relaxed text-neutral-300">
-                    {note.content || (
-                      <span className="italic text-neutral-600">
-                        {lang === 'uk' ? '(Порожній вміст)' : '(No content)'}
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                <div className={`flex items-center justify-between gap-2 ${
-                  viewMode === 'list' ? 'mt-4 sm:mt-0 sm:shrink-0 sm:flex-col sm:items-end' : 'mt-auto pt-4'
-                }`}>
-                  <span className="whitespace-nowrap text-[11px] tabular-nums text-neutral-500">
-                    {formatDate(note.createdAt)}{note.updatedAt ? ` · ${lang === 'uk' ? 'ред.' : 'edited'}` : ''}
-                  </span>
-
-                  {/* Tools appear on hover or keyboard focus where hover exists; touch screens always show them. */}
-                  <div className="-mr-2 flex items-center transition-opacity [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        sound.tick(500);
-                        onUpdateNote(note.id, { pinned: !note.pinned });
-                      }}
-                      title={note.pinned ? nv.unpinNote : nv.pinNote}
-                      aria-label={note.pinned ? nv.unpinNote : nv.pinNote}
-                      className={`${noteAction} ${note.pinned ? 'text-amber-400' : ''}`}
-                    >
-                      {note.pinned ? <PinOff className="h-3.5 w-3.5" aria-hidden="true" /> : <Pin className="h-3.5 w-3.5" aria-hidden="true" />}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleCopyNote(note)}
-                      title={nv.copyNote}
-                      aria-label={nv.copyNote}
-                      className={noteAction}
-                    >
-                      {copiedId === note.id ? <Check className="h-3.5 w-3.5 text-emerald-400" aria-hidden="true" /> : <Copy className="h-3.5 w-3.5" aria-hidden="true" />}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleStartEdit(note)}
-                      title={nv.editNote}
-                      aria-label={nv.editNote}
-                      className={noteAction}
-                    >
-                      <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setPendingDelete(note)}
-                      title={nv.deleteNote}
-                      aria-label={nv.deleteNote}
-                      className={`${noteAction} hover:text-rose-400`}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                    </button>
-                  </div>
-                </div>
-              </article>
-            );
-          })}
-        </div>
-      )}
-
-      <dialog
-        ref={deleteDialogRef}
-        aria-labelledby="delete-note-title"
-        aria-describedby="delete-note-description"
-        onCancel={() => setPendingDelete(null)}
-        onClose={() => setPendingDelete(null)}
-        onClick={(event) => { if (event.target === event.currentTarget) setPendingDelete(null); }}
-        className="fixed m-auto w-[calc(100%-2rem)] max-w-md border border-neutral-700 bg-[#101014] p-0 text-neutral-100 shadow-2xl backdrop:bg-black/70"
-      >
-        <div className="space-y-4 p-5 font-sans">
-          <h2 id="delete-note-title" className="flex items-center gap-2 text-sm font-bold">
-            <AlertTriangle className="h-5 w-5 shrink-0 text-rose-400" />
-            {lang === 'uk' ? 'Видалити нотатку?' : 'Delete note?'}
-          </h2>
-          <p id="delete-note-description" className="text-xs leading-relaxed text-neutral-300">
-            {lang === 'uk' ? 'Нотатку «' : 'The note “'}
-            <span className="font-bold break-words">{pendingDelete?.title}</span>
-            {lang === 'uk' ? '» буде видалено. Після видалення ви матимете 8 секунд, щоб відновити її кнопкою «Скасувати».' : '” will be deleted. You will have 8 seconds to restore it using Undo.'}
-          </p>
-          <div className="flex justify-end gap-2">
-            <button autoFocus type="button" onClick={() => setPendingDelete(null)} className="border border-neutral-600 px-3 py-2 text-xs hover:bg-neutral-800">
-              {nv.cancel}
-            </button>
-            <button type="button" onClick={handleConfirmDelete} className="bg-rose-600 px-3 py-2 text-xs font-bold text-white hover:bg-rose-500">
-              {lang === 'uk' ? 'Видалити' : 'Delete'}
-            </button>
-          </div>
-        </div>
-      </dialog>
-
-      {/* Undo Toast for deleted note */}
-      <AnimatePresence>
-        {recentlyDeletedNote && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 20, transition: { duration: 0.15 } }}
-            className="fixed bottom-16 left-1/2 -translate-x-1/2 z-40 bg-neutral-900 border border-neutral-700 px-4 py-2.5 flex items-center gap-3 shadow-2xl text-xs font-sans"
-          >
-            <span className="text-neutral-300">
-              {lang === 'uk' ? 'Нотатку видалено:' : 'Note deleted:'} "{recentlyDeletedNote.title.slice(0, 24)}{recentlyDeletedNote.title.length > 24 ? '...' : ''}"
-            </span>
-            <button
-              type="button"
-              onClick={handleRestoreDeletedNote}
-              className="text-white font-extrabold underline hover:text-neutral-300 cursor-pointer flex items-center gap-1"
-            >
-              <RotateCcw className="w-3 h-3" />
-              <span>{t.undo}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setRecentlyDeletedNote(null)}
-              className="text-neutral-500 hover:text-white ml-1 font-bold text-xs p-0.5 cursor-pointer transition-colors"
-              title={lang === 'uk' ? 'Закрити' : 'Close'}
-            >
-              ✕
-            </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
     </div>
-  );
+    {storageError && <p role="alert" className="nv-alert">{copy.storage}</p>}
+    <div className="pulse-page-grid nv-grid">
+      <aside className="pulse-page-sidebar">
+        <label className="nv-search">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#a1a1a6" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="m21 21-4.34-4.34" /><circle cx="11" cy="11" r="8" /></svg>
+          <input type="text" aria-label={copy.searchLabel} placeholder={copy.search} value={query} onChange={event => setQuery(event.target.value)} />
+          <button type="button" aria-label={copy.newNote} data-tip={copy.newNote} onClick={newNote}><Path d="M12 5v14M5 12h14" width={2.4} /></button>
+        </label>
+        {shown.map(note => <button key={note.id} type="button" className={'nv-item' + (note.id === justAdded ? ' nv-item--new' : '')} aria-pressed={note.id === current?.id} onClick={() => select(note.id)}>
+          <span className="nv-item-copy"><span className="nv-item-title">{note.title || copy.untitled}</span><span className="nv-item-date">{noteDate(note.updatedAt ?? note.createdAt, now, lang)}</span></span>
+          {note.pinned && <span className="nv-item-pin" aria-label={copy.pinned}><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 17v5" /><path d={PIN_PATH} /></svg></span>}
+          <span className="nv-item-dot" style={{ background: kindOf(note) === 'lesson' ? '#8442ff' : '#13f287' }} />
+        </button>)}
+      </aside>
+      <div className="pulse-page-main">
+        <section ref={sectionRef} className="nv-paper" aria-label={copy.note}>
+          {current ? <>
+            <div className="nv-swap" key={current.id}>
+              <div className="nv-meta">
+                {isFresh ? <div role="radiogroup" aria-label={copy.kindLabel} className="nv-kinds">
+                  {(['lesson', 'idea'] as Kind[]).map(value => <button key={value} type="button" role="radio" aria-checked={kind === value} data-kind={value} onClick={() => onUpdateNote(current.id, { kind: value })}>{copy.kinds[value]}</button>)}
+                </div> : <span className="nv-tag" data-kind={kind}>{copy.kinds[kind]}</span>}
+                <span className="nv-date">{noteDate(current.updatedAt ?? current.createdAt, now, lang)}</span>
+                <span className="nv-spacer" />
+                <button type="button" className="nv-pen" aria-label={copy.append} aria-pressed={editing} data-tip={copy.append} onClick={() => editing ? stopEditing() : startEditing()}><Path d="M21.17 6.81a1 1 0 0 0-3.98-3.98L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5zM15 5l4 4" width={2.2} /></button>
+              </div>
+              {editing
+                ? <input ref={titleRef} type="text" className="nv-title-input" aria-label={copy.titleLabel} placeholder={copy.titleLabel} value={titleDraft} maxLength={300}
+                    onChange={event => setTitleDraft(event.target.value)} onBlur={commitTitle}
+                    onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); commitTitle(); appendRef.current?.focus({ preventScroll: true }); } }} />
+                : <h2 className="nv-title" style={{ color: current.title ? '#090a0a' : '#aeaeb2' }}>{current.title || copy.untitled}</h2>}
+              <div ref={editorRef} className="nv-editor" key={current.id + '#' + page} onMouseUp={openMenu}>
+                {segs.map((seg, index) => {
+                  if (seg.t === 'br') return <span key={index} className="nv-br" />;
+                  if (seg.t === 'num') return <span key={index} className="nv-num">{labels.get(index)}</span>;
+                  if (seg.t === 'chip') {
+                    const on = copiedSeg === index;
+                    return <span key={index} className="nv-chip" data-chip={index} data-on={on}>{seg.v}<button type="button" data-copy="1" aria-label={copy.copy} onClick={() => copyChip(index, seg.v)}><Path d={on ? ICONS.check : ICONS.copy} size={15} width={2.2} /></button></span>;
+                  }
+                  const s = seg.s ?? {};
+                  return <span key={index} data-seg={index} style={{ fontSize: s.size, lineHeight: s.size ? 1.3 : undefined, fontWeight: s.weight,
+                    fontFamily: s.font && s.font !== 'Inter' ? fontFamily(s.font) : undefined, color: (s.weight ?? 0) >= 700 || (s.size ?? 0) > 22 ? '#090a0a' : undefined }}>{seg.v}</span>;
+                })}
+              </div>
+              {!segs.length && !editing && <span className="nv-empty-page">{copy.emptyPage}</span>}
+              {editing && <textarea ref={appendRef} rows={1} className="nv-append" aria-label={copy.appendLabel} placeholder={copy.appendPlaceholder} style={{ marginTop: segs.length ? -8 : -18 }}
+                onInput={event => { const box = event.currentTarget; box.style.height = 'auto'; box.style.height = box.scrollHeight + 'px'; }}
+                onBlur={() => appendText(false)}
+                onKeyDown={event => {
+                  if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); appendText(true); }
+                  else if (event.key === 'Escape') { event.preventDefault(); stopEditing(); }
+                }} />}
+            </div>
+            {menu && <div data-menu="1" role="menu" aria-label={copy.menu} className="nv-menu" style={{ left: Math.round(menu.x), top: Math.round(menu.y) }}>
+              {single && <div className="nv-format">
+                <button type="button" className="nv-font" aria-expanded={fontsOpen} aria-label={copy.font} style={{ fontFamily: fontFamily(font) }} onClick={() => { if (!fontsOpen) loadFonts(); setFontsOpen(!fontsOpen); setFontQuery(''); }}>
+                  <span>{font}</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ transform: fontsOpen ? 'rotate(180deg)' : undefined }}><path d="m6 9 6 6 6-6" /></svg>
+                </button>
+                {fontsOpen && <div className="nv-fonts">
+                  <input type="text" aria-label={copy.fontSearch} placeholder={copy.fontSearch} value={fontQuery} autoFocus onChange={event => setFontQuery(event.target.value)} />
+                  <div role="listbox" aria-label={copy.fonts}>
+                    {(fontNames ?? ['Inter']).filter(name => !fontQuery || name.toLowerCase().includes(fontQuery.toLowerCase())).slice(0, 80).map(name =>
+                      <button key={name} type="button" role="option" aria-selected={font === name} style={{ fontFamily: fontFamily(name) }} onClick={() => { applyStyle({ font: name }); setFontsOpen(false); setFontQuery(''); }}>{name}</button>)}
+                  </div>
+                </div>}
+                <div className="nv-format-row">
+                  <div role="group" aria-label={copy.size} className="nv-size">
+                    <button type="button" aria-label={copy.smaller} onClick={() => applyStyle({ size: Math.max(12, size - 2) })}>−</button>
+                    <span aria-live="polite">{size}</span>
+                    <button type="button" aria-label={copy.bigger} onClick={() => applyStyle({ size: Math.min(48, size + 2) })}>+</button>
+                  </div>
+                  <div role="group" aria-label={copy.weight} className="nv-weights">
+                    {WEIGHTS.map((value, index) => <button key={value} type="button" aria-pressed={weight === value || value === 500 && weight === 400} aria-label={copy.weights[index]} style={{ fontWeight: value }} onClick={() => applyStyle({ weight: value })}>Аа</button>)}
+                  </div>
+                </div>
+              </div>}
+              {menuItems.map(item => <button key={item.label} type="button" role="menuitem" style={{ color: item.danger ? '#ff6b6d' : 'accent' in item && item.accent ? '#13f287' : '#ffffff' }} onClick={item.act}><Path d={item.icon} />{item.label}</button>)}
+            </div>}
+            <div className="nv-footer">
+              <div>{onMakeTasks && <button type="button" className="nv-make" onClick={() => onMakeTasks(current)}><KarkasLogo compact width={15} height={16} />{copy.makeTasks}</button>}</div>
+              <div role="tablist" aria-label={copy.pages} className="nv-pages">
+                {doc.pages.map((_, index) => <button key={index} type="button" role="tab" aria-selected={index === page} aria-label={copy.page + ' ' + (index + 1)} onClick={() => { if (editing) appendText(false); setPageOf(previous => ({ ...previous, [current.id]: index })); setMenu(null); }}>{index + 1}</button>)}
+                <button type="button" className="nv-page-add" aria-label={copy.addPage} data-tip={copy.addPage} onClick={addPage}><Path d="M12 5v14M5 12h14" size={15} width={2.6} /></button>
+              </div>
+              <div className="nv-actions">
+                <button type="button" className="nv-pin" aria-label={current.pinned ? copy.unpin : copy.pin} aria-pressed={!!current.pinned} data-tip={current.pinned ? copy.unpin : copy.pin} onClick={togglePin}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill={current.pinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 17v5" /><path d={PIN_PATH} /></svg>
+                </button>
+                <button type="button" className="nv-delete" aria-label={copy.remove} data-tip={copy.remove} onClick={removeNote}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" /></svg></button>
+              </div>
+            </div>
+          </> : <div className="nv-none">
+            <span>{copy.empty}</span>
+            <button type="button" className="nv-make" onClick={newNote}><Path d="M12 5v14M5 12h14" size={16} width={2.4} />{copy.newNote}</button>
+          </div>}
+          {toast && <div className="nv-toast-wrap"><span className="nv-toast" role="status">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#13f287" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>
+            {toast.text}{toast.undo ? <button type="button" data-menu="1" onClick={toast.undo}>{copy.undo}</button> : <span style={{ width: 10 }} />}
+          </span></div>}
+        </section>
+      </div>
+    </div>
+  </div>;
 };

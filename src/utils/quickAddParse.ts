@@ -2,7 +2,7 @@ import type { TaskTab } from '../types';
 import { isTaskDate, localTaskDate } from './taskDates';
 
 export interface QuickAddToken {
-  kind: 'phase' | 'priority' | 'planned' | 'deadline';
+  kind: 'phase' | 'category_proposal' | 'priority' | 'planned' | 'deadline';
   raw: string;
   value: string;
 }
@@ -10,6 +10,7 @@ export interface QuickAddToken {
 export interface ParsedQuickAdd {
   title: string;
   phase?: string;
+  proposedCategoryName?: string;
   priority?: 1 | 2 | 3;
   plannedDate?: string;
   deadlineDate?: string;
@@ -27,10 +28,10 @@ const weekdays: Record<string, number> = {
 };
 
 function normalize(value: string): string {
-  return value.toLowerCase().replace(/['’ʼ]/g, "'");
+  return value.normalize('NFC').toLocaleLowerCase('uk-UA').replace(/['’ʼ]/g, "'");
 }
 
-function normalizePhase(value: string): string {
+export function normalizeQuickAddCategory(value: string): string {
   return normalize(value).replace(/\s/g, '');
 }
 
@@ -80,19 +81,28 @@ export function parseQuickAdd(text: string, tabs: readonly TaskTab[], now = Date
       continue;
     }
     if (word.startsWith('#') && word.length > 1) {
-      const name = normalizePhase(word.slice(1));
-      const tab = tabs.find(tab => normalizePhase(tab.id) === name)
-        ?? tabs.find(tab => normalizePhase(tab.name) === name)
-        ?? tabs.find(tab => normalizePhase(tab.name).startsWith(name));
+      const name = normalizeQuickAddCategory(word.slice(1));
+      const tab = tabs.find(tab => normalizeQuickAddCategory(tab.id) === name)
+        ?? tabs.find(tab => normalizeQuickAddCategory(tab.name) === name)
+        ?? tabs.find(tab => normalizeQuickAddCategory(tab.name).startsWith(name));
       if (tab) {
         result.phase = tab.id;
+        delete result.proposedCategoryName;
         addToken('phase', tab.id, index);
+        continue;
+      }
+      if (/^#[\p{L}\p{N}][\p{L}\p{M}\p{N}_'’ʼ-]*$/u.test(word)) {
+        const rawName = word.slice(1).normalize('NFC');
+        const proposedName = rawName[0].toLocaleUpperCase('uk-UA') + rawName.slice(1);
+        delete result.phase;
+        result.proposedCategoryName = proposedName;
+        addToken('category_proposal', proposedName, index);
         continue;
       }
     }
 
     const prefix = normalize(word);
-    const hasPrefix = ['до', 'by', 'due', 'на', 'on'].includes(prefix);
+    const hasPrefix = ['до', 'by', 'due', 'на', 'on', 'в', 'у', 'во'].includes(prefix);
     const dateIndex = hasPrefix ? index + 1 : index;
     const date = words[dateIndex] ? parseDate(words[dateIndex].raw, now) : undefined;
     if (!date) continue;

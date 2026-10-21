@@ -49,7 +49,7 @@ export const OnboardingChecklist: React.FC<OnboardingChecklistProps> = props => 
   const aiExpanded = derived.status === 'active' && current === 'ai';
   const firstTask = tasks.find(task => !task.done && !task.scheduledPending);
   const running = tasks.some(task => task.timerRunning);
-  const success = lang === 'uk' ? 'Готово. Далі Karkas підлаштується під ваш ритм.' : 'All set. Karkas will adapt to your rhythm from here.';
+  const success = lang === 'uk' ? 'Готово' : 'All set';
   const connected = lang === 'uk' ? 'Ключ уже підключено.' : 'Key already connected.';
 
   useEffect(() => { latest.current = props; });
@@ -139,7 +139,7 @@ export const OnboardingChecklist: React.FC<OnboardingChecklistProps> = props => 
 
   if (dismissed || state.status === 'skipped') return null;
 
-  return <section aria-labelledby={headingId} className="mb-3 border border-neutral-800 bg-[#0c0c0d] px-3 py-2 text-sm text-white">
+  return <section aria-labelledby={headingId} className="pulse-onboarding text-sm text-white">
     <p className="sr-only" aria-live="polite" aria-atomic="true">{derived.status === 'done' ? (derived.steps.ai === 'ok' ? connected + ' ' : '') + success : (lang === 'uk' ? 'Поточний крок: ' : 'Current step: ') + steps.find(step => step.id === current)?.title}</p>
     {derived.status === 'done' ? <div className="flex items-center gap-2">
       <span aria-hidden="true" className="text-emerald-400">✓</span>
@@ -153,7 +153,6 @@ export const OnboardingChecklist: React.FC<OnboardingChecklistProps> = props => 
       <div role="progressbar" aria-label={lang === 'uk' ? 'Прогрес знайомства' : 'Onboarding progress'} aria-valuemin={0} aria-valuemax={visibleSteps.length} aria-valuenow={completed} className={'mb-2 mt-1 grid gap-1 ' + (visibleSteps.length === 4 ? 'grid-cols-4' : 'grid-cols-3')}>
         {visibleSteps.map(step => <span key={step.id} aria-hidden="true" className={'h-1 ' + (step.done ? 'bg-emerald-400' : 'bg-neutral-800')} />)}
       </div>
-      {running && <p role="status" className="py-2 text-xs text-neutral-300">{lang === 'uk' ? 'Сесія йде — можна працювати, ми нагадаємо в кінці.' : 'Session running — get to work; we’ll remind you at the end.'}</p>}
       <ol className="divide-y divide-neutral-800">
         {visibleSteps.map((step, index) => <li key={step.id} aria-current={step.id === current ? 'step' : undefined} className="py-2">
           <div className="flex min-w-0 items-center gap-2 text-xs">
@@ -164,16 +163,13 @@ export const OnboardingChecklist: React.FC<OnboardingChecklistProps> = props => 
           </div>
           {step.id === current && <div className="ml-6 mt-2 space-y-2 text-xs leading-relaxed text-neutral-400">
             {step.id === 'task' && <>
-              <p>{lang === 'uk' ? 'Напишіть одну справу, яку хочете зрушити сьогодні. Можна з датою й пріоритетом: «Звіт завтра !1».' : 'Write one thing you want to move forward today. Add a date and priority if you like: “Report tomorrow !1”.'}</p>
               <button type="button" className={primary} onClick={onFocusQuickAdd}>{lang === 'uk' ? 'Написати' : 'Write a task'}</button>
             </>}
             {step.id === 'session' && <>
-              <p>{lang === 'uk' ? 'Почніть з короткої сесії. Наприкінці Karkas покаже, що вийшло.' : 'Start with a short session. At the end, Karkas will show what you achieved.'}</p>
-              {!running && (firstTask ? <button type="button" className={primary + ' break-words'} onClick={() => onStartTrial(firstTask.id)}>{lang === 'uk' ? `Почати 5 хв: «${firstTask.title}»` : `Start 5 min: “${firstTask.title}”`}</button>
+              {!running && (firstTask ? <button type="button" className={primary + ' break-words'} onClick={() => onStartTrial(firstTask.id)}>{lang === 'uk' ? 'Почати 5 хв' : 'Start 5 min'}</button>
                 : <button type="button" className={primary} onClick={onFocusQuickAdd}>{lang === 'uk' ? 'Написати ще одне завдання' : 'Write another task'}</button>)}
             </>}
             {step.id === 'notify' && <>
-              <p>{lang === 'uk' ? 'Karkas тихо скаже, коли сесія закінчиться. Перевіримо, що Windows показує сповіщення.' : 'Karkas will quietly let you know when a session ends. Let’s check that Windows shows notifications.'}</p>
               <div aria-live="polite" aria-atomic="true">
                 {(notification === 'idle' || notification === 'sending') && <button type="button" className={primary} disabled={notification === 'sending'} onClick={() => { void testNotification(); }}>{notification === 'sending' ? (lang === 'uk' ? 'Надсилаємо…' : 'Sending…') : (lang === 'uk' ? 'Надіслати тестове' : 'Send a test')}</button>}
                 {notification === 'confirm' && <>
@@ -184,18 +180,15 @@ export const OnboardingChecklist: React.FC<OnboardingChecklistProps> = props => 
                   </div>
                 </>}
                 {notification === 'help' && <>
-                  <p className="mb-2">{lang === 'uk' ? 'Перевірте Параметри Windows → Система → Сповіщення: Karkas має бути увімкнений, а режим «Не турбувати» — вимкнений.' : 'Check Windows Settings → System → Notifications: enable Karkas and turn off Do not disturb.'}</p>
                   <div className="flex flex-wrap gap-2">
                     <button type="button" className={primary} onClick={() => { void testNotification(); }}>{lang === 'uk' ? 'Перевірити ще раз' : 'Test again'}</button>
                     <button type="button" className={quiet} onClick={() => updateSteps({ notify: 'unavailable' })}>{lang === 'uk' ? 'Пропустити' : 'Skip'}</button>
                   </div>
                 </>}
               </div>
-              <p className="text-neutral-500">{lang === 'uk' ? 'Хрестик ховає Karkas у трей — таймер іде далі.' : 'The close button hides Karkas in the tray — the timer keeps running.'}</p>
             </>}
             {step.id === 'ai' && <>
-              <p>{lang === 'uk' ? 'Може розбити завдання на кроки й пояснити, куди йде час. Потрібен ключ Gemini. Без нього все інше працює.' : 'Break tasks into steps and understand where your time goes. Requires a Gemini key. Everything else works without it.'}</p>
-              <p role="status" className="text-neutral-300">{aiCheck === 'checking' ? (lang === 'uk' ? 'Перевіряємо ключ…' : 'Checking for a key…') : aiCheck === 'error' ? (lang === 'uk' ? 'Не вдалося перевірити ключ. Відкрийте ШІ-панель і перевірте підключення.' : 'Could not check the key. Open the AI panel to check the connection.') : null}</p>
+              <p role="status" className="text-neutral-300">{aiCheck === 'checking' ? (lang === 'uk' ? 'Перевіряємо ключ…' : 'Checking for a key…') : aiCheck === 'error' ? (lang === 'uk' ? 'Помилка підключення' : 'Connection error') : null}</p>
               <div className="flex flex-wrap gap-2">
                 <button type="button" className={primary} onClick={onOpenAI}>{lang === 'uk' ? 'Підключити' : 'Connect'}</button>
                 <button type="button" className={quiet} onClick={() => updateSteps({ ai: 'skipped' })}>{lang === 'uk' ? 'Без ШІ' : 'Without AI'}</button>

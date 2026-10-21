@@ -1,0 +1,36 @@
+/* Date picker in Pulse terms: dark capsule, round days, green for the chosen one. */
+.pulse-calendar { position: fixed; z-index: 90; width: 336px; box-sizing: border-box; padding: 16px; border-radius: 32px; background: #090a0a; color: #ffffff; box-shadow: 0 0 0 1px #2c2c2e, 0 24px 60px rgba(0, 0, 0, .6); display: flex; flex-direction: column; gap: 10px; transform-origin: top left; animation: pulseCalendarIn .3s cubic-bezier(.2, .9, .25, 1.1) both; }
+.pulse-calendar[data-from-icon] { transform-origin: top right; overflow-y: auto; overscroll-behavior: contain; animation: none; }
+.pulse-calendar[data-from-icon][data-positioned] { animation: pulseCalendarGrow .28s cubic-bezier(.2, .8, .2, 1) both; }
+.pulse-calendar[data-from-icon] > * { flex-shrink: 0; }
+.pulse-calendar[data-from-icon] .pulse-calendar-grid { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.pulse-calendar[data-from-icon] .pulse-calendar-day { width: 100%; max-width: 40px; justify-self: center; }
+.pulse-calendar-scroll-space { height: 0; width: 1px; pointer-events: none; overflow-anchor: none; }
+.pulse-calendar button { font: inherit; border: none; cursor: pointer; }
+.pulse-calendar button:focus-visible { outline: 2px solid #13f287; outline-offset: 2px; }
+.pulse-calendar-head { display: flex; align-items: center; gap: 4px; padding: 0 0 4px 8px; }
+.pulse-calendar-title { flex: 1; font-size: 18px; font-weight: 800; letter-spacing: -0.02em; }
+.pulse-calendar-title span { font-weight: 300; color: #a1a1a6; }
+.pulse-calendar-head button { width: 40px; height: 40px; border-radius: 20px; background: #1f1f1f; color: #ffffff; display: flex; align-items: center; justify-content: center; padding: 0; transition: transform .15s ease, background-color .2s ease; }
+.pulse-calendar-head button:hover:not(:disabled) { background: #3a3a3c; transform: scale(1.06); }
+.pulse-calendar-head button:disabled { opacity: .3; cursor: default; }
+.pulse-calendar-grid { display: grid; grid-template-columns: repeat(7, 40px); justify-content: space-between; row-gap: 4px; animation: pulseCalendarSwap .25s cubic-bezier(.2, .8, .2, 1) both; }
+.pulse-calendar-weekday { height: 28px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: #6e6e73; }
+.pulse-calendar-day { width: 40px; height: 40px; border-radius: 20px; background: transparent; color: #ffffff; font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; padding: 0; transition: background-color .15s ease, color .15s ease, transform .15s ease; }
+.pulse-calendar-day[data-weekend] { color: #d1d1d6; }
+.pulse-calendar-day[data-outside] { color: #3a3a3c; }
+.pulse-calendar-day:hover:not([aria-disabled]) { background: #1f1f1f; }
+.pulse-calendar-day:active:not([aria-disabled]) { transform: scale(.9); }
+.pulse-calendar-day[data-today] { box-shadow: inset 0 0 0 2px #3a3a3c; }
+.pulse-calendar-day[aria-selected="true"] { background: #13f287; color: #090a0a; box-shadow: none; }
+.pulse-calendar-day[aria-disabled] { color: #2c2c2e; cursor: default; }
+.pulse-calendar-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 4px; }
+.pulse-calendar-foot button { height: 40px; border-radius: 20px; padding: 0 16px; font-size: 13px; font-weight: 800; transition: transform .15s ease; }
+.pulse-calendar-today { background: #f4f4f2; color: #090a0a; }
+.pulse-calendar-clear { background: #1f1f1f; color: #d1d1d6; }
+.pulse-calendar-foot button:hover { transform: translateY(-1px); }
+@keyframes pulseCalendarIn { 0% { opacity: 0; transform: translateY(-8px) scale(.95); filter: blur(3px); } 60% { opacity: 1; filter: blur(0); } 100% { opacity: 1; transform: none; filter: none; } }
+@keyframes pulseCalendarGrow { from { opacity: 0; transform: translateX(var(--calendar-from-x, 0px)) scale(var(--calendar-from-scale-x, .12), var(--calendar-from-scale-y, .1)); } to { opacity: 1; transform: none; } }
+@keyframes pulseCalendarSwap { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .pulse-calendar, .pulse-calendar * { animation: none !important; transition: none !important; } }
+.karkas-reduce-motion .pulse-calendar, .karkas-reduce-motion .pulse-calendar * { animation: none !important; }

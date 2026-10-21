@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<title>Налаштування</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300..900&amp;display=swap">
+<style>
+body{margin:0;background:#090a0a}
+a{color:#13f287}
+button{font-family:inherit}
+@keyframes kUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+main > *{animation:kUp .6s cubic-bezier(.2,.8,.2,1) backwards}
+main > *:nth-child(2){animation-delay:.1s}
+main > * > *{animation:kUp .55s cubic-bezier(.2,.8,.2,1) backwards}
+main > * > *:nth-child(2){animation-delay:.08s}main > * > *:nth-child(3){animation-delay:.16s}main > * > *:nth-child(4){animation-delay:.24s}main > * > *:nth-child(5){animation-delay:.32s}main > * > *:nth-child(6){animation-delay:.4s}
+header button,header a{transition:transform .15s ease}header button:hover,header a:hover{transform:scale(1.06)}header button:active{transform:scale(.94)}
+main button{transition:transform .15s ease,background-color .2s ease,color .2s ease}main button:active{transform:scale(.96)}
+.knob{transition:transform .25s cubic-bezier(.2,.8,.2,1),background-color .2s ease}
+.track{transition:background-color .2s ease}
+.zoom{transition:zoom .25s ease}
+html{scrollbar-width:thin;scrollbar-color:#3a3a3c transparent}
+@media (prefers-reduced-motion: reduce){*,*::before,*::after{animation:none !important;transition:none !important}}
+.wc button{transition:background-color .15s ease,color .15s ease}.wc button:hover{background:#3a3a3c;color:#ffffff}.wc button.x:hover{background:#ff4d4f;color:#ffffff}
+[data-tip]{position:relative}
+[data-tip]::after{content:attr(data-tip);position:absolute;top:calc(100% + 10px);left:50%;transform:translate(-50%,-4px);white-space:nowrap;height:32px;line-height:32px;padding:0 12px;border-radius:16px;background:#f4f4f2;color:#090a0a;font-size:13px;font-weight:700;letter-spacing:0;opacity:0;pointer-events:none;transition:opacity .15s ease .35s,transform .15s ease .35s;z-index:60;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+[data-tip]:hover::after,[data-tip]:focus-visible::after{opacity:1;transform:translate(-50%,0)}
+[data-tip-up]::after{top:auto;bottom:calc(100% + 12px);transform:translate(-50%,4px)}
+.pg > * > *{animation:kUp .55s cubic-bezier(.2,.8,.2,1) backwards}.pg > * > *:nth-child(2){animation-delay:.08s}.pg > * > *:nth-child(3){animation-delay:.16s}.pg > * > *:nth-child(4){animation-delay:.24s}.pg > * > *:nth-child(5){animation-delay:.32s}.pg > aside{animation-delay:.12s}
+@media (max-width: 1040px){.pg{grid-template-columns:minmax(0,1fr) !important}}
+</style>
+</helmet>
+<div style="min-height: 1100px; background: #090a0a; color: #ffffff; font-family: 'SF Pro Display', Inter, ui-sans-serif, system-ui, sans-serif; display: flex; flex-direction: column">
+
+<header style="height: 76px; flex-shrink: 0; box-sizing: border-box; padding: 0 16px 0 24px; display: flex; align-items: center; gap: 16px">
+<svg width="44" height="44" viewBox="0 0 1080 1080" role="img" aria-label="Karkas" style="flex-shrink: 0"><rect width="1080" height="1080" rx="540" fill="#f4f4f2"></rect><path d="{{k}}" fill="#090a0a"></path></svg>
+<nav aria-label="Розділи" style="flex: 1; display: flex; justify-content: center; gap: 4px">
+<a href="Today.dc.html" style="text-decoration: none; height: 44px; box-sizing: border-box; padding: 0 20px; border-radius: 22px; font-size: 15px; font-weight: 600; color: #a1a1a6; display: flex; align-items: center">Сьогодні</a>
+<a href="Main.dc.html" style="text-decoration: none; height: 44px; box-sizing: border-box; padding: 0 20px; border-radius: 22px; font-size: 15px; font-weight: 600; color: #a1a1a6; display: flex; align-items: center">Ріст</a>
+<a href="Notes.dc.html" style="text-decoration: none; height: 44px; box-sizing: border-box; padding: 0 20px; border-radius: 22px; font-size: 15px; font-weight: 600; color: #a1a1a6; display: flex; align-items: center">Блокнот</a>
+</nav>
+<div style="display: flex; align-items: center; gap: 8px">
+<button type="button" aria-label="Пошук" data-tip="Пошук · Ctrl F" style="width: 44px; height: 44px; border: none; border-radius: 22px; background: #1f1f1f; color: #ffffff; display: flex; align-items: center; justify-content: center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg></button>
+<a href="Settings.dc.html" aria-label="Налаштування" data-tip="Налаштування" aria-current="page" style="width: 44px; height: 44px; border-radius: 22px; background: #f4f4f2; color: #090a0a; display: flex; align-items: center; justify-content: center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"></path><circle cx="12" cy="12" r="3"></circle></svg></a>
+<a href="QuickAdd.dc.html" data-quick-add="1" data-tip="Нова задача · Ctrl N" style="text-decoration: none; height: 44px; box-sizing: border-box; border-radius: 22px; background: #f4f4f2; color: #090a0a; padding: 0 20px; font-size: 15px; font-weight: 800; display: flex; align-items: center; gap: 6px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>Додати</a>
+<a href="Settings.dc.html" aria-label="Акаунт Melychyn Ivan · синхронізовано" data-tip="Melychyn Ivan · синхронізовано" style="position: relative; text-decoration: none; width: 44px; height: 44px; border-radius: 22px; background: #1f1f1f; color: #13f287; font-size: 14px; font-weight: 800; letter-spacing: -0.02em; display: flex; align-items: center; justify-content: center">MI<span style="position: absolute; right: 1px; bottom: 1px; width: 10px; height: 10px; border-radius: 5px; background: #13f287; box-shadow: 0 0 0 3px #090a0a"></span></a>
+<div class="wc" role="group" aria-label="Вікно" style="margin-left: 8px; display: flex; gap: 2px; padding: 4px; border-radius: 26px; background: #1f1f1f">
+<button type="button" aria-label="Згорнути" style="width: 36px; height: 36px; border: none; border-radius: 18px; background: transparent; color: #d1d1d6; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 12h12"></path></svg></button>
+<button type="button" aria-label="Розгорнути" style="width: 36px; height: 36px; border: none; border-radius: 18px; background: transparent; color: #d1d1d6; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="4"></rect></svg></button>
+<button type="button" class="x" aria-label="Закрити" style="width: 36px; height: 36px; border: none; border-radius: 18px; background: transparent; color: #d1d1d6; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"></path></svg></button>
+</div>
+</div>
+</header>
+
+<main class="zoom" style="zoom: {{zoom}}; width: 100%; max-width: 1280px; margin: 0 auto; box-sizing: border-box; padding: 24px 32px 120px; display: flex; flex-direction: column">
+<div class="pg-head" style="display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 28px">
+<div style="display: flex; flex-direction: column; gap: 14px">
+<h1 style="margin: 0; text-transform: uppercase; letter-spacing: -0.035em; line-height: 0.92; font-size: 80px"><span style="display: block; font-weight: 300">Мої</span><span style="display: block; font-weight: 800">налаштування</span></h1>
+<div role="tablist" aria-label="Розділ налаштувань" style="align-self: flex-start; display: flex; gap: 4px; padding: 4px; border-radius: 26px; background: #1f1f1f">
+<sc-for list="{{tabs}}" as="t" hint-placeholder-count="3">
+<button type="button" role="tab" aria-selected="{{t.sel}}" onClick="{{t.pick}}" style="height: 40px; border: none; border-radius: 20px; padding: 0 18px; background: {{t.bg}}; color: {{t.ink}}; font-size: 14px; font-weight: {{t.w}}; cursor: pointer">{{t.label}}</button>
+</sc-for>
+</div>
+</div>
+<div style="display: flex; gap: 8px">
+<a href="Main.dc.html" aria-label="Назад" style="flex-shrink: 0; width: 56px; height: 56px; border-radius: 28px; background: #1f1f1f; color: #ffffff; display: flex; align-items: center; justify-content: center"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg></a>
+</div>
+</div>
+
+<sc-if value="{{isLook}}" hint-placeholder-val="{{true}}">
+<div class="pg" style="display: grid; grid-template-columns: 400px minmax(0, 1fr); gap: 24px; align-items: start">
+<aside class="pg-side" style="min-width: 0; display: flex; flex-direction: column; gap: 12px">
+<section aria-label="Мова" style="box-sizing: border-box; padding: 24px 24px 24px 28px; border-radius: 44px; background: #1f1f1f; display: flex; flex-direction: column; gap: 16px">
+<span style="font-size: 20px; font-weight: 800; letter-spacing: -0.02em">Мова</span>
+<div role="radiogroup" aria-label="Мова" style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; padding: 4px; border-radius: 30px; background: #090a0a">
+<sc-for list="{{langs}}" as="l" hint-placeholder-count="2">
+<button type="button" role="radio" aria-checked="{{l.sel}}" onClick="{{l.pick}}" style="height: 52px; border: none; border-radius: 26px; background: {{l.bg}}; color: {{l.ink}}; font-size: 15px; font-weight: 800; display: flex; align-items: center; justify-content: center; gap: 10px; cursor: pointer"><span style="font-size: 12px; font-weight: 800; opacity: 0.6">{{l.code}}</span>{{l.label}}</button>
+</sc-for>
+</div>
+</section>
+
+<section aria-label="Поведінка" style="box-sizing: border-box; padding: 24px; border-radius: 44px; background: #1f1f1f; display: flex; flex-direction: column; gap: 6px">
+<sc-for list="{{general}}" as="g" hint-placeholder-count="3">
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 52px; padding: 0 4px">
+<span style="font-size: 16px; font-weight: 700">{{g.label}}</span>
+<button type="button" role="switch" aria-checked="{{g.on}}" aria-label="{{g.label}}" onClick="{{g.toggle}}" class="track" style="flex-shrink: 0; width: 56px; height: 32px; border: none; padding: 0; border-radius: 16px; background: {{g.track}}; position: relative; cursor: pointer"><span class="knob" style="position: absolute; top: 4px; left: 4px; width: 24px; height: 24px; border-radius: 12px; background: {{g.knob}}; transform: translateX({{g.x}})"></span></button>
+</div>
+</sc-for>
+</section>
+</aside>
+<div class="pg-main" style="min-width: 0; display: flex; flex-direction: column; gap: 12px">
+<section aria-label="Розмір інтерфейсу" style="box-sizing: border-box; padding: 28px; border-radius: 44px; background: #6408fa; display: flex; flex-direction: column; gap: 20px">
+<div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px">
+<span style="display: flex; flex-direction: column; gap: 4px"><span style="font-size: 22px; font-weight: 800; letter-spacing: -0.02em">Розмір інтерфейсу</span></span>
+<span style="font-size: 44px; font-weight: 800; letter-spacing: -0.04em; line-height: 1">{{pct}}</span>
+</div>
+<div style="position: relative; height: 150px; border-radius: 32px; background: rgba(9,10,10,0.22); overflow: hidden; display: flex; align-items: center; justify-content: center">
+<div aria-hidden="true" style="position: absolute; left: 0; top: 0; bottom: 0; width: {{fill}}; opacity: 0.35"><svg width="100%" height="100%" style="display: block"><defs><pattern id="hz" width="9" height="40" patternUnits="userSpaceOnUse" patternTransform="rotate(10)"><line x1="1.5" y1="-10" x2="1.5" y2="50" stroke="#ffffff" stroke-width="2"></line></pattern></defs><rect width="100%" height="100%" fill="url(#hz)"></rect></svg></div>
+<span style="position: relative; display: flex; align-items: baseline; gap: 14px"><span style="font-size: {{sampleBig}}; font-weight: 800; letter-spacing: -0.04em; line-height: 1">Аа</span><span style="font-size: {{sampleSmall}}; font-weight: 500; opacity: 0.9">Холодні дзвінки · 17%</span></span>
+</div>
+<div style="display: flex; align-items: center; gap: 8px">
+<button type="button" aria-label="Зменшити" onClick="{{dec}}" style="flex-shrink: 0; width: 52px; height: 52px; border: none; border-radius: 26px; background: rgba(9,10,10,0.25); color: #ffffff; font-size: 24px; font-weight: 600; cursor: pointer">−</button>
+<div role="radiogroup" aria-label="Розмір" style="flex: 1; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; padding: 4px; border-radius: 30px; background: rgba(9,10,10,0.25)">
+<sc-for list="{{sizes}}" as="s" hint-placeholder-count="4">
+<button type="button" role="radio" aria-checked="{{s.sel}}" onClick="{{s.pick}}" style="height: 44px; border: none; border-radius: 22px; background: {{s.bg}}; color: {{s.ink}}; font-size: 14px; font-weight: 800; cursor: pointer">{{s.label}}</button>
+</sc-for>
+</div>
+<button type="button" aria-label="Збільшити" onClick="{{inc}}" style="flex-shrink: 0; width: 52px; height: 52px; border: none; border-radius: 26px; background: rgba(9,10,10,0.25); color: #ffffff; font-size: 24px; font-weight: 600; cursor: pointer">+</button>
+</div>
+<button type="button" onClick="{{reset}}" style="align-self: flex-start; height: 40px; border: none; border-radius: 20px; padding: 0 16px; background: transparent; color: #ffffff; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.4); font-size: 13px; font-weight: 700; cursor: pointer">Скинути до 100%</button>
+</section>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{isGrowth}}" hint-placeholder-val="{{false}}">
+<div class="pg" style="display: grid; grid-template-columns: 400px minmax(0, 1fr); gap: 24px; align-items: start">
+<aside class="pg-side" style="min-width: 0; display: flex; flex-direction: column; gap: 12px">
+<section aria-label="Karkas AI" style="box-sizing: border-box; padding: 24px 24px 24px 28px; border-radius: 44px; background: #1f1f1f; display: flex; flex-direction: column; gap: 16px">
+<span style="font-size: 20px; font-weight: 800; letter-spacing: -0.02em">Karkas AI</span>
+<div role="radiogroup" aria-label="Модель" style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; padding: 4px; border-radius: 30px; background: #090a0a">
+<sc-for list="{{models}}" as="m" hint-placeholder-count="2">
+<button type="button" role="radio" aria-checked="{{m.sel}}" onClick="{{m.pick}}" style="height: 52px; border: none; border-radius: 26px; background: {{m.bg}}; color: {{m.ink}}; font-size: 15px; font-weight: 800; cursor: pointer">{{m.label}}</button>
+</sc-for>
+</div>
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 12px 12px 20px; border-radius: 30px; background: #090a0a">
+<span style="display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 700"><span style="width: 10px; height: 10px; border-radius: 5px; background: #13f287"></span>Ключ API підключено</span>
+<button type="button" style="height: 40px; border: none; border-radius: 20px; padding: 0 16px; background: #3a3a3c; color: #ffffff; font-size: 13px; font-weight: 700">Змінити</button>
+</div>
+</section>
+</aside>
+<div class="pg-main" style="min-width: 0; display: flex; flex-direction: column; gap: 12px">
+<section aria-label="Нагадування" style="box-sizing: border-box; padding: 24px; border-radius: 44px; background: #1f1f1f; display: flex; flex-direction: column; gap: 6px">
+<span style="font-size: 20px; font-weight: 800; letter-spacing: -0.02em; padding: 0 4px 8px">Нагадування</span>
+<sc-for list="{{growth}}" as="g" hint-placeholder-count="3">
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 52px; padding: 0 4px">
+<span style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 16px; font-weight: 700">{{g.label}}</span><span style="font-size: 13px; font-weight: 600; color: #8e8e93">{{g.when}}</span></span>
+<button type="button" role="switch" aria-checked="{{g.on}}" aria-label="{{g.label}}" onClick="{{g.toggle}}" class="track" style="flex-shrink: 0; width: 56px; height: 32px; border: none; padding: 0; border-radius: 16px; background: {{g.track}}; position: relative; cursor: pointer"><span class="knob" style="position: absolute; top: 4px; left: 4px; width: 24px; height: 24px; border-radius: 12px; background: {{g.knob}}; transform: translateX({{g.x}})"></span></button>
+</div>
+</sc-for>
+</section>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{isAccount}}" hint-placeholder-val="{{false}}">
+<div class="pg" style="display: grid; grid-template-columns: 400px minmax(0, 1fr); gap: 24px; align-items: start">
+<aside class="pg-side" style="min-width: 0; display: flex; flex-direction: column; gap: 12px">
+<section aria-label="Оновлення" style="box-sizing: border-box; padding: 24px 24px 24px 28px; border-radius: 44px; background: #1f1f1f; display: flex; align-items: center; justify-content: space-between; gap: 16px">
+<span style="display: flex; flex-direction: column; gap: 4px"><span style="font-size: 20px; font-weight: 800; letter-spacing: -0.02em">Версія 1.3.23</span><span style="font-size: 14px; font-weight: 600; color: #13f287">Актуальна</span></span>
+<button type="button" style="height: 48px; border: none; border-radius: 24px; padding: 0 20px; background: #3a3a3c; color: #ffffff; font-size: 14px; font-weight: 700">Перевірити</button>
+</section>
+</aside>
+<div class="pg-main" style="min-width: 0; display: flex; flex-direction: column; gap: 12px">
+<section aria-label="Акаунт" style="box-sizing: border-box; padding: 24px; border-radius: 44px; background: #f4f4f2; color: #090a0a; display: flex; align-items: center; gap: 16px">
+<span style="flex-shrink: 0; width: 64px; height: 64px; border-radius: 32px; background: #090a0a; color: #13f287; font-size: 22px; font-weight: 800; display: flex; align-items: center; justify-content: center">MI</span>
+<span style="flex: 1; display: flex; flex-direction: column; gap: 4px"><span style="font-size: 20px; font-weight: 800; letter-spacing: -0.02em">Melychyn Ivan</span><span style="font-size: 14px; font-weight: 600; color: #48484a">Google · синхронізовано 2 хв тому</span></span>
+<a href="Auth.dc.html" style="text-decoration: none; height: 48px; box-sizing: border-box; border-radius: 24px; padding: 0 20px; background: #090a0a; color: #ffffff; font-size: 14px; font-weight: 700; display: flex; align-items: center">Синхронізувати</a>
+<a href="Auth.dc.html" style="text-decoration: none; height: 48px; box-sizing: border-box; border-radius: 24px; padding: 0 20px; background: #e5e5e3; color: #090a0a; font-size: 14px; font-weight: 700; display: flex; align-items: center">Вийти</a>
+</section>
+<section aria-label="Гарячі клавіші" style="box-sizing: border-box; padding: 24px; border-radius: 44px; background: #1f1f1f; display: flex; flex-direction: column; gap: 8px">
+<span style="font-size: 20px; font-weight: 800; letter-spacing: -0.02em; padding: 0 4px 8px">Гарячі клавіші</span>
+<sc-for list="{{keys}}" as="k" hint-placeholder-count="3">
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 4px; min-height: 40px">
+<span style="font-size: 15px; font-weight: 600">{{k.label}}</span>
+<span style="height: 32px; box-sizing: border-box; padding: 0 12px; border-radius: 16px; background: #090a0a; color: #d1d1d6; font-size: 13px; font-weight: 800; display: flex; align-items: center">{{k.combo}}</span>
+</div>
+</sc-for>
+</section>
+</div>
+</div>
+</sc-if>
+
+</main>
+
+<a href="AI.dc.html" aria-label="Karkas AI" data-ai="1" data-tip="Відкрити Karkas AI · Ctrl K" data-tip-up="1" style="position: fixed; left: 0; right: 0; bottom: 24px; z-index: 50; margin: 0 auto; width: max-content; height: 60px; box-sizing: border-box; padding: 0 24px 0 8px; border-radius: 30px; background: #090a0a; color: #ffffff; text-decoration: none; display: flex; align-items: center; gap: 12px; box-shadow: 0 0 0 1px #2c2c2e, 0 18px 44px rgba(0,0,0,0.55)"><span style="width: 44px; height: 44px; border-radius: 22px; background: #13f287; color: #090a0a; display: flex; align-items: center; justify-content: center"><svg width="17" height="18" viewBox="240 210 600 660" aria-hidden="true"><path d="{{k}}" fill="currentColor"></path></svg></span><span style="font-size: 15px; font-weight: 800">Karkas AI</span></a>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1100}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { tab: 'look', size: 1, lang: 'uk', model: 'fast',
+      sw: { sound: true, motion: true, startup: false, measure: true, dayclose: true, weekly: true, memory: true } };
+  }
+  componentDidMount() {
+    var r = document.documentElement.style;
+    r.colorScheme = 'dark'; r.background = '#090a0a';
+    r.scrollbarWidth = 'thin'; r.scrollbarColor = '#3a3a3c #090a0a';
+    this.onKey = function (e) {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.code === 'KeyN' || /^[nNтТ]$/.test(e.key))) {
+        e.preventDefault();
+        var a = document.querySelector('a[data-quick-add]');
+        if (a) a.click();
+      }
+    };
+    document.addEventListener('keydown', this.onKey, true);
+    this.onAi = function (e) {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.code === 'KeyK' || /^[kKлЛ]$/.test(e.key))) {
+        e.preventDefault();
+        var a = document.querySelector('a[data-ai]');
+        if (a) a.click();
+      }
+    };
+    document.addEventListener('keydown', this.onAi, true);
+  }
+  componentWillUnmount() {
+    document.removeEventListener('keydown', this.onKey, true);
+    document.removeEventListener('keydown', this.onAi, true);
+  }
+  renderVals() {
+    var self = this;
+    var scales = [0.9, 1, 1.15, 1.3];
+    var size = this.state.size;
+    var sw = function (id, label, when) {
+      var on = !!self.state.sw[id];
+      return { label: label, when: when, on: on ? 'true' : 'false', track: on ? '#13f287' : '#3a3a3c', knob: on ? '#090a0a' : '#a1a1a6', x: on ? '24px' : '0px',
+        toggle: function () { var next = Object.assign({}, self.state.sw); next[id] = !on; self.setState({ sw: next }); } };
+    };
+    var pill = function (list, key, light) {
+      return list.map(function (o) {
+        var on = self.state[key] === o.id;
+        var res = { label: o.label, code: o.code, sel: on ? 'true' : 'false',
+          bg: on ? '#f4f4f2' : 'transparent', ink: on ? '#090a0a' : (light ? '#ffffff' : '#d1d1d6'), w: on ? '800' : '700',
+          pick: function () { var s = {}; s[key] = o.id; self.setState(s); } };
+        return res;
+      });
+    };
+    return {
+      k: 'M271.942 219.415L404.957 219.433C422.53 219.359 443.586 218.322 461.004 219.748C464.585 220.026 470.468 224.229 471.281 227.599C474.687 241.912 473.545 264.483 473.642 279.259L474.648 368.86C474.881 385.654 475.074 402.486 475.906 419.243C476.603 433.371 493.847 432.426 495.434 419.502C496.672 412.669 495.55 405.541 495.763 398.69C496.307 381.359 493.572 360.175 495.469 342.556C495.846 339.054 497.151 335.607 499.67 333.145C502.607 330.275 506.619 328.821 510.714 328.511C530.128 327.042 553.065 329.442 572.653 328.457C595.781 327.291 607.064 334.864 607.296 305.608C607.45 288.551 606.576 269.837 606.675 252.054C606.747 239.199 610.007 222.176 622.856 221.785C634.042 221.452 645.267 221.6 656.453 221.6L718.209 221.637L775.592 221.489C786.507 221.452 798.177 221.137 808.996 221.84C814.337 222.174 818.846 222.47 821.924 226.655C823.859 229.265 825.33 232.321 825.485 235.561C826.239 252.744 825.949 270.779 826.162 287.981C826.452 309.922 826.607 331.846 826.627 353.788C826.646 365.064 826.956 377.192 825.969 388.413C825.096 397.996 812.065 399.708 802.443 399.738C776.916 399.818 733.402 398.781 725.622 402.652C721.19 404.837 719.138 409.448 718.209 413.892C714.281 432.723 722.08 474.255 716.448 490.845C715.268 494.345 713.178 497.437 709.655 499.122C693.224 506.955 623.94 495.66 608.109 504.27C605.225 505.825 603.464 507.917 602.67 510.991C600.541 519.175 600.677 568.577 604.954 574.298C607.605 577.854 611.999 578.909 616.295 579.576C623.398 580.649 630.945 580.131 638.106 580.094C659.472 580.001 684.709 577.928 705.63 581.038C706.484 581.172 707.301 581.488 708.01 581.983C709.2 582.816 710.087 583.504 710.88 584.207C714.001 586.973 715.705 591.007 716.058 595.162C716.67 602.39 716.562 610.44 716.681 617.164C716.874 634.421 717.358 651.826 716.777 669.083C716.119 688.007 735.627 686.637 749.852 686.544C766.747 686.415 783.682 686.304 800.596 686.155C802.526 686.169 804.536 686.217 806.569 686.282C813.468 686.501 821.591 687.518 824.788 693.636C826.801 697.487 827.381 702.302 827.672 706.56C828.62 721.151 827.207 736.335 827.265 751C827.381 780.718 828.581 810.789 827.11 840.47C826.936 843.97 826.781 848.562 825.175 851.71C823.762 854.524 819.775 857.431 816.64 858.209C805.686 860.931 761.774 859.45 747.801 859.468C707.314 859.468 666.014 860.949 625.604 858.968C622.604 858.82 617.476 858.876 615.037 857.135C611.399 854.524 609.192 851.025 608.128 846.821C606.58 840.6 607.218 833.286 607.218 826.879C607.18 809.289 609.038 786.403 606.348 769.608C605.651 765.183 604.509 760.758 600.483 758.054C585.62 748.074 514.226 762.183 500.311 751.222C496.982 748.574 495.86 744.482 495.26 740.538C494.156 733.52 494.795 725.836 494.853 718.744C494.989 701.987 495.976 683.378 493.75 666.861C493.169 662.603 491.873 657.048 487.692 654.641C482.514 651.662 476.554 657.022 475.145 662.827C471.803 676.598 473.487 701.586 473.487 711.504L473.448 810.048C473.448 821.861 474.184 835.545 472.868 847.173C472.287 852.321 467.991 855.098 463.791 857.857C463.032 858.354 462.151 858.633 461.244 858.663C413.027 860.236 363.524 857.83 315.235 858.857C299.017 859.209 282.277 859.227 266.097 858.524C259.885 858.246 253.227 849.747 253.963 843.822C253.711 810.789 253.673 777.719 253.44 744.667L252.937 519.546L252.744 322.014C252.686 294.35 252.453 266.724 252.008 239.061C251.757 224.062 257.272 219.859 271.942 219.415Z',
+      tabs: pill([{ id: 'look', label: 'Вигляд' }, { id: 'growth', label: 'Ріст і ШІ' }, { id: 'account', label: 'Акаунт' }], 'tab'),
+      isLook: this.state.tab === 'look', isGrowth: this.state.tab === 'growth', isAccount: this.state.tab === 'account',
+      zoom: String(scales[size]), pct: Math.round(scales[size] * 100) + '%',
+      fill: Math.round((size + 1) / scales.length * 100) + '%',
+      sampleBig: Math.round(56 * scales[size]) + 'px', sampleSmall: Math.round(16 * scales[size]) + 'px',
+      sizes: [{ id: 0, label: 'S' }, { id: 1, label: 'M' }, { id: 2, label: 'L' }, { id: 3, label: 'XL' }].map(function (s) {
+        var on = size === s.id;
+        return { label: s.label, sel: on ? 'true' : 'false', bg: on ? '#f4f4f2' : 'transparent', ink: on ? '#090a0a' : '#ffffff',
+          pick: function () { self.setState({ size: s.id }); } };
+      }),
+      dec: function () { self.setState({ size: Math.max(0, self.state.size - 1) }); },
+      inc: function () { self.setState({ size: Math.min(3, self.state.size + 1) }); },
+      reset: function () { self.setState({ size: 1 }); },
+      langs: pill([{ id: 'uk', code: 'UA', label: 'Українська' }, { id: 'en', code: 'EN', label: 'English' }], 'lang'),
+      general: [sw('sound', 'Звуки'), sw('motion', 'Анімації'), sw('startup', 'Запуск разом із Windows')],
+      growth: [sw('measure', 'Нагадати про замір', 'у день заміру, 10:00'), sw('dayclose', 'Закрити день', 'щодня о 21:00'), sw('weekly', 'Тижневий огляд', 'неділя, 19:00')],
+      models: pill([{ id: 'fast', label: 'Швидка модель' }, { id: 'smart', label: 'Розумна модель' }], 'model'),
+      keys: [{ label: 'Karkas AI', combo: 'Ctrl K' }, { label: 'Нова задача', combo: 'Ctrl N' }, { label: 'Пошук', combo: 'Ctrl F' }, { label: 'Додати й почати наступну', combo: 'Enter' }, { label: 'Закрити рядок', combo: 'Esc' }, { label: 'Завершити практику', combo: 'Ctrl Enter' }]
+    };
+  }
+}
+</script>
+</body>
+</html>

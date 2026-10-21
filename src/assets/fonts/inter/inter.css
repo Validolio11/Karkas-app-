@@ -1,0 +1,11 @@
+/* Inter variable, SIL Open Font License 1.1.
+ * Source: rsms/inter, docs/font-files/InterVariable.woff2.
+ * License: public/licenses/Inter-OFL.txt. Bundled for offline Electron use.
+ */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('./InterVariable.woff2') format('woff2');
+}

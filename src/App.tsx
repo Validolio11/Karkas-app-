@@ -19,9 +19,25 @@ import { TaskCard } from './components/TaskCard';
 import { DashboardView } from './components/DashboardView';
 import { NotepadView } from './components/NotepadView';
 import { useAccountNotes } from './hooks/useAccountNotes';
+import { useAccountAvatar } from './hooks/useAccountAvatar';
+import { growthStateFrom, useGrowth, type GrowthState } from './hooks/useGrowth';
+import { normalizeQuickAddCategory } from './utils/quickAddParse';
 import { useDialogKeyboard } from './components/useDialogKeyboard';
-import { HistoryView } from './components/HistoryView';
-import { TopWorkflowMatrix } from './components/TopWorkflowMatrix';
+import { GrowthView } from './components/growth/GrowthView';
+import { SkillSetup } from './components/growth/SkillSetup';
+import { PracticeFinishDialog } from './components/growth/PracticeFinishDialog';
+import { GROWTH_INTEGRATION_STRINGS } from './components/growth/growthIntegrationI18n';
+import { isConfiguredSkill } from './utils/growth';
+import type { GrowthSkill, Skill } from './types';
+import { PulseHeader } from './components/pulse/PulseHeader';
+import { AIIsland } from './components/pulse/AIIsland';
+import { PageShell, PageHead, PageGrid } from './components/pulse/PageShell';
+import { TodaySidebar } from './components/pulse/TodaySidebar';
+import { CategorySwitcher } from './components/pulse/CategorySwitcher';
+import { QuickAddDialog } from './components/pulse/QuickAddDialog';
+import { SettingsView } from './components/pulse/SettingsView';
+import { AccountView } from './components/pulse/AccountView';
+import { TodayTaskRow } from './components/pulse/TodayTaskRow';
 import { QuickAddDrawer, type QuickAddPrefill } from './components/QuickAddDrawer';
 import { QuickAddLine } from './components/QuickAddLine';
 import { NowStrip } from './components/NowStrip';
@@ -31,7 +47,6 @@ import { readOnboarding, writeOnboarding, shouldOfferOnboarding, type Onboarding
 import { summarizeDay, carryOverCandidates, dayCloseHour, shouldOfferDayClose, morningRecap, formatDayFocus, normalizeDayLog, type DayLog } from './utils/dayRecap';
 import { AIAssistantSheet } from './components/AIAssistantSheet';
 import { ManageTabsModal } from './components/ManageTabsModal';
-import { FireParticlesBackground } from './components/FireParticlesBackground';
 import { sound } from './utils/audio';
 import { detectEndedSessions, type EndedSession } from './utils/sessionSummary';
 import { SessionSummaryCard } from './components/SessionSummaryCard';
@@ -41,9 +56,9 @@ import {
   TRANSLATIONS,
   getRandomTabColor,
 } from './utils/i18n';
-import { Trash, Plus, CheckCircle, Flame, RefreshCw, Search, X, AlertTriangle, Sparkles } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
-import { AIIcon, AIIconId, getSavedAIIconId } from './components/AIIconTemplates';
+import { Trash, Plus, CheckCircle, Search, X, AlertTriangle, Sparkles } from 'lucide-react';
+import { motion, AnimatePresence, MotionConfig } from 'motion/react';
+import { AIIconId, getSavedAIIconId } from './components/AIIconTemplates';
 import { 
   auth, 
   loginWithGoogle, 
@@ -57,9 +72,7 @@ import {
   UserCloudState 
 } from './services/firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { AccountModal } from './components/AccountModal';
 import { UpdateModal } from './components/UpdateModal';
-import { SettingsModal } from './components/SettingsModal';
 import { mergeWorkspace, normalizeWorkspaceForStorage, sameWorkspace, type WorkspaceState } from './utils/syncState';
 import { diffWorkspaceOperations } from './utils/syncOperations';
 import { karkasApiFetch, desktopHasAiKey } from './utils/desktopApi';
@@ -74,7 +87,7 @@ import { discardTaskStepAttribution } from './utils/taskWorkTelemetry';
 import { TaskWorkPlanDialog } from './components/TaskWorkPlanDialog';
 import { applyTaskWorkPlan, type WorkPlanEdit } from './utils/taskWorkPlan';
 import { useWorkReminders } from './components/useWorkReminders';
-import { StrategyView } from './components/StrategyView';
+
 import { useStrategyReminders } from './components/useStrategyReminders';
 import { createPersonalStrategyProfile, readPersonalStrategy, savePersonalStrategy, clearPersonalStrategy, applyStrategyResponse, personalStrategyKey, intactStoredStrategy } from './utils/personalStrategy';
 import { continueStrategyDiscovery, normalizeStrategyDiscovery, preparePersonalDiscoveryRequest, preserveDiscoveryAfterUserGoalEdit, preserveDiscoveryAfterTabMigration } from './utils/strategyDiscovery';
@@ -132,6 +145,9 @@ const INITIAL_NOTES_EN: NotepadNote[] = [
     pinned: false,
   },
 ];
+const GROWTH_SKILLS_KEY = 'karkas_growth_skills_v1';
+const GROWTH_MEASUREMENTS_KEY = 'karkas_growth_measurements_v1';
+const GROWTH_SESSIONS_KEY = 'karkas_growth_sessions_v1';
 const LANG_KEY = 'todo_app_lang';
 const AI_ICON_KEY = 'karkas_ai_icon_variant';
 const FIRE_ENABLED_KEY = 'karkas_fire_enabled';
@@ -142,6 +158,16 @@ const APP_ZOOM_KEY = 'karkas_app_zoom_percent';
 const MIN_APP_ZOOM = 75;
 const MAX_APP_ZOOM = 150;
 const DEFAULT_APP_ZOOM = 100;
+
+/** «2 хв тому» for the account card. */
+function formatSyncAgo(at: number, lang: Language) {
+  const minutes = Math.max(0, Math.round((Date.now() - at) / 60000));
+  if (minutes < 1) return lang === 'uk' ? 'щойно' : 'just now';
+  if (minutes < 60) return lang === 'uk' ? minutes + ' хв тому' : minutes + ' min ago';
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return lang === 'uk' ? hours + ' год тому' : hours + ' h ago';
+  return new Date(at).toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-GB', { day: 'numeric', month: 'short' });
+}
 const APP_BUILD_VERSION = packageMetadata.version;
 const STARTUP_REQUEST_TIMEOUT_MS = 10000;
 const accountKeyForOwner = (uid: string | null) => 'karkas_workspace:' + (uid || 'guest');
@@ -179,8 +205,17 @@ export default function App() {
   });
 
   const [initialWorkspace] = useState(() => readLocalWorkspace(localStorage,
-    { tasks: STORAGE_KEY, tabs: TABS_KEY, deletedTasks: DELETED_STORAGE_KEY },
+    { tasks: STORAGE_KEY, tabs: TABS_KEY, deletedTasks: DELETED_STORAGE_KEY,
+      skills: GROWTH_SKILLS_KEY, measurements: GROWTH_MEASUREMENTS_KEY, practiceSessions: GROWTH_SESSIONS_KEY },
     { soundEnabled: true, fireEnabled: true, lang, aiIconVariant: 'quantum' }));
+  const [growthSetup, setGrowthSetup] = useState<{ skillId?: string; initialTitle?: string } | null>(null);
+  const [practiceFinish, setPracticeFinish] = useState<{ skillId: string; taskId?: string; measurementMode?: boolean; completeTask?: boolean; ownerId: string | null; generation: number } | null>(null);
+  const practiceFinishRef = React.useRef(practiceFinish);
+  practiceFinishRef.current = practiceFinish;
+  const [growthState, setGrowthState] = useState<GrowthState>(() => growthStateFrom(initialWorkspace.workspace));
+  const growthRef = React.useRef(growthState);
+  const growthFields = ['skills', 'measurements', 'practiceSessions'] as const;
+  const growthPresenceRef = React.useRef(new Set(growthFields.filter(key => initialWorkspace.workspace[key] !== undefined)));
   const canPersistWorkspaceRef = React.useRef(initialWorkspace.canPersist);
   const [workspaceStorageError, setWorkspaceStorageError] = useState(false);
   const [workspaceReloadToken, setWorkspaceReloadToken] = useState(0);
@@ -298,8 +333,9 @@ export default function App() {
   const [selectedPhase, setSelectedPhase] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       const hash = window.location.hash;
+      if (hash === '#today') return 'ALL';
       if (hash === '#dashboard') return 'DASHBOARD';
-      if (hash === '#strategy') return 'STRATEGY';
+      if (hash === '#strategy' || hash === '#growth') return 'STRATEGY';
       if (hash === '#notes' || hash === '#notepad') return 'NOTES';
       if (hash === '#history') return 'HISTORY';
     }
@@ -312,6 +348,12 @@ export default function App() {
       lang === 'uk' ? INITIAL_NOTES_UK : INITIAL_NOTES_EN);
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [quickAddPrefill, setQuickAddPrefill] = useState<QuickAddPrefill>();
+  const [isQuickAddOpen, setIsQuickAddOpen] = useState(false);
+  const [motionEnabled, setMotionEnabled] = useState(() => { try { return localStorage.getItem('karkas_motion') !== 'off'; } catch { return true; } });
+  useEffect(() => {
+    document.documentElement.classList.toggle('karkas-reduce-motion', !motionEnabled);
+    try { localStorage.setItem('karkas_motion', motionEnabled ? 'on' : 'off'); } catch { /* the choice still applies to this session */ }
+  }, [motionEnabled]);
   const quickAddPrefillKey = React.useRef(0);
   const [isAIOpen, setIsAIOpen] = useState(false);
   const [isManageTabsOpen, setIsManageTabsOpen] = useState(false);
@@ -373,7 +415,7 @@ export default function App() {
       setDesktopPreferencesReady(true);
     });
     const unsubscribe = desktop.window.onCommand((command) => {
-      if (command === 'new-task') setIsAddOpen(true);
+      if (command === 'new-task') setIsQuickAddOpen(true);
       if (command === 'open-settings') setIsSettingsOpen(true);
     });
     return () => { active = false; unsubscribe(); };
@@ -482,6 +524,7 @@ export default function App() {
   const [isWindowMinimized, setIsWindowMinimized] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchVisible, setSearchVisible] = useState(false);
   const [tabToDeleteConfirm, setTabToDeleteConfirm] = useState<TaskTab | null>(null);
   useDialogKeyboard(!!tabToDeleteConfirm, () => setTabToDeleteConfirm(null), 'tab-delete-confirm-dialog');
   const searchInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -503,7 +546,8 @@ export default function App() {
   // Global Keyboard Shortcuts (Escape, Ctrl+N, Ctrl+Shift+F, '/')
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement)?.closest('dialog[open]')) return;
+      if (e.defaultPrevented || e.isComposing) return;
+      if ((e.target as HTMLElement)?.closest('dialog[open], [aria-modal="true"]')) return;
       const targetTag = (e.target as HTMLElement)?.tagName?.toLowerCase();
       const isInputFocused =
         targetTag === 'input' || targetTag === 'textarea' || (e.target as HTMLElement)?.isContentEditable;
@@ -516,7 +560,7 @@ export default function App() {
         else if (isSettingsOpen) setIsSettingsOpen(false);
         else if (isAddOpen) setIsAddOpen(false);
         else if (isWindowMinimized) setIsWindowMinimized(false);
-        else if (searchQuery) setSearchQuery('');
+        else if (searchQuery || searchVisible) { setSearchQuery(''); setSearchVisible(false); }
         return;
       }
 
@@ -528,31 +572,44 @@ export default function App() {
         return;
       }
 
-      // Ctrl + N / Cmd + N -> Focus quick add or open the drawer
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
+      const shortcut = e.code || e.key;
+      if ((e.ctrlKey || e.metaKey) && (shortcut === 'KeyK' || e.key.toLowerCase() === 'k')) {
         e.preventDefault();
-        sound.tick(600);
-        if (quickAddVisible && quickAddInputRef.current) {
-          setIsAddOpen(false);
-          quickAddInputRef.current.focus();
-        } else setIsAddOpen(true);
+        if (!isAccountOpen && !isSettingsOpen && !isUpdateOpen && !isManageTabsOpen && !isAddOpen && !isQuickAddOpen) setIsAIOpen(true);
+        return;
+      }
+      if (((e.ctrlKey || e.metaKey) && (shortcut === 'KeyF' || e.key.toLowerCase() === 'f') && !e.shiftKey) || e.key === '/' && !isInputFocused) {
+        if (isAIOpen || isAccountOpen || isSettingsOpen || isUpdateOpen || isManageTabsOpen || isAddOpen || isQuickAddOpen) return;
+        e.preventDefault();
+        if (selectedPhase === 'NOTES') {
+          document.querySelector<HTMLInputElement>('[data-pulse-notes] input')?.focus();
+        } else {
+          setSelectedPhase('ALL'); setSearchVisible(true);
+          requestAnimationFrame(() => searchInputRef.current?.focus());
+        }
         return;
       }
 
-      // '/' (Slash) -> Focus Search Input
-      if (e.key === '/' && !isInputFocused) {
+      // Ctrl + N / Cmd + N -> Focus quick add or open the drawer
+      if ((e.ctrlKey || e.metaKey) && (shortcut === 'KeyN' || e.key.toLowerCase() === 'n') && !isInputFocused && !isAIOpen && !isAccountOpen && !isSettingsOpen && !isUpdateOpen && !isManageTabsOpen && !isAddOpen && !isQuickAddOpen) {
         e.preventDefault();
-        sound.tick(500);
-        searchInputRef.current?.focus();
+        sound.tick(600);
+        if (!['DASHBOARD', 'STRATEGY', 'NOTES', 'HISTORY'].includes(selectedPhase)) {
+          setActiveFilter('ALL');
+          setIsAddOpen(false);
+          requestAnimationFrame(() => quickAddInputRef.current?.focus());
+        } else setIsQuickAddOpen(true);
         return;
       }
+
+
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isAIOpen, isAccountOpen, isManageTabsOpen, isUpdateOpen, isSettingsOpen, isAddOpen, isWindowMinimized, searchQuery, quickAddVisible]);
+  }, [isAIOpen, isAccountOpen, isManageTabsOpen, isUpdateOpen, isSettingsOpen, isAddOpen, isQuickAddOpen, isWindowMinimized, searchQuery, searchVisible, quickAddVisible, selectedPhase]);
 
   const handleToggleFullscreen = () => {
     sound.tick(500);
@@ -703,6 +760,7 @@ export default function App() {
 
   // Google Cloud Auth & Sync state
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [accountAvatarUrl, setAccountAvatarUrl] = useAccountAvatar(currentUser?.uid ?? null, currentUser?.photoURL);
   const strategyOwner = currentUser?.uid ?? null;
   const [personalProfile, setPersonalProfile] = useState(() => readPersonalStrategy(localStorage, localStorage.getItem('karkas_workspace_owner')));
   const [profileOwner, setProfileOwner] = useState<string | null>(() => localStorage.getItem('karkas_workspace_owner'));
@@ -840,12 +898,12 @@ export default function App() {
       if (selectedPhase === 'DASHBOARD') {
         window.location.hash = '#dashboard';
       } else if (selectedPhase === 'STRATEGY') {
-        window.location.hash = '#strategy';
+        window.location.hash = '#growth';
       } else if (selectedPhase === 'NOTES') {
         window.location.hash = '#notes';
       } else if (selectedPhase === 'HISTORY') {
         window.location.hash = '#history';
-      } else if (window.location.hash === '#dashboard' || window.location.hash === '#strategy' || window.location.hash === '#notes' || window.location.hash === '#notepad' || window.location.hash === '#history') {
+      } else if (window.location.hash === '#dashboard' || window.location.hash === '#strategy' || window.location.hash === '#growth' || window.location.hash === '#notes' || window.location.hash === '#notepad' || window.location.hash === '#history') {
         history.replaceState(null, '', window.location.pathname);
       }
     }
@@ -854,8 +912,9 @@ export default function App() {
   useEffect(() => {
     const handleHashChange = () => {
       const hash = window.location.hash;
-      if (hash === '#dashboard') setSelectedPhase('DASHBOARD');
-      else if (hash === '#strategy') setSelectedPhase('STRATEGY');
+      if (hash === '#today') setSelectedPhase('ALL');
+      else if (hash === '#dashboard') setSelectedPhase('DASHBOARD');
+      else if (hash === '#strategy' || hash === '#growth') setSelectedPhase('STRATEGY');
       else if (hash === '#notes' || hash === '#notepad') setSelectedPhase('NOTES');
       else if (hash === '#history') setSelectedPhase('HISTORY');
       else if (isSystemView(selectedPhase) && selectedPhase !== 'ALL') setSelectedPhase('ALL');
@@ -908,6 +967,10 @@ export default function App() {
   autoSyncEnabledRef.current = autoSyncEnabled;
   const accountKey = accountKeyForOwner;
   const readWorkspace = (): WorkspaceState => normalizeWorkspaceForStorage({
+    ...Object.fromEntries(growthFields.flatMap(key => {
+      const value = growthPresenceRef.current.has(key) ? growthRef.current[key] : baseWorkspaceRef.current?.[key];
+      return value === undefined ? [] : [[key, value]];
+    })),
     tasks: currentTasksRef.current,
     tabs: currentTabsRef.current,
     deletedTasks: currentDeletedTasksRef.current,
@@ -939,7 +1002,14 @@ export default function App() {
   };
   const applyWorkspace = (input: WorkspaceState, localSessionChange = false) => {
     if (!canPersistWorkspaceRef.current) throw new Error('Recovery backup failed; workspace writes are blocked');
-    const value = migrateSystemCategories(parseWorkspace(input));
+    // Missing legacy fields are unknown, not deletions of an acknowledged record.
+    const hydrated = { ...input };
+    for (const key of growthFields) {
+      if (hydrated[key] === undefined && baseWorkspaceRef.current?.[key] !== undefined) {
+        Object.assign(hydrated, { [key]: baseWorkspaceRef.current[key] });
+      }
+    }
+    const value = migrateSystemCategories(parseWorkspace(hydrated));
     // A loaded or merged snapshot becomes the baseline, never a local session ending.
     if (!localSessionChange) previousSessionTasksRef.current = { tasks: value.tasks, ownerId: workspaceOwnerRef.current, ready: timerWorkspaceReadyRef.current };
     ++timerNoticeScopeRef.current;
@@ -949,6 +1019,9 @@ export default function App() {
     currentTasksRef.current = value.tasks;
     currentTabsRef.current = value.tabs;
     currentDeletedTasksRef.current = value.deletedTasks;
+    growthPresenceRef.current = new Set(growthFields.filter(key => value[key] !== undefined));
+    growthRef.current = growthStateFrom(value);
+    setGrowthState(growthRef.current);
     currentSoundEnabledRef.current = value.settings.soundEnabled;
     currentFireEnabledRef.current = value.settings.fireEnabled;
     currentLangRef.current = value.settings.lang as Language;
@@ -964,6 +1037,9 @@ export default function App() {
     writeRecoverableJson(localStorage, STORAGE_KEY, JSON.stringify(value.tasks));
     writeRecoverableJson(localStorage, TABS_KEY, JSON.stringify(value.tabs));
     writeRecoverableJson(localStorage, DELETED_STORAGE_KEY, JSON.stringify(value.deletedTasks));
+    writeRecoverableJson(localStorage, GROWTH_SKILLS_KEY, JSON.stringify(growthRef.current.skills));
+    writeRecoverableJson(localStorage, GROWTH_MEASUREMENTS_KEY, JSON.stringify(growthRef.current.measurements));
+    writeRecoverableJson(localStorage, GROWTH_SESSIONS_KEY, JSON.stringify(growthRef.current.practiceSessions));
     localStorage.setItem(AI_ICON_KEY, value.settings.aiIconVariant);
     const owner = workspaceOwnerRef.current;
     void persistWorkspace().then(saved => {
@@ -972,12 +1048,13 @@ export default function App() {
   };
 
   const recoveryCandidate = useMemo(() => {
-    if (tasks.length || tabs.length || deletedTasks.length) return null;
+    if (tasks.length || tabs.length || deletedTasks.length || growthState.skills.length || growthState.measurements.length || growthState.practiceSessions.length) return null;
     try { return readAccountRecovery(localStorage, accountKey(strategyOwner)); } catch { return null; }
-  }, [strategyOwner, workspaceReady, tasks.length, tabs.length, deletedTasks.length]);
+  }, [strategyOwner, workspaceReady, tasks.length, tabs.length, deletedTasks.length, growthState]);
   const restoreRetainedWorkspace = () => {
     if (!recoveryCandidate || workspaceOwnerRef.current !== strategyOwner || (auth.currentUser?.uid ?? null) !== strategyOwner
-      || currentTasksRef.current.length || currentTabsRef.current.length || currentDeletedTasksRef.current.length || !initialWorkspace.backupPreserved) return;
+      || currentTasksRef.current.length || currentTabsRef.current.length || currentDeletedTasksRef.current.length
+      || growthRef.current.skills.length || growthRef.current.measurements.length || growthRef.current.practiceSessions.length || !initialWorkspace.backupPreserved) return;
     try {
       // Restore only the validated workspace; obsolete sync journals are not replayed.
       const recoveredWorkspace = parseWorkspace(recoveryCandidate.workspace);
@@ -1011,7 +1088,7 @@ export default function App() {
       setWorkspaceStorageError(true);
     }
     return () => { cancelled = true; };
-  }, [tasks, tabs, deletedTasks, soundEnabled, fireEnabled, lang, aiIconVariant]);
+  }, [tasks, tabs, deletedTasks, growthState, soundEnabled, fireEnabled, lang, aiIconVariant]);
 
   useEffect(() => {
     if (!workspaceStorageError) return;
@@ -1145,7 +1222,7 @@ export default function App() {
         } else if (previousOwner !== uid && (previousOwner !== null || !uid
           || !claimGuestWorkspaceImport(localStorage, uid))) {
           applyWorkspace({
-            tasks: [], tabs: [], deletedTasks: [],
+            tasks: [], tabs: [], deletedTasks: [], skills: [], measurements: [], practiceSessions: [],
             settings: { soundEnabled: true, fireEnabled: true, lang: 'uk', aiIconVariant: 'quantum' },
           });
         } else {
@@ -1437,7 +1514,7 @@ export default function App() {
       setSyncError(error instanceof Error ? error.message : 'Could not queue local changes');
       setSyncStatus('error');
     });
-  }, [currentUser, autoSyncEnabled, isCloudSyncReady, tasks, tabs, deletedTasks,
+  }, [currentUser, autoSyncEnabled, isCloudSyncReady, tasks, tabs, deletedTasks, growthState,
       soundEnabled, fireEnabled, lang, aiIconVariant]);
 
   useEffect(() => {
@@ -1455,7 +1532,7 @@ export default function App() {
       performAutoSave().catch((error) => console.error('Cloud save failed; local changes retained:', error));
     }, 800);
     return () => clearTimeout(timer);
-  }, [currentUser, autoSyncEnabled, isCloudSyncReady, tasks, tabs, deletedTasks,
+  }, [currentUser, autoSyncEnabled, isCloudSyncReady, tasks, tabs, deletedTasks, growthState,
       soundEnabled, fireEnabled, lang, aiIconVariant, cloudData, performAutoSave]);
 
   useEffect(() => {
@@ -1569,11 +1646,41 @@ export default function App() {
     const interval = setInterval(() => setInsightNow(Date.now()), 30000);
     return () => clearInterval(interval);
   }, []);
-  useEffect(() => { setWorkPlanTaskId(null); setDayShiftNotice(null); }, [currentUser?.uid]);
+  useEffect(() => { setWorkPlanTaskId(null); setDayShiftNotice(null); setGrowthSetup(null); setPracticeFinish(null); }, [currentUser?.uid]);
   const workInsights = useMemo(() => buildWorkInsights(tasks, deletedTasks, {
     now: insightNow, lang, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Kyiv',
   }), [tasks, deletedTasks, insightNow, lang]);
   const strategyReady = profileOwner === strategyOwner && timerWorkspaceReadyRef.current && workspaceOwnerRef.current === strategyOwner;
+  const growthGeneration = authGenerationRef.current;
+  const growth = useGrowth(growthState, readWorkspace, next => {
+    try { parseWorkspace(next); } catch { return false; }
+    try { applyWorkspace(next, true); return true; }
+    catch { setWorkspaceStorageError(true); return false; }
+  }, () => growthGeneration === authGenerationRef.current && strategyReady && timerWorkspaceReadyRef.current && workspaceOwnerRef.current === strategyOwner && (auth.currentUser?.uid ?? null) === strategyOwner
+    && canPersistWorkspaceRef.current && !tabMigrationBusyRef.current
+    && localStorage.getItem(workspaceTabTransactionKey(strategyOwner)) === null
+    && localStorage.getItem(strategyTransactionKey(strategyOwner)) === null);
+  useEffect(() => {
+    if (!practiceFinish) return;
+    const skill = growthState.skills.find(value => value.id === practiceFinish.skillId && value.deletedAt === undefined && value.archivedAt === undefined && isConfiguredSkill(value));
+    const task = practiceFinish.taskId ? tasks.find(value => value.id === practiceFinish.taskId && !value.done && value.skillId === practiceFinish.skillId) : undefined;
+    if (practiceFinish.ownerId !== strategyOwner || practiceFinish.generation !== authGenerationRef.current || !skill || practiceFinish.taskId && !task) {
+      practiceFinishRef.current = null;
+      setPracticeFinish(null);
+    }
+  }, [practiceFinish, growthState.skills, tasks, strategyOwner]);
+  const growthMigrationRunRef = React.useRef<string | null>(null);
+  useEffect(() => {
+    if (!strategyReady || workspaceStorageError || currentUser && !isCloudSyncReady) return;
+    if (localStorage.getItem(strategyTransactionKey(strategyOwner)) !== null
+      || localStorage.getItem(workspaceTabTransactionKey(strategyOwner)) !== null) return;
+    const scope = JSON.stringify([strategyOwner, authGenerationRef.current, personalProfile.goals.map(goal => goal.id).sort()]);
+    if (growthMigrationRunRef.current === scope) return;
+    if (!personalProfile.goals.length || growth.migrateGoals(personalProfile.goals)
+      || personalProfile.goals.every(goal => growthRef.current.skills.some(skill => skill.sourceGoalId === goal.id))) {
+      growthMigrationRunRef.current = scope;
+    }
+  }, [strategyReady, strategyOwner, workspaceStorageError, isCloudSyncReady, personalProfile.goals]);
   const updatePersonalProfile = (next: PersonalStrategyProfile): boolean => {
     if (!strategyReady || workspaceOwnerRef.current !== strategyOwner) return false;
     if (localStorage.getItem(strategyTransactionKey(strategyOwner)) !== null
@@ -1887,7 +1994,7 @@ export default function App() {
   const filteredTasks = useMemo(() => {
     return operationalTasks
       .filter((t) => {
-        if (activeFilter !== 'DONE' && t.done) return false;
+        if (activeFilter !== 'DONE' && t.done && !(activeFilter === 'ALL' && t.completedAt && localTaskDate(t.completedAt) === localTaskDate(insightNow))) return false;
         if (activeFilter === 'DONE' && !t.done) return false;
         if (!isSystemView(selectedPhase) && t.phase !== selectedPhase) return false;
         if (searchQuery.trim()) {
@@ -1929,7 +2036,7 @@ export default function App() {
     const task = latestTasksRef.current.find(item => item.id === id && !item.scheduledPending);
     if (!task) return;
     setSelectedPhase('ALL');
-    setActiveFilter(task.done ? 'DONE' : 'ALL');
+    setActiveFilter('ALL');
     setSearchQuery('');
     setRevealTaskId(id);
   };
@@ -2261,8 +2368,9 @@ export default function App() {
   // Task Actions
   const handleToggleDone = (id: string) => {
     const now = Date.now();
-    const current = tasks.find(task => task.id === id);
+    const current = latestTasksRef.current.find(task => task.id === id);
     if (!current) return;
+    if (!current.done && openPracticeFinish(current, true)) return;
     const shouldComplete = !current.done;
     setTasks(prev => prev.map(task => task.id === id
       ? shouldComplete ? completeTask(finishLimitedStart(task, now), now) : reopenTask(task, now)
@@ -2340,7 +2448,9 @@ export default function App() {
   // workedUntilNow credits the gap since zero (capped); without it the person was not working.
   const handleFinishAfterExpiry = (id: string, workedUntilNow = false) => {
     const now = Date.now();
+    const current = latestTasksRef.current.find(task => task.id === id);
     setTasks(previous => previous.map(task => task.id === id ? finishAfterExpiry(task, now, workedUntilNow ? now : undefined) : task));
+    if (current && !current.done) openPracticeFinish(current, false);
   };
   const handleStartTask = (id: string) => {
     const now = Date.now();
@@ -2562,24 +2672,86 @@ export default function App() {
     setRecentlyDeleted(null);
   };
 
-  const handleAddTask = (newTask: NewTaskInput) => {
-    let effectivePhase = newTask.phase;
-    if (
-      effectivePhase === 'DASHBOARD' ||
-      effectivePhase === 'ALL' ||
-      !tabs.some((tb) => tb.id === effectivePhase)
-    ) {
-      effectivePhase = tabs[0]?.id || 'focus';
+  const handleAddTask = (newTask: NewTaskInput, proposedCategoryName?: string) => {
+    if (!timerWorkspaceReadyRef.current || tabMigrationBusyRef.current
+      || workspaceOwnerRef.current !== (auth.currentUser?.uid ?? null)
+      || localStorage.getItem(workspaceTabTransactionKey(workspaceOwnerRef.current)) !== null) return false;
+    const categoryName = proposedCategoryName?.trim().slice(0, 32);
+    const existing = categoryName ? currentTabsRef.current.find(tab => normalizeQuickAddCategory(tab.name) === normalizeQuickAddCategory(categoryName)) : undefined;
+    const proposedTab: TaskTab | undefined = categoryName && !existing
+      ? { id: `category-${crypto.randomUUID()}`, name: categoryName, color: getRandomTabColor(currentTabsRef.current) } : undefined;
+    let effectivePhase = existing?.id ?? proposedTab?.id ?? newTask.phase;
+    if (!proposedTab && !currentTabsRef.current.some(tab => tab.id === effectivePhase)) {
+      effectivePhase = currentTabsRef.current[0]?.id || 'focus';
     }
-
     const now = Date.now();
     const task = createTask({ ...newTask, phase: effectivePhase }, `task-${now}-${Math.random().toString(36).slice(2, 8)}`, now);
     if (!task) return false;
-    setTasks((prev) => [task, ...prev]);
+    if (proposedTab) {
+      const nextTabs = [...currentTabsRef.current, proposedTab];
+      currentTabsRef.current = nextTabs;
+      setTabs(nextTabs);
+    }
+    setTasks(prev => [task, ...prev]);
     setSelectedPhase('ALL');
     setActiveFilter('ALL');
     setSearchQuery('');
     setCompletedNoticeId(null);
+    return true;
+  };
+
+  const openPracticeFinish = (task: PSTask, finishTask: boolean): boolean => {
+    const skill = growthRef.current.skills.find(value => value.id === task.skillId && value.deletedAt === undefined && value.archivedAt === undefined);
+    if (!strategyReady || !skill || !isConfiguredSkill(skill)) return false;
+    setTasks(previous => previous.map(value => value.id === task.id ? pauseTaskTimer(finishLimitedStart(value, Date.now()), Date.now()) : value));
+    const pending = { skillId: skill.id, taskId: task.id, completeTask: finishTask, ownerId: strategyOwner, generation: authGenerationRef.current };
+    practiceFinishRef.current = pending;
+    setPracticeFinish(pending);
+    setSessionSummary(null);
+    return true;
+  };
+  const closePracticeFinish = () => { practiceFinishRef.current = null; setPracticeFinish(null); };
+  const finishPracticeTask = () => {
+    const pending = practiceFinishRef.current;
+    if (!pending || pending.ownerId !== workspaceOwnerRef.current || pending.generation !== authGenerationRef.current) return;
+    if (pending.taskId && pending.completeTask) {
+      const now = Date.now();
+      setTasks(previous => previous.map(task => task.id === pending.taskId ? completeTask(finishLimitedStart(task, now), now) : task));
+      setCompletedNoticeId(pending.taskId);
+    }
+    closePracticeFinish();
+  };
+  const savePracticeResult = (input: Parameters<typeof growth.addPracticeSession>[0], measurement?: Parameters<typeof growth.addPracticeSession>[1]): boolean => {
+    const pending = practiceFinishRef.current;
+    if (!pending || pending.ownerId !== workspaceOwnerRef.current || pending.generation !== authGenerationRef.current
+      || input.skillId !== pending.skillId || input.taskId !== pending.taskId) return false;
+    if (!growth.addPracticeSession(input, measurement)) return false;
+    finishPracticeTask();
+    return true;
+  };
+  const handleGrowthPractice = (skill: Skill, subskillId?: string, title?: string, start = false): boolean => {
+    if (!strategyReady || !canPersistWorkspaceRef.current || tabMigrationBusyRef.current
+      || workspaceOwnerRef.current !== (auth.currentUser?.uid ?? null)
+      || localStorage.getItem(workspaceTabTransactionKey(strategyOwner)) !== null
+      || localStorage.getItem(strategyTransactionKey(strategyOwner)) !== null) return false;
+    const active = growthRef.current.skills.find(value => value.id === skill.id && value.archivedAt === undefined && value.deletedAt === undefined);
+    if (!active || !isConfiguredSkill(active) || subskillId && !active.subskills.some(value => value.id === subskillId)) return false;
+    const now = Date.now(), today = localTaskDate(now);
+    const existing = latestTasksRef.current.find(task => !task.done && !task.scheduledPending && task.skillId === skill.id
+      && task.subskillId === subskillId && (!task.plannedDate || task.plannedDate === today) && (!title || task.title === title));
+    let taskId = existing?.id;
+    if (existing) { if (start) handleStartTask(existing.id); }
+    else {
+      const task = createTask({ title: title || active.subskills.find(value => value.id === subskillId)?.title || active.title,
+        phase: currentTabsRef.current[0]?.id || 'focus', priority: 2, steps: 0, skillId: active.id,
+        ...(subskillId ? { subskillId } : {}), plannedDate: today, timerMode: 'stopwatch' }, 'task-' + crypto.randomUUID(), now);
+      if (!task) return false;
+      const before = readWorkspace();
+      const records = annotateTaskChanges(before.tasks, [start ? startTaskWork(task, now) : task, ...before.tasks], now);
+      try { applyWorkspace({ ...before, tasks: records }, true); } catch { setWorkspaceStorageError(true); return false; }
+      taskId = task.id;
+    }
+    if (start && taskId) { setGrowthSetup(null); handleRevealTask(taskId); }
     return true;
   };
 
@@ -2704,6 +2876,15 @@ export default function App() {
     setTasks((prev) => prev.filter((t) => !t.done));
   };
 
+  // «бачить 3 навички · 14 замірів»: what Karkas AI can see, shown under its name.
+  const aiContextLine = useMemo(() => {
+    const skills = growth.skills.filter(skill => skill.deletedAt === undefined && skill.archivedAt === undefined).length;
+    const measurements = growth.measurements.filter(item => item.deletedAt === undefined).length;
+    const plural = (count: number, one: string, few: string, many: string) => count % 10 === 1 && count % 100 !== 11 ? one : count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 12 || count % 100 > 14) ? few : many;
+    if (lang === 'en') return skills ? `sees ${skills} skill${skills === 1 ? '' : 's'} · ${measurements} measurement${measurements === 1 ? '' : 's'}` : `sees ${tasks.length} task${tasks.length === 1 ? '' : 's'}`;
+    return skills ? `бачить ${skills} ${plural(skills, 'навичку', 'навички', 'навичок')} · ${measurements} ${plural(measurements, 'замір', 'заміри', 'замірів')}`
+      : `бачить ${tasks.length} ${plural(tasks.length, 'задачу', 'задачі', 'задач')}`;
+  }, [growth.skills, growth.measurements, tasks.length, lang]);
   const handleToggleSound = () => {
     sound.enabled = !soundEnabled;
     setSoundEnabled(!soundEnabled);
@@ -2726,54 +2907,31 @@ export default function App() {
   const summaryTask = sessionSummary && tasks.find(task => task.id === sessionSummary.session.taskId);
   const showSessionSummary = workspaceReady && sessionSummary && summaryTask && !summaryTask.timerRunning
     && sessionSummary.ownerId === workspaceOwnerRef.current && sessionSummary.ownerId === (currentUser?.uid ?? null)
-    && summaryTask.done === sessionSummary.task.done
+    && !practiceFinish && summaryTask.done === sessionSummary.task.done
     && (sessionSummary.session.reason !== 'countdownEnded' || summaryTask.countdownExpiredAt === sessionSummary.task.countdownExpiredAt);
+
+  const isPracticeTask = (task: PSTask) => !!task.skillId;
+  const todayFirstRun = operationalTasks.length === 0 && !growth.skills.some(skill => skill.deletedAt === undefined);
+  const pulseTasks = [...filteredTasks.filter(task => isPracticeTask(task) && !task.done), ...filteredTasks.filter(task => !isPracticeTask(task) && !task.done), ...filteredTasks.filter(task => task.done)];
 
   const recentlyDeletedArchive = recentlyDeleted ? deletedTasks.find(task => task.id === recentlyDeleted.id) : undefined;
 
   return (
-    <div className="min-h-screen bg-[#030303] text-[#f4f4f5] flex flex-col selection:bg-white selection:text-black relative overflow-x-clip">
-      {/* Dynamic Fire Embers & Sparks Background */}
-      <FireParticlesBackground enabled={fireEnabled} />
+    <MotionConfig reducedMotion="user"><div className="pulse-app min-h-screen flex flex-col relative overflow-x-clip">
 
-      {/* Top Header & Interactive Dynamic Tab Matrix with Windows Titlebar */}
-      <TopWorkflowMatrix
-        stats={stats}
-        listCounts={listCounts}
-        tabs={tabs}
-        activeFilter={activeFilter}
-        selectedPhase={selectedPhase}
-        soundEnabled={soundEnabled}
-        isAddOpen={isAddOpen}
-        hidePullHint={quickAddVisible && !isAddOpen}
-        lang={lang}
-        aiIconVariant={aiIconVariant}
-        historyCount={completedHistoryCount}
-        notesCount={notesOwner === strategyOwner ? notes.length : 0}
-        user={currentUser}
-        isSyncing={isSyncing}
-        autoSyncEnabled={autoSyncEnabled}
-        syncStatus={syncStatus}
-        syncError={syncError}
-        isMinimized={isWindowMinimized}
-        isFullscreen={isFullscreen}
-        onMinimize={handleMinimizeWindow}
-        onToggleFullscreen={handleToggleFullscreen}
-        onCloseWindow={handleCloseWindow}
-        onToggleSound={handleToggleSound}
-        onToggleLang={handleToggleLang}
-        onSetFilter={setActiveFilter}
-        onSelectPhase={setSelectedPhase}
-        onToggleAdd={() => setIsAddOpen((prev) => !prev)}
-        onOpenAI={() => {
-          setAiPromptSeed('');
-          setIsAIOpen(true);
+      <PulseHeader
+        lang={lang} activeTab={selectedPhase === 'STRATEGY' || selectedPhase === 'DASHBOARD' || selectedPhase === 'HISTORY' ? 'growth' : selectedPhase === 'NOTES' ? 'notes' : 'today'}
+        onTabChange={tab => { setIsSettingsOpen(false); setIsAccountOpen(false); setGrowthSetup(null); setSelectedPhase(tab === 'growth' ? 'STRATEGY' : tab === 'notes' ? 'NOTES' : 'ALL'); setSearchQuery(''); setSearchVisible(false); }}
+        onSearch={() => {
+          if (selectedPhase === 'NOTES') document.querySelector<HTMLInputElement>('[data-pulse-notes] input')?.focus();
+          else { setSelectedPhase('ALL'); setSearchVisible(true); requestAnimationFrame(() => searchInputRef.current?.focus()); }
         }}
-        onAddTab={handleAddTab}
-        onDeleteTab={handleDeleteTab}
-        onOpenManageTabs={() => setIsManageTabsOpen(true)}
-        onOpenAccount={() => setIsAccountOpen(true)}
-        onOpenSettings={() => setIsSettingsOpen(true)}
+        onSettings={() => { setIsAccountOpen(false); setIsSettingsOpen(true); }} onAdd={() => setIsQuickAddOpen(true)} onAccount={() => { setIsSettingsOpen(false); setIsAccountOpen(true); }}
+        accountName={currentUser?.displayName || currentUser?.email || (lang === 'uk' ? 'Гість' : 'Guest')}
+        accountAvatarUrl={accountAvatarUrl}
+        syncLabel={!currentUser ? (lang === 'uk' ? 'локально' : 'local') : !autoSyncEnabled ? (lang === 'uk' ? 'автосинхронізацію вимкнено' : 'auto sync off') : undefined}
+        syncStatus={syncStatus} isFullscreen={isFullscreen}
+        onMinimize={handleMinimizeWindow} onToggleFullscreen={handleToggleFullscreen} onCloseWindow={handleCloseWindow}
       />
 
       {actionNotice && <div role="status" className="relative z-20 max-w-6xl w-full mx-auto px-4 py-3 text-sm bg-amber-950/40 border border-amber-800 text-amber-100">
@@ -2786,7 +2944,7 @@ export default function App() {
       {completedNoticeId && tasks.some(task => task.id === completedNoticeId && task.done) && (
         <div role="status" className="relative z-20 w-full px-5 py-3 bg-emerald-950/30 border-b border-emerald-900 text-emerald-100 flex flex-wrap items-center justify-center gap-3 text-sm">
           <span>{lang === 'uk' ? 'Завдання завершено й збережено в історії.' : 'Task completed and saved in history.'}</span>
-          <button type="button" onClick={() => setSelectedPhase('HISTORY')} className="min-h-11 underline">{lang === 'uk' ? 'Відкрити історію' : 'Open history'}</button>
+          <button type="button" onClick={() => setSelectedPhase('HISTORY')} className="min-h-11 underline">{GROWTH_INTEGRATION_STRINGS[lang].openWeek}</button>
           <button type="button" onClick={() => handleReopenCompletedTask(completedNoticeId)} className="min-h-11 underline">{lang === 'uk' ? 'Повернути в роботу' : 'Reopen task'}</button>
           <button type="button" onClick={() => setCompletedNoticeId(null)} className="min-h-11" aria-label={lang === 'uk' ? 'Закрити повідомлення' : 'Dismiss notice'}><X className="w-4 h-4" /></button>
         </div>
@@ -2821,7 +2979,11 @@ export default function App() {
         </div>
       )}
 
-      {/* Quick Add Pull-Down Drawer with Dynamic Tabs */}
+      {isQuickAddOpen && timerWorkspaceReadyRef.current && <QuickAddDialog tabs={tabs} skills={growth.skills} selectedPhase={selectedPhase} lang={lang} now={insightNow}
+        onAdd={handleAddTask} onClose={() => setIsQuickAddOpen(false)}
+        onMoreOptions={values => { setQuickAddPrefill({ ...values, key: ++quickAddPrefillKey.current }); setIsAddOpen(true); }} />}
+
+      {/* Detailed add drawer: reached through «more options» in the quick add line */}
       <QuickAddDrawer
         prefill={quickAddPrefill}
         ownerId={currentUser?.uid ?? null}
@@ -2834,7 +2996,7 @@ export default function App() {
       />
 
       {/* Main Content Area */}
-      <main className="flex-1 max-w-4xl w-full mx-auto px-5 sm:px-8 py-7 sm:py-8 pb-32 relative z-10">
+      <PageShell role="main" className="relative z-10 flex-1">
         {recoveryCandidate && <div role="status" className="mb-5 border border-amber-800 bg-amber-950/20 p-3 text-sm text-amber-200">
           <p>{lang === 'uk' ? `Знайдено збережений простір: ${recoveryCandidate.workspace.tasks.length} завдань, ${recoveryCandidate.workspace.tabs.length} категорій, ${recoveryCandidate.workspace.deletedTasks.length} в архіві.` : `Retained workspace found: ${recoveryCandidate.workspace.tasks.length} tasks, ${recoveryCandidate.workspace.tabs.length} categories, ${recoveryCandidate.workspace.deletedTasks.length} archived.`}</p>
           <button type="button" onClick={restoreRetainedWorkspace} className="mt-3 min-h-11 border border-amber-800 px-3">{lang === 'uk' ? 'Відновити збережений простір' : 'Restore retained workspace'}</button>
@@ -2861,20 +3023,22 @@ export default function App() {
               setAiSeedAsDraft(true);
               setIsAIOpen(true);
             }}
-            onOpenAdd={() => setIsAddOpen(true)}
+            onOpenAdd={() => setIsQuickAddOpen(true)}
             onOpenManageTabs={() => setIsManageTabsOpen(true)}
             onAddTask={handleAddTask}
           />
-        ) : selectedPhase === 'STRATEGY' ? (
-          strategyReady ? <StrategyView key={strategyOwner || 'guest'} ownerId={strategyOwner} profile={personalProfile}
-            tasks={tasks} deletedTasks={deletedTasks} tabs={tabs} lang={lang} insights={workInsights}
-            remindersEnabled={workReminders.enabled} onRemindersChange={workReminders.setEnabled}
-            onProfileChange={next => updatePersonalProfile(preserveDiscoveryAfterUserGoalEdit(personalProfileRef.current, next))} onResetMemory={resetPersonalMemory} onChat={openStrategyChat}
-            onDeepenDiscovery={() => deepenPersonalDiscovery()}
-            onContinueAfterExpiry={handleContinueAfterExpiry} onFinishAfterExpiry={handleFinishAfterExpiry}
-            onStart={handleStartTask} onPauseTimer={handleStopTimer} onOpenTask={handleRevealTask} onOpenAdd={() => setIsAddOpen(true)}
-            onLimitedStart={handleLimitedStart} onFinishLimitedStart={handleFinishLimitedStart} attemptsSummary={summarizeAttempts(tasks, Date.now())}
-            onUndo={handleUndoStrategy} onApplyPriority={applySuggestedPriority} onEditPlan={setWorkPlanTaskId} />
+        ) : selectedPhase === 'STRATEGY' || selectedPhase === 'HISTORY' ? (
+          strategyReady ? growthSetup ? <SkillSetup
+            key={strategyOwner + ':' + (growthSetup.skillId ?? 'new')}
+            lang={lang} growth={growth} skill={growth.skills.find(skill => skill.id === growthSetup.skillId)}
+            initialTitle={growthSetup.initialTitle} onClose={() => setGrowthSetup(null)}
+            onSaved={() => setGrowthSetup(null)} />
+          : <GrowthView key={strategyOwner + ':' + selectedPhase} lang={lang} growth={growth}
+            tasks={[...tasks, ...deletedTasks]} initialTab={selectedPhase === 'HISTORY' ? 'week' : 'skills'}
+            onSetup={(skill, initialTitle) => setGrowthSetup({ skillId: skill?.id, initialTitle })}
+            onPractice={(skill, subskillId, title) => { if (!handleGrowthPractice(skill, subskillId, title, true)) setActionNotice(GROWTH_INTEGRATION_STRINGS[lang].planFailed); }}
+            onAddPractice={(skill, subskillId, title) => handleGrowthPractice(skill, subskillId, title, false)}
+            onMeasure={skill => setPracticeFinish({ skillId: skill.id, measurementMode: true, ownerId: strategyOwner, generation: authGenerationRef.current })} />
           : <p role="status" className="text-sm text-neutral-400">{lang === 'uk' ? 'Завантажуємо ваш простір…' : 'Loading your workspace…'}</p>
         ) : selectedPhase === 'NOTES' ? (
           <NotepadView
@@ -2886,62 +3050,35 @@ export default function App() {
             onUpdateNote={handleUpdateNote}
             onDeleteNote={handleDeleteNote}
             onRestoreNote={handleRestoreNote}
+            onMakeTasks={note => openStrategyChat((lang === 'uk' ? 'Зроби задачі з нотатки «' : 'Make tasks from the note “') + (note.title || (lang === 'uk' ? 'Без назви' : 'Untitled')) + (lang === 'uk' ? '»:' : '”:') + '\n' + note.content)}
             storageError={notesStorageError}
-          />
-        ) : selectedPhase === 'HISTORY' ? (
-          <HistoryView
-            tasks={operationalTasks}
-            deletedTasks={deletedTasks}
-            tabs={tabs}
-            lang={lang}
-            onBackToTasks={() => setSelectedPhase('ALL')}
-            onToggleDone={handleToggleDone}
-            onRestoreDeleted={handleRestoreDeletedTask}
-            onPermanentDelete={handlePermanentDeleteTask}
-            onClearDeleted={handleClearDeletedHistory}
-            onClassifyDeleted={handleClassifyDeletedTask}
           />
         ) : (
           <>
-            {scheduledPlans.length > 0 && <details className="mb-6 border border-neutral-800 bg-[#0c0c0e] p-4" open>
-              <summary className="cursor-pointer text-sm font-semibold text-neutral-200">{lang === 'uk' ? 'Заплановані завдання' : 'Scheduled tasks'} ({scheduledPlans.length})</summary>
-              <p className="mt-2 text-sm leading-relaxed text-neutral-400">{lang === 'uk' ? 'З’являться в черзі перед зазначеним часом. Сповіщення працюють, поки Karkas відкритий або в треї.' : 'Added to the queue before the scheduled time. Notifications require Karkas open or running in the tray.'}</p>
-              <div className="mt-3 divide-y divide-neutral-800">{scheduledPlans.map(plan => <div key={plan.id} className="flex flex-wrap items-center gap-3 py-3">
-                <div className="min-w-0 flex-1"><p className="break-words text-base font-semibold text-neutral-100">{plan.title}</p><p className="mt-1 break-words text-sm leading-relaxed text-emerald-300">{plan.schedule ? describeSchedule(plan.schedule, lang, plan.scheduleNextStartAt) : (lang === 'uk' ? 'Розклад некоректний — уточніть його через AI' : 'Invalid schedule — update it through AI')}</p></div>
-                <button type="button" onClick={() => { handleDelete(plan.id); setActionNotice(lang === 'uk' ? 'Розклад скасовано. Його можна відновити з кошика.' : 'Schedule cancelled. You can restore it from trash.'); }} className="min-h-11 border border-neutral-700 px-3 text-sm text-neutral-300 hover:border-neutral-400 hover:text-white">{lang === 'uk' ? 'Скасувати розклад' : 'Cancel schedule'}</button>
-              </div>)}</div>
-            </details>}
-            {quickAddVisible && <>
-              {onboardingVisible && <OnboardingChecklist
-                key={`onboarding:${strategyOwner ?? 'guest'}`}
-                lang={lang} state={onboardingState} tasks={operationalTasks} isDesktop={!!window.karkasDesktop}
-                onChange={saveOnboarding}
-                onFocusQuickAdd={() => quickAddInputRef.current?.focus()}
-                onStartTrial={id => { handleConfigureCountdown(id, 300); handleStartTask(id); }}
-                onTestNotification={async () => {
-                  try {
-                    const result = await window.karkasDesktop?.system.showNotification({
-                      title: lang === 'uk' ? 'Karkas · 25 хв фокусу' : 'Karkas · 25 min of focus',
-                      body: lang === 'uk' ? 'Так виглядатиме кінець сесії. Відкрий Karkas — запишемо результат.' : 'This is how a session end will look. Open Karkas to record the result.',
-                    });
-                    return !!result?.ok;
-                  } catch { return false; }
-                }}
-                onOpenAI={() => setIsAIOpen(true)}
-                hasAiKey={() => desktopHasAiKey().catch(() => false)}
-                onSkip={() => saveOnboarding({ ...onboardingState, status: 'skipped' })}
-              />}
-              {!searchQuery && !onboardingVisible && <NowStrip
+            <PageHead firstLine={new Date(insightNow).toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-GB', { weekday: 'long' })}
+              secondLine={new Date(insightNow).toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-GB', { day: 'numeric', month: 'long' })}
+              switcher={<CategorySwitcher tabs={tabs} lang={lang} selected={selectedPhase} total={listCounts.total} counts={listCounts.phaseCounts}
+                labelOf={tab => (t.phases as Record<string,string>)[tab.id] || tab.name} onSelect={setSelectedPhase} onAdd={name => handleAddTab(name)} onManage={() => setIsManageTabsOpen(true)} />}
+            />
+            <PageGrid sidebarClassName="pulse-today-side" contentClassName="pulse-today-main" sidebar={<TodaySidebar tasks={operationalTasks} tabs={tabs} now={insightNow} lang={lang} summary={daySummaries.today}
+              suggestion={strategyReady ? personalProfile.latestStrategy?.nextAction : undefined}
+              skills={growth.skills} measurements={growth.measurements} sessions={growth.sessions} firstRun={todayFirstRun}
+              onReveal={handleRevealTask} onDiscuss={openStrategyChat}
+              onAddPractice={(skill, subskillId, title) => { if (!handleGrowthPractice(skill, subskillId, title, false)) setActionNotice(GROWTH_INTEGRATION_STRINGS[lang].planFailed); }}
+              onSetupSkill={initialTitle => { setSelectedPhase('STRATEGY'); setGrowthSetup({ initialTitle }); }}
+              onCloseDay={() => { if (dayRecapReady) setDayClose({ owner: strategyOwner, date: daySummaries.today.date }); }} />}>
+              {todayFirstRun && quickAddVisible && <section className="pulse-first-card"><span>{lang === 'uk' ? 'Почнімо' : 'Let’s begin'}</span><h2>{lang === 'uk' ? 'Що зробите сьогодні?' : 'What will you do today?'}</h2></section>}
+              {quickAddVisible && <>              {!searchQuery && !todayFirstRun && <NowStrip
                 key={`now:${currentUser?.uid ?? 'guest'}`}
                 tasks={operationalTasks}
                 lang={lang}
                 now={insightNow}
-                todaySummary={daySummaries.today} offerDayClose={offerDayClose} recap={yesterdayRecap}
+                todaySummary={daySummaries.today} dayClosed={dayRecapReady && !!dayLogState.value.closed[daySummaries.today.date]} offerDayClose={offerDayClose} recap={yesterdayRecap}
                 recapNote={dayRecapReady ? dayLogState.value.closed[daySummaries.yesterday.date]?.note : undefined}
                 onOpenDayClose={() => { if (dayRecapReady) setDayClose({ owner: strategyOwner, date: daySummaries.today.date }); }}
                 onDismissRecap={() => saveDayLog({ ...dayLogState.value, recapDismissed: daySummaries.today.date })}
                 onReveal={handleRevealTask}
-                onStart={handleStartTask}
+                onStart={handleStartTask} onPause={handleToggleTimer} onComplete={handleToggleDone} tabs={tabs}
                 onMoveDeadline={(task, newDate) => handleEditTask(task.id, task.title, task.note || '', {
                   title: task.title, note: task.note || '', plannedDate: task.plannedDate, deadlineDate: task.deadlineDate,
                 }, {
@@ -2952,6 +3089,7 @@ export default function App() {
               <QuickAddLine
                 key={`quick-add:${currentUser?.uid ?? 'guest'}`}
                 tabs={tabs}
+                skills={growth.skills}
                 selectedPhase={selectedPhase}
                 lang={lang}
                 now={insightNow}
@@ -2962,9 +3100,19 @@ export default function App() {
                   setIsAddOpen(true);
                 }}
               />
-            </>}
-            {/* Search Input Bar with Hotkeys Badge */}
-            <div className="mb-6 flex items-center gap-3">
+
+</>}
+                          {scheduledPlans.length > 0 && <details className="pulse-scheduled-plans" open>
+              <summary className="cursor-pointer text-sm font-semibold text-neutral-200">{lang === 'uk' ? 'Заплановані завдання' : 'Scheduled tasks'} ({scheduledPlans.length})</summary>
+              <p className="mt-2 text-sm leading-relaxed text-neutral-400">{lang === 'uk' ? 'З’являться в черзі перед зазначеним часом. Сповіщення працюють, поки Karkas відкритий або в треї.' : 'Added to the queue before the scheduled time. Notifications require Karkas open or running in the tray.'}</p>
+              <div className="mt-3 divide-y divide-neutral-800">{scheduledPlans.map(plan => <div key={plan.id} className="flex flex-wrap items-center gap-3 py-3">
+                <div className="min-w-0 flex-1"><p className="break-words text-base font-semibold text-neutral-100">{plan.title}</p><p className="mt-1 break-words text-sm leading-relaxed text-emerald-300">{plan.schedule ? describeSchedule(plan.schedule, lang, plan.scheduleNextStartAt) : (lang === 'uk' ? 'Розклад некоректний — уточніть його через AI' : 'Invalid schedule — update it through AI')}</p></div>
+                <button type="button" onClick={() => { handleDelete(plan.id); setActionNotice(lang === 'uk' ? 'Розклад скасовано. Його можна відновити з кошика.' : 'Schedule cancelled. You can restore it from trash.'); }} className="min-h-11 border border-neutral-700 px-3 text-sm text-neutral-300 hover:border-neutral-400 hover:text-white">{lang === 'uk' ? 'Скасувати розклад' : 'Cancel schedule'}</button>
+              </div>)}</div>
+            </details>}
+
+            {/* Search opens from the header or Ctrl F. */}
+            {(searchVisible || !!searchQuery) && <div className="mb-3 flex items-center gap-3">
               <div className="relative flex-1">
                 <Search className="w-3.5 h-3.5 text-neutral-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <input
@@ -2972,28 +3120,29 @@ export default function App() {
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
+                  aria-label={lang === 'uk' ? 'Пошук завдань' : 'Search tasks'}
                   placeholder={
                     lang === 'uk'
                       ? 'Пошук завдань…'
                       : 'Search tasks…'
                   }
-                  className="w-full pl-9 pr-8 py-3 bg-[#09090d] border border-neutral-800 text-neutral-200 placeholder-neutral-400 text-sm font-sans focus:outline-none focus:border-neutral-500 transition-colors shadow-inner"
+                  className="pulse-task-search"
                 />
                 {searchQuery && (
                   <button
                     type="button"
-                    onClick={() => setSearchQuery('')}
+                    aria-label={lang === 'uk' ? 'Очистити пошук' : 'Clear search'} onClick={() => setSearchQuery('')}
                     className="absolute right-2.5 top-1/2 -translate-y-1/2 text-neutral-500 hover:text-white p-0.5 cursor-pointer"
                   >
                     <X className="w-3 h-3" />
                   </button>
                 )}
               </div>
-            </div>
+            </div>}
 
             {/* Empty State */}
-            {filteredTasks.length === 0 && !(onboardingVisible && quickAddVisible) && (
-              <div className="py-16 text-center border border-dashed border-neutral-800 bg-[#08080a] p-8 my-4 animate-in fade-in duration-200">
+            {filteredTasks.length === 0 && !!searchQuery && (
+              <div className="pulse-empty-state">
                 <div className="w-8 h-8 mx-auto mb-3 border border-neutral-700 flex items-center justify-center text-neutral-400">
                   <CheckCircle className="w-4 h-4 text-neutral-400" />
                 </div>
@@ -3051,7 +3200,7 @@ export default function App() {
                   )}
                   <button
                     id="empty-add-btn"
-                    onClick={() => setIsAddOpen(true)}
+                    onClick={() => setIsQuickAddOpen(true)}
                     className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 bg-white text-black font-extrabold text-xs font-sans tracking-wider hover:bg-neutral-200 transition-colors"
                   >
                     <Plus className="h-3.5 w-3.5" aria-hidden="true" />
@@ -3065,7 +3214,7 @@ export default function App() {
               <span className="min-w-0 whitespace-pre-line break-words">{dayShiftNotice.text}</span>
               {dayShiftNotice.undoToken && <button type="button" onClick={() => void handleUndoDayShift()} className="min-h-11 px-3 underline focus-visible:outline-2 focus-visible:outline-white">{lang === 'uk' ? 'Скасувати' : 'Undo'}</button>}
               <button type="button" onClick={() => setDayShiftNotice(null)} className="min-h-11 px-3 text-neutral-400 hover:text-white">{lang === 'uk' ? 'Закрити' : 'Dismiss'}</button>
-            </div> : dayDelay.minutes > 0 && <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border border-amber-900/60 px-4 py-3 text-sm">
+            </div> : dayDelay.minutes > 0 && <div className="pulse-delay-card flex flex-wrap items-center justify-between gap-3 text-sm">
               <p className="text-amber-200">{missedBlockCount > 1
                 ? lang === 'uk' ? `${missedBlockCount} ${missedBlockCount % 10 === 1 && missedBlockCount % 100 !== 11 ? 'блок' : missedBlockCount % 10 >= 2 && missedBlockCount % 10 <= 4 && (missedBlockCount % 100 < 12 || missedBlockCount % 100 > 14) ? 'блоки' : 'блоків'} вже в минулому` : `${missedBlockCount} blocks are already in the past`
                 : lang === 'uk' ? `Ти відстаєш від плану на ${dayDelay.minutes} хв` : `Your plan is ${dayDelay.minutes} min behind`}</p>
@@ -3081,7 +3230,7 @@ export default function App() {
             {/* Tasks List */}
             <div className="flex flex-col gap-2.5">
               <AnimatePresence initial={false}>
-                {filteredTasks.map((task, index) => (
+                {pulseTasks.map((task, index) => (
                   <motion.div
                     key={task.id}
                     layout
@@ -3090,48 +3239,23 @@ export default function App() {
                     exit={{ opacity: 0, x: -100, transition: { duration: 0.18 } }}
                     transition={{ duration: 0.2 }}
                   >
-                    <TaskCard
-                      task={task}
-                      index={index}
-                      lang={lang}
-                      tabs={tabs}
-                      onToggleDone={handleToggleDone}
-                      onStartTask={handleStartTask}
-                      timeZone={listTimeZone}
-                      onApplyAgentActions={handleScheduleActions}
-                      onReplanDay={() => void handleReplanDay()}
-                      onUpdateStep={handleUpdateStep}
-                      onCyclePriority={handleCyclePriority}
-                      onCyclePhase={handleCyclePhase}
-                      onTogglePin={handleTogglePin}
-                      onDelete={handleDelete}
-                      onEditTask={handleEditTask}
-                      onToggleStepItem={handleToggleStepItem}
-                      onAddStepItem={handleAddStepItem}
-                      onDeleteStepItem={handleDeleteStepItem}
-                      onAIBreakdown={handleAIBreakdownTask}
-                      isBreakingDown={breakingDownTaskId === task.id}
-                      onContinueAfterExpiry={handleContinueAfterExpiry} onFinishAfterExpiry={handleFinishAfterExpiry}
-                      onConfigureCountdown={handleConfigureCountdown}
-                      onExtendCountdown={handleExtendCountdown}
-                      onClearCountdown={handleClearCountdown}
-                      onToggleTimer={handleToggleTimer}
-                      onStopTimer={handleStopTimer}
-                      onResetTimer={handleResetTimer}
-                      onUpdateTimeSpent={handleUpdateTimeSpent}
-                      onAskAIAboutTask={(taskTitle) => {
-                        const prompt =
-                          lang === 'uk'
-                            ? `Як найкраще розпланувати та виконати задачу: "${taskTitle}"?`
-                            : `How to best plan and execute task: "${taskTitle}"?`;
-                        setAiPromptSeed(prompt);
-                        setIsAIOpen(true);
-                      }}
-                    />
+                    {(index === 0 || (isPracticeTask(task) && !task.done) !== (isPracticeTask(pulseTasks[index - 1]) && !pulseTasks[index - 1].done)) && <h2 className="pulse-list-title">{isPracticeTask(task) && !task.done ? (lang === 'uk' ? 'Практика' : 'Practice') : (lang === 'uk' ? 'Справи' : 'Tasks')}</h2>}
+                    <TodayTaskRow task={task} tabs={tabs} lang={lang} now={insightNow}
+                      skillName={task.skillId ? growth.skills.find(skill => skill.id === task.skillId)?.title : undefined}
+                      onToggleDone={handleToggleDone} onStart={handleStartTask} onDelete={handleDelete}
+                      onRename={(id, title) => { const current = latestTasksRef.current.find(item => item.id === id); return !!current && handleEditTask(id, title, current.note || '', { title: current.title, note: current.note || '', plannedDate: current.plannedDate, deadlineDate: current.deadlineDate }); }}
+                      onMove={(moved, date) => {
+                        // A timed task keeps its clock time on the new day.
+                        const at = moved.scheduledFor ? new Date(moved.scheduledFor) : null;
+                        const startTime = at ? String(at.getHours()).padStart(2, '0') + ':' + String(at.getMinutes()).padStart(2, '0') : undefined;
+                        void handleScheduleActions([{ type: 'update_task', taskId: moved.id, plannedDate: date, ...(startTime ? { date, startTime } : {}) }])
+                          .catch(error => setActionNotice(error instanceof Error ? error.message : (lang === 'uk' ? 'Не вдалося перенести задачу.' : 'Could not move the task.')));
+                      }} />
                   </motion.div>
                 ))}
               </AnimatePresence>
             </div>
+            </PageGrid>
           </>
         )}
 
@@ -3194,7 +3318,15 @@ export default function App() {
             </motion.div>
           )}
         </AnimatePresence>
-      </main>
+      </PageShell>
+      {practiceFinish && practiceFinish.ownerId === strategyOwner && practiceFinish.generation === authGenerationRef.current && strategyReady && (() => {
+        const skill = growth.skills.find(value => value.id === practiceFinish.skillId && value.deletedAt === undefined && value.archivedAt === undefined);
+        const task = practiceFinish.taskId ? tasks.find(value => value.id === practiceFinish.taskId) : undefined;
+        return skill && isConfiguredSkill(skill) && (!practiceFinish.taskId || task && !task.done) ? <PracticeFinishDialog
+          key={strategyOwner + ':' + skill.id + ':' + (task?.id ?? 'measurement')}
+          lang={lang} skill={skill} measurements={growth.measurements} task={task} measurementMode={practiceFinish.measurementMode}
+          onSave={savePracticeResult} onClose={closePracticeFinish} onSkip={finishPracticeTask} /> : null;
+      })()}
       {workPlanTask && timerWorkspaceReadyRef.current && workspaceOwnerRef.current === (currentUser?.uid || null) && <TaskWorkPlanDialog key={`${currentUser?.uid || 'guest'}:${workPlanTask.id}`} task={workPlanTask} lang={lang} onClose={() => setWorkPlanTaskId(null)} onSave={saveWorkPlan} />}
 
       {dayClose && dayRecapReady && dayClose.owner === strategyOwner && dayClose.date === daySummaries.today.date && <DayCloseDialog
@@ -3208,119 +3340,12 @@ export default function App() {
         onPlanTomorrow={handlePlanTomorrow} onFinishAfterExpiry={id => { setTimerNotice(null); handleFinishAfterExpiry(id); }}
         onContinueTenMinutes={id => { setTimerNotice(null); handleContinueSummaryCountdown(id); }} onReopen={handleReopenCompletedTask} />}
 
-      {/* All bottom controls share the same responsive layout. */}
-      <footer className="fixed bottom-0 left-0 right-0 z-30 bg-[#060608]/95 backdrop-blur-md border-t border-neutral-800/80 px-3 sm:px-4 py-2.5 app-no-drag pointer-events-auto">
-        <div className="max-w-6xl mx-auto flex flex-wrap items-center gap-2 sm:gap-3 app-no-drag">
-      <div className="order-0 shrink-0 flex items-center app-no-drag pointer-events-auto">
-        <button
-          id="toggle-fire-animation-btn"
-          type="button"
-          onClick={() => {
-            sound.tick(fireEnabled ? 350 : 650);
-            setFireEnabled((prev) => !prev);
-          }}
-          title={
-            fireEnabled
-              ? (lang === 'uk' ? 'Вимкнути анімацію вогню' : 'Turn off fire animation')
-              : (lang === 'uk' ? 'Увімкнути анімацію вогню' : 'Turn on fire animation')
-          }
-          aria-pressed={fireEnabled}
-          className={`min-h-11 px-2 py-1 border transition-all cursor-pointer flex items-center gap-1.5 text-xs font-sans tracking-wider uppercase backdrop-blur-md shadow-md app-no-drag pointer-events-auto ${
-            fireEnabled
-              ? 'border-neutral-700 bg-neutral-900/95 text-neutral-200 hover:border-white hover:text-white'
-              : 'border-neutral-800 bg-[#08080a]/95 text-neutral-500 hover:text-neutral-300 hover:border-neutral-700'
-          }`}
-        >
-          <div className="relative w-3.5 h-3.5 flex items-center justify-center shrink-0">
-            <Flame className={`w-3.5 h-3.5 transition-colors ${fireEnabled ? 'text-white' : 'text-neutral-600'}`} />
-            {!fireEnabled && (
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <div className="w-4 h-[1.5px] bg-red-500 rotate-45" />
-              </div>
-            )}
-          </div>
-          <span className="hidden sm:inline font-bold">
-            {fireEnabled ? t.fireOn : t.fireOff}
-          </span>
-        </button>
-      </div>
-
-      {/* System Update Trigger Button */}
-      <div className="order-4 shrink-0 flex items-center app-no-drag pointer-events-auto">
-        <button
-          id="toggle-update-modal-btn"
-          type="button"
-          onClick={() => {
-            sound.tick(600);
-            setIsUpdateOpen(true);
-          }}
-          title={lang === 'uk' ? `Центр оновлень (v${appCurrentVersion})` : `System update center (v${appCurrentVersion})`}
-          className="min-h-11 px-2 py-1 border border-neutral-800 bg-[#08080a]/95 text-neutral-400 hover:text-white hover:border-neutral-600 transition-all cursor-pointer flex items-center gap-1.5 text-xs font-sans tracking-wider uppercase backdrop-blur-md shadow-md app-no-drag pointer-events-auto"
-        >
-          <RefreshCw className="w-3.5 h-3.5 text-emerald-400" />
-          <span className="hidden sm:inline font-bold text-neutral-300">
-            v{appCurrentVersion}
-          </span>
-        </button>
-      </div>
-
-          {/* Left: Quick Filter Status */}
-          <div className="order-5 basis-full lg:order-1 lg:basis-auto flex flex-wrap items-center justify-center gap-2 text-xs font-sans text-neutral-400 app-no-drag">
-            <span className="text-neutral-200 font-bold">
-              {selectedPhase === 'NOTES'
-                ? `${notes.length} ${lang === 'uk' ? (notes.length === 1 ? 'нотатка' : notes.length < 5 ? 'нотатки' : 'нотаток') : (notes.length === 1 ? 'note' : 'notes')}`
-                : selectedPhase === 'HISTORY' ? `${completedHistoryCount} ${lang === 'uk' ? 'ВИКОНАНО В ІСТОРІЇ' : 'COMPLETED IN HISTORY'}`
-                : selectedPhase === 'STRATEGY' ? (lang === 'uk' ? 'МОЯ СТРАТЕГІЯ' : 'MY STRATEGY')
-                : selectedPhase === 'DASHBOARD' ? `${tasks.length} ${lang === 'uk' ? 'ЗАВДАНЬ' : 'TASKS'}` : `${filteredTasks.length} ${t.shownCount}`}
-            </span>
-            {!['NOTES', 'STRATEGY'].includes(selectedPhase) && tasks.some((t) => t.done) && (
-              <button
-                id="clear-completed-bottom-btn"
-                onClick={handleClearCompleted}
-                className="hover:text-rose-400 transition-colors flex items-center gap-1 border-l border-neutral-800 pl-2 app-no-drag"
-              >
-                <Trash className="w-3 h-3" />
-                <span>{t.purgeDelivered}</span>
-              </button>
-            )}
-          </div>
-
-          {/* Center: Main AI Summon Pill */}
-          <button
-            id="bottom-summon-ai-btn"
-            onClick={() => {
-              sound.activate();
-              setAiPromptSeed('');
-              setIsAIOpen(true);
-            }}
-            aria-label={lang === 'uk' ? 'Відкрити ШІ-планувальник' : 'Open AI planner'}
-            className="order-2 min-h-11 shrink-0 mx-auto flex items-center justify-center gap-2 px-3 sm:px-4 py-1.5 bg-neutral-900 border border-neutral-700 hover:border-white text-white font-sans text-xs font-bold tracking-wider transition-all active:scale-95 app-no-drag"
-          >
-            <AIIcon id={aiIconVariant} className="w-3.5 h-3.5 shrink-0 text-neutral-300" />
-            <span className="whitespace-nowrap">KARKAS AI</span>
-          </button>
-
-          {/* Right: Quick Add Button */}
-          {!isAddOpen && <button
-            id="bottom-quick-add-btn"
-            type="button"
-            onClick={() => {
-              if (!isAddOpen) {
-                sound.tick(600);
-                setIsAddOpen(true);
-              }
-            }}
-            className="order-3 min-h-11 shrink-0 flex items-center gap-1 px-3 py-1.5 bg-white text-black font-extrabold font-sans text-xs tracking-wider hover:bg-neutral-200 transition-all active:scale-95 app-no-drag"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>{t.addOp}</span>
-          </button>}
-        </div>
-      </footer>
+      <AIIsland lang={lang} isOpen={isAIOpen} onOpen={() => { sound.activate(); setAiPromptSeed(''); setIsAIOpen(true); }} />
 
       {/* AI Assistant HUD Sheet */}
       <AIAssistantSheet
         isOpen={isAIOpen && strategyReady}
+        contextLine={aiContextLine}
         lang={lang}
         tabs={tabs}
         onClose={() => setIsAIOpen(false)}
@@ -3362,23 +3387,16 @@ export default function App() {
       />
 
       {/* Google Account & Cloud Backup Modal */}
-      <AccountModal
-        isOpen={isAccountOpen}
-        lang={lang}
-        user={currentUser}
-        cloudData={cloudData}
-        isSyncing={isSyncing}
-        lastSyncTime={lastSyncTime}
-        autoSyncEnabled={autoSyncEnabled}
-        syncStatus={syncStatus}
-        syncError={syncError}
-        onClose={() => setIsAccountOpen(false)}
-        onLoginWithGoogle={handleLoginWithGoogle}
-        onLogout={handleLogout}
-        onSyncNow={handleSyncNow}
-        onRestoreFromCloud={handleRestoreFromCloud}
-        onToggleAutoSync={handleToggleAutoSync}
-      />
+      {isAccountOpen && <div className="ac-overlay" role="region" aria-label={lang === 'uk' ? 'Акаунт' : 'Account'}>
+        <AccountView key={currentUser?.uid ?? 'guest'} lang={lang}
+          user={currentUser ? { id: currentUser.uid, name: currentUser.displayName || currentUser.email || (lang === 'uk' ? 'Акаунт' : 'Account'), email: currentUser.email, avatarUrl: accountAvatarUrl } : null}
+          onAvatarChange={setAccountAvatarUrl}
+          isSyncing={isSyncing} syncStatus={syncStatus} syncError={syncError} autoSyncEnabled={autoSyncEnabled}
+          counts={{ tasks: tasks.length, skills: growth.skills.filter(skill => skill.deletedAt === undefined).length,
+            measurements: growth.measurements.filter(item => item.deletedAt === undefined).length, notes: notes.length }}
+          onLogin={handleLoginWithGoogle} onLogout={handleLogout} onSyncNow={handleSyncNow} onRestoreFromCloud={handleRestoreFromCloud}
+          onToggleAutoSync={handleToggleAutoSync} onClose={() => setIsAccountOpen(false)} />
+      </div>}
 
       {/* System Update Modal */}
       <UpdateModal
@@ -3401,21 +3419,30 @@ export default function App() {
       />
 
       {/* Device-local application settings */}
-      <SettingsModal
-        isOpen={isSettingsOpen}
-        lang={lang}
-        zoomPercent={appZoomPercent}
-        minZoom={MIN_APP_ZOOM}
-        maxZoom={MAX_APP_ZOOM}
-        defaultZoom={DEFAULT_APP_ZOOM}
-        launchAtStartup={launchAtStartup}
-        startupPending={startupPending}
-        startupError={startupError}
-        onLaunchAtStartupChange={handleLaunchAtStartupChange}
-        onRefreshStartup={handleRefreshStartup}
-        onZoomChange={(value) => setAppZoomPercent(normalizeAppZoom(value))}
-        onClose={() => setIsSettingsOpen(false)}
-      />
+      {isSettingsOpen && <div className="st-overlay" role="region" aria-label={lang === 'uk' ? 'Налаштування' : 'Settings'}>
+        <SettingsView lang={lang} zoomPercent={appZoomPercent} minZoom={MIN_APP_ZOOM} maxZoom={MAX_APP_ZOOM} defaultZoom={DEFAULT_APP_ZOOM}
+          onZoomChange={value => setAppZoomPercent(normalizeAppZoom(value))}
+          launchAtStartup={launchAtStartup} startupPending={startupPending} onLaunchAtStartupChange={handleLaunchAtStartupChange}
+          soundEnabled={soundEnabled} onToggleSound={handleToggleSound} motionEnabled={motionEnabled} onToggleMotion={() => setMotionEnabled(value => !value)}
+          onSetLang={next => { if (next !== lang) handleToggleLang(); }}
+          appVersion={appCurrentVersion}
+          onCheckUpdate={async () => {
+            const res = await karkasApiFetch('/api/check-update');
+            if (!res.ok) throw new Error('update check failed');
+            const data = await res.json();
+            return data && data.tag_name && !data.draft && !data.prerelease && isNewerAppVersion(data.tag_name, appCurrentVersion) ? String(data.tag_name) : null;
+          }}
+          onOpenUpdates={() => { setIsSettingsOpen(false); setIsUpdateOpen(true); }}
+          aiConnected={(() => { try { return localStorage.getItem('karkas_custom_ai_enabled') === 'true'; } catch { return false; } })()}
+          onOpenAI={() => { setIsSettingsOpen(false); setIsAIOpen(true); }}
+          account={currentUser ? { name: currentUser.displayName || currentUser.email || (lang === 'uk' ? 'Акаунт' : 'Account'),
+            avatarUrl: accountAvatarUrl,
+            detail: [currentUser.email, lastSyncTime ? (lang === 'uk' ? 'синхронізовано ' : 'synced ') + formatSyncAgo(lastSyncTime, lang) : ''].filter(Boolean).join(' · ') } : null}
+          onSync={() => { void handleSyncNow(); }} onLogout={() => { void handleLogout(); }}
+          onLogin={() => { setIsSettingsOpen(false); setIsAccountOpen(true); }}
+          onClearCompleted={tasks.some(task => task.done) ? handleClearCompleted : undefined}
+          onClose={() => setIsSettingsOpen(false)} />
+      </div>}
 
       {/* Automated Update Detection Prompt Banner */}
       <AnimatePresence>
@@ -3558,6 +3585,6 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
-    </div>
+    </div></MotionConfig>
   );
 }

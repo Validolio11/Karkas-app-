@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { motion, AnimatePresence, useDragControls } from 'motion/react';
+import { useDragControls } from 'motion/react';
 import {
   PSTask,
   TaskTab,
@@ -31,6 +31,8 @@ import {
   Square,
   ArrowUp,
   RefreshCw,
+  ChevronDown,
+  History,
 } from 'lucide-react';
 import { AIIcon, AIIconId } from './AIIconTemplates';
 import { shouldVerifyAsApiKey } from '../utils/apiKey';
@@ -84,9 +86,14 @@ interface AIAssistantSheetProps {
   /** recentUserTexts (oldest first) set the form of address of the opening question. */
   onDeepenDiscovery?: (ownerId: string | null, recentUserTexts?: string[]) => boolean;
   onUndoStrategy?: (actionId: string) => boolean;
+  /** «бачить 3 навички · 14 замірів» under the title. */
+  contextLine?: string;
 }
 
 type AIChatMessage = PersistedAIChatMessage;
+
+/** Bar heights of the recording wave in AI.dc.html; the live microphone level scales them. */
+const WAVE = Array.from({ length: 32 }, (_, index) => (10 + 26 * Math.abs(Math.sin(index * 1.7) * Math.cos(index * 0.45))) / 36);
 
 interface AIChatOption {
   label: string;
@@ -303,6 +310,7 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   onDeepenDiscovery,
   onChatWelcome,
   onUndoStrategy,
+  contextLine,
 }) => {
   const currentOwnerRef = useRef(accountId);
   currentOwnerRef.current = accountId;
@@ -1459,87 +1467,36 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
   const assistantMark = <div className="karkas-ai-message-author"><AIIcon id={aiIconVariant} className="h-3.5 w-3.5" /><span className="sr-only">Karkas AI:</span></div>;
 
   return (
-    <AnimatePresence>
+    <>
       {isOpen && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center pointer-events-auto">
-          {/* Backdrop */}
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={onClose}
-            className="fixed inset-0 bg-black/80 backdrop-blur-sm"
-          />
-
-          {/* Sheet Surface */}
-          <motion.div
-            id="ps-ai-sheet"
-            role="dialog"
-            aria-modal="true"
-            aria-label={lang === 'uk' ? 'ШІ-чат Karkas' : 'Karkas AI chat'}
-            initial={{ y: '100%' }}
-            animate={{ y: 0 }}
-            exit={{ y: '100%' }}
-            transition={{ type: 'spring', damping: 28, stiffness: 300 }}
-            drag="y"
-            dragControls={dragControls}
-            dragListener={false}
-            dragConstraints={{ top: 0 }}
-            dragElastic={0.2}
-            onDragEnd={(_, info) => {
-              if (info.offset.y > 100) {
-                onClose();
-              }
-            }}
-            className="relative z-10 w-full max-w-[1100px] h-[95dvh] max-sm:h-[100dvh] bg-[#0c0c0e] border-t border-x border-neutral-800 flex flex-col shadow-2xl font-sans"
-          >
-            {/* Drag Handle */}
-            <div
-              aria-hidden="true"
-              onPointerDown={(event) => dragControls.start(event)}
-              style={{ touchAction: 'none' }}
-              className="w-full shrink-0 flex items-center justify-center pt-1.5 pb-1 cursor-grab active:cursor-grabbing"
-            >
-              <div className="w-10 h-1 bg-neutral-700 rounded-full" />
-            </div>
-
-            {/* Header */}
-            <div className="flex shrink-0 items-center justify-between gap-2 px-4 sm:px-5 py-1 border-b border-neutral-800">
-              <div className="min-w-0 flex items-center gap-2">
-                <AIIcon id={aiIconVariant} className="w-4 h-4 shrink-0 text-white" />
-                <span className="min-w-0 break-words text-xs sm:text-sm font-bold uppercase tracking-wider font-sans text-white">
-                  KARKAS AI
-                </span>
-                {discoveryMode.active && <span id="ai-discovery-mode-chip" role="status" className="shrink-0 border border-emerald-700/70 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-300">
-                  {lang === 'uk' ? 'Режим знайомства' : 'Getting to know you'}
-                </span>}
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-              {discoveryMode.active && <button id="ai-finish-discovery-btn" type="button" disabled={loading} onClick={finishDiscovery}
-                className="min-h-11 sm:min-h-8 max-w-32 sm:max-w-none border border-neutral-800 px-2 py-1.5 text-[11px] leading-tight text-neutral-300 hover:border-neutral-600 hover:text-white disabled:opacity-40">
+        <div className="kai-layer">
+          <div className="kai-backdrop" aria-hidden="true" onClick={onClose} />
+          <div id="ps-ai-sheet" role="dialog" aria-modal="true" aria-label={lang === 'uk' ? 'ШІ-чат Karkas' : 'Karkas AI chat'} className="kai-island max-w-[1100px] h-[95dvh]">
+            <div className="kai-head">
+              <span className="kai-avatar"><AIIcon id={aiIconVariant} className="w-[18px] h-[18px]" /></span>
+              <span className="kai-title">
+                <span>Karkas AI</span>
+                {discoveryMode.active ? <span id="ai-discovery-mode-chip" role="status">{lang === 'uk' ? 'Режим знайомства' : 'Getting to know you'}</span> : contextLine && <span>{contextLine}</span>}
+              </span>
+              {discoveryMode.active && <button id="ai-finish-discovery-btn" type="button" disabled={loading} onClick={finishDiscovery} className="kai-pill">
                 {lang === 'uk' ? 'Завершити знайомство' : 'Finish getting to know'}
               </button>}
-              {onDeepenDiscovery && !discoveryMode.active && <button type="button" disabled={loading || isListening || isTranscribing}
-                onClick={() => { if (onDeepenDiscovery(accountId, recentUserTexts())) { setChatProposalReadiness(false); setChatPlanningRequest(null); setChatPlanningResponse(null); } }}
-                className="min-h-11 sm:min-h-8 max-w-32 sm:max-w-none border border-neutral-800 px-2 py-1.5 text-[11px] leading-tight text-neutral-400 hover:border-neutral-600 hover:text-white disabled:opacity-40">
+              {onDeepenDiscovery && !discoveryMode.active && <button type="button" disabled={loading || isListening || isTranscribing} className="kai-pill"
+                onClick={() => { if (onDeepenDiscovery(accountId, recentUserTexts())) { setChatProposalReadiness(false); setChatPlanningRequest(null); setChatPlanningResponse(null); } }}>
                 {lang === 'uk' ? 'Поглибити знайомство' : 'Get to know me better'}
               </button>}
-              <button
-                id="close-ai-sheet-btn"
-                aria-label={lang === 'uk' ? 'Закрити ШІ-помічника' : 'Close AI assistant'}
-                onClick={onClose}
-                className="shrink-0 min-w-11 min-h-11 flex items-center justify-center p-1.5 text-neutral-400 hover:text-white border border-neutral-800 hover:border-neutral-600 transition-colors cursor-pointer"
-              >
-                <X className="w-4 h-4" />
+              {visibleConversation.previousCount > 0 && <button id="ai-reveal-previous-history-btn" type="button" className="kai-pill" onClick={() => setIntroductionId(null)}>
+                <History size={16} aria-hidden="true" />{lang === 'uk' ? 'Історія' : 'History'}
+              </button>}
+              <button id="close-ai-sheet-btn" type="button" className="kai-round" aria-label={lang === 'uk' ? 'Згорнути в острівець' : 'Collapse to the island'} onClick={onClose}>
+                <ChevronDown size={18} aria-hidden="true" />
               </button>
-              </div>
             </div>
 
             {/* Content Container (Scrollable) */}
-            <div ref={contentRef} className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-6 sm:px-6 sm:py-8">
-              <div className="mx-auto flex w-full max-w-3xl flex-col gap-7">
+            <div ref={contentRef} className="kai-feed">
+              <div className="kai-feed-inner">
               {/* All replies, analyses and proposals share one persisted conversation. */}
-              {visibleConversation.previousCount > 0 && <button id="ai-reveal-previous-history-btn" type="button" onClick={() => setIntroductionId(null)} className="self-start min-h-11 border border-neutral-700 px-3 py-2 text-sm text-neutral-300 hover:border-white">{lang === 'uk' ? 'Попередня історія' : 'Previous history'} ({visibleConversation.previousCount})</button>}
               {visibleConversation.messages.length > 0 && <div role="log" aria-label={lang === 'uk' ? 'Розмова з AI' : 'AI conversation'} aria-live="polite" aria-relevant="additions text" className="karkas-ai-conversation">
                 {visibleConversation.messages.map((message, index) => {
                   const parsed = message.role === 'assistant' ? parseChatOptions(message.content) : { body: message.content, options: [] };
@@ -1626,8 +1583,8 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
             </div>
 
             {/* Custom Prompt Input at the bottom of the sheet */}
-            <div className="shrink-0 px-3 sm:px-6 pt-3 pb-3 sm:pb-4 bg-[#0c0c0e]">
-              <div className="mx-auto w-full max-w-3xl space-y-2">
+            <div className="kai-foot">
+              <div className="kai-foot-inner">
               {pendingChangeCount > 0 && pendingProposalOwnerRef.current === accountId && !pendingChatConfirmed.current
                 && chatMessages.some(message => message.id === latestProposalMessageId.current && message.proposalStatus === 'pending') && (
                 <div className="flex flex-wrap items-center justify-between gap-2 border border-neutral-800 px-3 py-2 text-sm">
@@ -1645,80 +1602,14 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                 <span className="flex-1">{voiceNotice}</span>
                 <button type="button" onClick={() => setVoiceNotice(null)} aria-label={lang === 'uk' ? 'Приховати повідомлення' : 'Dismiss message'} className="min-w-11 min-h-11 flex items-center justify-center text-neutral-400 hover:text-white"><X className="w-4 h-4" /></button>
               </div>}
-              {(isListening || isTranscribing) && (
-                <div className="flex items-center justify-between px-3 py-1.5 bg-[#050507] border border-neutral-800 text-xs font-sans">
-                  {isTranscribing ? (
-                    <div className="flex items-center gap-2 text-neutral-300">
-                      <Loader2 className="w-3.5 h-3.5 animate-spin text-neutral-400" />
-                      <span className="text-[11px] text-neutral-300">{t.aiSheet.voiceTranscribing}</span>
-                    </div>
-                  ) : (
-                    <div className="flex flex-wrap items-center justify-between gap-2 w-full">
-                      <div className="min-w-0 flex flex-wrap items-center gap-2.5">
-                        <span className="relative flex h-2 w-2">
-                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                          <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
-                        </span>
-                        {/* Audio wave bars */}
-                        <div className="flex items-end gap-0.5 h-3.5" role="meter" aria-label={lang === 'uk' ? 'Рівень мікрофона' : 'Microphone level'} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(voiceLevel * 100)}>
-                          {[0.65, 1, 0.8, 0.55].map((scale, index) => (
-                            <span key={index} className="w-0.5 bg-red-400 transition-[height] duration-75" style={{ height: `${Math.max(2, voiceLevel * 14 * scale)}px` }} />
-                          ))}
-                        </div>
-                        <span className="text-[11px] text-red-300 font-bold uppercase tracking-wider">
-                          {voicePhase === 'starting'
-                            ? (lang === 'uk' ? 'Запускаю мікрофон…' : 'Starting microphone…')
-                            : voicePhase === 'connecting'
-                              ? (lang === 'uk' ? 'Слухаю · підключаю розпізнавання…' : 'Listening · connecting…')
-                              : voicePhase === 'recording'
-                                ? (lang === 'uk' ? 'Записую · текст після зупинки' : 'Recording · text after stop')
-                                : t.aiSheet.voiceListening}
-                        </span>
-                        <span className="text-[10px] text-neutral-400 font-sans">
-                          {Math.floor(recordingDuration / 60).toString().padStart(2, '0')}:
-                          {(recordingDuration % 60).toString().padStart(2, '0')}
-                        </span>
-                      </div>
-                      <button
-                        onClick={stopVoiceInput}
-                        className="px-2 py-0.5 text-[10px] uppercase font-bold text-red-400 hover:text-white border border-red-900/60 hover:border-red-500 bg-red-950/40 transition-colors"
-                      >
-                        {t.aiSheet.voiceStop}
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-
               {voiceReviewText && <details className="mb-3 text-sm text-neutral-300">
                 <summary className="cursor-pointer min-h-11 flex items-center">{lang === 'uk' ? 'Переглянути розпізнаний текст' : 'Review recognized text'}</summary>
                 <p className="whitespace-pre-wrap break-words max-h-32 overflow-auto py-2 select-text">{voiceReviewText}</p>
               </details>}
-              <div className="karkas-ai-composer">
-                {!awaitingApiKey && mode !== 'chat' && <div className="karkas-ai-command-chip"><span>{AI_COMMANDS.find(action => action.intent === modeIntent(mode))?.command}</span><button type="button" aria-label={lang === 'uk' ? 'Прибрати дію' : 'Remove action'} onClick={() => { setMode('chat'); promptInputRef.current?.focus(); }}><X size={14} /></button></div>}
-                {awaitingApiKey ? <input
-                  id="ai-prompt-input"
-                  type="password"
-                  autoComplete="off"
-                  aria-label={lang === 'uk' ? 'Gemini API-ключ' : 'Gemini API key'}
-                  value={prompt}
-                  onChange={event => changePrompt(event.target.value)}
-                  onKeyDown={composerKeyDown}
-                  placeholder={lang === 'uk' ? 'Вставте Gemini API-ключ сюди…' : 'Paste your Gemini API key here…'}
-                  className="karkas-ai-composer-field"
-                /> : <textarea
-                  ref={promptInputRef}
-                  id="ai-prompt-input"
-                  rows={1}
-                  aria-label={t.aiSheet.inputPlaceholder}
-                  value={prompt}
-                  onChange={event => changePrompt(event.target.value)}
-                  onKeyDown={composerKeyDown}
-                  placeholder={lang === 'uk' ? 'Напишіть повідомлення…' : 'Write a message…'}
-                  className="karkas-ai-composer-field"
-                />}
-                <div className="karkas-ai-composer-toolbar">
-                <AICommandMenu key={`menu:${accountScope}`} lang={lang} disabled={loading || awaitingApiKey} onChoose={intent => { setMode(intentMode(intent)); promptInputRef.current?.focus(); }} />
+              <div className="kai-chips">
+                {AI_COMMANDS.map(action => <button key={action.intent} type="button" className="kai-chip" aria-pressed={mode === intentMode(action.intent)} disabled={loading || awaitingApiKey}
+                  onClick={() => { setMode(mode === intentMode(action.intent) ? 'chat' : intentMode(action.intent)); promptInputRef.current?.focus(); }}>/{action[lang].toLowerCase()}</button>)}
+                <span className="kai-chips-spacer" />
                 <AIModelSelect
                   key={`model:${accountScope}`}
                   models={visibleModels}
@@ -1733,55 +1624,77 @@ export const AIAssistantSheet: React.FC<AIAssistantSheetProps> = ({
                     sound.tick(400);
                   }}
                 />
-
-                <div className="flex-1" />
-                  <AIEmojiPicker key={`emoji:${accountScope}`} lang={lang} disabled={awaitingApiKey} onChoose={insertEmoji} />
-                  {prompt && <button
-                    type="button"
-                    onClick={() => { changePrompt(''); document.getElementById('ai-prompt-input')?.focus(); }}
-                    aria-label={lang === 'uk' ? 'Очистити введений текст' : 'Clear entered text'}
-                    title={lang === 'uk' ? 'Очистити текст' : 'Clear text'}
-                    className="karkas-ai-tool"
-                  ><X className="w-4 h-4" /></button>}
-                  <button
-                    id="ai-voice-dictation-btn"
-                    type="button"
-                    onClick={handleToggleVoiceInput}
-                    disabled={loading || awaitingApiKey || isTranscribing}
-                    title={isListening ? t.aiSheet.voiceStop : t.aiSheet.voiceInput}
-                    aria-label={isListening ? t.aiSheet.voiceStop : t.aiSheet.voiceInput}
-                    className={`karkas-ai-tool ${isListening ? 'is-recording' : isTranscribing ? 'cursor-wait' : ''}`}
-                  >
-                    {isTranscribing ? (
-                      <Loader2 className="w-4 h-4 animate-spin text-neutral-300" />
-                    ) : isListening ? (
-                      <Square className="w-3.5 h-3.5 fill-current text-red-400" />
-                    ) : (
-                      <Mic className="w-4 h-4" />
-                    )}
-                  </button>
+              </div>
+              <div className={'kai-composer' + (isListening ? ' is-recording' : '')}>
+                <AICommandMenu key={`menu:${accountScope}`} lang={lang} disabled={loading || awaitingApiKey} onChoose={intent => { setMode(intentMode(intent)); promptInputRef.current?.focus(); }} />
+                <AIEmojiPicker key={`emoji:${accountScope}`} lang={lang} disabled={awaitingApiKey} onChoose={insertEmoji} />
+                {!awaitingApiKey && mode !== 'chat' && !isListening && !isTranscribing && <span className="kai-mode"><span>{AI_COMMANDS.find(action => action.intent === modeIntent(mode))?.command}</span><button type="button" aria-label={lang === 'uk' ? 'Прибрати дію' : 'Remove action'} onClick={() => { setMode('chat'); promptInputRef.current?.focus(); }}><X size={14} /></button></span>}
+                {isListening || isTranscribing ? <div role="status" className="kai-rec" aria-label={isTranscribing ? t.aiSheet.voiceTranscribing : (lang === 'uk' ? 'Йде запис голосу' : 'Recording voice')}>
+                  {isTranscribing ? <span className="kai-rec-label">{t.aiSheet.voiceTranscribing}</span> : <>
+                    <span className="kai-rec-dot" aria-hidden="true" />
+                    <span className="kai-rec-time">{Math.floor(recordingDuration / 60)}:{(recordingDuration % 60).toString().padStart(2, '0')}</span>
+                    <div className="kai-wave" role="meter" aria-label={lang === 'uk' ? 'Рівень мікрофона' : 'Microphone level'} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(voiceLevel * 100)}>
+                      {WAVE.map((scale, index) => <span key={index} style={{ height: Math.max(4, Math.round(40 * scale * (0.2 + 0.8 * voiceLevel))) + 'px', opacity: Math.min(index, 31 - index) < 5 ? 0.25 + Math.min(index, 31 - index) * 0.15 : 1 }} />)}
+                    </div>
+                    {(voicePhase === 'starting' || voicePhase === 'connecting') && <span className="kai-rec-label">{voicePhase === 'starting' ? (lang === 'uk' ? 'Запускаю мікрофон…' : 'Starting microphone…') : (lang === 'uk' ? 'Підключаю…' : 'Connecting…')}</span>}
+                  </>}
+                </div> : awaitingApiKey ? <input
+                  id="ai-prompt-input"
+                  type="password"
+                  autoComplete="off"
+                  aria-label={lang === 'uk' ? 'Gemini API-ключ' : 'Gemini API key'}
+                  value={prompt}
+                  onChange={event => changePrompt(event.target.value)}
+                  onKeyDown={composerKeyDown}
+                  placeholder={lang === 'uk' ? 'Вставте Gemini API-ключ сюди…' : 'Paste your Gemini API key here…'}
+                  className="kai-field"
+                /> : <textarea
+                  ref={promptInputRef}
+                  id="ai-prompt-input"
+                  rows={1}
+                  aria-label={t.aiSheet.inputPlaceholder}
+                  value={prompt}
+                  onChange={event => changePrompt(event.target.value)}
+                  onKeyDown={composerKeyDown}
+                  placeholder={lang === 'uk' ? 'Повідомлення' : 'Message'}
+                  className="kai-field"
+                />}
+                {prompt && <button
+                  type="button"
+                  onClick={() => { changePrompt(''); promptInputRef.current?.focus(); }}
+                  aria-label={lang === 'uk' ? 'Очистити введений текст' : 'Clear entered text'}
+                  title={lang === 'uk' ? 'Очистити текст' : 'Clear text'}
+                  className="kai-clear"
+                ><X className="w-4 h-4" /></button>}
+                <button
+                  id="ai-voice-dictation-btn"
+                  type="button"
+                  onClick={handleToggleVoiceInput}
+                  disabled={loading || awaitingApiKey || isTranscribing}
+                  aria-label={isListening ? t.aiSheet.voiceStop : t.aiSheet.voiceInput}
+                  aria-pressed={isListening}
+                  className={'kai-mic' + (isListening ? ' is-recording' : '')}
+                >
+                  {isTranscribing ? <Loader2 className="w-5 h-5 animate-spin" /> : isListening
+                    ? <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="4" fill="currentColor" /></svg>
+                    : <Mic className="w-5 h-5" />}
+                </button>
                 <button
                   id="ai-generate-submit-btn"
                   type="button"
                   onClick={() => handleGenerate()}
                   disabled={loading || isListening || isTranscribing || (!prompt.trim() && (awaitingApiKey || mode === 'chat'))}
-                  title={t.aiSheet.execute}
                   aria-label={t.aiSheet.execute}
-                  className="karkas-ai-send shrink-0"
+                  className="kai-send"
                 >
-                  {loading ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <ArrowUp className="w-4 h-4 stroke-[2.5]" />
-                  )}
+                  {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <ArrowUp className="w-5 h-5 stroke-[2.5]" />}
                 </button>
-                </div>
               </div>
               </div>
             </div>
-          </motion.div>
+          </div>
         </div>
       )}
-    </AnimatePresence>
+    </>
   );
 };

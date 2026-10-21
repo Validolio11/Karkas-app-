@@ -55,10 +55,62 @@ export interface TaskActivityEvent {
   changeKey?: string;
 }
 
+export interface Skill {
+  id: string;
+  title: string;
+  metric: { label: string; unit: string; direction: 'up' | 'down' };
+  start: { value: number; date: string };
+  goal: { value: number; date: string; label?: string };
+  measure: { weekday: 0 | 1 | 2 | 3 | 4 | 5 | 6; minutes: number; how?: string; time?: string }; // time: local "HH:MM"
+  subskills: { id: string; title: string }[];
+  createdAt: number;
+  updatedAt?: number;
+  archivedAt?: number;
+  deletedAt?: number;
+  sourceGoalId?: string;
+  needsSetup?: boolean;
+}
+
+/** Migrated goals remain incomplete until the user chooses a real outcome metric. */
+export type SkillDraft = Pick<Skill, 'id' | 'title' | 'subskills' | 'createdAt' | 'updatedAt' | 'archivedAt' | 'deletedAt' | 'sourceGoalId'> & {
+  needsSetup: true;
+  metric?: never;
+  start?: never;
+  goal?: never;
+  measure?: never;
+};
+export type GrowthSkill = Skill | SkillDraft;
+
+export interface SkillMeasurement {
+  id: string;
+  skillId: string;
+  value: number;
+  at: number;
+  note?: string;
+  sessionId?: string;
+  deletedAt?: number;
+}
+
+export interface PracticeSession {
+  id: string;
+  skillId: string;
+  subskillId?: string;
+  taskId?: string;
+  at: number;
+  durationSeconds?: number;
+  difficulty: 'easy' | 'edge' | 'hard';
+  result?: { done: number; of: number };
+  lesson?: string;
+  measurementId?: string;
+  deletedAt?: number;
+}
+
 export interface PSTask {
   id: string;
   title: string;
   phase: string; // Dynamic tab/category ID
+  skillId?: string;
+  subskillId?: string;
   priority: 1 | 2 | 3; // 1: Urgent (Red), 2: Standard (Yellow), 3: Low (Green)
   steps: number; // Zero means the task has no subtasks
   currentStep: number; // 0 to steps
@@ -99,7 +151,7 @@ export interface PSTask {
 }
 
 export type NewTaskInput = Pick<PSTask, 'title' | 'phase' | 'priority' | 'steps'> &
-  Partial<Pick<PSTask, 'stepList' | 'note' | 'timerMode' | 'countdownDurationSeconds' | 'plannedDurationSeconds' | 'schedule' | 'plannedDate' | 'deadlineDate'>>;
+  Partial<Pick<PSTask, 'stepList' | 'note' | 'timerMode' | 'countdownDurationSeconds' | 'plannedDurationSeconds' | 'schedule' | 'plannedDate' | 'deadlineDate' | 'skillId' | 'subskillId'>>;
 
 export interface DeletedTask extends PSTask {
   deletedAt: number;
@@ -114,7 +166,14 @@ export interface NotepadNote {
   createdAt: number;
   updatedAt?: number;
   pinned?: boolean;
+  kind?: 'lesson' | 'idea'; // Missing on legacy notes: an idea.
+  doc?: NoteDoc; // Rich pages; valid only while its plain text equals content.
 }
+
+export interface NoteSegStyle { font?: string; size?: number; weight?: number }
+/** One run of a note page: styled text, a line break, a numbering marker or a copy chip. */
+export interface NoteSeg { t: 'text' | 'br' | 'num' | 'chip'; v: string; s?: NoteSegStyle }
+export interface NoteDoc { pages: NoteSeg[][] }
 
 export type NoteSortOption = 'NEWEST' | 'OLDEST' | 'DATE';
 
@@ -360,6 +419,9 @@ declare global {
       tasks: PSTask[];
       tabs: TaskTab[];
       deletedTasks: DeletedTask[];
+      skills?: GrowthSkill[];
+      measurements?: SkillMeasurement[];
+      practiceSessions?: PracticeSession[];
       settings: { soundEnabled: boolean; fireEnabled: boolean; lang: string; aiIconVariant: string };
     };
     base?: DesktopAccountSnapshot['workspace'] | null;

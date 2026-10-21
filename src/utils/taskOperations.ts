@@ -37,6 +37,9 @@ export function createTask(input: NewTaskInput, id: string, now = Date.now()): P
     typeof input.phase !== 'string' || !input.phase.trim() || typeof id !== 'string' || !id.trim() ||
     !Number.isFinite(now) || now < 0 || !Number.isInteger(input.steps) || input.steps < 0 ||
     ![1, 2, 3].includes(input.priority)) return null;
+  for (const key of ['skillId', 'subskillId'] as const) {
+    if (input[key] !== undefined && (typeof input[key] !== 'string' || !input[key]!.trim() || input[key]!.length > 512)) return null;
+  }
   const mode = input.timerMode ?? 'none';
   const schedule = input.schedule === undefined ? undefined : normalizeTaskSchedule(input.schedule);
   if (input.schedule !== undefined && !schedule) return null;
@@ -62,6 +65,8 @@ export function createTask(input: NewTaskInput, id: string, now = Date.now()): P
     id: id.trim(), title: input.title.trim(), phase: input.phase.trim(), priority: input.priority,
     steps: list?.length ? list.length : input.steps, currentStep: 0,
     ...(list ? { stepList: list } : {}),
+    ...(input.skillId !== undefined ? { skillId: input.skillId.trim() } : {}),
+    ...(input.subskillId !== undefined ? { subskillId: input.subskillId.trim() } : {}),
     ...(input.note !== undefined ? { note: input.note.trim() } : {}),
     ...(input.plannedDate !== undefined ? { plannedDate: input.plannedDate } : {}),
     ...(input.deadlineDate !== undefined ? { deadlineDate: input.deadlineDate } : {}),

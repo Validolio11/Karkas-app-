@@ -1,0 +1,660 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<title>Блокнот</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300..900&amp;display=swap">
+<style>
+body{margin:0;background:#090a0a}
+a{color:#13f287}
+button,input{font-family:inherit}
+input::placeholder{color:#6e6e73}
+@keyframes kUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+@keyframes kSwap{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+main > *{animation:kUp .6s cubic-bezier(.2,.8,.2,1) backwards}
+main > *:nth-child(2){animation-delay:.12s}
+main > * > *{animation:kUp .55s cubic-bezier(.2,.8,.2,1) backwards}
+main > * > *:nth-child(2){animation-delay:.08s}main > * > *:nth-child(3){animation-delay:.16s}main > * > *:nth-child(4){animation-delay:.24s}main > * > *:nth-child(5){animation-delay:.32s}main > * > *:nth-child(6){animation-delay:.4s}main > * > *:nth-child(7){animation-delay:.48s}
+.swap{animation:kSwap .35s cubic-bezier(.2,.8,.2,1) both}
+header button,header a{transition:transform .15s ease}header button:hover,header a:hover{transform:scale(1.06)}header button:active{transform:scale(.94)}
+main button,main a{transition:transform .18s ease,background-color .2s ease,color .2s ease}main button:hover,main a:hover{transform:translateY(-2px)}main button:active,main a:active{transform:scale(.97)}
+html{scrollbar-width:thin;scrollbar-color:#3a3a3c transparent}
+@media (prefers-reduced-motion: reduce){*,*::before,*::after{animation:none !important;transition:none !important}}
+.wc button{transition:background-color .15s ease,color .15s ease}.wc button:hover{background:#3a3a3c;color:#ffffff}.wc button.x:hover{background:#ff4d4f;color:#ffffff}
+[data-tip]{position:relative}
+[data-tip]::after{content:attr(data-tip);position:absolute;top:calc(100% + 10px);left:50%;transform:translate(-50%,-4px);white-space:nowrap;height:32px;line-height:32px;padding:0 12px;border-radius:16px;background:#f4f4f2;color:#090a0a;font-size:13px;font-weight:700;letter-spacing:0;opacity:0;pointer-events:none;transition:opacity .15s ease .35s,transform .15s ease .35s;z-index:60;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+[data-tip]:hover::after,[data-tip]:focus-visible::after{opacity:1;transform:translate(-50%,0)}
+[data-tip-up]::after{top:auto;bottom:calc(100% + 12px);transform:translate(-50%,4px)}
+.pg > * > *{animation:kUp .55s cubic-bezier(.2,.8,.2,1) backwards}.pg > * > *:nth-child(2){animation-delay:.08s}.pg > * > *:nth-child(3){animation-delay:.16s}.pg > * > *:nth-child(4){animation-delay:.24s}.pg > * > *:nth-child(5){animation-delay:.32s}.pg > aside{animation-delay:.12s}
+@media (max-width: 1040px){.pg{grid-template-columns:minmax(0,1fr) !important}}
+@keyframes kMenu{from{opacity:0;transform:translateY(-6px) scale(.97)}to{opacity:1;transform:none}}
+[data-menu]{transform-origin:top left;animation:kMenu .18s cubic-bezier(.2,.8,.2,1) both}
+[data-menu] button:hover{transform:none;background:#1f1f1f}
+[data-editor] ::selection{background:#13f287;color:#090a0a}
+.qc button:hover{transform:scale(1.08)}
+.qt{animation:kSwap .3s cubic-bezier(.2,.8,.2,1) both}
+[data-menu] [role="menuitem"]:hover{background:#1f1f1f !important}
+@keyframes kMenuIn{0%{opacity:0;transform:translateY(-10px) scale(.94);filter:blur(4px)}60%{opacity:1;filter:blur(0)}100%{opacity:1;transform:none;filter:none}}
+@keyframes kItem{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:none}}
+@keyframes kFold{from{opacity:0;transform:translateY(-6px) scaleY(.92)}to{opacity:1;transform:none}}
+@keyframes kChipIn{0%{opacity:0;transform:scale(.6)}60%{opacity:1;transform:scale(1.08)}100%{transform:scale(1)}}
+@keyframes kNum{0%{opacity:0;transform:translateX(-10px) scale(.7)}70%{opacity:1;transform:translateX(1px) scale(1.1)}100%{transform:none}}
+@keyframes kToastIn{0%{opacity:0;transform:translateY(18px) scale(.9)}65%{opacity:1;transform:translateY(-3px) scale(1.02)}100%{transform:none}}
+@keyframes kShine{from{background-position:-120% 0}to{background-position:220% 0}}
+[data-menu][role="menu"]{transform-origin:top left;animation:kMenuIn .32s cubic-bezier(.2,.9,.25,1.1) both}
+[data-menu] [role="menuitem"]{animation:kItem .28s cubic-bezier(.2,.8,.2,1) backwards;transition:background-color .15s ease,color .15s ease}
+[data-menu] [role="menuitem"]:nth-of-type(1){animation-delay:.04s}[data-menu] [role="menuitem"]:nth-of-type(2){animation-delay:.07s}[data-menu] [role="menuitem"]:nth-of-type(3){animation-delay:.1s}[data-menu] [role="menuitem"]:nth-of-type(4){animation-delay:.13s}[data-menu] [role="menuitem"]:nth-of-type(5){animation-delay:.16s}
+[data-menu] [role="menuitem"] svg{transition:transform .2s cubic-bezier(.2,.8,.2,1)}[data-menu] [role="menuitem"]:hover svg{transform:translateX(2px) scale(1.12)}
+[data-menu] [aria-pressed],[data-menu] [role="option"]{transition:background-color .2s ease,color .2s ease,transform .15s ease}
+[data-menu] [aria-pressed]:active,[data-menu] [role="option"]:active,[data-menu] [aria-label="Менше"]:active,[data-menu] [aria-label="Більше"]:active{transform:scale(.9)}
+[data-menu] [aria-live="polite"]{display:inline-block;transition:transform .2s ease}
+.qf{transform-origin:top center;animation:kFold .22s cubic-bezier(.2,.8,.2,1) both;will-change:transform,opacity}
+[data-menu][role="menu"]{will-change:transform,opacity}
+html{scrollbar-gutter:stable}
+.qf [role="option"]{animation:kItem .24s cubic-bezier(.2,.8,.2,1) backwards}
+.qf [role="option"]:nth-child(2){animation-delay:.02s}.qf [role="option"]:nth-child(3){animation-delay:.04s}.qf [role="option"]:nth-child(4){animation-delay:.06s}.qf [role="option"]:nth-child(5){animation-delay:.08s}.qf [role="option"]:nth-child(6){animation-delay:.1s}
+.qc{animation:kChipIn .42s cubic-bezier(.2,.9,.3,1.2) backwards;transition:background-color .25s ease,color .25s ease,transform .25s cubic-bezier(.2,.9,.3,1.3)!important}
+.qc button{transition:transform .2s cubic-bezier(.2,.9,.3,1.3)}.qc button:active{transform:scale(.85)}
+.qn{animation:kNum .4s cubic-bezier(.2,.9,.3,1.2) backwards}
+[data-editor] [data-seg]{transition:font-size .28s cubic-bezier(.2,.8,.2,1),font-weight .28s ease,color .25s ease,letter-spacing .28s ease}
+.qt{animation:kToastIn .45s cubic-bezier(.2,.9,.3,1.2) both !important}
+@media (prefers-reduced-motion: reduce){.qt,.qc,.qn,.qf,[data-menu]{animation:none !important;transition:none !important}}
+@keyframes kPage{from{opacity:0;transform:translateX(14px)}to{opacity:1;transform:none}}
+@keyframes kEdit{0%{opacity:0;transform:translateY(10px) scale(.98)}100%{opacity:1;transform:none}}
+.qp{animation:kPage .32s cubic-bezier(.2,.8,.2,1) both}
+.qe{animation:kEdit .3s cubic-bezier(.2,.9,.3,1.1) both}
+@keyframes kCaret{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+textarea[data-append]{animation:kCaret .25s ease both}
+textarea[data-append]::placeholder{color:#c7c7cc}
+[role="tablist"][aria-label="Сторінки"] button:active{transform:scale(.88)}
+@media (prefers-reduced-motion: reduce){.qp,.qe{animation:none !important}}
+@keyframes kPin{0%{opacity:0;transform:scale(.4) rotate(-40deg)}70%{opacity:1;transform:scale(1.15) rotate(8deg)}100%{transform:none}}
+.qpin{animation:kPin .4s cubic-bezier(.2,.9,.3,1.2) backwards}
+@media (prefers-reduced-motion: reduce){.qpin{animation:none !important}}
+@keyframes kNewNote{0%{opacity:0;transform:translateY(-14px) scale(.96)}70%{opacity:1;transform:translateY(2px) scale(1.01)}100%{transform:none}}
+input[data-title]::placeholder{color:#c7c7cc}
+input[data-title]{animation:kCaret .25s ease both}
+</style>
+</helmet>
+<div style="min-height: 1000px; background: #090a0a; color: #ffffff; font-family: 'SF Pro Display', Inter, ui-sans-serif, system-ui, sans-serif; display: flex; flex-direction: column">
+
+<header style="height: 76px; flex-shrink: 0; box-sizing: border-box; padding: 0 16px 0 24px; display: flex; align-items: center; gap: 16px">
+<svg width="44" height="44" viewBox="0 0 1080 1080" role="img" aria-label="Karkas" style="flex-shrink: 0"><rect width="1080" height="1080" rx="540" fill="#f4f4f2"></rect><path d="{{k}}" fill="#090a0a"></path></svg>
+<nav aria-label="Розділи" style="flex: 1; display: flex; justify-content: center; gap: 4px">
+<a href="Today.dc.html" style="text-decoration: none; height: 44px; box-sizing: border-box; padding: 0 20px; border-radius: 22px; font-size: 15px; font-weight: 600; color: #a1a1a6; display: flex; align-items: center">Сьогодні</a>
+<a href="Main.dc.html" style="text-decoration: none; height: 44px; box-sizing: border-box; padding: 0 20px; border-radius: 22px; font-size: 15px; font-weight: 600; color: #a1a1a6; display: flex; align-items: center">Ріст</a>
+<a href="Notes.dc.html" aria-current="page" style="text-decoration: none; height: 44px; box-sizing: border-box; padding: 0 20px; border-radius: 22px; font-size: 15px; font-weight: 800; color: #090a0a; background: #f4f4f2; display: flex; align-items: center">Блокнот</a>
+</nav>
+<div style="display: flex; align-items: center; gap: 8px">
+<button type="button" aria-label="Пошук" data-tip="Пошук · Ctrl F" style="width: 44px; height: 44px; border: none; border-radius: 22px; background: #1f1f1f; color: #ffffff; display: flex; align-items: center; justify-content: center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg></button>
+<a href="AI.dc.html" aria-label="Karkas AI" data-ai="1" data-tip="Відкрити Karkas AI · Ctrl K" data-tip-up="1" style="position: fixed; left: 0; right: 0; bottom: 24px; z-index: 50; margin: 0 auto; width: max-content; height: 60px; box-sizing: border-box; padding: 0 24px 0 8px; border-radius: 30px; background: #090a0a; color: #ffffff; text-decoration: none; display: flex; align-items: center; gap: 12px; box-shadow: 0 0 0 1px #2c2c2e, 0 18px 44px rgba(0,0,0,0.55)"><span style="width: 44px; height: 44px; border-radius: 22px; background: #13f287; color: #090a0a; display: flex; align-items: center; justify-content: center"><svg width="17" height="18" viewBox="240 210 600 660" aria-hidden="true"><path d="{{k}}" fill="currentColor"></path></svg></span><span style="font-size: 15px; font-weight: 800">Karkas AI</span></a>
+<a href="Settings.dc.html" aria-label="Налаштування" data-tip="Налаштування" style="width: 44px; height: 44px; border-radius: 22px; background: #1f1f1f; color: #ffffff; display: flex; align-items: center; justify-content: center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"></path><circle cx="12" cy="12" r="3"></circle></svg></a>
+<a href="QuickAdd.dc.html" data-quick-add="1" data-tip="Нова задача · Ctrl N" style="text-decoration: none; height: 44px; box-sizing: border-box; border-radius: 22px; background: #f4f4f2; color: #090a0a; padding: 0 20px; font-size: 15px; font-weight: 800; display: flex; align-items: center; gap: 6px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>Додати</a>
+<a href="Settings.dc.html" aria-label="Акаунт Melychyn Ivan · синхронізовано" data-tip="Melychyn Ivan · синхронізовано" style="position: relative; text-decoration: none; width: 44px; height: 44px; border-radius: 22px; background: #1f1f1f; color: #13f287; font-size: 14px; font-weight: 800; letter-spacing: -0.02em; display: flex; align-items: center; justify-content: center">MI<span style="position: absolute; right: 1px; bottom: 1px; width: 10px; height: 10px; border-radius: 5px; background: #13f287; box-shadow: 0 0 0 3px #090a0a"></span></a>
+<div class="wc" role="group" aria-label="Вікно" style="margin-left: 8px; display: flex; gap: 2px; padding: 4px; border-radius: 26px; background: #1f1f1f">
+<button type="button" aria-label="Згорнути" style="width: 36px; height: 36px; border: none; border-radius: 18px; background: transparent; color: #d1d1d6; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 12h12"></path></svg></button>
+<button type="button" aria-label="Розгорнути" style="width: 36px; height: 36px; border: none; border-radius: 18px; background: transparent; color: #d1d1d6; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="4"></rect></svg></button>
+<button type="button" class="x" aria-label="Закрити" style="width: 36px; height: 36px; border: none; border-radius: 18px; background: transparent; color: #d1d1d6; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"></path></svg></button>
+</div>
+</div>
+</header>
+
+<main style="width: 100%; max-width: 1280px; margin: 0 auto; box-sizing: border-box; padding: 24px 32px 120px; display: flex; flex-direction: column">
+<div class="pg-head" style="display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 28px">
+<div style="display: flex; flex-direction: column; gap: 14px">
+<h1 style="margin: 0; text-transform: uppercase; letter-spacing: -0.035em; line-height: 0.92; font-size: 80px"><span style="display: block; font-weight: 300">Мій</span><span style="display: block; font-weight: 800">блокнот</span></h1>
+<div role="group" aria-label="Фільтр" style="align-self: flex-start; display: flex; gap: 4px; padding: 4px; border-radius: 26px; background: #1f1f1f">
+<sc-for list="{{filters}}" as="f" hint-placeholder-count="3">
+<button type="button" aria-pressed="{{f.pressed}}" onClick="{{f.pick}}" style="height: 40px; border: none; border-radius: 20px; padding: 0 18px; background: {{f.bg}}; color: {{f.ink}}; font-size: 14px; font-weight: {{f.w}}; cursor: pointer">{{f.label}}</button>
+</sc-for>
+</div>
+</div>
+</div>
+<div class="pg" style="display: grid; grid-template-columns: 400px minmax(0, 1fr); gap: 24px; align-items: start">
+<aside class="pg-side" style="min-width: 0; display: flex; flex-direction: column; gap: 12px">
+<label style="height: 60px; box-sizing: border-box; border-radius: 30px; background: #1f1f1f; padding: 0 8px 0 22px; display: flex; align-items: center; gap: 10px">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#a1a1a6" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m21 21-4.34-4.34"></path><circle cx="11" cy="11" r="8"></circle></svg>
+<input type="text" aria-label="Пошук нотаток" placeholder="Пошук" style="flex: 1; min-width: 0; border: none; outline: none; background: transparent; color: #ffffff; font-size: 16px; font-weight: 600; padding: 0">
+<button type="button" aria-label="Нова нотатка" data-tip="Нова нотатка" onClick="{{newNote}}" style="cursor: pointer; width: 44px; height: 44px; border: none; border-radius: 22px; background: #f4f4f2; color: #090a0a; display: flex; align-items: center; justify-content: center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button>
+</label>
+<sc-for list="{{list}}" as="n" hint-placeholder-count="4">
+<button type="button" aria-pressed="{{n.pressed}}" onClick="{{n.pick}}" style="animation: {{n.anim}}; text-align: left; border: none; cursor: pointer; box-sizing: border-box; padding: 16px 20px; border-radius: 30px; background: {{n.bg}}; color: {{n.ink}}; display: flex; align-items: center; gap: 12px">
+<span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px"><span style="font-size: 16px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{n.title}}</span><span style="font-size: 12px; font-weight: 600; color: {{n.sub}}">{{n.date}}</span></span>
+<sc-if value="{{n.pinned}}" hint-placeholder-val="{{false}}"><span class="qpin" aria-label="Закріплено" style="flex-shrink: 0; width: 28px; height: 28px; border-radius: 14px; background: #f4f4f2; color: #090a0a; display: flex; align-items: center; justify-content: center"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17v5"></path><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"></path></svg></span></sc-if>
+<span style="flex-shrink: 0; width: 10px; height: 10px; border-radius: 5px; background: {{n.dot}}"></span>
+</button>
+</sc-for>
+</aside>
+<div class="pg-main" style="min-width: 0; display: flex; flex-direction: column; gap: 12px">
+<section aria-label="Нотатка" style="position: relative; min-width: 0; box-sizing: border-box; min-height: 760px; padding: 32px 36px; border-radius: 48px; background: #f4f4f2; color: #090a0a; display: flex; flex-direction: column; gap: 18px">
+<div class="swap" key="{{cur.id}}" style="flex: 1; display: flex; flex-direction: column; gap: 18px">
+<div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
+<sc-if value="{{tagStatic}}" hint-placeholder-val="{{true}}"><span style="height: 30px; box-sizing: border-box; padding: 0 12px; border-radius: 15px; background: {{cur.tagBg}}; color: {{cur.tagInk}}; font-size: 12px; font-weight: 800; display: flex; align-items: center">{{cur.tag}}</span></sc-if>
+<sc-if value="{{tagPick}}" hint-placeholder-val="{{false}}"><div role="radiogroup" aria-label="Тип нотатки" class="qe" style="display: flex; gap: 2px; padding: 3px; border-radius: 18px; background: #e5e5e3">
+<sc-for list="{{kinds}}" as="kd" hint-placeholder-count="2">
+<button type="button" role="radio" aria-checked="{{kd.on}}" onClick="{{kd.pick}}" style="height: 30px; border: none; border-radius: 15px; padding: 0 12px; background: {{kd.bg}}; color: {{kd.ink}}; font-family: inherit; font-size: 12px; font-weight: 800; cursor: pointer; transition: background-color .2s ease, color .2s ease">{{kd.label}}</button>
+</sc-for>
+</div></sc-if>
+<span style="font-size: 13px; font-weight: 600; color: #6e6e73">{{cur.date}}</span>
+<span style="flex: 1"></span>
+<button type="button" aria-label="Дописати" aria-pressed="{{editingOn}}" data-tip="Дописати" onClick="{{toggleEdit}}" style="width: 42px; height: 42px; border: none; border-radius: 21px; background: {{penBg}}; color: {{penInk}}; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background-color .25s ease, color .25s ease, transform .2s cubic-bezier(.2,.9,.3,1.3); transform: {{penRot}}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.17 6.81a1 1 0 0 0-3.98-3.98L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5zM15 5l4 4"></path></svg></button>
+</div>
+<sc-if value="{{titleStatic}}" hint-placeholder-val="{{true}}"><h2 style="margin: 0; font-size: 40px; line-height: 1.05; font-weight: 800; letter-spacing: -0.035em; color: {{titleInk}}">{{cur.title}}</h2></sc-if>
+<sc-if value="{{editing}}" hint-placeholder-val="{{false}}"><input type="text" data-title="1" aria-label="Назва нотатки" placeholder="Назва нотатки" style="display: block; width: 100%; box-sizing: border-box; margin: 0; padding: 0; border: none; outline: none; background: transparent; color: #090a0a; caret-color: #6408fa; font-family: inherit; font-size: 40px; line-height: 1.05; font-weight: 800; letter-spacing: -0.035em"></sc-if>
+<div data-editor="1" class="qp" key="{{pageKey}}" style="font-size: 18px; line-height: 1.7; font-weight: 400; color: #3a3a3c">
+<sc-for list="{{segs}}" as="g" hint-placeholder-count="5">
+<sc-if value="{{g.isText}}" hint-placeholder-val="{{true}}"><span data-seg="{{g.i}}" style="{{g.css}}">{{g.v}}</span></sc-if>
+<sc-if value="{{g.isNum}}" hint-placeholder-val="{{false}}"><span class="qn" style="display: inline-block; min-width: 30px; font-weight: 800; color: #6408fa; font-variant-numeric: tabular-nums">{{g.v}}</span></sc-if>
+<sc-if value="{{g.isBr}}" hint-placeholder-val="{{false}}"><span style="display: block; height: 10px"></span></sc-if>
+<sc-if value="{{g.isChip}}" hint-placeholder-val="{{false}}"><span class="qc" data-chip="{{g.i}}" style="cursor: pointer; display: inline-flex; align-items: center; gap: 10px; vertical-align: middle; height: 40px; box-sizing: border-box; margin: 2px; padding: 0 5px 0 16px; border-radius: 20px; background: {{g.chipBg}}; color: {{g.chipInk}}; transform: {{g.chipScale}}; font-size: 16px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; transition: background-color .2s ease, color .2s ease">{{g.v}}<button type="button" data-copy="1" aria-label="Копіювати" onClick="{{g.copy}}" style="width: 30px; height: 30px; border: none; padding: 0; border-radius: 15px; background: #f4f4f2; color: #090a0a; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{g.btnIcon}}"></path></svg></button></span></sc-if>
+</sc-for>
+</div>
+<sc-if value="{{pageEmpty}}" hint-placeholder-val="{{false}}">
+<span style="font-size: 18px; font-weight: 500; color: #aeaeb2">Порожня сторінка</span>
+</sc-if>
+<sc-if value="{{editing}}" hint-placeholder-val="{{false}}">
+<textarea data-append="1" rows="1" aria-label="Дописати текст" placeholder="Пишіть тут…" style="display: block; width: 100%; box-sizing: border-box; margin: {{appendGap}} 0 0; padding: 0; border: none; outline: none; resize: none; overflow: hidden; background: transparent; color: #3a3a3c; caret-color: #6408fa; font-family: inherit; font-size: 18px; line-height: 1.7; font-weight: 400"></textarea>
+</sc-if>
+</div>
+<sc-if value="{{menuOpen}}" hint-placeholder-val="{{false}}">
+<div data-menu="1" role="menu" aria-label="Дії з виділеним" style="position: absolute; left: {{menuX}}; top: {{menuY}}; z-index: 20; width: 280px; box-sizing: border-box; padding: 6px; border-radius: 24px; background: #090a0a; box-shadow: 0 18px 44px rgba(9,10,10,0.35); display: flex; flex-direction: column; gap: 2px">
+<sc-if value="{{hasFmt}}" hint-placeholder-val="{{true}}">
+<div style="position: relative; display: flex; flex-direction: column; gap: 6px; padding: 4px 4px 10px; margin-bottom: 4px; border-bottom: 1px solid #1f1f1f">
+<button type="button" onClick="{{toggleFonts}}" aria-expanded="{{fontsOpen}}" aria-label="Шрифт" style="height: 40px; border: none; border-radius: 19px; padding: 0 12px 0 16px; background: #1f1f1f; color: #ffffff; font-family: {{fontFamily}}; font-size: 15px; font-weight: 600; display: flex; align-items: center; justify-content: space-between; gap: 8px; cursor: pointer"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{fontName}}</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex-shrink: 0; opacity: 0.7; transform: {{fontRot}}"><path d="m6 9 6 6 6-6"></path></svg></button>
+<sc-if value="{{fontsShown}}" hint-placeholder-val="{{false}}">
+<div class="qf" style="position: absolute; left: 4px; right: 4px; top: 50px; z-index: 3; display: flex; flex-direction: column; gap: 4px; padding: 6px; border-radius: 18px; background: #1f1f1f; box-shadow: 0 0 0 1px #2c2c2e, 0 18px 40px rgba(0,0,0,0.5)">
+<input type="text" data-fq="1" aria-label="Пошук шрифту" placeholder="Пошук шрифту" style="height: 36px; border: none; outline: none; border-radius: 14px; background: #090a0a; color: #ffffff; padding: 0 12px; font-family: inherit; font-size: 14px; font-weight: 600">
+<div role="listbox" aria-label="Шрифти" style="height: 236px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: #3a3a3c transparent; display: flex; flex-direction: column; gap: 2px">
+<sc-for list="{{fontList}}" as="ff" hint-placeholder-count="6">
+<button type="button" role="option" aria-selected="{{ff.on}}" onClick="{{ff.pick}}" style="flex-shrink: 0; height: 36px; border: none; border-radius: 12px; padding: 0 12px; background: {{ff.bg}}; color: {{ff.ink}}; font-family: {{ff.family}}; font-size: 15px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer">{{ff.name}}</button>
+</sc-for>
+</div>
+</div>
+</sc-if>
+<div style="display: flex; gap: 6px">
+<div role="group" aria-label="Розмір шрифту" style="display: flex; align-items: center; gap: 2px; padding: 3px; border-radius: 19px; background: #1f1f1f">
+<button type="button" aria-label="Менше" onClick="{{sizeDown}}" style="width: 34px; height: 34px; border: none; border-radius: 16px; background: transparent; color: #ffffff; font-family: inherit; font-size: 18px; font-weight: 700; cursor: pointer">−</button>
+<span aria-live="polite" style="min-width: 26px; text-align: center; color: #ffffff; font-size: 14px; font-weight: 800; font-variant-numeric: tabular-nums">{{size}}</span>
+<button type="button" aria-label="Більше" onClick="{{sizeUp}}" style="width: 34px; height: 34px; border: none; border-radius: 16px; background: transparent; color: #ffffff; font-family: inherit; font-size: 18px; font-weight: 700; cursor: pointer">+</button>
+</div>
+<div role="group" aria-label="Товщина" style="flex: 1; display: flex; gap: 2px; padding: 3px; border-radius: 19px; background: #1f1f1f">
+<sc-for list="{{weights}}" as="w" hint-placeholder-count="3">
+<button type="button" aria-pressed="{{w.on}}" aria-label="{{w.name}}" onClick="{{w.pick}}" style="flex: 1; height: 34px; border: none; border-radius: 16px; background: {{w.bg}}; color: {{w.ink}}; font-family: inherit; font-size: 15px; font-weight: {{w.wt}}; cursor: pointer">Аа</button>
+</sc-for>
+</div>
+</div>
+</div>
+</sc-if>
+<sc-for list="{{menu}}" as="m" hint-placeholder-count="4">
+<button type="button" role="menuitem" onClick="{{m.act}}" style="height: 44px; border: none; border-radius: 18px; padding: 0 14px; background: transparent; color: {{m.ink}}; font-family: inherit; font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 12px; text-align: left; cursor: pointer"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{m.icon}}"></path></svg>{{m.label}}</button>
+</sc-for>
+</div>
+</sc-if>
+<sc-if value="{{toast}}" hint-placeholder-val="{{false}}">
+<div style="position: absolute; left: 0; right: 0; bottom: 100px; display: flex; justify-content: center; pointer-events: none">
+<span class="qt" role="status" style="pointer-events: auto; height: 44px; box-sizing: border-box; padding: 0 6px 0 16px; border-radius: 22px; background: #090a0a; color: #ffffff; font-size: 14px; font-weight: 800; display: flex; align-items: center; gap: 8px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#13f287" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg>{{toast}}<sc-if value="{{canUndo}}" hint-placeholder-val="{{false}}"><button type="button" data-menu="1" onClick="{{undo}}" style="margin-left: 6px; height: 32px; border: none; border-radius: 16px; padding: 0 14px; background: #3a3a3c; color: #ffffff; font-family: inherit; font-size: 13px; font-weight: 800; cursor: pointer">Скасувати</button></sc-if><sc-if value="{{noUndo}}" hint-placeholder-val="{{true}}"><span style="width: 10px"></span></sc-if></span>
+</div>
+</sc-if>
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 18px; border-top: 1px solid #e5e5e3">
+<div><a href="Today.dc.html" style="text-decoration: none; height: 52px; box-sizing: border-box; padding: 0 22px; border-radius: 26px; background: #090a0a; color: #ffffff; font-size: 15px; font-weight: 800; display: flex; align-items: center; gap: 10px"><svg width="15" height="16" viewBox="240 210 600 660" aria-hidden="true"><path d="{{k}}" fill="#13f287"></path></svg>Зробити задачі</a></div>
+<div role="tablist" aria-label="Сторінки" style="display: flex; align-items: center; gap: 2px; padding: 3px; border-radius: 22px; background: #e5e5e3">
+<sc-for list="{{pages}}" as="pg" hint-placeholder-count="4">
+<button type="button" role="tab" aria-selected="{{pg.on}}" aria-label="Сторінка {{pg.n}}" onClick="{{pg.pick}}" style="width: 36px; height: 36px; border: none; border-radius: 18px; background: {{pg.bg}}; color: {{pg.ink}}; font-family: inherit; font-size: 14px; font-weight: 800; font-variant-numeric: tabular-nums; cursor: pointer; transition: background-color .25s ease, color .25s ease, transform .15s ease">{{pg.n}}</button>
+</sc-for>
+<button type="button" aria-label="Нова сторінка" data-tip="Нова сторінка" onClick="{{addPage}}" style="width: 36px; height: 36px; border: none; border-radius: 18px; background: transparent; color: #48484a; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button>
+</div>
+<div style="display: flex; gap: 8px">
+<button type="button" aria-label="{{pinLabel}}" aria-pressed="{{pinOn}}" data-tip="{{pinLabel}}" onClick="{{togglePin}}" style="width: 52px; height: 52px; border: none; border-radius: 26px; background: {{pinBg}}; color: {{pinInk}}; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background-color .25s ease, color .25s ease, transform .3s cubic-bezier(.2,.9,.3,1.4); transform: {{pinRot}}"><svg width="18" height="18" viewBox="0 0 24 24" fill="{{pinFill}}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17v5"></path><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"></path></svg></button>
+<button type="button" aria-label="Видалити" style="width: 52px; height: 52px; border: none; border-radius: 26px; background: #e5e5e3; color: #090a0a; display: flex; align-items: center; justify-content: center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"></path><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path></svg></button>
+</div>
+</div>
+</section>
+</div>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { selId: 'n1', created: [], titles: {}, kinds: {}, sel: 0, filter: 'all', edits: {}, menu: null, copied: -1, toast: '', fontsOpen: false, fq: '', fontsReady: 0, page: {}, extra: {}, editing: false, pinned: {} };
+  }
+  componentDidMount() {
+    var r = document.documentElement.style;
+    r.colorScheme = 'dark'; r.background = '#090a0a';
+    r.scrollbarWidth = 'thin'; r.scrollbarColor = '#3a3a3c #090a0a';
+    r.scrollbarGutter = 'stable';
+    this.onKey = function (e) {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.code === 'KeyN' || /^[nNтТ]$/.test(e.key))) {
+        e.preventDefault();
+        var a = document.querySelector('a[data-quick-add]');
+        if (a) a.click();
+      }
+    };
+    document.addEventListener('keydown', this.onKey, true);
+    this.onAi = function (e) {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.code === 'KeyK' || /^[kKлЛ]$/.test(e.key))) {
+        e.preventDefault();
+        var a = document.querySelector('a[data-ai]');
+        if (a) a.click();
+      }
+    };
+    document.addEventListener('keydown', this.onAi, true);
+    var self = this;
+    var closest = function (e, attr) {
+      var path = e.composedPath ? e.composedPath() : [e.target];
+      for (var i = 0; i < path.length; i++) if (path[i].getAttribute && path[i].getAttribute(attr) !== null) return path[i];
+      return null;
+    };
+    this.onSelUp = function (e) {
+      if (closest(e, 'data-menu')) return;
+      var ed = closest(e, 'data-editor');
+      if (!ed) return;
+      var chipEl = closest(e, 'data-chip');
+      if (chipEl && !closest(e, 'data-copy')) {
+        var cbox = ed.closest('section') || ed;
+        var c0 = cbox.getBoundingClientRect(), cr = chipEl.getBoundingClientRect();
+        var cs = cbox.offsetWidth ? c0.width / cbox.offsetWidth : 1;
+        self.setState({ menu: { chip: +chipEl.getAttribute('data-chip'), text: chipEl.textContent.trim(),
+          x: Math.max(16, Math.min((cr.left - c0.left) / cs, cbox.offsetWidth - 256)), y: (cr.bottom - c0.top) / cs + 10 } });
+        return;
+      }
+      setTimeout(function () {
+        var root = ed.getRootNode ? ed.getRootNode() : document;
+        var sel = (root.getSelection && root.getSelection()) || window.getSelection();
+        var text = sel ? String(sel).trim() : '';
+        if (!text) { if (self.state.menu) self.setState({ menu: null }); return; }
+        var node = sel.anchorNode && (sel.anchorNode.nodeType === 3 ? sel.anchorNode.parentElement : sel.anchorNode);
+        var segEl = node && node.closest ? node.closest('[data-seg]') : null;
+        var box = ed.closest('section') || ed;
+        var r0 = box.getBoundingClientRect();
+        var scale = box.offsetWidth ? r0.width / box.offsetWidth : 1;
+        var rr = sel.rangeCount ? sel.getRangeAt(0).getBoundingClientRect() : { left: e.clientX, bottom: e.clientY };
+        var x = Math.max(16, Math.min((rr.left - r0.left) / scale, box.offsetWidth - 256));
+        var y = (rr.bottom - r0.top) / scale + 10;
+        if (y + 380 > box.offsetHeight) y = Math.max(16, (rr.top - r0.top) / scale - 390);
+        self.setState({ menu: { text: text, seg: segEl ? +segEl.getAttribute('data-seg') : -1, x: x, y: y } });
+      }, 0);
+    };
+    this.onSelDown = function (e) {
+      if (self.state.menu && !closest(e, 'data-menu')) self.setState({ menu: null, fontsOpen: false, fq: '' });
+    };
+    document.addEventListener('mouseup', this.onSelUp, true);
+    document.addEventListener('mousedown', this.onSelDown, true);
+    this.onUndo = function (e) {
+      var t = e.target && e.target.tagName;
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.code === 'KeyZ' || /^[zZяЯ]$/.test(e.key)) && t !== 'INPUT' && t !== 'TEXTAREA') {
+        if (self.hist && self.hist.length) { e.preventDefault(); self.undo(); }
+      }
+    };
+    document.addEventListener('keydown', this.onUndo, true);
+    this.onFq = function (e) {
+      var el = e.composedPath ? e.composedPath()[0] : e.target;
+      if (el && el.getAttribute && el.getAttribute('data-fq')) self.setState({ fq: el.value });
+      if (el && el.getAttribute && el.getAttribute('data-append')) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; }
+    };
+    this.onAppendBlur = function (e) {
+      var el = e.composedPath ? e.composedPath()[0] : e.target;
+      if (el && el.getAttribute && el.getAttribute('data-append') && el.value.trim()) self.appendFrom(el, true);
+    };
+    document.addEventListener('focusout', this.onAppendBlur, true);
+    document.addEventListener('input', this.onFq, true);
+    this.onTitleInput = function (e) {
+      var el = e.composedPath ? e.composedPath()[0] : e.target;
+      if (!el || !el.getAttribute || !el.getAttribute('data-title')) return;
+      var t = Object.assign({}, self.state.titles); t[self.curId] = el.value;
+      self.setState({ titles: t });
+    };
+    document.addEventListener('input', this.onTitleInput, true);
+    this.onAppendKey = function (e) {
+      var el = e.composedPath ? e.composedPath()[0] : e.target;
+      if (el && el.getAttribute && el.getAttribute('data-title') && e.key === 'Enter') { e.preventDefault(); self.focusAppend(); return; }
+      if (!el || !el.getAttribute || !el.getAttribute('data-append')) return;
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); self.appendFrom(el); }
+      else if (e.key === 'Escape') { self.appendFrom(el, true); self.setState({ editing: false }); }
+    };
+    document.addEventListener('keydown', this.onAppendKey, true);
+  }
+  appendFrom(el, keepBlur) {
+    var box = el || document.querySelector('[data-append]');
+    if (!box || !this._append) return;
+    var text = box.value.replace(/\s+$/, '');
+    if (!text.trim()) return;
+    this._append(text);
+    box.value = '';
+    box.style.height = 'auto';
+    if (!keepBlur) { try { box.focus(); } catch (err) {} }
+  }
+  fillTitle(focus) {
+    var self = this;
+    setTimeout(function () {
+      var el = document.querySelector('[data-title]');
+      if (!el) return;
+      el.value = self.state.titles[self.curId] !== undefined ? self.state.titles[self.curId] : (self.curTitle || '');
+      if (focus) { try { el.focus({ preventScroll: true }); } catch (err) {} }
+    }, 40);
+  }
+  focusAppend() {
+    setTimeout(function () { var el = document.querySelector('[data-append]'); if (el) { try { el.focus({ preventScroll: true }); } catch (err) {} } }, 60);
+  }
+  loadFonts() {
+    var self = this;
+    if (this.fontNames) return;
+    this.fontNames = ['Inter', 'Segoe UI', 'Segoe UI Variable', 'Arial', 'Bahnschrift', 'Calibri', 'Cambria', 'Candara', 'Comic Sans MS', 'Consolas',
+      'Constantia', 'Corbel', 'Courier New', 'Franklin Gothic Medium', 'Gabriola', 'Georgia', 'Impact', 'Lucida Console', 'Lucida Sans Unicode',
+      'Palatino Linotype', 'Segoe Print', 'Segoe Script', 'Sitka Text', 'Sylfaen', 'Tahoma', 'Times New Roman', 'Trebuchet MS', 'Verdana'];
+    try {
+      if (window.queryLocalFonts) {
+        window.queryLocalFonts().then(function (list) {
+          var seen = {}, names = ['Inter'];
+          list.forEach(function (x) { if (x.family && !seen[x.family] && x.family !== 'Inter') { seen[x.family] = 1; names.push(x.family); } });
+          if (names.length > 1) { self.fontNames = ['Inter'].concat(names.slice(1).sort(function (p, q) { return p.localeCompare(q); })); self.setState({ fontsReady: Date.now() }); }
+        }, function () {});
+      }
+    } catch (err) {}
+  }
+  undo() {
+    if (!this.hist || !this.hist.length) return;
+    clearTimeout(this.tt);
+    this.setState({ edits: this.hist.pop(), menu: null, toast: '' });
+  }
+  componentWillUnmount() {
+    document.removeEventListener('keydown', this.onKey, true);
+    document.removeEventListener('keydown', this.onAi, true);
+    document.removeEventListener('mouseup', this.onSelUp, true);
+    document.removeEventListener('mousedown', this.onSelDown, true);
+    document.removeEventListener('keydown', this.onUndo, true);
+    document.removeEventListener('input', this.onFq, true);
+    document.removeEventListener('keydown', this.onAppendKey, true);
+    document.removeEventListener('input', this.onTitleInput, true);
+    document.removeEventListener('focusout', this.onAppendBlur, true);
+    clearTimeout(this.tt); clearTimeout(this.ct);
+  }
+  renderVals() {
+    var self = this;
+    var created = this.state.created;
+    var notes = created.concat([
+      { id: 'n1', kind: 'lesson', tag: 'Висновок · Дзвінки', date: 'Сьогодні, 18:40', title: 'Заперечення «дорого»',
+        lines: ['Питання «з чим порівнюєте?» спрацювало: 2 з 5 перейшли до зустрічі.', 'Далі: приклад окупності в одне речення.', 'Спробувати на наступному замірі в пʼятницю.',
+          'Код клієнта в CRM: 698033', [{ t: 'text', v: 'Код до нового завдання: ' }, { t: 'chip', v: '2222222225553543534' }]],
+        pages: [null,
+          ['Скрипт на «дорого»', 'Спершу: «З чим порівнюєте?»', 'Потім: приклад окупності за один місяць.'],
+          ['Дзвінки 21 жовтня', 'Олена — перенести на пʼятницю, 15:00', 'Марко — надіслати комерційну пропозицію'],
+          ['Наступний тиждень', 'Рольова гра: 5 заперечень підряд', 'Записати 2 дзвінки для розбору']] },
+      { id: 'n2', kind: 'idea', tag: 'Ідея', date: 'Вчора', title: 'Скрипт для повторного дзвінка',
+        lines: ['Почати з результату минулої розмови, а не з представлення.', 'Тривалість — до 90 секунд.'] },
+      { id: 'n3', kind: 'lesson', tag: 'Висновок · React', date: '17 жовт', title: 'Маленькі PR',
+        lines: ['PR до 200 рядків — ревʼю вдвічі коротше.', 'Ділити фічу на три кроки ще до початку.'] },
+      { id: 'n4', kind: 'idea', tag: 'Ідея', date: '15 жовт', title: 'Подкасти для переказу',
+        lines: ['Шукати теми, яких не знаю: економіка, біологія.', 'Записувати переказ на диктофон.'] }
+    ]).map(function (n) {
+      var kind = self.state.kinds[n.id] || n.kind;
+      var title = self.state.titles[n.id] !== undefined ? self.state.titles[n.id] : n.title;
+      var tag = n.isNew ? (kind === 'lesson' ? 'Висновок' : 'Ідея') : n.tag;
+      return Object.assign({}, n, { kind: kind, title: title, tag: tag });
+    });
+    var pinned = this.state.pinned;
+    var shown = notes.filter(function (n) { return self.state.filter === 'all' || n.kind === self.state.filter; })
+      .map(function (n, i) { return { n: n, i: i }; })
+      .sort(function (x, y) { return (pinned[y.n.id] ? 1 : 0) - (pinned[x.n.id] ? 1 : 0) || x.i - y.i; })
+      .map(function (x) { return x.n; });
+    var cur = shown.filter(function (n) { return n.id === self.state.selId; })[0] || shown[0] || notes[0];
+    this.curId = cur.id; this.curTitle = cur.title;
+    var tagStyle = cur.kind === 'lesson' ? { bg: '#6408fa', ink: '#ffffff' } : { bg: '#13f287', ink: '#090a0a' };
+    var filters = [{ id: 'all', label: 'Усі' }, { id: 'lesson', label: 'Висновки' }, { id: 'idea', label: 'Ідеї' }].map(function (f) {
+      var on = self.state.filter === f.id;
+      return { label: f.label, pressed: on ? 'true' : 'false', bg: on ? '#f4f4f2' : 'transparent', ink: on ? '#090a0a' : '#d1d1d6', w: on ? '800' : '700',
+        pick: function () { self.setState({ filter: f.id }); } };
+    });
+    var COPY = 'M8 8h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2zM16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2';
+    var CHECK = 'M20 6 9 17l-5-5';
+    var TRASH = 'M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2';
+    var PASTE = 'M9 3h6a1 1 0 0 1 1 1v2H8V4a1 1 0 0 1 1-1zM8 5H6a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2';
+    var CHIP = COPY + 'M14 11v6M11 14h6';
+    var nid = cur.id;
+    var basePages = cur.pages ? cur.pages.length : 1;
+    var pageCount = basePages + (this.state.extra[nid] || 0);
+    var page = Math.min(this.state.page[nid] || 0, pageCount - 1);
+    var segKey = nid + '#' + page;
+    var initSegs = function (n) {
+      var out = [];
+      var src = page === 0 ? n.lines : ((n.pages && n.pages[page]) || []);
+      src.forEach(function (l, i) {
+        if (i) out.push({ t: 'br', v: '' });
+        (typeof l === 'string' ? [{ t: 'text', v: l }] : l).forEach(function (g) { out.push({ t: g.t, v: g.v }); });
+      });
+      return out;
+    };
+    var segs = this.state.edits[segKey] || initSegs(cur);
+    var sameStyle = function (x, y) { return JSON.stringify(x || {}) === JSON.stringify(y || {}); };
+    var tidy = function (arr) {
+      var out = [];
+      arr.forEach(function (g) {
+        if (g.t === 'text' && !g.v) return;
+        var last = out[out.length - 1];
+        if (g.t === 'text' && !g.mk && last && last.t === 'text' && !last.mk && sameStyle(last.s, g.s)) last.v += g.v;
+        else out.push({ t: g.t, v: g.v, s: g.s, mk: g.mk });
+      });
+      return out;
+    };
+    var strip = function (arr) { return arr.map(function (g) { var o = { t: g.t, v: g.v }; if (g.s) o.s = g.s; return o; }); };
+    var withSegs = function (arr) { var ed = Object.assign({}, self.state.edits); ed[segKey] = strip(tidy(arr)); return ed; };
+    var findSeg = function (m) {
+      var has = function (g) { return g && g.t === 'text' && g.v.indexOf(m.text) >= 0; };
+      var idx = has(segs[m.seg]) ? m.seg : -1;
+      for (var i = 0; idx < 0 && i < segs.length; i++) if (has(segs[i])) idx = i;
+      return idx;
+    };
+    var splitAt = function (m) {
+      var idx = findSeg(m);
+      if (idx < 0) return null;
+      var g0 = segs[idx], v = g0.v, p = v.indexOf(m.text);
+      return segs.slice(0, idx).concat([{ t: 'text', v: v.slice(0, p), s: g0.s }, { t: 'sel', v: m.text, s: g0.s }, { t: 'text', v: v.slice(p + m.text.length), s: g0.s }], segs.slice(idx + 1));
+    };
+    var copyText = function (t) { try { navigator.clipboard.writeText(t); } catch (err) {} };
+    var clearSel = function () { try { window.getSelection().removeAllRanges(); } catch (err) {} };
+    var remember = function () { self.hist = (self.hist || []).concat([self.state.edits]).slice(-20); };
+    var done = function (patch, msg) {
+      clearSel();
+      patch.menu = null;
+      patch.undoable = !!patch.edits;
+      if (patch.edits) remember();
+      if (msg) { patch.toast = msg; clearTimeout(self.tt); self.tt = setTimeout(function () { self.setState({ toast: '' }); }, patch.edits ? 4000 : 1600); }
+      self.setState(patch);
+    };
+    var menu = this.state.menu;
+    var chipMenu = menu && menu.chip !== undefined && segs[menu.chip] && segs[menu.chip].t === 'chip';
+    var single = menu && !chipMenu && menu.text.indexOf('\n') < 0;
+    // formatting: font, size, weight of the selected text
+    var LEGACY = { sans: 'Inter', serif: 'Georgia', mono: 'Consolas' };
+    var fontName = function (v) { return LEGACY[v] || v || 'Inter'; };
+    this._append = function (text) {
+      remember();
+      var add = (segs.length ? [{ t: 'br', v: '' }] : []).concat([{ t: 'text', v: text }]);
+      self.setState({ edits: withSegs(segs.concat(add)), undoable: true });
+    };
+    var famOf = function (v) {
+      var n = fontName(v);
+      return n === 'Inter' ? "'SF Pro Display', Inter, sans-serif" : "'" + n.replace(/'/g, '') + "', 'Segoe UI', sans-serif";
+    };
+    var WEIGHTS = [{ wt: 300, name: 'Тонкий' }, { wt: 500, name: 'Звичайний' }, { wt: 800, name: 'Жирний' }];
+    var target = single && menu.fseg !== undefined && segs[menu.fseg] && segs[menu.fseg].v === menu.text ? menu.fseg : -1;
+    var curStyle = target >= 0 ? (segs[target].s || {}) : (single && findSeg(menu) >= 0 ? (segs[findSeg(menu)].s || {}) : {});
+    var curSize = curStyle.size || 18, curWeight = curStyle.weight || 400, curFont = fontName(curStyle.font);
+    var applyStyle = function (patch) {
+      var arr;
+      if (target >= 0) {
+        arr = segs.map(function (g, i) { return i === target ? { t: 'text', v: g.v, s: Object.assign({}, g.s, patch), mk: true } : g; });
+      } else {
+        arr = splitAt(menu);
+        if (!arr) return;
+        arr = arr.map(function (g) { return g.t === 'sel' ? { t: 'text', v: g.v, s: Object.assign({}, g.s, patch), mk: true } : g; });
+      }
+      var t = tidy(arr), at = -1;
+      t.forEach(function (g, i) { if (g.mk) at = i; });
+      remember();
+      var ed = Object.assign({}, self.state.edits); ed[segKey] = strip(t);
+      self.setState({ edits: ed, undoable: true, menu: Object.assign({}, menu, { fseg: at }) });
+    };
+    // numbering: toggle a number marker at the start of each selected paragraph
+    var toggleNumbers = function () {
+      var pieces = menu.text.split(/\n+/).map(function (x) { return x.trim(); }).filter(Boolean);
+      var starts = [], from = 0;
+      pieces.forEach(function (piece) {
+        for (var i = from; i < segs.length; i++) {
+          if (segs[i].t === 'text' && segs[i].v.indexOf(piece) >= 0) {
+            var st = i;
+            while (st > 0 && segs[st - 1].t !== 'br') st--;
+            if (starts.indexOf(st) < 0) starts.push(st);
+            from = i;
+            break;
+          }
+        }
+      });
+      if (!starts.length) return done({}, '');
+      var allOn = starts.every(function (st) { return segs[st].t === 'num'; });
+      var out = [];
+      segs.forEach(function (g, i) {
+        if (starts.indexOf(i) >= 0) {
+          if (allOn && g.t === 'num') return;
+          if (!allOn && g.t !== 'num') out.push({ t: 'num', v: '' });
+        }
+        out.push(g);
+      });
+      done({ edits: withSegs(out) }, allOn ? 'Нумерацію прибрано' : 'Нумерацію додано');
+    };
+    var TEXT = 'M4 7V5h16v2M9 19h6M12 5v14';
+    var LIST = 'M10 6h11M10 12h11M10 18h11M4 6h1v4M4 10h2M6 18H4c0-1 2-2 2-3s-1-1.5-2-1';
+    var menuItems = !menu ? [] : chipMenu ? [
+      { label: 'Копіювати', icon: COPY, ink: '#ffffff', act: function () { copyText(segs[menu.chip].v); done({}, 'Скопійовано'); } },
+      { label: 'Звичайний текст', icon: TEXT, ink: '#ffffff', act: function () {
+        done({ edits: withSegs(segs.map(function (g, i) { return i === menu.chip ? { t: 'text', v: g.v } : g; })) }, 'Кнопку прибрано');
+      } },
+      { label: 'Видалити', icon: TRASH, ink: '#ff6b6d', act: function () {
+        done({ edits: withSegs(segs.filter(function (g, i) { return i !== menu.chip; })) }, 'Видалено');
+      } }
+    ] : [
+      { label: 'Нумерація', icon: LIST, ink: '#ffffff', act: toggleNumbers },
+      { label: 'Копіювати', icon: COPY, ink: '#ffffff', act: function () { copyText(menu.text); done({}, 'Скопійовано'); } },
+      { label: 'Вставити', icon: PASTE, ink: '#ffffff', act: function () {
+        var put = function (t) {
+          var arr = t ? splitAt(menu) : null;
+          done(arr ? { edits: withSegs(arr.map(function (g) { return g.t === 'sel' ? { t: 'text', v: t, s: g.s } : g; })) } : {}, arr ? 'Вставлено' : '');
+        };
+        try { navigator.clipboard.readText().then(put, function () { put(''); }); } catch (err) { put(''); }
+      } },
+      { label: 'Кнопка копіювання', icon: CHIP, ink: '#13f287', act: function () {
+        var arr = splitAt(menu);
+        done(arr ? { edits: withSegs(arr.map(function (g) { return g.t === 'sel' ? { t: 'chip', v: g.v.trim() } : g; })) } : {}, arr ? 'Кнопку додано' : '');
+      } },
+      { label: 'Видалити', icon: TRASH, ink: '#ff6b6d', act: function () {
+        var arr = splitAt(menu);
+        done(arr ? { edits: withSegs(arr.filter(function (g) { return g.t !== 'sel'; })) } : {}, arr ? 'Видалено' : '');
+      } }
+    ];
+    var num = 0, prevNum = false, inPara = false;
+    var segView = segs.map(function (g, i) {
+      var on = self.state.copied === i;
+      var label = '';
+      if (g.t === 'num') { num = prevNum ? num + 1 : 1; label = num + '.'; }
+      if (g.t === 'br') { prevNum = inPara; inPara = false; } else if (g.t === 'num') { inPara = true; }
+      var st = g.s || {};
+      var css = (st.size ? 'font-size: ' + st.size + 'px; line-height: 1.3; ' : '') + (st.weight ? 'font-weight: ' + st.weight + '; ' : '') +
+        (st.font && fontName(st.font) !== 'Inter' ? 'font-family: ' + famOf(st.font) + '; ' : '') + (st.weight >= 700 || st.size > 22 ? 'color: #090a0a; ' : '');
+      return { i: i, v: g.t === 'num' ? label : g.v, css: css, isText: g.t === 'text', isBr: g.t === 'br', isChip: g.t === 'chip', isNum: g.t === 'num',
+        chipBg: on ? '#13f287' : '#090a0a', chipScale: on ? 'scale(1.06)' : 'none', chipInk: on ? '#090a0a' : '#ffffff', btnIcon: on ? CHECK : COPY,
+        copy: function () {
+          copyText(g.v);
+          clearTimeout(self.ct);
+          self.setState({ copied: i });
+          self.ct = setTimeout(function () { self.setState({ copied: -1 }); }, 1400);
+        } };
+    });
+    var fmt = {
+      hasFmt: !!single,
+      fontName: curFont, fontFamily: famOf(curFont),
+      fontsOpen: this.state.fontsOpen ? 'true' : 'false', fontsShown: !!this.state.fontsOpen, fontRot: this.state.fontsOpen ? 'rotate(180deg)' : 'none',
+      toggleFonts: function () { if (!self.state.fontsOpen) self.loadFonts(); self.setState({ fontsOpen: !self.state.fontsOpen, fq: '' }); },
+      fontList: (this.fontNames || ['Inter']).filter(function (n) { return !self.state.fq || n.toLowerCase().indexOf(self.state.fq.toLowerCase()) >= 0; }).slice(0, 80).map(function (n) {
+        var sel = curFont === n;
+        return { name: n, family: famOf(n), on: sel ? 'true' : 'false', bg: sel ? '#f4f4f2' : 'transparent', ink: sel ? '#090a0a' : '#ffffff',
+          pick: function () { applyStyle({ font: n }); self.setState({ fontsOpen: false, fq: '' }); } };
+      }),
+      weights: WEIGHTS.map(function (x) {
+        var sel = curWeight === x.wt || (x.wt === 500 && curWeight === 400);
+        return { name: x.name, wt: x.wt, on: sel ? 'true' : 'false', bg: sel ? '#f4f4f2' : 'transparent', ink: sel ? '#090a0a' : '#ffffff',
+          pick: function () { applyStyle({ weight: x.wt }); } };
+      }),
+      size: curSize,
+      sizeUp: function () { applyStyle({ size: Math.min(48, curSize + 2) }); },
+      sizeDown: function () { applyStyle({ size: Math.max(12, curSize - 2) }); }
+    };
+    var list = shown.map(function (n) {
+      var on = n.id === cur.id;
+      return { title: n.title || 'Без назви', date: n.date, pressed: on ? 'true' : 'false',
+        bg: on ? '#3a3a3c' : '#1f1f1f', ink: '#ffffff', sub: on ? '#d1d1d6' : '#8e8e93',
+        dot: n.kind === 'lesson' ? '#8442ff' : '#13f287', pinned: !!pinned[n.id],
+        anim: n.id === self.state.justAdded ? 'kNewNote .45s cubic-bezier(.2,.9,.3,1.2) both' : 'none',
+        pick: function () { self.setState({ selId: n.id, editing: false, menu: null }); } };
+    });
+    return {
+      k: 'M271.942 219.415L404.957 219.433C422.53 219.359 443.586 218.322 461.004 219.748C464.585 220.026 470.468 224.229 471.281 227.599C474.687 241.912 473.545 264.483 473.642 279.259L474.648 368.86C474.881 385.654 475.074 402.486 475.906 419.243C476.603 433.371 493.847 432.426 495.434 419.502C496.672 412.669 495.55 405.541 495.763 398.69C496.307 381.359 493.572 360.175 495.469 342.556C495.846 339.054 497.151 335.607 499.67 333.145C502.607 330.275 506.619 328.821 510.714 328.511C530.128 327.042 553.065 329.442 572.653 328.457C595.781 327.291 607.064 334.864 607.296 305.608C607.45 288.551 606.576 269.837 606.675 252.054C606.747 239.199 610.007 222.176 622.856 221.785C634.042 221.452 645.267 221.6 656.453 221.6L718.209 221.637L775.592 221.489C786.507 221.452 798.177 221.137 808.996 221.84C814.337 222.174 818.846 222.47 821.924 226.655C823.859 229.265 825.33 232.321 825.485 235.561C826.239 252.744 825.949 270.779 826.162 287.981C826.452 309.922 826.607 331.846 826.627 353.788C826.646 365.064 826.956 377.192 825.969 388.413C825.096 397.996 812.065 399.708 802.443 399.738C776.916 399.818 733.402 398.781 725.622 402.652C721.19 404.837 719.138 409.448 718.209 413.892C714.281 432.723 722.08 474.255 716.448 490.845C715.268 494.345 713.178 497.437 709.655 499.122C693.224 506.955 623.94 495.66 608.109 504.27C605.225 505.825 603.464 507.917 602.67 510.991C600.541 519.175 600.677 568.577 604.954 574.298C607.605 577.854 611.999 578.909 616.295 579.576C623.398 580.649 630.945 580.131 638.106 580.094C659.472 580.001 684.709 577.928 705.63 581.038C706.484 581.172 707.301 581.488 708.01 581.983C709.2 582.816 710.087 583.504 710.88 584.207C714.001 586.973 715.705 591.007 716.058 595.162C716.67 602.39 716.562 610.44 716.681 617.164C716.874 634.421 717.358 651.826 716.777 669.083C716.119 688.007 735.627 686.637 749.852 686.544C766.747 686.415 783.682 686.304 800.596 686.155C802.526 686.169 804.536 686.217 806.569 686.282C813.468 686.501 821.591 687.518 824.788 693.636C826.801 697.487 827.381 702.302 827.672 706.56C828.62 721.151 827.207 736.335 827.265 751C827.381 780.718 828.581 810.789 827.11 840.47C826.936 843.97 826.781 848.562 825.175 851.71C823.762 854.524 819.775 857.431 816.64 858.209C805.686 860.931 761.774 859.45 747.801 859.468C707.314 859.468 666.014 860.949 625.604 858.968C622.604 858.82 617.476 858.876 615.037 857.135C611.399 854.524 609.192 851.025 608.128 846.821C606.58 840.6 607.218 833.286 607.218 826.879C607.18 809.289 609.038 786.403 606.348 769.608C605.651 765.183 604.509 760.758 600.483 758.054C585.62 748.074 514.226 762.183 500.311 751.222C496.982 748.574 495.86 744.482 495.26 740.538C494.156 733.52 494.795 725.836 494.853 718.744C494.989 701.987 495.976 683.378 493.75 666.861C493.169 662.603 491.873 657.048 487.692 654.641C482.514 651.662 476.554 657.022 475.145 662.827C471.803 676.598 473.487 701.586 473.487 711.504L473.448 810.048C473.448 821.861 474.184 835.545 472.868 847.173C472.287 852.321 467.991 855.098 463.791 857.857C463.032 858.354 462.151 858.633 461.244 858.663C413.027 860.236 363.524 857.83 315.235 858.857C299.017 859.209 282.277 859.227 266.097 858.524C259.885 858.246 253.227 849.747 253.963 843.822C253.711 810.789 253.673 777.719 253.44 744.667L252.937 519.546L252.744 322.014C252.686 294.35 252.453 266.724 252.008 239.061C251.757 224.062 257.272 219.859 271.942 219.415Z',
+      filters: filters, list: list,
+      pinOn: pinned[cur.id] ? 'true' : 'false', pinLabel: pinned[cur.id] ? 'Відкріпити' : 'Закріпити',
+      pinBg: pinned[cur.id] ? '#090a0a' : '#e5e5e3', pinInk: pinned[cur.id] ? '#ffffff' : '#090a0a',
+      pinFill: pinned[cur.id] ? 'currentColor' : 'none', pinRot: pinned[cur.id] ? 'rotate(-30deg)' : 'none',
+      togglePin: function () {
+        var p = Object.assign({}, self.state.pinned), was = !!p[cur.id];
+        if (was) delete p[cur.id]; else p[cur.id] = true;
+        clearTimeout(self.tt);
+        self.tt = setTimeout(function () { self.setState({ toast: '' }); }, 1600);
+        self.setState({ pinned: p, toast: was ? 'Відкріплено' : 'Закріплено вгорі', undoable: false });
+      },
+      segs: segView, menu: menuItems, menuOpen: !!menu,
+      hasFmt: fmt.hasFmt, fontName: fmt.fontName, fontFamily: fmt.fontFamily, fontsOpen: fmt.fontsOpen, fontsShown: fmt.fontsShown, fontRot: fmt.fontRot, toggleFonts: fmt.toggleFonts, fontList: fmt.fontList, weights: fmt.weights, size: fmt.size, sizeUp: fmt.sizeUp, sizeDown: fmt.sizeDown,
+      menuX: menu ? Math.round(menu.x) + 'px' : '0px', menuY: menu ? Math.round(menu.y) + 'px' : '0px',
+      toast: this.state.toast,
+      pages: Array.apply(null, Array(pageCount)).map(function (x, i) {
+        var on = i === page;
+        return { n: i + 1, on: on ? 'true' : 'false', bg: on ? '#090a0a' : 'transparent', ink: on ? '#ffffff' : '#48484a',
+          pick: function () { var p = Object.assign({}, self.state.page); p[nid] = i; self.setState({ page: p, menu: null }); } };
+      }),
+      addPage: function () {
+        var ex = Object.assign({}, self.state.extra); ex[nid] = (ex[nid] || 0) + 1;
+        var p = Object.assign({}, self.state.page); p[nid] = pageCount;
+        self.setState({ extra: ex, page: p, editing: true, menu: null });
+        self.focusAppend();
+      },
+      pageKey: segKey, pageEmpty: segs.length === 0 && !this.state.editing,
+      editing: !!this.state.editing, editingOn: this.state.editing ? 'true' : 'false',
+      penBg: this.state.editing ? '#090a0a' : '#e5e5e3', penInk: this.state.editing ? '#ffffff' : '#090a0a', penRot: this.state.editing ? 'rotate(-12deg)' : 'none',
+      toggleEdit: function () { var on = !self.state.editing; if (!on) self.appendFrom(null, true); self.setState({ editing: on, menu: null }); if (on) { self.fillTitle(false); self.focusAppend(); } },
+      titleStatic: !this.state.editing, titleInk: cur.title ? '#090a0a' : '#aeaeb2',
+      tagStatic: !(this.state.editing && cur.isNew), tagPick: !!(this.state.editing && cur.isNew),
+      kinds: [{ id: 'lesson', label: 'Висновок', bg: '#6408fa', ink: '#ffffff' }, { id: 'idea', label: 'Ідея', bg: '#13f287', ink: '#090a0a' }].map(function (k) {
+        var on = cur.kind === k.id;
+        return { label: k.label, on: on ? 'true' : 'false', bg: on ? k.bg : 'transparent', ink: on ? k.ink : '#48484a',
+          pick: function () { var kk = Object.assign({}, self.state.kinds); kk[cur.id] = k.id; self.setState({ kinds: kk }); } };
+      }),
+      newNote: function () {
+        var id = 'u' + Date.now();
+        var note = { id: id, isNew: true, kind: 'idea', tag: 'Ідея', date: 'Щойно', title: '', lines: [] };
+        self.setState({ created: [note].concat(self.state.created), selId: id, filter: 'all', editing: true, menu: null, justAdded: id });
+        self.fillTitle(true);
+      },
+      appendGap: segs.length ? '-8px' : '-18px',
+      canUndo: !!this.state.undoable && !!(this.hist && this.hist.length), noUndo: !(this.state.undoable && this.hist && this.hist.length),
+      undo: function () { self.undo(); },
+      cur: { id: cur.id, tag: cur.tag, date: cur.date, title: cur.title || 'Без назви', lines: cur.lines, tagBg: tagStyle.bg, tagInk: tagStyle.ink }
+    };
+  }
+}
+</script>
+</body>
+</html>

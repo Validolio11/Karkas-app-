@@ -31,6 +31,7 @@ export const SETTINGS_TRANSLATIONS = {
 
 export const TRANSLATIONS = {
   uk: {
+    growth: { status: { ahead: 'Випереджаєш', on_track: 'На шляху', behind: 'Відстаєш {percent}%', no_data: 'Немає замірів' } },
     appTitle: 'KARKAS',
     dashboard: 'ДАШБОРД',
     notepad: 'БЛОКНОТ',
@@ -358,6 +359,7 @@ export const TRANSLATIONS = {
     },
   },
   en: {
+    growth: { status: { ahead: 'Ahead', on_track: 'On track', behind: 'Behind by {percent}%', no_data: 'No measurements' } },
     appTitle: 'KARKAS',
     dashboard: 'DASHBOARD',
     notepad: 'NOTEPAD',

@@ -16,7 +16,9 @@ import {
   onSnapshot,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { PSTask, TaskTab, DeletedTask } from '../types';
+import { PSTask, TaskTab, DeletedTask, type GrowthSkill, type SkillMeasurement, type PracticeSession } from '../types';
+import { GROWTH_COLLECTIONS } from '../utils/growthSync';
+import { emptyGrowthShadowWrites, type GrowthShadowStoredDocuments } from '../utils/growthCloudShadow';
 import { serializeTaskForCloud } from '../utils/cloudTaskSerialization';
 import { parseWorkspace } from '../utils/workspaceValidation';
 import { assertCloudPayloadWithinLimit, isSyncMutationApplied, mergeWorkspace, recordSyncMutation, sameWorkspace, type SyncMutationIdentity, type WorkspaceState } from '../utils/syncState';
@@ -59,6 +61,9 @@ export interface UserCloudState {
   tasks: PSTask[];
   tabs: TaskTab[];
   deletedTasks: DeletedTask[];
+  skills?: GrowthSkill[];
+  measurements?: SkillMeasurement[];
+  practiceSessions?: PracticeSession[];
   settings: {
     soundEnabled: boolean;
     fireEnabled: boolean;
@@ -130,6 +135,18 @@ function writeCloudShadow(
       ...(mutationMetadata ? { lastMutation: mutationMetadata } : {}),
     }));
   }
+  for (const collection of GROWTH_COLLECTIONS) {
+    for (const write of plan.growthWrites[collection]) {
+      transaction.set(doc(db, 'users', userId, collection, write.documentId), sanitizeForFirestore({
+        id: write.id,
+        lifecycle: write.lifecycle,
+        ...(write.value ? { value: write.value } : {}),
+        revision: plan.manifest.revision,
+        updatedAt,
+        ...(mutationMetadata ? { lastMutation: mutationMetadata } : {}),
+      }));
+    }
+  }
   if (plan.settings) {
     transaction.set(doc(db, 'users', userId, 'workspace', 'settings'), sanitizeForFirestore({
       value: plan.settings,
@@ -167,13 +184,15 @@ export async function advanceUserCloudShadowMigration(userId: string, maxBatches
       const checkpointSnapshot = await transaction.get(checkpointRef);
       const previousManifest = manifestSnapshot.exists() ? manifestSnapshot.data() as CloudShadowManifest : null;
       if (root.shadowStatus === 'ready' && root.shadowSchemaVersion === 2 &&
-          root.shadowRevision === revision && previousManifest?.revision === revision) return true;
+          root.shadowRevision === revision && previousManifest?.revision === revision &&
+          GROWTH_COLLECTIONS.every(collection => root[collection] === undefined || previousManifest?.[collection] !== undefined)) return true;
 
       const plan = buildCloudShadowPlan(previousManifest, root, root, revision, {
         maxWrites: Number.MAX_SAFE_INTEGER,
       });
       const checkpoint = checkpointSnapshot.exists() ? checkpointSnapshot.data() : null;
-      const planEntryCount = plan.taskWrites.length + plan.tabWrites.length + (plan.settings ? 1 : 0);
+      const planEntryCount = plan.taskWrites.length + plan.tabWrites.length +
+        GROWTH_COLLECTIONS.reduce((count, collection) => count + plan.growthWrites[collection].length, 0) + (plan.settings ? 1 : 0);
       const checkpointCursor = checkpoint?.targetRevision === revision && Number.isSafeInteger(checkpoint?.cursor) &&
         checkpoint.cursor >= 0 && checkpoint.cursor <= planEntryCount ? checkpoint.cursor : 0;
       const cursor = checkpointCursor;
@@ -182,6 +201,7 @@ export async function advanceUserCloudShadowMigration(userId: string, maxBatches
         ...plan,
         taskWrites: page.taskWrites,
         tabWrites: page.tabWrites,
+        growthWrites: page.growthWrites,
         settings: page.settings,
       }, Date.now(), undefined, false);
 
@@ -335,6 +355,9 @@ export async function saveUserCloudData(
       return tabObj;
     }),
     deletedTasks: (merged.deletedTasks || []).map((task) => serializeTaskForCloud(task)),
+    skills: merged.skills ?? [],
+    measurements: merged.measurements ?? [],
+    practiceSessions: merged.practiceSessions ?? [],
     settings: {
       soundEnabled: Boolean(merged.settings?.soundEnabled),
       fireEnabled: Boolean(merged.settings?.fireEnabled),
@@ -420,12 +443,14 @@ export async function fetchUserCloudShadowData(userId: string, expectedRevision:
   const manifest = parseCloudShadowManifest(manifestSnapshot.data());
   if (manifest.revision !== expectedRevision) throw new Error('Cloud shadow manifest revision is stale');
 
-  const [taskSnapshots, tabSnapshots, settingsSnapshot] = await Promise.all([
+  const [taskSnapshots, tabSnapshots, settingsSnapshot, growthSnapshots] = await Promise.all([
     getServerDocumentsInBatches(manifest.tasks.map((entry) =>
       doc(db, 'users', userId, 'tasks', encodeCloudEntityDocumentId(entry.id)))),
     getServerDocumentsInBatches(manifest.tabs.map((entry) =>
       doc(db, 'users', userId, 'tabs', encodeCloudEntityDocumentId(entry.id)))),
     getDocFromServer(doc(db, 'users', userId, 'workspace', 'settings')),
+    Promise.all(GROWTH_COLLECTIONS.map(collection => getServerDocumentsInBatches((manifest[collection] ?? []).map(entry =>
+      doc(db, 'users', userId, collection, encodeCloudEntityDocumentId(entry.id)))))),
   ]);
   if (!settingsSnapshot.exists()) throw new Error('Cloud shadow settings are missing');
   const taskDocuments = taskSnapshots.map((snapshot) => ({
@@ -436,8 +461,14 @@ export async function fetchUserCloudShadowData(userId: string, expectedRevision:
     ...(snapshot.exists() ? snapshot.data() : {}),
     documentId: snapshot.id,
   })) as CloudShadowStoredTab[];
+  const growthDocuments: GrowthShadowStoredDocuments = emptyGrowthShadowWrites();
+  GROWTH_COLLECTIONS.forEach((collection, index) => {
+    growthDocuments[collection] = growthSnapshots[index].map(snapshot => ({
+      ...(snapshot.exists() ? snapshot.data() : {}), documentId: snapshot.id,
+    })) as GrowthShadowStoredDocuments[typeof collection];
+  });
   const settingsDocument = settingsSnapshot.data() as CloudShadowStoredSettings;
-  return parseWorkspace(materializeCloudShadow(manifest, taskDocuments, tabDocuments, settingsDocument));
+  return parseWorkspace(materializeCloudShadow(manifest, taskDocuments, tabDocuments, settingsDocument, growthDocuments));
 }
 
 export async function verifyUserCloudShadowData(userId: string, legacy: UserCloudState): Promise<boolean> {

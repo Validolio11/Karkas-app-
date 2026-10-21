@@ -13,6 +13,8 @@ export function serializeTaskForCloud<T extends PSTask | DeletedTask>(task: T, n
     result.deletedAt = task.deletedAt ?? now;
     if ('deletionReason' in task && (task.deletionReason === 'accidental' || task.deletionReason === 'cancelled')) result.deletionReason = task.deletionReason;
   }
+  if (task.skillId !== undefined) result.skillId = task.skillId;
+  if (task.subskillId !== undefined) result.subskillId = task.subskillId;
   if (task.note != null) result.note = task.note;
   if (Number.isFinite(task.updatedAt) && task.updatedAt! >= 0) result.updatedAt = task.updatedAt;
   if (Array.isArray(task.activityTrail)) result.activityTrail = mergeTaskActivityTrail(undefined, task.activityTrail).map(event => ({ ...event }));

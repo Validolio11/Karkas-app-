@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<title>Karkas Pulse — дизайн-система</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300..900&amp;display=swap">
+<style>
+body{margin:0;background:#090a0a}
+button,input{font-family:inherit}
+html{scrollbar-width:thin;scrollbar-color:#3a3a3c transparent}
+::-webkit-scrollbar{width:12px;height:12px}::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#3a3a3c;border-radius:6px;border:3px solid #090a0a}::-webkit-scrollbar-thumb:hover{background:#13f287}::-webkit-scrollbar-corner{background:transparent}
+</style>
+</helmet>
+<div style="min-height: 1600px; background: #090a0a; color: #ffffff; font-family: 'SF Pro Display', Inter, ui-sans-serif, system-ui, sans-serif">
+<div style="width: 100%; max-width: 1280px; margin: 0 auto; box-sizing: border-box; padding: 64px 40px 80px; display: flex; flex-direction: column; gap: 48px">
+
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 24px">
+<h1 style="margin: 0; text-transform: uppercase; letter-spacing: -0.03em; line-height: 0.92; font-size: 88px"><span style="display: block; font-weight: 300">Karkas</span><span style="display: block; font-weight: 800">Pulse</span></h1>
+<p style="margin: 0; max-width: 460px; font-size: 16px; line-height: 1.5; font-weight: 500; color: #a1a1a6">Чорне полотно, великі капсульні плитки, цифри як головний герой. Зелений — тільки ріст. Фіолетовий — дані й фокус. Штрих — частка шляху.</p>
+</div>
+
+<section style="display: flex; flex-direction: column; gap: 20px">
+<h2 style="margin: 0; font-size: 13px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #a1a1a6">Кольори</h2>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px">
+<sc-for list="{{colors}}" as="c" hint-placeholder-count="8">
+<div style="height: 168px; box-sizing: border-box; padding: 18px; border-radius: 28px; background: {{c.hex}}; color: {{c.ink}}; box-shadow: {{c.edge}}; display: flex; flex-direction: column; justify-content: flex-end; gap: 2px">
+<span style="font-size: 16px; font-weight: 800">{{c.name}}</span>
+<span style="font-size: 12px; font-weight: 600; opacity: 0.75">{{c.hex}} · {{c.role}}</span>
+</div>
+</sc-for>
+</div>
+</section>
+
+<section style="display: flex; flex-wrap: wrap; gap: 12px">
+<div style="flex: 1 1 560px; box-sizing: border-box; padding: 32px; border-radius: 32px; background: #1c1c1e; display: flex; flex-direction: column; gap: 22px">
+<h2 style="margin: 0; font-size: 13px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #a1a1a6">Шрифт · SF Pro Display → Inter на Windows</h2>
+<div style="text-transform: uppercase; letter-spacing: -0.03em; line-height: 0.92; font-size: 64px"><span style="display: block; font-weight: 300">Чи стаю</span><span style="display: block; font-weight: 800">я кращим?</span></div>
+<div style="display: flex; flex-wrap: wrap; gap: 32px; align-items: baseline">
+<span style="font-size: 72px; font-weight: 800; letter-spacing: -0.04em; line-height: 1">49%</span>
+<span style="font-size: 32px; font-weight: 300; letter-spacing: -0.02em">Холодні дзвінки</span>
+</div>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 24px; font-size: 13px; color: #a1a1a6; font-weight: 600">
+<span>Дисплей — 56–88 · 300 + 800 · ВЕЛИКІ</span><span>Цифри — 44–96 · 800 · −4%</span>
+<span>Заголовок — 24–32 · 300 або 700</span><span>Текст — 15–16 · 500</span>
+<span>Підпис — 12–13 · 600</span><span>Мітка — 12 · 700 · ВЕЛИКІ · +8%</span>
+</div>
+</div>
+<div style="flex: 1 1 420px; box-sizing: border-box; padding: 32px; border-radius: 32px; background: #1c1c1e; display: flex; flex-direction: column; gap: 22px">
+<h2 style="margin: 0; font-size: 13px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #a1a1a6">Форма</h2>
+<div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end">
+<sc-for list="{{radii}}" as="r" hint-placeholder-count="4">
+<div style="display: flex; flex-direction: column; gap: 8px; align-items: center">
+<div style="width: 88px; height: 88px; border-radius: {{r.v}}; background: #3a3a3c"></div>
+<span style="font-size: 12px; font-weight: 600; color: #a1a1a6">{{r.n}}</span>
+</div>
+</sc-for>
+</div>
+<div style="display: flex; flex-direction: column; gap: 10px">
+<span style="font-size: 12px; font-weight: 600; color: #a1a1a6">Штрих — частка шляху до цілі</span>
+<div style="height: 56px; border-radius: 28px; background: #3a3a3c; overflow: hidden; display: flex"><div style="width: 38%"><svg aria-hidden="true" width="100%" height="100%" style="display: block"><defs><pattern id="hs1" width="9" height="40" patternUnits="userSpaceOnUse" patternTransform="rotate(10)"><line x1="1.5" y1="-10" x2="1.5" y2="50" stroke="#8e8e93" stroke-width="2"></line></pattern></defs><rect width="100%" height="100%" fill="url(#hs1)"></rect></svg></div></div>
+<div style="height: 56px; border-radius: 28px; background: #13f287; overflow: hidden; display: flex"><div style="width: 62%"><svg aria-hidden="true" width="100%" height="100%" style="display: block"><defs><pattern id="hs2" width="9" height="40" patternUnits="userSpaceOnUse" patternTransform="rotate(10)"><line x1="1.5" y1="-10" x2="1.5" y2="50" stroke="#090a0a" stroke-width="2"></line></pattern></defs><rect width="100%" height="100%" fill="url(#hs2)"></rect></svg></div></div>
+</div>
+</div>
+</section>
+
+<section style="display: flex; flex-direction: column; gap: 20px">
+<h2 style="margin: 0; font-size: 13px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #a1a1a6">Компоненти</h2>
+<div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start">
+
+<div style="flex: 1 1 380px; box-sizing: border-box; padding: 28px; border-radius: 32px; background: #1c1c1e; display: flex; flex-direction: column; gap: 16px">
+<span style="font-size: 12px; font-weight: 600; color: #a1a1a6">Кнопки</span>
+<div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center">
+<button type="button" style="height: 52px; border: none; border-radius: 26px; padding: 0 26px; background: #f4f4f2; color: #090a0a; font-size: 15px; font-weight: 800">Зберегти</button>
+<button type="button" style="height: 52px; border: none; border-radius: 26px; padding: 0 26px; background: #3a3a3c; color: #ffffff; font-size: 15px; font-weight: 700">Пропустити</button>
+<button type="button" aria-label="Пошук" style="width: 52px; height: 52px; border: none; border-radius: 26px; background: #090a0a; color: #ffffff; display: flex; align-items: center; justify-content: center; box-shadow: inset 0 0 0 1px #3a3a3c"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg></button>
+</div>
+<span style="font-size: 12px; font-weight: 600; color: #a1a1a6; margin-top: 8px">Поле пошуку</span>
+<label style="height: 76px; box-sizing: border-box; border-radius: 38px; background: #f4f4f2; color: #090a0a; padding: 0 12px 0 28px; display: flex; align-items: center; gap: 12px">
+<span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 12px; font-weight: 600; color: #6e6e73">Нова задача</span><span style="font-size: 20px; font-weight: 800">10 дзвінків #дзвінки</span></span>
+<span style="width: 56px; height: 56px; border-radius: 28px; background: #090a0a; color: #ffffff; display: flex; align-items: center; justify-content: center"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></span>
+</label>
+</div>
+
+<div style="flex: 1 1 380px; box-sizing: border-box; padding: 28px; border-radius: 32px; background: #1c1c1e; display: flex; flex-direction: column; gap: 16px">
+<span style="font-size: 12px; font-weight: 600; color: #a1a1a6">Статуси</span>
+<div style="display: flex; flex-wrap: wrap; gap: 8px">
+<span style="height: 36px; box-sizing: border-box; padding: 0 16px; border-radius: 18px; background: #13f287; color: #090a0a; font-size: 14px; font-weight: 800; display: flex; align-items: center">На шляху</span>
+<span style="height: 36px; box-sizing: border-box; padding: 0 16px; border-radius: 18px; background: #6408fa; color: #ffffff; font-size: 14px; font-weight: 800; display: flex; align-items: center">Випереджаєш</span>
+<span style="height: 36px; box-sizing: border-box; padding: 0 16px; border-radius: 18px; background: #ff4d4f; color: #090a0a; font-size: 14px; font-weight: 800; display: flex; align-items: center">Відстаєш на 14%</span>
+<span style="height: 36px; box-sizing: border-box; padding: 0 16px; border-radius: 18px; background: #3a3a3c; color: #ffffff; font-size: 14px; font-weight: 700; display: flex; align-items: center">Плато 3 тиж</span>
+</div>
+<span style="font-size: 12px; font-weight: 600; color: #a1a1a6; margin-top: 8px">Кільце</span>
+<div style="display: flex; align-items: center; gap: 20px; padding: 20px; border-radius: 28px; background: #090a0a">
+<svg width="96" height="96" viewBox="0 0 96 96" role="img" aria-label="61% на межі"><circle cx="48" cy="48" r="38" fill="none" stroke="#2c2c2e" stroke-width="12"></circle><circle cx="48" cy="48" r="38" fill="none" stroke="#13f287" stroke-width="12" stroke-linecap="round" stroke-dasharray="146 239" transform="rotate(-90 48 48)"></circle></svg>
+<span style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 22px; font-weight: 800">На межі</span><span style="font-size: 13px; font-weight: 600; color: #a1a1a6">61% практики</span></span>
+</div>
+</div>
+
+<div style="flex: 1 1 380px; box-sizing: border-box; padding: 28px; border-radius: 32px; background: #6408fa; display: flex; flex-direction: column; gap: 8px; overflow: hidden">
+<div style="display: flex; justify-content: space-between; align-items: flex-start"><span style="font-size: 14px; font-weight: 600; max-width: 160px; line-height: 1.3">Графік — фіолетова панель</span><span style="font-size: 26px; font-weight: 800">+9%</span></div>
+<svg viewBox="0 0 340 170" width="100%" height="170" role="img" aria-label="Приклад графіка">
+<rect x="186" y="0" width="46" height="170" fill="#ffffff" fill-opacity="0.16"></rect>
+<path d="M0 150 C40 150 50 110 80 95 S130 70 160 80 S200 60 209 58 S260 30 290 40 S330 50 340 45 L340 170 L0 170 Z" fill="#ffffff" fill-opacity="0.14"></path>
+<path d="M0 150 C40 150 50 110 80 95 S130 70 160 80 S200 60 209 58 S260 30 290 40 S330 50 340 45" fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round"></path>
+<circle cx="209" cy="58" r="11" fill="#ffffff"></circle>
+</svg>
+</div>
+
+</div>
+</section>
+
+<section style="display: flex; flex-direction: column; gap: 12px">
+<h2 style="margin: 0 0 8px; font-size: 13px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #a1a1a6">Плитка навички</h2>
+<sc-for list="{{tiles}}" as="t" hint-placeholder-count="3">
+<div style="height: 120px; border-radius: 40px; background: {{t.bg}}; color: {{t.ink}}; overflow: hidden; display: flex; align-items: stretch">
+<div style="width: {{t.w}}"><svg aria-hidden="true" width="100%" height="100%" style="display: block"><defs><pattern id="ht{{$index}}" width="9" height="40" patternUnits="userSpaceOnUse" patternTransform="rotate(10)"><line x1="1.5" y1="-10" x2="1.5" y2="50" stroke="{{t.hatch}}" stroke-width="2"></line></pattern></defs><rect width="100%" height="100%" fill="url(#ht{{$index}})"></rect></svg></div>
+<div style="flex: 1; display: flex; flex-direction: column; align-items: flex-end; justify-content: center; padding: 0 36px; gap: 2px">
+<span style="font-size: 52px; font-weight: 800; letter-spacing: -0.04em; line-height: 1">{{t.v}}</span>
+<span style="font-size: 20px; font-weight: 300">{{t.n}}</span>
+</div>
+</div>
+</sc-for>
+</section>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1600}}'>
+class Component extends DCLogic {
+  componentDidMount() {
+    var r = document.documentElement.style;
+    r.colorScheme = 'dark'; r.background = '#090a0a';
+    r.scrollbarWidth = 'thin'; r.scrollbarColor = '#3a3a3c #090a0a';
+  }
+  renderVals() {
+    var edge = 'inset 0 0 0 1px #2c2c2e';
+    return {
+      colors: [
+        { name: 'Ніч', hex: '#090a0a', role: 'полотно', ink: '#ffffff', edge: edge },
+        { name: 'Графіт', hex: '#1c1c1e', role: 'плитка', ink: '#ffffff', edge: 'none' },
+        { name: 'Сталь', hex: '#3a3a3c', role: 'друга плитка', ink: '#ffffff', edge: 'none' },
+        { name: 'Туман', hex: '#a1a1a6', role: 'другий текст', ink: '#090a0a', edge: 'none' },
+        { name: 'Папір', hex: '#f4f4f2', role: 'головна дія', ink: '#090a0a', edge: 'none' },
+        { name: 'Пульс', hex: '#13f287', role: 'ріст', ink: '#090a0a', edge: 'none' },
+        { name: 'Вольт', hex: '#6408fa', role: 'дані, фокус', ink: '#ffffff', edge: 'none' },
+        { name: 'Сигнал', hex: '#ff4d4f', role: 'відставання', ink: '#090a0a', edge: 'none' }
+      ],
+      radii: [
+        { n: 'Поле 20', v: '20px' }, { n: 'Плитка 32', v: '32px' }, { n: 'Капсула 40', v: '40px' }, { n: 'Коло', v: '44px' }
+      ],
+      tiles: [
+        { n: 'Англійська розмовна', v: '18%', w: '18%', bg: '#1c1c1e', ink: '#ffffff', hatch: '#13f287' },
+        { n: 'Розробка на React', v: '66%', w: '66%', bg: '#3a3a3c', ink: '#ffffff', hatch: '#8e8e93' },
+        { n: 'Холодні дзвінки', v: '53%', w: '53%', bg: '#13f287', ink: '#090a0a', hatch: '#090a0a' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

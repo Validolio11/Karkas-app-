@@ -1,12 +1,15 @@
+import { encodeCloudEntityDocumentId } from './cloudEntityId';
+export { encodeCloudEntityDocumentId } from './cloudEntityId';
+import { buildGrowthCloudShadow, materializeGrowthCloudShadow, validateGrowthCloudManifest, emptyGrowthShadowWrites, type GrowthShadowManifest, type GrowthShadowWrites, type GrowthShadowStoredDocuments } from './growthCloudShadow';
 import type { DeletedTask, PSTask, TaskTab } from '../types';
 import { diffWorkspaceOperations, type WorkspaceSyncOperation } from './syncOperations';
 import type { WorkspaceState } from './syncState';
 
 export const CLOUD_SHADOW_SCHEMA_VERSION = 2;
 export const CLOUD_SHADOW_MAX_WRITES = 450;
-const MAX_ENTITY_ID_BYTES = 900;
 
-export interface CloudShadowManifest {
+
+export interface CloudShadowManifest extends GrowthShadowManifest {
   schemaVersion: typeof CLOUD_SHADOW_SCHEMA_VERSION;
   revision: number;
   tasks: Array<{ id: string; revision: number; lifecycle: 'active' | 'deleted' | 'purged' }>;
@@ -32,6 +35,7 @@ export interface CloudShadowTabWrite {
 
 export interface CloudShadowPlan {
   fullReconcile: boolean;
+  growthWrites: GrowthShadowWrites;
   taskWrites: CloudShadowTaskWrite[];
   tabWrites: CloudShadowTabWrite[];
   settings: WorkspaceState['settings'] | null;
@@ -40,6 +44,7 @@ export interface CloudShadowPlan {
 }
 
 export interface CloudShadowPlanPage {
+  growthWrites: GrowthShadowWrites;
   taskWrites: CloudShadowTaskWrite[];
   tabWrites: CloudShadowTabWrite[];
   settings: WorkspaceState['settings'] | null;
@@ -50,27 +55,6 @@ export interface CloudShadowPlanPage {
 export interface CloudShadowStoredTask extends CloudShadowTaskWrite { revision: number }
 export interface CloudShadowStoredTab extends CloudShadowTabWrite { revision: number }
 export interface CloudShadowStoredSettings { revision: number; value: WorkspaceState['settings'] }
-
-export function encodeCloudEntityDocumentId(id: string): string {
-  if (typeof id !== 'string' || id.length === 0) throw new Error('Cloud entity id must be a non-empty string');
-  // UTF-8 is portable across clients, but unpaired UTF-16 surrogates must be
-  // rejected because TextEncoder would replace them and create collisions.
-  for (let index = 0; index < id.length; index += 1) {
-    const codeUnit = id.charCodeAt(index);
-    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
-      const next = id.charCodeAt(index + 1);
-      if (!(next >= 0xdc00 && next <= 0xdfff)) throw new Error('Cloud entity id contains invalid Unicode');
-      index += 1;
-    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
-      throw new Error('Cloud entity id contains invalid Unicode');
-    }
-  }
-  const bytes = new TextEncoder().encode(id);
-  if (bytes.byteLength > MAX_ENTITY_ID_BYTES) throw new Error('Cloud entity id is too large');
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return `e_${btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')}`;
-}
 
 export function parseCloudShadowManifest(value: unknown): CloudShadowManifest {
   if (!value || typeof value !== 'object') throw new Error('Cloud shadow manifest is invalid');
@@ -89,6 +73,7 @@ export function parseCloudShadowManifest(value: unknown): CloudShadowManifest {
     Number.isSafeInteger(manifest.settingsRevision) && manifest.settingsRevision > 0 &&
     manifest.settingsRevision <= manifest.revision;
   if (!valid) throw new Error('Cloud shadow manifest is invalid');
+  validateGrowthCloudManifest(manifest, manifest.revision);
   const taskIds = new Set(manifest.tasks.map((entry) => entry.id));
   const tabIds = new Set(manifest.tabs.map((entry) => entry.id));
   if (taskIds.size !== manifest.tasks.length || tabIds.size !== manifest.tabs.length) {
@@ -167,10 +152,12 @@ export function buildCloudShadowPlan(
       ? { documentId: encodeCloudEntityDocumentId(id), id, lifecycle: 'active', value: structuredClone(current) }
       : { documentId: encodeCloudEntityDocumentId(id), id, lifecycle: 'deleted' };
   });
+  const growth = buildGrowthCloudShadow(validatedManifest, before, after, nextRevision, fullReconcile);
   const settingsChanged = fullReconcile || operations.some((operation) => operation.kind === 'settings');
   const taskWritesById = new Map(taskWrites.map((write) => [write.id, write]));
   const tabWritesById = new Map(tabWrites.map((write) => [write.id, write]));
   const manifest: CloudShadowManifest = {
+    ...growth.inventory,
     schemaVersion: CLOUD_SHADOW_SCHEMA_VERSION,
     revision: nextRevision,
     tasks: [...new Set([...previousTaskIds, ...nextTasks.keys()])].sort().map((id) => ({
@@ -192,7 +179,7 @@ export function buildCloudShadowPlan(
     throw new Error('Cloud shadow manifest is too large');
   }
   // Entity/settings writes plus manifest, root and the optional client watermark.
-  const writeCount = taskWrites.length + tabWrites.length + (settingsChanged ? 1 : 0) + 3;
+  const writeCount = taskWrites.length + tabWrites.length + growth.writeCount + (settingsChanged ? 1 : 0) + 3;
   const maxWrites = options.maxWrites ?? CLOUD_SHADOW_MAX_WRITES;
   if (writeCount > maxWrites) {
     const error = new Error(`Cloud shadow migration requires ${writeCount} writes; maximum is ${maxWrites}.`);
@@ -201,6 +188,7 @@ export function buildCloudShadowPlan(
   }
   return {
     fullReconcile,
+    growthWrites: growth.writes,
     taskWrites,
     tabWrites,
     settings: settingsChanged ? structuredClone(after.settings) : null,
@@ -213,18 +201,27 @@ export function pageCloudShadowPlan(plan: CloudShadowPlan, cursor: number, pageS
   if (!Number.isSafeInteger(cursor) || cursor < 0 || !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 450) {
     throw new Error('Cloud shadow migration cursor or page size is invalid');
   }
-  const entries: Array<{ kind: 'task'; value: CloudShadowTaskWrite } | { kind: 'tab'; value: CloudShadowTabWrite } | { kind: 'settings'; value: WorkspaceState['settings'] }> = [
+  type Entry = { kind: 'task'; value: CloudShadowTaskWrite } | { kind: 'tab'; value: CloudShadowTabWrite } |
+    { kind: 'growth'; collection: keyof GrowthShadowWrites; value: GrowthShadowWrites[keyof GrowthShadowWrites][number] } |
+    { kind: 'settings'; value: WorkspaceState['settings'] };
+  const entries: Entry[] = [
     ...plan.taskWrites.map((value) => ({ kind: 'task' as const, value })),
     ...plan.tabWrites.map((value) => ({ kind: 'tab' as const, value })),
+    ...Object.entries(plan.growthWrites).flatMap(([collection, values]) => values.map(value => ({
+      kind: 'growth' as const, collection: collection as keyof GrowthShadowWrites, value,
+    }))),
     ...(plan.settings ? [{ kind: 'settings' as const, value: plan.settings }] : []),
   ];
   if (cursor > entries.length) throw new Error('Cloud shadow migration cursor exceeds the plan');
   const page = entries.slice(cursor, cursor + pageSize);
+  const growthWrites: GrowthShadowWrites = emptyGrowthShadowWrites();
+  for (const entry of page) if (entry.kind === 'growth') growthWrites[entry.collection].push(entry.value);
   const nextCursor = cursor + page.length;
   return {
-    taskWrites: page.filter((entry): entry is { kind: 'task'; value: CloudShadowTaskWrite } => entry.kind === 'task').map((entry) => entry.value),
-    tabWrites: page.filter((entry): entry is { kind: 'tab'; value: CloudShadowTabWrite } => entry.kind === 'tab').map((entry) => entry.value),
-    settings: page.find((entry): entry is { kind: 'settings'; value: WorkspaceState['settings'] } => entry.kind === 'settings')?.value ?? null,
+    taskWrites: page.filter((entry): entry is Extract<Entry, { kind: 'task' }> => entry.kind === 'task').map((entry) => entry.value),
+    tabWrites: page.filter((entry): entry is Extract<Entry, { kind: 'tab' }> => entry.kind === 'tab').map((entry) => entry.value),
+    growthWrites,
+    settings: page.find((entry): entry is Extract<Entry, { kind: 'settings' }> => entry.kind === 'settings')?.value ?? null,
     nextCursor,
     complete: nextCursor >= entries.length,
   };
@@ -235,6 +232,7 @@ export function materializeCloudShadow(
   taskDocuments: CloudShadowStoredTask[],
   tabDocuments: CloudShadowStoredTab[],
   settingsDocument: CloudShadowStoredSettings,
+  growthDocuments: GrowthShadowStoredDocuments = emptyGrowthShadowWrites(),
 ): WorkspaceState {
   const validatedManifest = parseCloudShadowManifest(manifest);
   manifest = validatedManifest;
@@ -273,5 +271,5 @@ export function materializeCloudShadow(
   if (settingsDocument.revision !== manifest.settingsRevision) {
     throw new Error('Cloud shadow settings version does not match its manifest');
   }
-  return { tasks, tabs, deletedTasks, settings: structuredClone(settingsDocument.value) };
+  return { tasks, tabs, deletedTasks, ...materializeGrowthCloudShadow(manifest, growthDocuments), settings: structuredClone(settingsDocument.value) };
 }

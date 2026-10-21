@@ -15,9 +15,13 @@ export interface QuickAddPrefill {
   key: number;
   title: string;
   phase?: string;
+  proposedCategoryName?: string;
   priority?: 1 | 2 | 3;
   plannedDate?: string;
   deadlineDate?: string;
+  schedule?: NewTaskInput['schedule'];
+  skillId?: string;
+  subskillId?: string;
 }
 
 interface QuickAddDrawerProps {
@@ -28,7 +32,7 @@ interface QuickAddDrawerProps {
   tabs: TaskTab[];
   selectedPhase?: string;
   onClose: () => void;
-  onAddTask: (task: NewTaskInput) => void | boolean;
+  onAddTask: (task: NewTaskInput, proposedCategoryName?: string) => void | boolean;
 }
 
 // Remount the draft session on account changes so fields and in-flight AI results cannot cross accounts.
@@ -63,11 +67,15 @@ const QuickAddDraftSession: React.FC<QuickAddDrawerProps> = ({ ownerId = null, i
   const [countdownMinutes, setCountdownMinutes] = useState(savedDraft?.countdownInput ?? String(savedDraft?.countdownMinutes || 25));
   const [plannedDate, setPlannedDate] = useState(savedDraft?.plannedDate || '');
   const [deadlineDate, setDeadlineDate] = useState(savedDraft?.deadlineDate || '');
+  // A timed inline entry stays in this mounted session; the stored draft format is unchanged.
+  const [prefillSchedule, setPrefillSchedule] = useState<NewTaskInput['schedule']>();
+  const [prefillSkill, setPrefillSkill] = useState<Pick<NewTaskInput, 'skillId' | 'subskillId'>>({});
+  const [proposedCategoryName, setProposedCategoryName] = useState(savedDraft?.proposedCategoryName);
   const [aiLoading, setAiLoading] = useState(false);
   const [notice, setNotice] = useState('');
   const [storedWizardStep, setWizardStep] = useState(savedDraft?.title.trim() ? savedDraft.wizardStep ?? 0 : 0);
   // Without categories there is nothing to choose, so the category stage is skipped rather than shown empty.
-  const hasCategories = tabs.length > 0;
+  const hasCategories = tabs.length > 0 || !!proposedCategoryName;
   const wizardStep = resolveQuickAddWizardStep(storedWizardStep, hasCategories);
   const visibleSteps = quickAddWizardSteps(hasCategories);
   const stepNumber = visibleSteps.indexOf(wizardStep) + 1;
@@ -85,7 +93,7 @@ const QuickAddDraftSession: React.FC<QuickAddDrawerProps> = ({ ownerId = null, i
   const nextFocus = useRef<'title' | 'countdown' | 'planned' | 'deadline' | null>(null);
   const requestGeneration = useRef(0);
   const aiRequest = useRef<AbortController | null>(null);
-  const draftSnapshot = JSON.stringify({ title, note, phase, priority, steps, customSteps });
+  const draftSnapshot = JSON.stringify({ title, note, phase, proposedCategoryName, priority, steps, customSteps });
   const latestSnapshot = useRef(draftSnapshot);
   latestSnapshot.current = draftSnapshot;
   const minutes = Number(countdownMinutes);
@@ -95,8 +103,8 @@ const QuickAddDraftSession: React.FC<QuickAddDrawerProps> = ({ ownerId = null, i
   const priorityColor = priority === 1 ? '#f87171' : priority === 2 ? '#fbbf24' : '#34d399';
 
   useEffect(() => {
-    try { saveQuickAddDraft(localStorage, { title, note, phase, priority, steps, customSteps, timerMode, countdownMinutes: validMinutes ? minutes : undefined, countdownInput: countdownMinutes, wizardStep, plannedDate: plannedDate || undefined, deadlineDate: deadlineDate || undefined }, ownerId); } catch { /* Keep the in-memory draft if storage is unavailable. */ }
-  }, [title, note, phase, priority, steps, customSteps, timerMode, countdownMinutes, plannedDate, deadlineDate, wizardStep]);
+    try { saveQuickAddDraft(localStorage, { title, note, phase, proposedCategoryName, priority, steps, customSteps, timerMode, countdownMinutes: validMinutes ? minutes : undefined, countdownInput: countdownMinutes, wizardStep, plannedDate: plannedDate || undefined, deadlineDate: deadlineDate || undefined }, ownerId); } catch { /* Keep the in-memory draft if storage is unavailable. */ }
+  }, [title, note, phase, proposedCategoryName, priority, steps, customSteps, timerMode, countdownMinutes, plannedDate, deadlineDate, wizardStep]);
 
   const cancelAi = () => {
     requestGeneration.current += 1;
@@ -141,6 +149,9 @@ const QuickAddDraftSession: React.FC<QuickAddDrawerProps> = ({ ownerId = null, i
     setCountdownMinutes('25');
     setPlannedDate(prefill.plannedDate || '');
     setDeadlineDate(prefill.deadlineDate || '');
+    setPrefillSchedule(prefill.schedule);
+    setPrefillSkill({ skillId: prefill.skillId, subskillId: prefill.subskillId });
+    setProposedCategoryName(prefill.proposedCategoryName);
     setNotice('');
     setError('');
     setWizardStep(0);
@@ -220,13 +231,22 @@ const QuickAddDraftSession: React.FC<QuickAddDrawerProps> = ({ ownerId = null, i
     submitLock.current = true;
     const stepList = buildQuickAddSteps(steps, customSteps, lang, `s-${Date.now()}`);
     try {
+      let schedule = prefillSchedule;
+      if (schedule && plannedDate) {
+        const start = new Date(schedule.startAt);
+        const [year, month, day] = plannedDate.split('-').map(Number);
+        start.setFullYear(year, month - 1, day);
+        schedule = { ...schedule, startAt: start.toISOString() };
+      }
       const accepted = onAddTask({
         title: title.trim(), note: note.trim() || undefined,
         phase: tabs.some(tab => tab.id === phase) ? phase : tabs[0]?.id || 'focus', priority,
         steps, stepList: stepList.length ? stepList : undefined,
         timerMode, countdownDurationSeconds: timerMode === 'countdown' ? minutes * 60 : undefined,
         plannedDate: plannedDate || undefined, deadlineDate: deadlineDate || undefined,
-      });
+        ...(schedule ? { schedule } : {}),
+        ...prefillSkill,
+      }, proposedCategoryName);
       if (accepted === false) {
         submitLock.current = false;
         setError(uk ? 'Не вдалося додати завдання. Чернетку збережено — спробуйте ще раз.' : 'Could not add the task. Your draft is saved — try again.');
@@ -236,7 +256,7 @@ const QuickAddDraftSession: React.FC<QuickAddDrawerProps> = ({ ownerId = null, i
       cancelAi();
       // Only the category carries over; priority and the rest start from defaults for the next task.
       try { saveQuickAddDraft(localStorage, emptyQuickAddDraft(phase), ownerId); } catch { /* Storage is optional. */ }
-      setTitle(''); setNote(''); setPriority(DEFAULT_QUICK_ADD_PRIORITY); setCustomSteps([]); setSteps(0); setTimerMode('stopwatch'); setCountdownMinutes('25'); setPlannedDate(''); setDeadlineDate(''); setNotice(''); setError(''); setWizardStep(0);
+      setTitle(''); setNote(''); setPriority(DEFAULT_QUICK_ADD_PRIORITY); setCustomSteps([]); setSteps(0); setTimerMode('stopwatch'); setCountdownMinutes('25'); setPlannedDate(''); setDeadlineDate(''); setPrefillSchedule(undefined); setPrefillSkill({}); setProposedCategoryName(undefined); setNotice(''); setError(''); setWizardStep(0);
       onClose();
     } catch {
       submitLock.current = false;
@@ -317,7 +337,7 @@ const QuickAddDraftSession: React.FC<QuickAddDrawerProps> = ({ ownerId = null, i
         </section>}
         {wizardStep === 1 && <fieldset id="quick-add-category-options" className="min-w-0">
           <legend className="sr-only">{uk ? 'Категорія' : 'Category'}</legend>
-          <div className="grid grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3">{tabs.map(tab => <button type="button" key={tab.id} id={`quick-add-tab-${tab.id.toLowerCase()}`} aria-pressed={phase === tab.id} onClick={() => setPhase(tab.id)} className={`min-h-20 sm:min-h-24 min-w-0 text-left px-3 sm:px-4 py-3 border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white ${phase === tab.id ? 'border-white bg-white/5 text-white' : 'border-neutral-800 text-neutral-400 hover:border-neutral-500 hover:text-white'}`}><span className="mb-3 flex items-center justify-between gap-3"><span aria-hidden="true" className="h-2.5 w-2.5" style={{ backgroundColor: tab.color || '#a3a3a3' }} />{phase === tab.id && <Check aria-hidden="true" className="w-4 h-4 text-white" />}</span><span className="block break-words text-sm font-medium">{(t.phases as Record<string, string>)[tab.id] || tab.name}</span></button>)}</div>
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3">{proposedCategoryName && <button type="button" aria-pressed="true" className="min-h-20 sm:min-h-24 min-w-0 text-left px-3 sm:px-4 py-3 border border-white bg-white/5 text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"><span className="block break-words text-sm font-medium">+ {proposedCategoryName}</span></button>}{tabs.map(tab => <button type="button" key={tab.id} id={`quick-add-tab-${tab.id.toLowerCase()}`} aria-pressed={!proposedCategoryName && phase === tab.id} onClick={() => { setPhase(tab.id); setProposedCategoryName(undefined); }} className={`min-h-20 sm:min-h-24 min-w-0 text-left px-3 sm:px-4 py-3 border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white ${!proposedCategoryName && phase === tab.id ? 'border-white bg-white/5 text-white' : 'border-neutral-800 text-neutral-400 hover:border-neutral-500 hover:text-white'}`}><span className="mb-3 flex items-center justify-between gap-3"><span aria-hidden="true" className="h-2.5 w-2.5" style={{ backgroundColor: tab.color || '#a3a3a3' }} />{!proposedCategoryName && phase === tab.id && <Check aria-hidden="true" className="w-4 h-4 text-white" />}</span><span className="block break-words text-sm font-medium">{(t.phases as Record<string, string>)[tab.id] || tab.name}</span></button>)}</div>
         </fieldset>}
         {wizardStep === 2 && <fieldset id="quick-add-priority-options" className="min-w-0 max-w-3xl mx-auto py-3 sm:py-4">
           <legend className="sr-only">{uk ? 'Пріоритет' : 'Priority'}</legend>
@@ -327,6 +347,7 @@ const QuickAddDraftSession: React.FC<QuickAddDrawerProps> = ({ ownerId = null, i
           {!hasCategories && <p id="quick-add-no-categories-hint" className="mt-6 text-center text-xs leading-relaxed text-neutral-500">{uk ? 'Вкладок-сфер ще немає, тому вибір сфери пропущено. Додайте вкладку кнопкою «+ Вкладка» над списком завдань, щоб групувати завдання.' : 'There are no category tabs yet, so choosing a category was skipped. Add a tab with “+ Tab” above the task list to group tasks.'}</p>}
         </fieldset>}
         {wizardStep === 3 && <section id="quick-add-dates-panel" aria-label={uk ? 'Дати завдання' : 'Task dates'} className="min-w-0">
+          {prefillSchedule && <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-neutral-900 px-4 py-3 text-sm text-neutral-300"><span>{uk ? 'Запланований початок: ' : 'Scheduled start: '}{new Date(prefillSchedule.startAt).toLocaleTimeString(uk ? 'uk-UA' : 'en-GB', { hour: '2-digit', minute: '2-digit' })}</span><button type="button" aria-label={uk ? 'Прибрати запланований час' : 'Remove scheduled time'} onClick={() => setPrefillSchedule(undefined)} className="min-h-11 px-2 text-neutral-400 hover:text-white focus-visible:outline-2 focus-visible:outline-white">{uk ? 'Прибрати час' : 'Remove time'}</button></div>}
           <TaskDateCalendar plannedDate={plannedDate} deadlineDate={deadlineDate} onPlannedDateChange={value => { setPlannedDate(value); setError(''); }} onDeadlineDateChange={value => { setDeadlineDate(value); setError(''); }} lang={lang} plannedInputRef={plannedDateRef} deadlineInputRef={deadlineDateRef} invalid={datesReversed || !!plannedDate && !isTaskDate(plannedDate) || !!deadlineDate && !isTaskDate(deadlineDate)} />
         </section>}
         {wizardStep === 4 && <section id="quick-add-timer-panel" aria-labelledby="quick-add-timer-heading" className="min-w-0">

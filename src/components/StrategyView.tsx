@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Compass, MessageSquare } from 'lucide-react';
+import { MessageSquare } from 'lucide-react';
 import { AIIcon } from './AIIconTemplates';
 import type { DeletedTask, PersonalStrategyProfile, PSTask, TaskTab } from '../types';
 import type { WorkInsights } from '../utils/workInsights';
@@ -12,6 +12,7 @@ import type { CountdownExpiryActions } from './CountdownExpiryNotice';
 import { StrategyGoals } from './StrategyGoals';
 import { StrategyAudit } from './StrategyAudit';
 import { StrategyMore } from './StrategyMore';
+import { PageGrid, PageHead } from './pulse/PageShell';
 
 interface StrategyViewProps extends CountdownExpiryActions {
   ownerId: string | null; profile: PersonalStrategyProfile; tasks: PSTask[]; deletedTasks: DeletedTask[]; tabs: TaskTab[];
@@ -103,34 +104,30 @@ export const StrategyView: React.FC<StrategyViewProps> = (props: StrategyViewPro
       </div>
     </section>;
 
-  return <div className="space-y-8 text-sm text-neutral-200">
-    <header className="flex flex-wrap items-end justify-between gap-3">
-      <div className="min-w-0">
-        <h1 className="flex items-center gap-2 text-base font-bold uppercase tracking-wider text-white"><Compass className="h-[18px] w-[18px]" aria-hidden="true" />{uk ? 'Моя стратегія' : 'My strategy'}</h1>
-        {!onboarding && <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
-          {/* The segment bar already shows progress; a chip appears only for a state the bar cannot show. */}
-          {ready ? <Chip tone="green">{uk ? 'Знайомство завершено' : 'Introduction complete'}</Chip> : discoveryBar}
-          {!ready && cta === 'continue' && <Chip tone="green">{uk ? 'Режим знайомства' : 'Getting to know you'}</Chip>}
-        </div>}
-      </div>
-      {!onboarding && <button type="button" className={cta === 'continue' ? primaryBtn : btn} onClick={runDiscovery}><MessageSquare className="h-4 w-4" aria-hidden="true" />{ctaLabel}</button>}
-    </header>
+  return <div className="w-full text-sm text-neutral-200">
+    <PageHead firstLine={uk ? 'Мій' : 'My'} secondLine={uk ? 'Ріст' : 'Growth'}
+      switcher={!onboarding ? <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        {ready ? <Chip tone="green">{uk ? 'Знайомство завершено' : 'Introduction complete'}</Chip> : discoveryBar}
+        {!ready && cta === 'continue' && <Chip tone="green">{uk ? 'Режим знайомства' : 'Getting to know you'}</Chip>}
+      </div> : undefined}
+      actions={!onboarding ? <button type="button" className={cta === 'continue' ? primaryBtn : btn} onClick={runDiscovery}>
+        <MessageSquare className="h-4 w-4" aria-hidden="true" />{ctaLabel}
+      </button> : undefined} />
 
-    <div className="grid items-stretch gap-5 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+    <PageGrid sidebar={sideCard} sidebarLabel={uk ? 'Мій план' : 'My plan'}>
       <StrategyNextStep candidates={candidates} nextAction={profile.latestStrategy?.nextAction} tabs={tabs} lang={lang} now={clock}
         onContinueAfterExpiry={props.onContinueAfterExpiry} onFinishAfterExpiry={props.onFinishAfterExpiry}
         onStart={props.onStart} onPause={props.onPauseTimer} onChat={onChat} onOpenTask={props.onOpenTask} onOpenAdd={props.onOpenAdd}
         onLimitedStart={props.onLimitedStart} onFinishLimitedStart={props.onFinishLimitedStart} attemptsSummary={props.attemptsSummary} />
-      {sideCard}
-    </div>
 
-    <StrategyGoals deletedTasks={props.deletedTasks} goals={profile.goals} tasks={tasks} tabs={tabs} lang={lang} onChangeGoal={changeGoal} onOpenTask={props.onOpenTask} onChat={onChat} />
+      <StrategyGoals deletedTasks={props.deletedTasks} goals={profile.goals} tasks={tasks} tabs={tabs} lang={lang} onChangeGoal={changeGoal} onOpenTask={props.onOpenTask} onChat={onChat} />
 
-    <StrategyAudit ownerId={ownerId} profile={profile} tasks={tasks} deletedTasks={props.deletedTasks} tabs={tabs} lang={lang} clock={clock} onChat={onChat} />
+      <StrategyAudit ownerId={ownerId} profile={profile} tasks={tasks} deletedTasks={props.deletedTasks} tabs={tabs} lang={lang} clock={clock} onChat={onChat} />
 
-    <StrategyMore profile={profile} tasks={tasks} insights={props.insights} lang={lang} remindersEnabled={props.remindersEnabled}
+      <StrategyMore profile={profile} tasks={tasks} insights={props.insights} lang={lang} remindersEnabled={props.remindersEnabled}
       feedback={feedback} onFeedbackChange={setFeedback} confirmReset={confirmReset} onConfirmResetChange={setConfirmReset}
       onProfileChange={onProfileChange} onResetMemory={props.onResetMemory} onUndo={props.onUndo} onChat={onChat} onOpenTask={props.onOpenTask}
       onRemindersChange={props.onRemindersChange} onApplyPriority={props.onApplyPriority} onEditPlan={props.onEditPlan} />
+    </PageGrid>
   </div>;
 };

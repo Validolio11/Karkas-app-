@@ -3,14 +3,15 @@ import { preserveRawStorage } from './recoverableLocalStorage';
 import type { WorkspaceState } from './syncState';
 
 type Store = Pick<Storage, 'getItem' | 'setItem'> & Partial<Pick<Storage, 'key' | 'length'>>;
-export function readLocalWorkspace(storage: Store, keys: { tasks: string; tabs: string; deletedTasks: string }, settings: WorkspaceState['settings']) {
+export function readLocalWorkspace(storage: Store, keys: { tasks: string; tabs: string; deletedTasks: string; skills?: string; measurements?: string; practiceSessions?: string }, settings: WorkspaceState['settings']) {
   const empty: WorkspaceState = { tasks: [], tabs: [], deletedTasks: [], settings };
   const raw = new Map<string, string>();
   try {
     const value = { ...empty };
-    const fields = new Map<'tasks' | 'tabs' | 'deletedTasks', string>();
-    for (const field of ['tasks', 'tabs', 'deletedTasks'] as const) {
+    const fields = new Map<'tasks' | 'tabs' | 'deletedTasks' | 'skills' | 'measurements' | 'practiceSessions', string>();
+    for (const field of ['tasks', 'tabs', 'deletedTasks', 'skills', 'measurements', 'practiceSessions'] as const) {
       let key = keys[field];
+      if (!key) continue;
       let text = storage.getItem(key);
       if (field === 'tasks' && text === null) { key = 'ps_todo_tasks_v1'; text = storage.getItem(key); }
       if (text !== null) { raw.set(key, text); fields.set(field, text); }
@@ -86,7 +87,7 @@ export function readAccountRecovery(storage: Store, key: string): { raw: string;
       if (!raw) continue;
       const value = JSON.parse(raw);
       const workspace = parseWorkspace(value.workspace);
-      if (!workspace.tasks.length && !workspace.tabs.length && !workspace.deletedTasks.length) continue;
+      if (!workspace.tasks.length && !workspace.tabs.length && !workspace.deletedTasks.length && !workspace.skills?.length && !workspace.measurements?.length && !workspace.practiceSessions?.length) continue;
       if (rank > bestRank) { best = { raw, workspace }; bestRank = rank; }
     } catch { /* Never offer an invalid snapshot for recovery. */ }
   }

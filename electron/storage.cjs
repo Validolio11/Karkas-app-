@@ -89,7 +89,7 @@ function assertSyncOperations(value, label) {
     throw new DesktopStorageError('INVALID_DATA', `${label} must be an operations array`);
   }
   for (const operation of value) {
-    if (!isPlainObject(operation) || !['task', 'tab', 'settings'].includes(operation.kind)) {
+    if (!isPlainObject(operation) || !['task', 'tab', 'settings', 'skill', 'measurement', 'practiceSession'].includes(operation.kind)) {
       throw new DesktopStorageError('INVALID_DATA', `${label} contains an invalid operation`);
     }
     if (operation.kind === 'settings') {
@@ -255,6 +255,9 @@ function normalizeLegacyWorkspace(legacy) {
     tasks,
     tabs,
     deletedTasks,
+    ...(legacy.karkas_growth_skills_v1 !== undefined ? { skills: parseLegacyJson(legacy.karkas_growth_skills_v1, []) } : {}),
+    ...(legacy.karkas_growth_measurements_v1 !== undefined ? { measurements: parseLegacyJson(legacy.karkas_growth_measurements_v1, []) } : {}),
+    ...(legacy.karkas_growth_sessions_v1 !== undefined ? { practiceSessions: parseLegacyJson(legacy.karkas_growth_sessions_v1, []) } : {}),
     settings: {
       soundEnabled: bool(legacy.karkas_sound_enabled, true),
       fireEnabled: bool(legacy.karkas_fire_enabled, true),
@@ -286,7 +289,7 @@ function normalizeLegacySnapshot(legacy) {
   }
 
   const directWorkspace = normalizeLegacyWorkspace(legacy);
-  const directHasData = directWorkspace.tasks.length > 0 || directWorkspace.tabs.length > 0 || directWorkspace.deletedTasks.length > 0;
+  const directHasData = directWorkspace.tasks.length > 0 || directWorkspace.tabs.length > 0 || directWorkspace.deletedTasks.length > 0 || directWorkspace.skills?.length > 0 || directWorkspace.measurements?.length > 0 || directWorkspace.practiceSessions?.length > 0;
   const activeKey = ownerMapKey(activeOwner);
   if (!store.accounts[activeKey] && (directHasData || Object.keys(store.accounts).length === 0)) {
     const lastSync = legacy.karkas_last_sync_time == null ? null : Number(legacy.karkas_last_sync_time);

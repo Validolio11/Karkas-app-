@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<title>Karkas Pulse — іконки</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300..900&amp;display=swap">
+<style>
+body{margin:0;background:#090a0a}
+button{font-family:inherit}
+.tile{display:flex;flex-direction:column;align-items:center;gap:10px;width:104px}
+.dot{width:56px;height:56px;border-radius:28px;background:#1f1f1f;color:#ffffff;display:flex;align-items:center;justify-content:center}
+.cap{font-size:13px;font-weight:700;color:#ffffff;text-align:center;line-height:1.25}
+.id{display:block;font-size:11px;font-weight:500;color:#8e8e93}
+.ico{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+html{scrollbar-width:thin;scrollbar-color:#3a3a3c transparent}
+::-webkit-scrollbar{width:12px;height:12px}::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#3a3a3c;border-radius:6px;border:3px solid #090a0a}::-webkit-scrollbar-thumb:hover{background:#13f287}::-webkit-scrollbar-corner{background:transparent}
+</style>
+</helmet>
+<div style="min-height: 1700px; background: #090a0a; color: #ffffff; font-family: 'SF Pro Display', Inter, ui-sans-serif, system-ui, sans-serif">
+<div style="width: 100%; max-width: 1280px; margin: 0 auto; box-sizing: border-box; padding: 64px 40px 80px; display: flex; flex-direction: column; gap: 40px">
+
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 24px">
+<h1 style="margin: 0; text-transform: uppercase; letter-spacing: -0.035em; line-height: 0.92; font-size: 88px"><span style="display: block; font-weight: 300">Pulse</span><span style="display: block; font-weight: 800">іконки</span></h1>
+<p style="margin: 0; max-width: 480px; font-size: 16px; line-height: 1.5; font-weight: 500; color: #a1a1a6">Lucide, лінія 2, заокруглені кінці, сітка 24. Іконка майже завжди стоїть у колі. Активний стан — інверсія: світле коло, темна іконка.</p>
+</div>
+
+<section style="display: flex; flex-wrap: wrap; gap: 12px">
+<div style="flex: 1 1 520px; box-sizing: border-box; padding: 32px; border-radius: 48px; background: #1f1f1f; display: flex; flex-direction: column; gap: 24px">
+<h2 style="margin: 0; font-size: 13px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #a1a1a6">Знак Karkas</h2>
+<div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: center">
+<svg width="128" height="128" viewBox="0 0 1080 1080" role="img" aria-label="Знак Karkas — основний"><rect width="1080" height="1080" rx="270" fill="#f4f4f2"></rect><path d="{{k}}" fill="#090a0a"></path></svg>
+<svg width="128" height="128" viewBox="0 0 1080 1080" role="img" aria-label="Знак Karkas на фіолетовому"><rect width="1080" height="1080" rx="270" fill="#6408fa"></rect><path d="{{k}}" fill="#ffffff"></path></svg>
+<svg width="128" height="128" viewBox="0 0 1080 1080" role="img" aria-label="Знак Karkas на зеленому"><rect width="1080" height="1080" rx="270" fill="#13f287"></rect><path d="{{k}}" fill="#090a0a"></path></svg>
+<svg width="128" height="128" viewBox="0 0 1080 1080" role="img" aria-label="Знак Karkas на темному"><rect width="1080" height="1080" rx="270" fill="#1D1D1D"></rect><path d="{{k}}" fill="#ffffff"></path></svg>
+<svg width="44" height="44" viewBox="0 0 1080 1080" role="img" aria-label="Знак Karkas у шапці"><rect width="1080" height="1080" rx="540" fill="#f4f4f2"></rect><path d="{{k}}" fill="#090a0a"></path></svg>
+</div>
+<span style="font-size: 13px; font-weight: 600; color: #a1a1a6">Основна іконка застосунку — чорний K на білому (#F4F4F2), форма K з public/icon.svg без змін. Підкладка заокруглена на 25%, як плитки Pulse; у шапці — коло 44 px, як інші кнопки. Кольорові варіанти — для промо й станів.</span>
+</div>
+
+<div style="flex: 1 1 520px; box-sizing: border-box; padding: 32px; border-radius: 48px; background: #1f1f1f; display: flex; flex-direction: column; gap: 22px">
+<h2 style="margin: 0; font-size: 13px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #a1a1a6">Розміри й контейнери</h2>
+<div style="display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-end">
+<div class="tile"><span style="height: 30px; box-sizing: border-box; padding: 0 12px; border-radius: 15px; background: #6408fa; color: #ffffff; font-size: 12px; font-weight: 800; display: flex; align-items: center; gap: 6px"><svg viewBox="0 0 24 24" style="width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round" aria-hidden="true"><path d="M16 7h6v6"></path><path d="m22 7-8.5 8.5-5-5L2 17"></path></svg>React</span><span class="cap">16 · у чипі<span class="id">лінія 2.4</span></span></div>
+<div class="tile"><span style="width: 44px; height: 44px; border-radius: 22px; background: #1f1f1f; box-shadow: inset 0 0 0 1px #3a3a3c; color: #ffffff; display: flex; align-items: center; justify-content: center"><svg viewBox="0 0 24 24" style="width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round" aria-hidden="true"><path d="m21 21-4.34-4.34"></path><circle cx="11" cy="11" r="8"></circle></svg></span><span class="cap">20 · коло 44<span class="id">шапка</span></span></div>
+<div class="tile"><span style="width: 56px; height: 56px; border-radius: 28px; background: #f4f4f2; color: #090a0a; display: flex; align-items: center; justify-content: center"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z"></path></svg></span><span class="cap">24 · коло 56<span class="id">картки</span></span></div>
+<div class="tile"><span style="width: 64px; height: 64px; border-radius: 32px; background: #090a0a; color: #ffffff; display: flex; align-items: center; justify-content: center"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"></path><circle cx="12" cy="12" r="3"></circle></svg></span><span class="cap">24 · коло 64<span class="id">діалоги</span></span></div>
+</div>
+<div style="display: flex; flex-direction: column; gap: 8px; font-size: 13px; font-weight: 600; color: #a1a1a6">
+<span>Зелена іконка — тільки ріст. Фіолетова — ШІ й дані. Червона — тільки відставання.</span>
+<span>Іконки без підпису мають aria-label. Емодзі в інтерфейсі не використовуємо.</span>
+</div>
+</div>
+</section>
+
+<section style="display: flex; flex-direction: column; gap: 22px">
+<h2 style="margin: 0; font-size: 13px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #a1a1a6">Навігація</h2>
+<div style="display: flex; flex-wrap: wrap; gap: 20px">
+<div class="tile"><span class="dot"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 5h8"></path><path d="M13 12h8"></path><path d="M13 19h8"></path><path d="m3 17 2 2 4-4"></path><path d="m3 7 2 2 4-4"></path></svg></span><span class="cap">Задачі<span class="id">list-checks</span></span></div>
+<div class="tile"><span class="dot" style="background: #f4f4f2; color: #090a0a"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 7h6v6"></path><path d="m22 7-8.5 8.5-5-5L2 17"></path></svg></span><span class="cap">Ріст · активна<span class="id">trending-up</span></span></div>
+<div class="tile"><span class="dot"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="4" rx="2"></rect><path d="M16 2v4"></path><path d="M3 10h18"></path><path d="M8 2v4"></path><path d="M17 14h-6"></path><path d="M13 18H7"></path><path d="M7 14h.01"></path><path d="M17 18h.01"></path></svg></span><span class="cap">Огляд<span class="id">calendar-range</span></span></div>
+<div class="tile"><span class="dot"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m16.24 7.76-1.804 5.411a2 2 0 0 1-1.265 1.265L7.76 16.24l1.804-5.411a2 2 0 0 1 1.265-1.265z"></path><circle cx="12" cy="12" r="10"></circle></svg></span><span class="cap">Стратегія<span class="id">compass</span></span></div>
+<div class="tile"><span class="dot"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M13.4 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7.4"></path><path d="M2 6h4"></path><path d="M2 10h4"></path><path d="M2 14h4"></path><path d="M2 18h4"></path><path d="M21.378 5.626a1 1 0 1 0-3.004-3.004l-5.01 5.012a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506z"></path></svg></span><span class="cap">Блокнот<span class="id">notebook-pen</span></span></div>
+<div class="tile"><span class="dot" style="background: #13f287; color: #090a0a"><svg width="22" height="24" viewBox="240 210 600 660" aria-hidden="true"><path d="{{k}}" fill="currentColor"></path></svg></span><span class="cap">Karkas AI<span class="id">знак K · icons-ai.svg</span></span></div>
+</div>
+</section>
+
+<section style="display: flex; flex-direction: column; gap: 22px">
+<h2 style="margin: 0; font-size: 13px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #a1a1a6">Механіка «Ріст»</h2>
+<div style="display: flex; flex-wrap: wrap; gap: 20px">
+<div class="tile"><span class="dot"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 3 4 8 5-5 5 15H2L8 3z"></path></svg></span><span class="cap">Навичка<span class="id">mountain</span></span></div>
+<div class="tile"><span class="dot"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 14 4-4"></path><path d="M3.34 19a10 10 0 1 1 17.32 0"></path></svg></span><span class="cap">Замір<span class="id">gauge</span></span></div>
+<div class="tile"><span class="dot"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg></span><span class="cap">Ціль<span class="id">target</span></span></div>
+<div class="tile"><span class="dot"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><line x1="10" x2="14" y1="2" y2="2"></line><line x1="12" x2="15" y1="14" y2="11"></line><circle cx="12" cy="14" r="8"></circle></svg></span><span class="cap">Практика<span class="id">timer</span></span></div>
+<div class="tile"><span class="dot" style="background: #6408fa"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3q1 4 4 6.5t3 5.5a1 1 0 0 1-14 0 5 5 0 0 1 1-3 1 1 0 0 0 5 0c0-2-1.5-3-1.5-5q0-2 2.5-4"></path></svg></span><span class="cap">На межі<span class="id">flame</span></span></div>
+<div class="tile"><span class="dot"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"></path><path d="M9 18h6"></path><path d="M10 22h4"></path></svg></span><span class="cap">Висновок<span class="id">lightbulb</span></span></div>
+<div class="tile"><span class="dot"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m18.84 12.25 1.72-1.71h-.02a5.004 5.004 0 0 0-.12-7.07 5.006 5.006 0 0 0-6.95 0l-1.72 1.71"></path><path d="m5.17 11.75-1.71 1.71a5.004 5.004 0 0 0 .12 7.07 5.006 5.006 0 0 0 6.95 0l1.71-1.71"></path><line x1="8" x2="8" y1="2" y2="5"></line><line x1="2" x2="5" y1="8" y2="8"></line><line x1="16" x2="16" y1="19" y2="22"></line><line x1="19" x2="22" y1="16" y2="16"></line></svg></span><span class="cap">Найслабша ланка<span class="id">unlink</span></span></div>
+<div class="tile"><span class="dot" style="background: #13f287; color: #090a0a"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 7h6v6"></path><path d="m22 7-8.5 8.5-5-5L2 17"></path></svg></span><span class="cap">На шляху<span class="id">trending-up</span></span></div>
+<div class="tile"><span class="dot" style="background: #ff4d4f; color: #090a0a"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 17h6v-6"></path><path d="m22 17-8.5-8.5-5 5L2 7"></path></svg></span><span class="cap">Відстаєш<span class="id">trending-down</span></span></div>
+<div class="tile"><span class="dot" style="background: #3a3a3c"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 18l7-7h13"></path><path d="M18 7l4 4-4 4"></path></svg></span><span class="cap">Плато<span class="id">власна</span></span></div>
+</div>
+</section>
+
+<section style="display: flex; flex-direction: column; gap: 22px">
+<h2 style="margin: 0; font-size: 13px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #a1a1a6">Дії</h2>
+<div style="display: flex; flex-wrap: wrap; gap: 20px">
+<div class="tile"><span class="dot"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.34-4.34"></path><circle cx="11" cy="11" r="8"></circle></svg></span><span class="cap">Пошук<span class="id">search</span></span></div>
+<div class="tile"><span class="dot" style="background: #f4f4f2; color: #090a0a"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"></path><path d="M12 5v14"></path></svg></span><span class="cap">Додати<span class="id">plus</span></span></div>
+<div class="tile"><span class="dot"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"></path><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"></path></svg></span><span class="cap">Назад<span class="id">undo-2</span></span></div>
+<div class="tile"><span class="dot" style="background: #090a0a; box-shadow: inset 0 0 0 1px #3a3a3c"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></span><span class="cap">Закрити<span class="id">x</span></span></div>
+<div class="tile"><span class="dot"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"></path><circle cx="12" cy="12" r="3"></circle></svg></span><span class="cap">Налаштування<span class="id">settings</span></span></div>
+<div class="tile"><span class="dot"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8.5" cy="8.5" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="15.5" cy="8.5" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="8.5" cy="15.5" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="15.5" cy="15.5" r="1.4" fill="currentColor" stroke="none"></circle></svg></span><span class="cap">Меню<span class="id">власна · 4 точки</span></span></div>
+<div class="tile"><span class="dot"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.268 21a2 2 0 0 0 3.464 0"></path><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"></path></svg></span><span class="cap">Нагадування<span class="id">bell</span></span></div>
+<div class="tile"><span class="dot" style="background: #f4f4f2; color: #090a0a"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z"></path></svg></span><span class="cap">Почати<span class="id">play</span></span></div>
+<div class="tile"><span class="dot"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="14" y="3" width="5" height="18" rx="1"></rect><rect x="5" y="3" width="5" height="18" rx="1"></rect></svg></span><span class="cap">Пауза<span class="id">pause</span></span></div>
+<div class="tile"><span class="dot"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span><span class="cap">Виконано<span class="id">check</span></span></div>
+<div class="tile"><span class="dot"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 2v4"></path><path d="M16 2v4"></path><rect width="18" height="18" x="3" y="4" rx="2"></rect><path d="M3 10h18"></path><path d="M8 14h.01"></path><path d="M12 14h.01"></path><path d="M16 14h.01"></path><path d="M8 18h.01"></path><path d="M12 18h.01"></path><path d="M16 18h.01"></path></svg></span><span class="cap">Дата<span class="id">calendar-days</span></span></div>
+<div class="tile"><span class="dot"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg></span><span class="cap">Попередній<span class="id">chevron-left</span></span></div>
+<div class="tile"><span class="dot"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg></span><span class="cap">Наступний<span class="id">chevron-right</span></span></div>
+</div>
+</section>
+
+<section style="display: flex; flex-direction: column; gap: 22px">
+<h2 style="margin: 0; font-size: 13px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #a1a1a6">У використанні</h2>
+<div style="display: flex; flex-wrap: wrap; gap: 24px; align-items: center">
+<nav aria-label="Приклад нижньої навігації" style="display: flex; align-items: center; gap: 6px; padding: 8px; border-radius: 40px; background: #1f1f1f">
+<a href="#" aria-label="Задачі" style="width: 64px; height: 64px; border-radius: 32px; color: #a1a1a6; display: flex; align-items: center; justify-content: center"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 5h8"></path><path d="M13 12h8"></path><path d="M13 19h8"></path><path d="m3 17 2 2 4-4"></path><path d="m3 7 2 2 4-4"></path></svg></a>
+<a href="#" aria-label="Ріст" aria-current="page" style="width: 64px; height: 64px; border-radius: 32px; background: #f4f4f2; color: #090a0a; display: flex; align-items: center; justify-content: center"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 7h6v6"></path><path d="m22 7-8.5 8.5-5-5L2 17"></path></svg></a>
+<a href="#" aria-label="Огляд" style="width: 64px; height: 64px; border-radius: 32px; color: #a1a1a6; display: flex; align-items: center; justify-content: center"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="4" rx="2"></rect><path d="M16 2v4"></path><path d="M3 10h18"></path><path d="M8 2v4"></path><path d="M17 14h-6"></path><path d="M13 18H7"></path><path d="M7 14h.01"></path><path d="M17 18h.01"></path></svg></a>
+<a href="#" aria-label="Karkas AI" style="width: 64px; height: 64px; border-radius: 32px; color: #a87bff; display: flex; align-items: center; justify-content: center"><svg width="22" height="24" viewBox="240 210 600 660" aria-hidden="true"><path d="{{k}}" fill="currentColor"></path></svg></a>
+<a href="#" aria-label="Налаштування" style="width: 64px; height: 64px; border-radius: 32px; color: #a1a1a6; display: flex; align-items: center; justify-content: center"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"></path><circle cx="12" cy="12" r="3"></circle></svg></a>
+</nav>
+<div style="flex: 1 1 420px; height: 96px; box-sizing: border-box; border-radius: 48px; background: #f4f4f2; color: #090a0a; padding: 0 14px 0 14px; display: flex; align-items: center; gap: 14px">
+<span style="width: 68px; height: 68px; border-radius: 34px; background: #e5e5e3; display: flex; align-items: center; justify-content: center"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"></path><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"></path></svg></span>
+<span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 12px; font-weight: 600; color: #6e6e73">Шукати навичку</span><span style="font-size: 20px; font-weight: 800">Холодні дзвінки</span></span>
+<span style="width: 68px; height: 68px; border-radius: 34px; background: #090a0a; color: #ffffff; display: flex; align-items: center; justify-content: center"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.34-4.34"></path><circle cx="11" cy="11" r="8"></circle></svg></span>
+</div>
+</div>
+</section>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1700}}'>
+class Component extends DCLogic {
+  componentDidMount() {
+    var r = document.documentElement.style;
+    r.colorScheme = 'dark'; r.background = '#090a0a';
+    r.scrollbarWidth = 'thin'; r.scrollbarColor = '#3a3a3c #090a0a';
+  }
+  renderVals() {
+    return {
+      k: 'M271.942 219.415L404.957 219.433C422.53 219.359 443.586 218.322 461.004 219.748C464.585 220.026 470.468 224.229 471.281 227.599C474.687 241.912 473.545 264.483 473.642 279.259L474.648 368.86C474.881 385.654 475.074 402.486 475.906 419.243C476.603 433.371 493.847 432.426 495.434 419.502C496.672 412.669 495.55 405.541 495.763 398.69C496.307 381.359 493.572 360.175 495.469 342.556C495.846 339.054 497.151 335.607 499.67 333.145C502.607 330.275 506.619 328.821 510.714 328.511C530.128 327.042 553.065 329.442 572.653 328.457C595.781 327.291 607.064 334.864 607.296 305.608C607.45 288.551 606.576 269.837 606.675 252.054C606.747 239.199 610.007 222.176 622.856 221.785C634.042 221.452 645.267 221.6 656.453 221.6L718.209 221.637L775.592 221.489C786.507 221.452 798.177 221.137 808.996 221.84C814.337 222.174 818.846 222.47 821.924 226.655C823.859 229.265 825.33 232.321 825.485 235.561C826.239 252.744 825.949 270.779 826.162 287.981C826.452 309.922 826.607 331.846 826.627 353.788C826.646 365.064 826.956 377.192 825.969 388.413C825.096 397.996 812.065 399.708 802.443 399.738C776.916 399.818 733.402 398.781 725.622 402.652C721.19 404.837 719.138 409.448 718.209 413.892C714.281 432.723 722.08 474.255 716.448 490.845C715.268 494.345 713.178 497.437 709.655 499.122C693.224 506.955 623.94 495.66 608.109 504.27C605.225 505.825 603.464 507.917 602.67 510.991C600.541 519.175 600.677 568.577 604.954 574.298C607.605 577.854 611.999 578.909 616.295 579.576C623.398 580.649 630.945 580.131 638.106 580.094C659.472 580.001 684.709 577.928 705.63 581.038C706.484 581.172 707.301 581.488 708.01 581.983C709.2 582.816 710.087 583.504 710.88 584.207C714.001 586.973 715.705 591.007 716.058 595.162C716.67 602.39 716.562 610.44 716.681 617.164C716.874 634.421 717.358 651.826 716.777 669.083C716.119 688.007 735.627 686.637 749.852 686.544C766.747 686.415 783.682 686.304 800.596 686.155C802.526 686.169 804.536 686.217 806.569 686.282C813.468 686.501 821.591 687.518 824.788 693.636C826.801 697.487 827.381 702.302 827.672 706.56C828.62 721.151 827.207 736.335 827.265 751C827.381 780.718 828.581 810.789 827.11 840.47C826.936 843.97 826.781 848.562 825.175 851.71C823.762 854.524 819.775 857.431 816.64 858.209C805.686 860.931 761.774 859.45 747.801 859.468C707.314 859.468 666.014 860.949 625.604 858.968C622.604 858.82 617.476 858.876 615.037 857.135C611.399 854.524 609.192 851.025 608.128 846.821C606.58 840.6 607.218 833.286 607.218 826.879C607.18 809.289 609.038 786.403 606.348 769.608C605.651 765.183 604.509 760.758 600.483 758.054C585.62 748.074 514.226 762.183 500.311 751.222C496.982 748.574 495.86 744.482 495.26 740.538C494.156 733.52 494.795 725.836 494.853 718.744C494.989 701.987 495.976 683.378 493.75 666.861C493.169 662.603 491.873 657.048 487.692 654.641C482.514 651.662 476.554 657.022 475.145 662.827C471.803 676.598 473.487 701.586 473.487 711.504L473.448 810.048C473.448 821.861 474.184 835.545 472.868 847.173C472.287 852.321 467.991 855.098 463.791 857.857C463.032 858.354 462.151 858.633 461.244 858.663C413.027 860.236 363.524 857.83 315.235 858.857C299.017 859.209 282.277 859.227 266.097 858.524C259.885 858.246 253.227 849.747 253.963 843.822C253.711 810.789 253.673 777.719 253.44 744.667L252.937 519.546L252.744 322.014C252.686 294.35 252.453 266.724 252.008 239.061C251.757 224.062 257.272 219.859 271.942 219.415Z'
+    };
+  }
+}
+</script>
+</body>
+</html>

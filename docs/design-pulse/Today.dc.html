@@ -1,0 +1,574 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<title>Задачі — практика замість галочок</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300..900&amp;display=swap">
+<style>
+body{margin:0;background:#090a0a}
+a{color:#13f287}
+button,input{font-family:inherit}
+input::placeholder{color:#6e6e73}
+@keyframes kUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+@keyframes kGrow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@keyframes kNow{0%,100%{box-shadow:0 0 0 0 rgba(19,242,135,.4)}50%{box-shadow:0 0 0 12px rgba(19,242,135,0)}}
+@keyframes kBlink{0%,100%{opacity:1}50%{opacity:.55}}
+@keyframes kShine{from{background-position:-160px 0}to{background-position:280px 0}}
+main > *{animation:kUp .6s cubic-bezier(.2,.8,.2,1) backwards}
+main > *:nth-child(2){animation-delay:.15s}
+main > * > *{animation:kUp .5s cubic-bezier(.2,.8,.2,1) backwards}
+main > * > *:nth-child(2){animation-delay:.07s}main > * > *:nth-child(3){animation-delay:.14s}main > * > *:nth-child(4){animation-delay:.21s}main > * > *:nth-child(5){animation-delay:.28s}main > * > *:nth-child(6){animation-delay:.35s}main > * > *:nth-child(7){animation-delay:.42s}main > * > *:nth-child(8){animation-delay:.49s}main > * > *:nth-child(9){animation-delay:.56s}main > * > *:nth-child(10){animation-delay:.63s}main > * > *:nth-child(11){animation-delay:.7s}main > * > *:nth-child(12){animation-delay:.77s}
+main section[aria-label="Зараз"]{animation:kUp .6s cubic-bezier(.2,.8,.2,1) .07s backwards,kNow 2.8s ease-in-out 1.4s infinite}
+div:has(> svg pattern){transform-origin:left center;animation:kGrow 1.2s cubic-bezier(.2,.8,.2,1) .5s backwards}
+main section[aria-label="Зараз"] span[style*="tabular"]{animation:kBlink 2s ease-in-out infinite}
+[aria-label="Виконати"]{transition:transform .15s ease,background-color .2s ease,box-shadow .2s ease}[aria-label="Виконати"]:hover{transform:scale(1.12)}
+header button,header a{transition:transform .15s ease}header button:hover,header a:hover{transform:scale(1.06)}header button:active{transform:scale(.94)}
+main button,main a{transition:transform .18s ease,background-color .2s ease}main button:hover,main a:hover{transform:translateY(-2px)}main button:active,main a:active{transform:scale(.97)}
+html{scrollbar-width:thin;scrollbar-color:#3a3a3c transparent}
+::-webkit-scrollbar{width:12px;height:12px}::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#3a3a3c;border-radius:6px;border:3px solid #090a0a}::-webkit-scrollbar-thumb:hover{background:#13f287}::-webkit-scrollbar-corner{background:transparent}
+@media (prefers-reduced-motion: reduce){*,*::before,*::after{animation:none !important;transition:none !important}}
+.wc button{transition:background-color .15s ease,color .15s ease}.wc button:hover{background:#3a3a3c;color:#ffffff}.wc button.x:hover{background:#ff4d4f;color:#ffffff}
+@keyframes kChip{0%{opacity:0;transform:scale(.6)}70%{opacity:1;transform:scale(1.06)}100%{opacity:1;transform:scale(1)}}
+.chip{animation:kChip .3s cubic-bezier(.2,.8,.2,1) backwards}.chip:nth-child(3){animation-delay:.04s}.chip:nth-child(4){animation-delay:.08s}
+[data-tip]{position:relative}
+[data-tip]::after{content:attr(data-tip);position:absolute;top:calc(100% + 10px);left:50%;transform:translate(-50%,-4px);white-space:nowrap;height:32px;line-height:32px;padding:0 12px;border-radius:16px;background:#f4f4f2;color:#090a0a;font-size:13px;font-weight:700;letter-spacing:0;opacity:0;pointer-events:none;transition:opacity .15s ease .35s,transform .15s ease .35s;z-index:60;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+[data-tip]:hover::after,[data-tip]:focus-visible::after{opacity:1;transform:translate(-50%,0)}
+[data-tip-up]::after{top:auto;bottom:calc(100% + 12px);transform:translate(-50%,4px)}
+.pg > * > *{animation:kUp .55s cubic-bezier(.2,.8,.2,1) backwards}.pg > * > *:nth-child(2){animation-delay:.08s}.pg > * > *:nth-child(3){animation-delay:.16s}.pg > * > *:nth-child(4){animation-delay:.24s}.pg > * > *:nth-child(5){animation-delay:.32s}.pg > aside{animation-delay:.12s}
+@media (max-width: 1040px){.pg{grid-template-columns:minmax(0,1fr) !important}}
+.swap{animation:kChip .3s cubic-bezier(.2,.8,.2,1) both}
+</style>
+</helmet>
+<div style="min-height: 1000px; background: #090a0a; color: #ffffff; font-family: 'SF Pro Display', Inter, ui-sans-serif, system-ui, sans-serif; display: flex; flex-direction: column">
+
+<header style="height: 76px; flex-shrink: 0; box-sizing: border-box; padding: 0 16px 0 24px; display: flex; align-items: center; gap: 16px">
+<svg width="44" height="44" viewBox="0 0 1080 1080" role="img" aria-label="Karkas" style="flex-shrink: 0"><rect width="1080" height="1080" rx="540" fill="#f4f4f2"></rect><path d="M271.942 219.415L404.957 219.433C422.53 219.359 443.586 218.322 461.004 219.748C464.585 220.026 470.468 224.229 471.281 227.599C474.687 241.912 473.545 264.483 473.642 279.259L474.648 368.86C474.881 385.654 475.074 402.486 475.906 419.243C476.603 433.371 493.847 432.426 495.434 419.502C496.672 412.669 495.55 405.541 495.763 398.69C496.307 381.359 493.572 360.175 495.469 342.556C495.846 339.054 497.151 335.607 499.67 333.145C502.607 330.275 506.619 328.821 510.714 328.511C530.128 327.042 553.065 329.442 572.653 328.457C595.781 327.291 607.064 334.864 607.296 305.608C607.45 288.551 606.576 269.837 606.675 252.054C606.747 239.199 610.007 222.176 622.856 221.785C634.042 221.452 645.267 221.6 656.453 221.6L718.209 221.637L775.592 221.489C786.507 221.452 798.177 221.137 808.996 221.84C814.337 222.174 818.846 222.47 821.924 226.655C823.859 229.265 825.33 232.321 825.485 235.561C826.239 252.744 825.949 270.779 826.162 287.981C826.452 309.922 826.607 331.846 826.627 353.788C826.646 365.064 826.956 377.192 825.969 388.413C825.096 397.996 812.065 399.708 802.443 399.738C776.916 399.818 733.402 398.781 725.622 402.652C721.19 404.837 719.138 409.448 718.209 413.892C714.281 432.723 722.08 474.255 716.448 490.845C715.268 494.345 713.178 497.437 709.655 499.122C693.224 506.955 623.94 495.66 608.109 504.27C605.225 505.825 603.464 507.917 602.67 510.991C600.541 519.175 600.677 568.577 604.954 574.298C607.605 577.854 611.999 578.909 616.295 579.576C623.398 580.649 630.945 580.131 638.106 580.094C659.472 580.001 684.709 577.928 705.63 581.038C706.484 581.172 707.301 581.488 708.01 581.983C709.2 582.816 710.087 583.504 710.88 584.207C714.001 586.973 715.705 591.007 716.058 595.162C716.67 602.39 716.562 610.44 716.681 617.164C716.874 634.421 717.358 651.826 716.777 669.083C716.119 688.007 735.627 686.637 749.852 686.544C766.747 686.415 783.682 686.304 800.596 686.155C802.526 686.169 804.536 686.217 806.569 686.282C813.468 686.501 821.591 687.518 824.788 693.636C826.801 697.487 827.381 702.302 827.672 706.56C828.62 721.151 827.207 736.335 827.265 751C827.381 780.718 828.581 810.789 827.11 840.47C826.936 843.97 826.781 848.562 825.175 851.71C823.762 854.524 819.775 857.431 816.64 858.209C805.686 860.931 761.774 859.45 747.801 859.468C707.314 859.468 666.014 860.949 625.604 858.968C622.604 858.82 617.476 858.876 615.037 857.135C611.399 854.524 609.192 851.025 608.128 846.821C606.58 840.6 607.218 833.286 607.218 826.879C607.18 809.289 609.038 786.403 606.348 769.608C605.651 765.183 604.509 760.758 600.483 758.054C585.62 748.074 514.226 762.183 500.311 751.222C496.982 748.574 495.86 744.482 495.26 740.538C494.156 733.52 494.795 725.836 494.853 718.744C494.989 701.987 495.976 683.378 493.75 666.861C493.169 662.603 491.873 657.048 487.692 654.641C482.514 651.662 476.554 657.022 475.145 662.827C471.803 676.598 473.487 701.586 473.487 711.504L473.448 810.048C473.448 821.861 474.184 835.545 472.868 847.173C472.287 852.321 467.991 855.098 463.791 857.857C463.032 858.354 462.151 858.633 461.244 858.663C413.027 860.236 363.524 857.83 315.235 858.857C299.017 859.209 282.277 859.227 266.097 858.524C259.885 858.246 253.227 849.747 253.963 843.822C253.711 810.789 253.673 777.719 253.44 744.667L252.937 519.546L252.744 322.014C252.686 294.35 252.453 266.724 252.008 239.061C251.757 224.062 257.272 219.859 271.942 219.415Z" fill="#090a0a"></path></svg>
+<nav aria-label="Розділи" style="flex: 1; display: flex; justify-content: center; gap: 4px">
+<a href="Today.dc.html" aria-current="page" style="text-decoration: none; height: 44px; box-sizing: border-box; padding: 0 20px; border-radius: 22px; font-size: 15px; font-weight: 800; color: #090a0a; background: #f4f4f2; display: flex; align-items: center">Сьогодні</a>
+<a href="Main.dc.html" style="text-decoration: none; height: 44px; box-sizing: border-box; padding: 0 20px; border-radius: 22px; font-size: 15px; font-weight: 600; color: #a1a1a6; display: flex; align-items: center">Ріст</a>
+<a href="Notes.dc.html" style="text-decoration: none; height: 44px; box-sizing: border-box; padding: 0 20px; border-radius: 22px; font-size: 15px; font-weight: 600; color: #a1a1a6; display: flex; align-items: center">Блокнот</a>
+</nav>
+<div style="display: flex; align-items: center; gap: 8px">
+<button type="button" aria-label="Пошук" data-tip="Пошук · Ctrl F" style="width: 44px; height: 44px; border: none; border-radius: 22px; background: #1f1f1f; color: #ffffff; display: flex; align-items: center; justify-content: center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg></button>
+<a href="AI.dc.html" aria-label="Karkas AI" data-ai="1" data-tip="Відкрити Karkas AI · Ctrl K" data-tip-up="1" style="position: fixed; left: 0; right: 0; bottom: 24px; z-index: 50; margin: 0 auto; width: max-content; height: 60px; box-sizing: border-box; padding: 0 24px 0 8px; border-radius: 30px; background: #090a0a; color: #ffffff; text-decoration: none; display: flex; align-items: center; gap: 12px; box-shadow: 0 0 0 1px #2c2c2e, 0 18px 44px rgba(0,0,0,0.55)"><span style="width: 44px; height: 44px; border-radius: 22px; background: #13f287; color: #090a0a; display: flex; align-items: center; justify-content: center"><svg width="17" height="18" viewBox="240 210 600 660" aria-hidden="true"><path d="M271.942 219.415L404.957 219.433C422.53 219.359 443.586 218.322 461.004 219.748C464.585 220.026 470.468 224.229 471.281 227.599C474.687 241.912 473.545 264.483 473.642 279.259L474.648 368.86C474.881 385.654 475.074 402.486 475.906 419.243C476.603 433.371 493.847 432.426 495.434 419.502C496.672 412.669 495.55 405.541 495.763 398.69C496.307 381.359 493.572 360.175 495.469 342.556C495.846 339.054 497.151 335.607 499.67 333.145C502.607 330.275 506.619 328.821 510.714 328.511C530.128 327.042 553.065 329.442 572.653 328.457C595.781 327.291 607.064 334.864 607.296 305.608C607.45 288.551 606.576 269.837 606.675 252.054C606.747 239.199 610.007 222.176 622.856 221.785C634.042 221.452 645.267 221.6 656.453 221.6L718.209 221.637L775.592 221.489C786.507 221.452 798.177 221.137 808.996 221.84C814.337 222.174 818.846 222.47 821.924 226.655C823.859 229.265 825.33 232.321 825.485 235.561C826.239 252.744 825.949 270.779 826.162 287.981C826.452 309.922 826.607 331.846 826.627 353.788C826.646 365.064 826.956 377.192 825.969 388.413C825.096 397.996 812.065 399.708 802.443 399.738C776.916 399.818 733.402 398.781 725.622 402.652C721.19 404.837 719.138 409.448 718.209 413.892C714.281 432.723 722.08 474.255 716.448 490.845C715.268 494.345 713.178 497.437 709.655 499.122C693.224 506.955 623.94 495.66 608.109 504.27C605.225 505.825 603.464 507.917 602.67 510.991C600.541 519.175 600.677 568.577 604.954 574.298C607.605 577.854 611.999 578.909 616.295 579.576C623.398 580.649 630.945 580.131 638.106 580.094C659.472 580.001 684.709 577.928 705.63 581.038C706.484 581.172 707.301 581.488 708.01 581.983C709.2 582.816 710.087 583.504 710.88 584.207C714.001 586.973 715.705 591.007 716.058 595.162C716.67 602.39 716.562 610.44 716.681 617.164C716.874 634.421 717.358 651.826 716.777 669.083C716.119 688.007 735.627 686.637 749.852 686.544C766.747 686.415 783.682 686.304 800.596 686.155C802.526 686.169 804.536 686.217 806.569 686.282C813.468 686.501 821.591 687.518 824.788 693.636C826.801 697.487 827.381 702.302 827.672 706.56C828.62 721.151 827.207 736.335 827.265 751C827.381 780.718 828.581 810.789 827.11 840.47C826.936 843.97 826.781 848.562 825.175 851.71C823.762 854.524 819.775 857.431 816.64 858.209C805.686 860.931 761.774 859.45 747.801 859.468C707.314 859.468 666.014 860.949 625.604 858.968C622.604 858.82 617.476 858.876 615.037 857.135C611.399 854.524 609.192 851.025 608.128 846.821C606.58 840.6 607.218 833.286 607.218 826.879C607.18 809.289 609.038 786.403 606.348 769.608C605.651 765.183 604.509 760.758 600.483 758.054C585.62 748.074 514.226 762.183 500.311 751.222C496.982 748.574 495.86 744.482 495.26 740.538C494.156 733.52 494.795 725.836 494.853 718.744C494.989 701.987 495.976 683.378 493.75 666.861C493.169 662.603 491.873 657.048 487.692 654.641C482.514 651.662 476.554 657.022 475.145 662.827C471.803 676.598 473.487 701.586 473.487 711.504L473.448 810.048C473.448 821.861 474.184 835.545 472.868 847.173C472.287 852.321 467.991 855.098 463.791 857.857C463.032 858.354 462.151 858.633 461.244 858.663C413.027 860.236 363.524 857.83 315.235 858.857C299.017 859.209 282.277 859.227 266.097 858.524C259.885 858.246 253.227 849.747 253.963 843.822C253.711 810.789 253.673 777.719 253.44 744.667L252.937 519.546L252.744 322.014C252.686 294.35 252.453 266.724 252.008 239.061C251.757 224.062 257.272 219.859 271.942 219.415Z" fill="currentColor"></path></svg></span><span style="font-size: 15px; font-weight: 800">Karkas AI</span></a>
+<a href="Settings.dc.html" aria-label="Налаштування" data-tip="Налаштування" style="width: 44px; height: 44px; border-radius: 22px; background: #1f1f1f; color: #ffffff; display: flex; align-items: center; justify-content: center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"></path><circle cx="12" cy="12" r="3"></circle></svg></a>
+<button type="button" onClick="{{focusAdd}}" data-tip="Нова задача · Ctrl N" style="height: 44px; border: none; border-radius: 22px; background: #f4f4f2; color: #090a0a; padding: 0 20px; font-size: 15px; font-weight: 800; display: flex; align-items: center; gap: 6px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>Додати</button>
+<a href="Settings.dc.html" aria-label="Акаунт Melychyn Ivan · синхронізовано" data-tip="Melychyn Ivan · синхронізовано" style="position: relative; text-decoration: none; width: 44px; height: 44px; border-radius: 22px; background: #1f1f1f; color: #13f287; font-size: 14px; font-weight: 800; letter-spacing: -0.02em; display: flex; align-items: center; justify-content: center">MI<span style="position: absolute; right: 1px; bottom: 1px; width: 10px; height: 10px; border-radius: 5px; background: #13f287; box-shadow: 0 0 0 3px #090a0a"></span></a>
+<div class="wc" role="group" aria-label="Вікно" style="margin-left: 8px; display: flex; gap: 2px; padding: 4px; border-radius: 26px; background: #1f1f1f">
+<button type="button" aria-label="Згорнути" style="width: 36px; height: 36px; border: none; border-radius: 18px; background: transparent; color: #d1d1d6; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 12h12"></path></svg></button>
+<button type="button" aria-label="Розгорнути" style="width: 36px; height: 36px; border: none; border-radius: 18px; background: transparent; color: #d1d1d6; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="4"></rect></svg></button>
+<button type="button" class="x" aria-label="Закрити" style="width: 36px; height: 36px; border: none; border-radius: 18px; background: transparent; color: #d1d1d6; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"></path></svg></button>
+</div>
+</div>
+</header>
+
+<main style="width: 100%; max-width: 1280px; margin: 0 auto; box-sizing: border-box; padding: 24px 32px 120px; display: flex; flex-direction: column">
+<div class="pg-head" style="display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 28px">
+<div style="display: flex; flex-direction: column; gap: 14px">
+<h1 style="margin: 0; text-transform: uppercase; letter-spacing: -0.035em; line-height: 0.92; font-size: 80px"><span style="display: block; font-weight: 300">Вівторок</span><span style="display: block; font-weight: 800">20 жовтня</span></h1>
+<div role="group" aria-label="Вкладки" style="align-self: flex-start; display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; border-radius: 26px; background: #1f1f1f">
+<button type="button" aria-pressed="true" style="height: 40px; border: none; border-radius: 20px; padding: 0 18px; font-size: 14px; font-weight: 800; background: #f4f4f2; color: #090a0a">Усі 6</button>
+<button type="button" aria-pressed="false" style="height: 40px; border: none; border-radius: 20px; padding: 0 18px; font-size: 14px; font-weight: 700; background: transparent; color: #d1d1d6">Робота 3</button>
+<button type="button" aria-pressed="false" style="height: 40px; border: none; border-radius: 20px; padding: 0 18px; font-size: 14px; font-weight: 700; background: transparent; color: #d1d1d6">Навчання 2</button>
+<button type="button" aria-pressed="false" style="height: 40px; border: none; border-radius: 20px; padding: 0 18px; font-size: 14px; font-weight: 700; background: transparent; color: #d1d1d6">Дім 1</button>
+<button type="button" aria-label="Нова вкладка" style="width: 40px; height: 40px; border: none; border-radius: 20px; background: transparent; color: #a1a1a6; font-size: 18px">+</button>
+</div>
+</div>
+</div>
+<div class="pg" style="display: grid; grid-template-columns: 400px minmax(0, 1fr); gap: 24px; align-items: start">
+<aside class="pg-side" style="min-width: 0; display: flex; flex-direction: column; gap: 12px">
+<sc-if value="{{isFirst}}" hint-placeholder-val="{{false}}">
+<section class="swap" aria-label="Перша навичка" style="box-sizing: border-box; padding: 30px 28px 28px; border-radius: 44px; background: #6408fa; color: #ffffff; display: flex; flex-direction: column; gap: 18px">
+<span style="text-transform: uppercase; letter-spacing: -0.035em; line-height: 0.95; font-size: 34px"><span style="display: block; font-weight: 300">Яку навичку</span><span style="display: block; font-weight: 800">прокачуємо?</span></span>
+<div style="display: flex; flex-wrap: wrap; gap: 8px">
+<a href="Setup.dc.html" style="text-decoration: none; height: 48px; box-sizing: border-box; padding: 0 20px; border-radius: 24px; background: #f4f4f2; color: #090a0a; font-size: 15px; font-weight: 800; display: flex; align-items: center">Холодні дзвінки</a>
+<a href="Setup.dc.html" style="text-decoration: none; height: 48px; box-sizing: border-box; padding: 0 20px; border-radius: 24px; background: #f4f4f2; color: #090a0a; font-size: 15px; font-weight: 800; display: flex; align-items: center">Англійська</a>
+<a href="Setup.dc.html" style="text-decoration: none; height: 48px; box-sizing: border-box; padding: 0 20px; border-radius: 24px; background: #f4f4f2; color: #090a0a; font-size: 15px; font-weight: 800; display: flex; align-items: center">React</a>
+<a href="Setup.dc.html" style="text-decoration: none; height: 48px; box-sizing: border-box; padding: 0 20px; border-radius: 24px; background: rgba(9,10,10,0.25); color: #ffffff; font-size: 15px; font-weight: 800; display: flex; align-items: center">+ Своя</a>
+</div>
+</section>
+</sc-if>
+<sc-if value="{{notFirst}}" hint-placeholder-val="{{true}}">
+<section style="box-sizing: border-box; padding: 30px 28px 28px; border-radius: 44px; background: #6408fa; display: flex; flex-direction: column; gap: 16px">
+<span style="text-transform: uppercase; letter-spacing: -0.03em; line-height: 0.95; font-size: 34px"><span style="display: block; font-weight: 300">Англійська</span><span style="display: block; font-weight: 800">на плато</span></span>
+<span style="font-size: 15px; line-height: 1.45; font-weight: 500">5 хв переказу на незнайому тему</span>
+<div style="display: flex; gap: 8px">
+<button type="button" style="height: 48px; border: none; border-radius: 24px; padding: 0 20px; background: #f4f4f2; color: #090a0a; font-size: 14px; font-weight: 800">Додати на сьогодні</button>
+<button type="button" style="height: 48px; border: none; border-radius: 24px; padding: 0 18px; background: rgba(9,10,10,0.25); color: #ffffff; font-size: 14px; font-weight: 700">Інша</button>
+</div>
+</section>
+
+<section aria-label="План дня" style="box-sizing: border-box; padding: 24px 22px 22px; border-radius: 44px; background: #1f1f1f; display: flex; flex-direction: column; gap: 8px">
+<span style="font-size: 20px; font-weight: 800; letter-spacing: -0.02em; padding: 0 6px 6px">План дня</span>
+<sc-for list="{{slots}}" as="s" hint-placeholder-count="5">
+<div style="display: flex; align-items: center; gap: 12px">
+<span style="flex-shrink: 0; width: 46px; font-size: 13px; font-weight: 700; color: {{s.timeInk}}; font-variant-numeric: tabular-nums">{{s.time}}</span>
+<span style="flex: 1; min-width: 0; height: {{s.h}}; box-sizing: border-box; padding: 0 16px; border-radius: 22px; background: {{s.bg}}; color: {{s.ink}}; box-shadow: {{s.ring}}; display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 14px; font-weight: 700"><span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{s.title}}</span><span style="flex-shrink: 0; font-size: 12px; font-weight: 600; opacity: 0.8">{{s.dur}}</span></span>
+</div>
+</sc-for>
+<sc-if value="{{canClose}}" hint-placeholder-val="{{true}}">
+<button type="button" onClick="{{toEvening}}" style="display: flex; align-items: center; gap: 12px; border: none; background: transparent; padding: 0; color: inherit; font-family: inherit; text-align: left; cursor: pointer">
+<span style="flex-shrink: 0; width: 46px; font-size: 13px; font-weight: 700; color: #a1a1a6; font-variant-numeric: tabular-nums">21:00</span>
+<span style="flex: 1; min-width: 0; height: 44px; box-sizing: border-box; padding: 0 16px; border-radius: 22px; box-shadow: inset 0 0 0 1px #13f287; color: #13f287; display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 14px; font-weight: 800">Закрити день<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg></span>
+</button>
+</sc-if>
+</section>
+</sc-if>
+
+
+</aside>
+<div class="pg-main" style="min-width: 0; display: flex; flex-direction: column; gap: 12px">
+
+<sc-if value="{{isMorning}}" hint-placeholder-val="{{false}}">
+<section class="swap" aria-label="Ранок" style="min-height: 196px; box-sizing: border-box; padding: 28px 28px 28px 36px; border-radius: 48px; background: #f4f4f2; color: #090a0a; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 20px">
+<div style="flex: 1 1 360px; min-width: 0; display: flex; flex-direction: column; gap: 10px">
+<span style="font-size: 14px; font-weight: 700; color: #6e6e73">Вчора ви вирішили</span>
+<span style="font-size: 32px; line-height: 1.05; font-weight: 800; letter-spacing: -0.03em">Додати приклад окупності в одне речення</span>
+<span style="align-self: flex-start; height: 30px; box-sizing: border-box; padding: 0 12px; border-radius: 15px; background: #090a0a; color: #13f287; font-size: 13px; font-weight: 800; display: flex; align-items: center">Холодні дзвінки</span>
+</div>
+<button type="button" onClick="{{startDay}}" style="height: 60px; border: none; border-radius: 30px; padding: 0 30px; background: #090a0a; color: #ffffff; font-family: inherit; font-size: 16px; font-weight: 800; cursor: pointer">Почати день</button>
+</section>
+</sc-if>
+<sc-if value="{{isDay}}" hint-placeholder-val="{{true}}">
+<section aria-label="Зараз" style="position: relative; min-height: 196px; border-radius: 48px; background: #13f287; color: #090a0a; overflow: hidden; display: flex">
+<div aria-hidden="true" style="position: absolute; left: 0; top: 0; bottom: 0; width: 62%; opacity: 0.2"><svg width="100%" height="100%" style="display: block"><defs><pattern id="hn" width="9" height="40" patternUnits="userSpaceOnUse" patternTransform="rotate(10)"><line x1="1.5" y1="-10" x2="1.5" y2="50" stroke="#090a0a" stroke-width="2"></line></pattern></defs><rect width="100%" height="100%" fill="url(#hn)"></rect></svg></div>
+<div style="position: relative; flex: 1; box-sizing: border-box; padding: 28px 28px 28px 36px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 20px">
+<div style="display: flex; flex-direction: column; gap: 10px; min-width: 0">
+<span style="font-size: 14px; font-weight: 700">Зараз</span>
+<span style="font-size: 32px; line-height: 1.05; font-weight: 800; letter-spacing: -0.03em">10 дзвінків з нової бази</span>
+<span style="align-self: flex-start; height: 30px; box-sizing: border-box; padding: 0 12px; border-radius: 15px; background: #090a0a; color: #13f287; font-size: 13px; font-weight: 800; display: flex; align-items: center">Холодні дзвінки</span>
+</div>
+<div style="display: flex; flex-direction: column; align-items: flex-end; gap: 14px">
+<span style="font-size: 72px; font-weight: 800; letter-spacing: -0.05em; line-height: 0.9; font-variant-numeric: tabular-nums">18:42</span>
+<div style="display: flex; gap: 8px">
+<button type="button" aria-label="Пауза" style="width: 52px; height: 52px; border: none; border-radius: 26px; background: rgba(9,10,10,0.12); color: #090a0a; display: flex; align-items: center; justify-content: center"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1.5"></rect><rect x="14" y="5" width="4" height="14" rx="1.5"></rect></svg></button>
+<a href="Practice.dc.html" style="text-decoration: none; height: 52px; box-sizing: border-box; padding: 0 24px; border-radius: 26px; background: #090a0a; color: #ffffff; font-size: 15px; font-weight: 800; display: flex; align-items: center">Завершити</a>
+</div>
+</div>
+</div>
+</section>
+</sc-if>
+<sc-if value="{{isEvening}}" hint-placeholder-val="{{false}}">
+<section class="swap" aria-label="Закриття дня" style="box-sizing: border-box; padding: 28px; border-radius: 48px; background: #1f1f1f; display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 0 8px 4px">
+<span style="font-size: 32px; font-weight: 800; letter-spacing: -0.03em">Закрити день</span>
+<span style="font-size: 15px; font-weight: 700; color: #a1a1a6">{{doneLine}}</span>
+</div>
+<sc-for list="{{leftovers}}" as="l" hint-placeholder-count="2">
+<div style="display: flex; align-items: center; gap: 12px; min-height: 60px; box-sizing: border-box; padding: 8px 8px 8px 24px; border-radius: 30px; background: #090a0a">
+<span style="flex: 1; min-width: 0; font-size: 16px; font-weight: 700">{{l.title}}</span>
+<div role="radiogroup" aria-label="{{l.title}}" style="display: flex; gap: 4px; padding: 4px; border-radius: 24px; background: #1f1f1f">
+<button type="button" role="radio" aria-checked="{{l.tSel}}" onClick="{{l.tomorrow}}" style="height: 40px; border: none; border-radius: 20px; padding: 0 16px; background: {{l.tBg}}; color: {{l.tInk}}; font-family: inherit; font-size: 14px; font-weight: 800; cursor: pointer">Завтра</button>
+<button type="button" role="radio" aria-checked="{{l.dSel}}" onClick="{{l.drop}}" style="height: 40px; border: none; border-radius: 20px; padding: 0 16px; background: {{l.dBg}}; color: {{l.dInk}}; font-family: inherit; font-size: 14px; font-weight: 800; cursor: pointer">Прибрати</button>
+</div>
+</div>
+</sc-for>
+<label style="height: 64px; box-sizing: border-box; margin-top: 4px; padding: 0 24px; border-radius: 32px; background: #f4f4f2; display: flex; align-items: center">
+<input type="text" aria-label="Що забираю з сьогодні" placeholder="Що забираю з сьогодні?" style="flex: 1; min-width: 0; border: none; outline: none; background: transparent; color: #090a0a; font-family: inherit; font-size: 16px; font-weight: 700; padding: 0">
+</label>
+<div style="display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px">
+<button type="button" onClick="{{backToDay}}" style="height: 56px; border: none; border-radius: 28px; padding: 0 22px; background: transparent; color: #a1a1a6; font-family: inherit; font-size: 15px; font-weight: 700; cursor: pointer">Пізніше</button>
+<button type="button" onClick="{{closeDay}}" style="height: 56px; border: none; border-radius: 28px; padding: 0 28px; background: #f4f4f2; color: #090a0a; font-family: inherit; font-size: 16px; font-weight: 800; cursor: pointer">Закрити день</button>
+</div>
+</section>
+</sc-if>
+<sc-if value="{{isClosed}}" hint-placeholder-val="{{false}}">
+<section class="swap" aria-label="День закрито" style="min-height: 196px; box-sizing: border-box; padding: 28px 28px 28px 36px; border-radius: 48px; background: #090a0a; box-shadow: inset 0 0 0 2px #1f1f1f; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 20px">
+<div style="display: flex; flex-direction: column; gap: 10px; min-width: 0">
+<span style="display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 800; color: #13f287"><span style="width: 24px; height: 24px; border-radius: 12px; background: #13f287; color: #090a0a; display: flex; align-items: center; justify-content: center"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span>День закрито</span>
+<span style="font-size: 32px; line-height: 1.05; font-weight: 800; letter-spacing: -0.03em">{{tomorrowLine}}</span>
+</div>
+<button type="button" onClick="{{toMorning}}" style="height: 52px; border: none; border-radius: 26px; padding: 0 24px; background: #1f1f1f; color: #ffffff; font-family: inherit; font-size: 15px; font-weight: 800; cursor: pointer">Ранок</button>
+</section>
+</sc-if>
+<sc-if value="{{isFirst}}" hint-placeholder-val="{{false}}">
+<section class="swap" aria-label="Початок" style="min-height: 196px; box-sizing: border-box; padding: 28px 36px; border-radius: 48px; background: #13f287; color: #090a0a; display: flex; flex-direction: column; justify-content: center; gap: 10px">
+<span style="font-size: 14px; font-weight: 700">Почнімо</span>
+<span style="font-size: 40px; line-height: 1.02; font-weight: 800; letter-spacing: -0.035em">Що зробите сьогодні?</span>
+</section>
+</sc-if>
+
+<label style="height: 76px; box-sizing: border-box; border-radius: 38px; background: #f4f4f2; color: #090a0a; padding: 0 10px 0 28px; display: flex; align-items: center; gap: 12px">
+<input type="text" data-qa="1" autofocus aria-label="Нова задача" placeholder="Нова задача · завтра о 10 #робота" style="flex: 1; min-width: 0; border: none; outline: none; background: transparent; color: #090a0a; font-size: 20px; font-weight: 800; padding: 0">
+<button type="button" onClick="{{add}}" aria-label="Додати задачу" style="width: 56px; height: 56px; border-radius: 28px; background: #090a0a; color: #ffffff; display: flex; align-items: center; justify-content: center; border: none; padding: 0; flex-shrink: 0; cursor: pointer"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button>
+</label>
+<sc-if value="{{hasQ}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px">
+<sc-for list="{{chips}}" as="c" hint-placeholder-count="3">
+<button type="button" aria-expanded="{{c.open}}" onClick="{{c.pick}}" style="height: 40px; border: none; border-radius: 20px; padding: 0 12px 0 14px; background: {{c.bg}}; color: {{c.ink}}; box-shadow: {{c.ring}}; font-size: 14px; font-weight: 800; display: flex; align-items: center; gap: 8px; cursor: pointer; transition: background-color .2s ease, box-shadow .2s ease"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{c.icon}}"></path></svg>{{c.label}}<span style="font-weight: 600; opacity: 0.6">{{c.note}}</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="opacity: 0.6; transform: {{c.rot}}; transition: transform .2s ease"><path d="m6 9 6 6 6-6"></path></svg></button>
+</sc-for>
+</div>
+<sc-if value="{{hasPicker}}" hint-placeholder-val="{{false}}">
+<div class="swap" key="{{pickerLabel}}" role="listbox" aria-label="{{pickerLabel}}" data-drag="1" style="cursor: grab; user-select: none; -webkit-user-select: none; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 2px 12px 4px; -webkit-mask-image: linear-gradient(to right, transparent 0, #000 var(--fl, 0px), #000 calc(100% - var(--fr, 48px)), transparent 100%); mask-image: linear-gradient(to right, transparent 0, #000 var(--fl, 0px), #000 calc(100% - var(--fr, 48px)), transparent 100%)">
+<sc-for list="{{picker}}" as="o" hint-placeholder-count="7">
+<button type="button" role="option" aria-selected="{{o.sel}}" onClick="{{o.pick}}" style="flex-shrink: 0; min-width: {{o.w}}; height: {{o.h}}; border: none; border-radius: {{o.r}}; padding: 0 14px; background: {{o.bg}}; color: {{o.ink}}; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; cursor: inherit">
+<sc-if value="{{o.top}}" hint-placeholder-val="{{false}}"><span style="font-size: 11px; font-weight: 700; opacity: 0.7">{{o.top}}</span></sc-if>
+<span style="font-size: {{o.fs}}; font-weight: 800; letter-spacing: -0.02em; line-height: 1">{{o.main}}</span>
+<sc-if value="{{o.bottom}}" hint-placeholder-val="{{false}}"><span style="font-size: 11px; font-weight: 700; opacity: 0.7">{{o.bottom}}</span></sc-if>
+</button>
+</sc-for>
+</div>
+</sc-if>
+</div>
+</sc-if>
+<sc-if value="{{flash}}" hint-placeholder-val="{{false}}">
+<div class="chip" role="status" style="align-self: flex-start; margin-left: 12px; height: 36px; box-sizing: border-box; padding: 0 16px 0 8px; border-radius: 18px; background: #13f287; color: #090a0a; font-size: 14px; font-weight: 800; display: flex; align-items: center; gap: 8px"><span style="width: 24px; height: 24px; border-radius: 12px; background: #090a0a; color: #13f287; display: flex; align-items: center; justify-content: center"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span>{{flash}}</div>
+</sc-if>
+
+<sc-if value="{{notFirst}}" hint-placeholder-val="{{true}}">
+<h2 style="margin: 16px 0 4px 8px; font-size: 22px; font-weight: 800; letter-spacing: -0.02em">Практика</h2>
+<sc-for list="{{practice}}" as="t" hint-placeholder-count="2">
+<div style="display: flex; align-items: center; gap: 16px; box-sizing: border-box; padding: 18px 14px 18px 28px; border-radius: 40px; background: #1f1f1f">
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px">
+<span style="font-size: 18px; font-weight: 700; letter-spacing: -0.02em">{{t.title}}</span>
+<span style="align-self: flex-start; height: 28px; box-sizing: border-box; padding: 0 12px; border-radius: 14px; background: #6408fa; color: #ffffff; font-size: 12px; font-weight: 800; display: flex; align-items: center">{{t.skill}}</span>
+</div>
+<span style="font-size: 18px; font-weight: 300; color: #d1d1d6">{{t.time}}</span>
+<button type="button" aria-label="Почати" style="width: 56px; height: 56px; border: none; border-radius: 28px; background: #f4f4f2; color: #090a0a; display: flex; align-items: center; justify-content: center"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13a1 1 0 0 0 1.5.9l10.4-6.5a1 1 0 0 0 0-1.8L9.5 4.6A1 1 0 0 0 8 5.5z"></path></svg></button>
+</div>
+</sc-for>
+</sc-if>
+
+<sc-if value="{{hasChores}}" hint-placeholder-val="{{true}}">
+<h2 style="margin: 16px 0 4px 8px; font-size: 22px; font-weight: 800; letter-spacing: -0.02em">Справи</h2>
+<sc-for list="{{chores}}" as="t" hint-placeholder-count="4">
+<div style="display: flex; align-items: center; gap: 14px; height: 60px; box-sizing: border-box; padding: 0 24px 0 16px; border-radius: 30px; box-shadow: inset 0 0 0 1px #1f1f1f">
+<button type="button" aria-label="Виконати" style="flex-shrink: 0; width: 32px; height: 32px; border-radius: 16px; border: none; padding: 0; background: {{t.box}}; box-shadow: inset 0 0 0 2px {{t.ring}}; color: #090a0a; display: flex; align-items: center; justify-content: center"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="opacity: {{t.tick}}"><path d="M5 12l5 5 9-10"></path></svg></button>
+<span style="flex: 1; min-width: 0; font-size: 15px; font-weight: 600; color: {{t.ink}}; text-decoration: {{t.strike}}; text-decoration-color: #8442ff; text-decoration-thickness: 2px">{{t.title}}</span>
+<span style="font-size: 13px; font-weight: 600; color: #8e8e93">{{t.meta}}</span>
+</div>
+</sc-for>
+</sc-if>
+
+</div>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { q: '', added: [], flash: '', phase: 'day', first: false, keep: {} };
+  }
+  componentDidMount() {
+    var self = this;
+    var r = document.documentElement.style;
+    r.colorScheme = 'dark'; r.background = '#090a0a';
+    r.scrollbarWidth = 'thin'; r.scrollbarColor = '#3a3a3c #090a0a';
+    var first = false;
+    try { var ft = +window.localStorage.getItem('karkas.firstRun'); first = !!ft && Date.now() - ft < 15 * 60 * 1000; } catch (err) {}
+    if (first) this.setState({ first: true });
+    var qa = function (e) {
+      var el = e.composedPath ? e.composedPath()[0] : e.target;
+      return el && el.getAttribute && el.getAttribute('data-qa') ? el : null;
+    };
+    this.onInput = function (e) { var el = qa(e); if (el) { self.inp = el; self.setState({ q: el.value }); } };
+    this.onKey = function (e) {
+      var el = qa(e);
+      if (e.key === 'Escape' && self.state.open) { e.preventDefault(); self.setState({ open: null }); return; }
+      if (el && e.key === 'Enter') { e.preventDefault(); self.inp = el; self.addTask(); }
+      else if (el && e.key === 'Escape') { el.value = ''; self.setState({ q: '' }); el.blur(); }
+      else if ((e.ctrlKey || e.metaKey) && (e.code === 'KeyN' || /^[nNтТ]$/.test(e.key))) { e.preventDefault(); self.focusInput(); }
+    };
+    document.addEventListener('input', this.onInput, true);
+    document.addEventListener('keydown', this.onKey, true);
+    var dragEl = function (e) {
+      var path = e.composedPath ? e.composedPath() : [e.target];
+      for (var i = 0; i < path.length; i++) if (path[i].getAttribute && path[i].getAttribute('data-drag')) return path[i];
+      return null;
+    };
+    this.onDown = function (e) {
+      if (e.button !== 0) return;
+      var el = dragEl(e);
+      if (el) self.drag = { el: el, id: e.pointerId, x: e.clientX, left: el.scrollLeft, moved: false };
+    };
+    this.onMove = function (e) {
+      var d = self.drag;
+      if (!d) return;
+      var dx = e.clientX - d.x;
+      if (!d.moved && Math.abs(dx) > 4) {
+        d.moved = true;
+        d.el.style.cursor = 'grabbing';
+        try { d.el.setPointerCapture(d.id); } catch (err) {}
+      }
+      if (d.moved) { e.preventDefault(); d.el.scrollLeft = d.left - dx; }
+    };
+    this.onUp = function () {
+      var d = self.drag;
+      if (!d) return;
+      d.el.style.cursor = '';
+      self.drag = null;
+      if (d.moved) self.dragEnd = Date.now();
+    };
+    this.onClickCap = function (e) {
+      if (self.dragEnd && Date.now() - self.dragEnd < 300 && dragEl(e)) { e.preventDefault(); e.stopPropagation(); }
+    };
+    this.onWheel = function (e) {
+      var el = dragEl(e);
+      if (el && Math.abs(e.deltaY) > Math.abs(e.deltaX)) { e.preventDefault(); el.scrollLeft += e.deltaY; }
+    };
+    this.onScroll = function (e) {
+      var el = e.target;
+      if (!el || !el.getAttribute || !el.getAttribute('data-drag')) return;
+      var end = el.scrollWidth - el.clientWidth - el.scrollLeft;
+      el.style.setProperty('--fl', el.scrollLeft > 2 ? '48px' : '0px');
+      el.style.setProperty('--fr', end > 2 ? '48px' : '0px');
+    };
+    document.addEventListener('scroll', this.onScroll, true);
+    document.addEventListener('pointerdown', this.onDown, true);
+    document.addEventListener('pointermove', this.onMove, true);
+    document.addEventListener('pointerup', this.onUp, true);
+    document.addEventListener('pointercancel', this.onUp, true);
+    document.addEventListener('click', this.onClickCap, true);
+    document.addEventListener('wheel', this.onWheel, { capture: true, passive: false });
+    this.onAi = function (e) {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.code === 'KeyK' || /^[kKлЛ]$/.test(e.key))) {
+        e.preventDefault();
+        var a = document.querySelector('a[data-ai]');
+        if (a) a.click();
+      }
+    };
+    document.addEventListener('keydown', this.onAi, true);
+    this.ft = setTimeout(function () { self.focusInput(); }, 350);
+  }
+  componentWillUnmount() {
+    document.removeEventListener('input', this.onInput, true);
+    document.removeEventListener('keydown', this.onKey, true);
+    document.removeEventListener('scroll', this.onScroll, true);
+    document.removeEventListener('pointerdown', this.onDown, true);
+    document.removeEventListener('pointermove', this.onMove, true);
+    document.removeEventListener('pointerup', this.onUp, true);
+    document.removeEventListener('pointercancel', this.onUp, true);
+    document.removeEventListener('click', this.onClickCap, true);
+    document.removeEventListener('wheel', this.onWheel, { capture: true });
+    document.removeEventListener('keydown', this.onAi, true);
+    clearTimeout(this.ft); clearTimeout(this.fl);
+  }
+  focusInput() {
+    var el = this.inp || document.querySelector('[data-qa]');
+    if (el) { this.inp = el; try { el.focus({ preventScroll: true }); } catch (e) {} }
+  }
+  parseTask(q) {
+    var M = ['січ', 'лют', 'бер', 'квіт', 'трав', 'черв', 'лип', 'серп', 'вер', 'жовт', 'лист', 'груд'];
+    var MF = ['січня', 'лютого', 'березня', 'квітня', 'травня', 'червня', 'липня', 'серпня', 'вересня', 'жовтня', 'листопада', 'грудня'];
+    var D = ['Нд', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+    var WD = [/^(нд|неділ[яюі])$/, /^(пн|понеділ(ок|ка))$/, /^(вт|вівтор(ок|ка))$/, /^(ср|серед[аиу])$/, /^(чт|четвер(га)?)$/, /^(пт|п[ʼ'’]?ятниц[яюі])$/, /^(сб|субот[аиу])$/];
+    var cats = { 'робота': 'Робота', 'навчання': 'Навчання', 'дім': 'Дім', 'дом': 'Дім' };
+    var base = new Date(2026, 9, 20);
+    var tk = String(q || '').split(/\s+/).filter(Boolean);
+    var used = tk.map(function () { return false; });
+    var low = function (i) { return (tk[i] || '').toLowerCase().replace(/[,.!?]+$/, ''); };
+    var off = null, time = null, cat = null, auto = false, m;
+    for (var i = 0; i < tk.length; i++) {
+      var t = low(i);
+      var pre = i > 0 && /^(о|об)$/.test(low(i - 1));
+      if (t.charAt(0) === '#' && cats[t.slice(1)]) { cat = cats[t.slice(1)]; used[i] = true; continue; }
+      if (t === 'сьогодні') { off = 0; used[i] = true; continue; }
+      if (t === 'завтра') { off = 1; used[i] = true; continue; }
+      if (t === 'післязавтра') { off = 2; used[i] = true; continue; }
+      if (t === 'через' && /^\d+$/.test(low(i + 1)) && /^(дн|день)/.test(low(i + 2))) { off = +low(i + 1); used[i] = used[i + 1] = used[i + 2] = true; i += 2; continue; }
+      var w = -1;
+      for (var k = 0; k < 7; k++) if (WD[k].test(t)) w = k;
+      if (w >= 0) { off = (w - base.getDay() + 7) % 7 || 7; used[i] = true; if (i > 0 && /^(в|у|до)$/.test(low(i - 1))) used[i - 1] = true; continue; }
+      if ((m = t.match(/^(\d{1,2})(?:[:.](\d{2}))?$/)) && (pre || t.indexOf(':') > 0) && +m[1] < 24) {
+        time = ('0' + m[1]).slice(-2) + ':' + (m[2] || '00'); used[i] = true; if (pre) used[i - 1] = true; continue;
+      }
+      var mi = /^\d{1,2}$/.test(t) ? Math.max(MF.indexOf(low(i + 1)), M.indexOf(low(i + 1))) : -1;
+      if (mi >= 0 || ((m = t.match(/^(\d{1,2})\.(\d{1,2})$/)) && +m[2] >= 1 && +m[2] <= 12)) {
+        var dd = mi >= 0 ? +t : +m[1], mm = mi >= 0 ? mi : +m[2] - 1;
+        var dt = new Date(2026, mm, dd);
+        if (dt < base) dt = new Date(2027, mm, dd);
+        off = Math.round((dt - base) / 864e5); used[i] = true; if (mi >= 0) { used[i + 1] = true; i++; }
+        var pj = i - (mi >= 0 ? 2 : 1);
+        if (pj >= 0 && /^(на|до)$/.test(low(pj))) used[pj] = true;
+        continue;
+      }
+    }
+    var title = tk.filter(function (x, j) { return !used[j]; }).join(' ');
+    title = title.charAt(0).toUpperCase() + title.slice(1);
+    if (!cat) {
+      var s = title.toLowerCase();
+      if (/дзвін|подзвон|клієнт|звіт|зустріч|договір|рахун|презентац|лист/.test(s)) cat = 'Робота';
+      else if (/вивч|прочита|курс|урок|англійськ|конспект/.test(s)) cat = 'Навчання';
+      else if (/купи|прибра|оплат|продукт|ремонт|прати|готува/.test(s)) cat = 'Дім';
+      auto = !!cat;
+    }
+    var label = null;
+    if (off !== null) {
+      var d = new Date(2026, 9, 20 + off);
+      label = off === 0 ? 'Сьогодні' : off === 1 ? 'Завтра' : D[d.getDay()] + ', ' + d.getDate() + ' ' + M[d.getMonth()];
+    }
+    return { title: title, off: off, dateLabel: label, time: time, cat: cat, auto: auto };
+  }
+  labelOf(off) {
+    var M = ['січ', 'лют', 'бер', 'квіт', 'трав', 'черв', 'лип', 'серп', 'вер', 'жовт', 'лист', 'груд'];
+    var D = ['Нд', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+    var d = new Date(2026, 9, 20 + off);
+    return off === 0 ? 'Сьогодні' : off === 1 ? 'Завтра' : D[d.getDay()] + ', ' + d.getDate() + ' ' + M[d.getMonth()];
+  }
+  effOf(p) {
+    var st = this.state;
+    var off = st.pDate !== null && st.pDate !== undefined ? st.pDate : p.off;
+    return { title: p.title, off: off, dateLabel: off === null ? null : this.labelOf(off),
+      time: st.pTime || p.time, cat: st.pCat || p.cat, auto: !st.pCat && p.auto };
+  }
+  chipsOf(e, base) {
+    var self = this, open = this.state.open;
+    var CAL = 'M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z';
+    var CLOCK = 'M12 6v6l4 2M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z';
+    var TAG = 'M12.6 2.6A2 2 0 0 0 11.2 2H4a2 2 0 0 0-2 2v7.2a2 2 0 0 0 .6 1.4l8.7 8.7a2.4 2.4 0 0 0 3.4 0l6.6-6.6a2.4 2.4 0 0 0 0-3.4zM7.5 7.5h.01';
+    var mk = function (k, icon, set, label, note, bg, ink) {
+      var on = open === k;
+      return { icon: icon, label: label, note: note, bg: set ? bg : base, ink: set ? ink : '#d1d1d6',
+        ring: on ? 'inset 0 0 0 2px #f4f4f2' : 'none', open: on ? 'true' : 'false', rot: on ? 'rotate(180deg)' : 'none',
+        pick: function () { self.setState({ open: self.state.open === k ? null : k }); } };
+    };
+    return [
+      mk('date', CAL, e.off !== null, e.off !== null ? e.dateLabel : 'Дата', '', '#13f287', '#090a0a'),
+      mk('time', CLOCK, !!e.time, e.time || 'Час', '', '#f4f4f2', '#090a0a'),
+      mk('cat', TAG, !!e.cat, e.cat || 'Категорія', e.auto ? 'авто' : '', '#6408fa', '#ffffff')
+    ];
+  }
+  pickerOf(e, base) {
+    var self = this, open = this.state.open, items = [], i;
+    var M = ['січ', 'лют', 'бер', 'квіт', 'трав', 'черв', 'лип', 'серп', 'вер', 'жовт', 'лист', 'груд'];
+    var D = ['нд', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
+    var pick = function (patch) {
+      return function () { patch.open = null; self.setState(patch); self.focusInput(); };
+    };
+    var item = function (o, on, bg, ink) {
+      o.sel = on ? 'true' : 'false'; o.bg = on ? bg : base; o.ink = on ? ink : '#ffffff';
+      return o;
+    };
+    if (open === 'date') {
+      for (i = 0; i < 14; i++) {
+        var d = new Date(2026, 9, 20 + i);
+        items.push(item({ top: i === 0 ? 'сьогодні' : i === 1 ? 'завтра' : D[d.getDay()], main: String(d.getDate()),
+          bottom: i === 0 || d.getDate() === 1 ? M[d.getMonth()] : '', w: '64px', h: '72px', r: '24px', fs: '22px',
+          pick: pick({ pDate: i }) }, e.off === i, '#13f287', '#090a0a'));
+      }
+      return { label: 'Дата', items: items };
+    }
+    if (open === 'time') {
+      for (i = 8; i <= 21; i++) {
+        var t = ('0' + i).slice(-2) + ':00';
+        items.push(item({ top: i < 12 ? 'ранок' : i < 17 ? 'день' : 'вечір', main: String(i), bottom: ':00', w: '64px', h: '72px', r: '24px', fs: '22px', pick: pick({ pTime: t }) }, e.time === t, '#f4f4f2', '#090a0a'));
+      }
+      return { label: 'Час', items: items };
+    }
+    if (open === 'cat') {
+      [['Робота', '3 задачі'], ['Навчання', '2 задачі'], ['Дім', '1 задача']].forEach(function (c) {
+        items.push(item({ top: c[1], main: c[0], bottom: '', w: '64px', h: '72px', r: '24px', fs: '17px', pick: pick({ pCat: c[0] }) }, e.cat === c[0], '#6408fa', '#ffffff'));
+      });
+      items.push(item({ top: 'категорія', main: '+ Нова', bottom: '', w: '64px', h: '72px', r: '24px', fs: '17px', pick: pick({}) }, false, '', ''));
+      return { label: 'Категорія', items: items };
+    }
+    return null;
+  }
+  metaOf(p) {
+    return [p.dateLabel || 'Сьогодні', p.time, p.cat].filter(Boolean).join(' · ');
+  }
+  addTask() {
+    var self = this;
+    var p = this.effOf(this.parseTask(this.state.q));
+    if (!p.title) { this.focusInput(); return; }
+    var today = !p.off;
+    var meta = [p.time, p.cat].filter(Boolean).join(' · ');
+    this.setState({ pDate: null, pTime: null, pCat: null, open: null,
+      q: '',
+      added: today ? [{ title: p.title, meta: meta }].concat(this.state.added) : this.state.added,
+      flash: today ? 'Додано на сьогодні' : 'Заплановано: ' + this.metaOf(p)
+    });
+    if (this.inp) this.inp.value = '';
+    this.focusInput();
+    clearTimeout(this.fl);
+    this.fl = setTimeout(function () { self.setState({ flash: '' }); }, 2600);
+  }
+  renderVals() {
+    var self = this;
+    var p = this.parseTask(this.state.q);
+    var e = this.effOf(p);
+    var pk = this.pickerOf(e, '#1f1f1f');
+    var chore = function (title, meta, done) {
+      return { title: title, meta: meta,
+        box: done ? '#f4f4f2' : 'transparent', ring: done ? '#f4f4f2' : '#3a3a3c',
+        tick: done ? '1' : '0', ink: done ? '#8e8e93' : '#ffffff', strike: done ? 'line-through' : 'none' };
+    };
+    var slot = function (time, title, dur, kind) {
+      var st = {
+        done: { bg: 'transparent', ink: '#8e8e93', ring: 'inset 0 0 0 1px #3a3a3c', h: '44px', timeInk: '#6e6e73' },
+        now: { bg: '#13f287', ink: '#090a0a', ring: 'none', h: '60px', timeInk: '#13f287' },
+        practice: { bg: '#6408fa', ink: '#ffffff', ring: 'none', h: '52px', timeInk: '#d1d1d6' },
+        ai: { bg: 'transparent', ink: '#d1d1d6', ring: 'inset 0 0 0 1px #6408fa', h: '44px', timeInk: '#a1a1a6' }
+      }[kind];
+      return { time: time, title: title, dur: dur, bg: st.bg, ink: st.ink, ring: st.ring, h: st.h, timeInk: st.timeInk };
+    };
+    var first = this.state.first, phase = this.state.phase;
+    var added = this.state.added.map(function (a) { return chore(a.title, a.meta, false); });
+    var chores = first ? added : added.concat([
+        chore('Оплатити хостинг', 'до 22 жовт', false),
+        chore('Відповісти на листи клієнтів', '15 хв', false),
+        chore('Оновити резюме на LinkedIn', '', true),
+        chore('Купити продукти', '', true)
+      ]);
+    var open = chores.filter(function (c) { return c.tick === '0'; });
+    var keep = this.state.keep;
+    var leftovers = open.map(function (c, i) {
+      var t = keep[i] !== false;
+      var pick = function (v) { return function () { var k = Object.assign({}, self.state.keep); k[i] = v; self.setState({ keep: k }); }; };
+      return { title: c.title, tSel: t ? 'true' : 'false', dSel: t ? 'false' : 'true',
+        tBg: t ? '#f4f4f2' : 'transparent', tInk: t ? '#090a0a' : '#d1d1d6',
+        dBg: t ? 'transparent' : '#ff4d4f', dInk: t ? '#d1d1d6' : '#090a0a',
+        tomorrow: pick(true), drop: pick(false) };
+    });
+    var moved = leftovers.filter(function (l) { return l.tSel === 'true'; }).length;
+    var plural = function (n) { return n % 10 === 1 && n % 100 !== 11 ? 'справа' : (n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? 'справи' : 'справ'); };
+    return {
+      isFirst: first, notFirst: !first, hasChores: chores.length > 0,
+      isMorning: !first && phase === 'morning', isDay: !first && phase === 'day',
+      isEvening: !first && phase === 'evening', isClosed: !first && phase === 'closed',
+      canClose: phase === 'day' || phase === 'morning',
+      leftovers: leftovers,
+      doneLine: (chores.length - open.length) + ' з ' + chores.length + ' зроблено',
+      tomorrowLine: 'Завтра: ' + moved + ' ' + plural(moved) + ' · 1 практика',
+      startDay: function () { self.setState({ phase: 'day' }); },
+      toEvening: function () { self.setState({ phase: 'evening', keep: {} }); },
+      backToDay: function () { self.setState({ phase: 'day' }); },
+      closeDay: function () { self.setState({ phase: 'closed' }); },
+      toMorning: function () { self.setState({ phase: 'morning' }); },
+      hasQ: !!p.title, title: p.title, chips: this.chipsOf(e, '#1f1f1f'), sig: [e.dateLabel, e.time, e.cat].join('|'),
+      hasPicker: !!pk, picker: pk ? pk.items : [], pickerLabel: pk ? pk.label : '',
+      flash: this.state.flash,
+      add: function () { self.addTask(); },
+      focusAdd: function () { self.focusInput(); },
+      slots: [
+        slot('09:00', 'Листи клієнтам', '15 хв', 'done'),
+        slot('10:00', '10 дзвінків з нової бази', 'зараз', 'now'),
+        slot('13:00', 'Розбір записів дзвінків', '25 хв', 'practice'),
+        slot('15:00', 'Фіча «фільтр задач»', '3 год', 'practice'),
+        slot('19:00', 'Переказ англійською', '5 хв', 'ai')
+      ],
+      practice: [
+        { title: 'Розбір 2 записів дзвінків: де втратив контроль', skill: 'Холодні дзвінки', focus: 'перехід до зустрічі', time: '25 хв' },
+        { title: 'Фіча «фільтр задач» без підказок', skill: 'React', focus: 'декомпозиція', time: '3 год' }
+      ],
+      chores: chores,
+      deltas: [
+        { name: 'Холодні дзвінки', delta: '+1%', bg: '#13f287', ink: '#090a0a' },
+        { name: 'React', delta: '−0,2 год', bg: '#13f287', ink: '#090a0a' },
+        { name: 'Англійська', delta: '0', bg: '#3a3a3c', ink: '#ffffff' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

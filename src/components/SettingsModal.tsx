@@ -18,6 +18,13 @@ interface SettingsModalProps {
   onLaunchAtStartupChange: (enabled: boolean) => void;
   onRefreshStartup: () => void;
   onClose: () => void;
+  /** Moved here from the old «Інші дії» panel on Today. */
+  soundEnabled?: boolean;
+  onToggleSound?: () => void;
+  onToggleLang?: () => void;
+  appVersion?: string;
+  onOpenUpdates?: () => void;
+  onClearCompleted?: () => void;
 }
 
 const ZOOM_PRESETS = [75, 90, 100, 110, 125, 150];
@@ -37,6 +44,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onLaunchAtStartupChange,
   onRefreshStartup,
   onClose,
+  soundEnabled,
+  onToggleSound,
+  onToggleLang,
+  appVersion,
+  onOpenUpdates,
+  onClearCompleted,
 }) => {
   const labels = SETTINGS_TRANSLATIONS[lang];
   const startupMessages = lang === 'uk' ? {
@@ -262,6 +275,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </button>
               </div>
             )}
+            <div className="flex flex-wrap gap-2 border-t border-neutral-800 pt-5">
+              {onToggleLang && <button type="button" onClick={onToggleLang} className="min-h-11 rounded-full bg-neutral-900 px-4 text-xs font-bold text-neutral-200 hover:bg-neutral-800">{lang === 'uk' ? 'English' : 'Українська'}</button>}
+              {onToggleSound && <button type="button" aria-pressed={!!soundEnabled} onClick={onToggleSound} className="min-h-11 rounded-full bg-neutral-900 px-4 text-xs font-bold text-neutral-200 hover:bg-neutral-800">{lang === 'uk' ? 'Звук' : 'Sound'} · {soundEnabled ? (lang === 'uk' ? 'увімкнено' : 'on') : (lang === 'uk' ? 'вимкнено' : 'off')}</button>}
+              {onOpenUpdates && <button type="button" onClick={onOpenUpdates} className="min-h-11 rounded-full bg-neutral-900 px-4 text-xs font-bold text-neutral-200 hover:bg-neutral-800">{lang === 'uk' ? 'Оновлення' : 'Updates'}{appVersion ? ' · v' + appVersion : ''}</button>}
+              {onClearCompleted && <button type="button" onClick={onClearCompleted} className="min-h-11 rounded-full bg-neutral-900 px-4 text-xs font-bold text-neutral-200 hover:bg-neutral-800">{lang === 'uk' ? 'Очистити виконані' : 'Clear completed'}</button>}
+            </div>
           </div>
         </motion.div>
       </div>}

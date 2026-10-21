@@ -1,3 +1,4 @@
+import { diffGrowthWorkspaceOperations, applyGrowthWorkspaceOperations, isGrowthOperation, type GrowthSyncOperation } from './growthSync';
 import { canonical } from './canonical';
 import type { DeletedTask, PSTask, TaskTab, TaskStepItem } from '../types';
 import type { SyncMutationIdentity, WorkspaceState } from './syncState';
@@ -34,7 +35,7 @@ export interface SettingsSyncOperation {
   unset?: string[];
 }
 
-export type WorkspaceSyncOperation = TaskSyncOperation | TabSyncOperation | SettingsSyncOperation;
+export type WorkspaceSyncOperation = TaskSyncOperation | TabSyncOperation | SettingsSyncOperation | GrowthSyncOperation;
 
 export interface WorkspaceMutation extends SyncMutationIdentity {
   createdAt: number;
@@ -170,6 +171,7 @@ export function diffWorkspaceOperations(base: WorkspaceState, next: WorkspaceSta
     }
   }
 
+  operations.push(...diffGrowthWorkspaceOperations(base, next));
   const settings = diffFields(base.settings, next.settings);
   if (settings.patch || settings.unset) operations.push({ kind: 'settings', ...settings });
   return operations;
@@ -187,6 +189,7 @@ export function applyWorkspaceMutation(remote: WorkspaceState, mutation: Workspa
   let settings = structuredClone(remote.settings);
 
   for (const operation of mutation.operations) {
+    if (isGrowthOperation(operation)) continue;
     if (operation.kind === 'settings') {
       settings = applyPatch(settings, operation.patch, operation.unset);
       continue;
@@ -290,6 +293,7 @@ export function applyWorkspaceMutation(remote: WorkspaceState, mutation: Workspa
     tasks: [...tasks.values()].filter((item) => item.lifecycle === 'active').map((item) => item.value as PSTask),
     deletedTasks: [...tasks.values()].filter((item) => item.lifecycle === 'deleted').map((item) => item.value),
     tabs: [...tabs.values()],
+    ...applyGrowthWorkspaceOperations(remote, mutation.operations.filter(isGrowthOperation), mutation.createdAt),
     settings,
   };
 }

@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<title>Вхід і синхронізація</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300..900&amp;display=swap">
+<style>
+body{margin:0;background:#090a0a}
+a{color:#13f287}
+button{font-family:inherit}
+@keyframes kUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+@keyframes kSwap{from{opacity:0;transform:translateY(10px) scale(.98)}to{opacity:1;transform:none}}
+@keyframes kPulse{0%{box-shadow:0 0 0 0 rgba(19,242,135,.55),0 0 0 0 rgba(19,242,135,.3)}100%{box-shadow:0 0 0 22px rgba(19,242,135,0),0 0 0 44px rgba(19,242,135,0)}}
+@keyframes kSpin{to{transform:rotate(360deg)}}
+@keyframes kPop{0%{opacity:0;transform:scale(.4)}70%{opacity:1;transform:scale(1.12)}100%{opacity:1;transform:scale(1)}}
+.hero > *{animation:kUp .6s cubic-bezier(.2,.8,.2,1) backwards}
+.hero > *:nth-child(2){animation-delay:.08s}.hero > *:nth-child(3){animation-delay:.16s}.hero > *:nth-child(4){animation-delay:.24s}
+.swap{animation:kSwap .45s cubic-bezier(.2,.8,.2,1) both}
+.tile{animation:kPop .5s cubic-bezier(.2,.8,.2,1) backwards}
+.tile:nth-child(2){animation-delay:.06s}.tile:nth-child(3){animation-delay:.12s}.tile:nth-child(4){animation-delay:.18s}
+.hero > *:nth-child(5){animation-delay:.32s}
+.pulse{animation:kPulse 1.6s ease-out infinite}
+.spin{animation:kSpin 1s linear infinite}
+.pop{animation:kPop .45s cubic-bezier(.2,.8,.2,1) both}
+.bar{transition:width .5s cubic-bezier(.2,.8,.2,1)}
+button,a{transition:transform .15s ease,background-color .2s ease}button:active,a:active{transform:scale(.97)}
+html{scrollbar-width:thin;scrollbar-color:#3a3a3c transparent}
+@media (prefers-reduced-motion: reduce){*,*::before,*::after{animation:none !important;transition:none !important}}
+.wc button{transition:background-color .15s ease,color .15s ease}.wc button:hover{background:#3a3a3c;color:#ffffff}.wc button.x:hover{background:#ff4d4f;color:#ffffff}
+</style>
+</helmet>
+<div style="min-height: 1000px; background: #090a0a; color: #ffffff; font-family: 'SF Pro Display', Inter, ui-sans-serif, system-ui, sans-serif; display: flex; flex-direction: column">
+
+<header style="height: 76px; flex-shrink: 0; box-sizing: border-box; padding: 0 16px 0 24px; display: flex; align-items: center; justify-content: space-between">
+<svg width="44" height="44" viewBox="0 0 1080 1080" role="img" aria-label="Karkas"><rect width="1080" height="1080" rx="540" fill="#f4f4f2"></rect><path d="{{k}}" fill="#090a0a"></path></svg>
+<div style="display: flex; align-items: center; gap: 8px">
+<div class="wc" role="group" aria-label="Вікно" style="margin-left: 8px; display: flex; gap: 2px; padding: 4px; border-radius: 26px; background: #1f1f1f">
+<button type="button" aria-label="Згорнути" style="width: 36px; height: 36px; border: none; border-radius: 18px; background: transparent; color: #d1d1d6; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 12h12"></path></svg></button>
+<button type="button" aria-label="Розгорнути" style="width: 36px; height: 36px; border: none; border-radius: 18px; background: transparent; color: #d1d1d6; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="4"></rect></svg></button>
+<button type="button" class="x" aria-label="Закрити" style="width: 36px; height: 36px; border: none; border-radius: 18px; background: transparent; color: #d1d1d6; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"></path></svg></button>
+</div>
+</div>
+</header>
+
+<main style="flex: 1; width: 100%; max-width: 1280px; margin: 0 auto; box-sizing: border-box; padding: 40px 32px 64px; display: flex; flex-wrap: wrap; align-items: center; gap: 48px">
+
+<div class="hero" style="flex: 1 1 460px; min-width: 0; display: flex; flex-direction: column; gap: 18px">
+<h1 style="margin: 0; text-transform: uppercase; letter-spacing: -0.035em; line-height: 0.92; font-size: 80px"><span style="display: block; font-weight: 300">{{titleA}}</span><span style="display: block; font-weight: 800">{{titleB}}</span></h1>
+<div role="list" aria-label="Кроки" style="align-self: flex-start; display: flex; gap: 4px; padding: 4px; border-radius: 26px; background: #1f1f1f">
+<sc-for list="{{steps}}" as="s" hint-placeholder-count="3">
+<span role="listitem" aria-current="{{s.cur}}" style="height: 40px; box-sizing: border-box; padding: 0 18px; border-radius: 20px; background: {{s.bg}}; color: {{s.ink}}; font-size: 14px; font-weight: {{s.w}}; display: flex; align-items: center; gap: 8px"><span style="width: 8px; height: 8px; border-radius: 4px; background: {{s.dot}}"></span>{{s.label}}</span>
+</sc-for>
+</div>
+<span style="max-width: 440px; font-size: 17px; line-height: 1.5; font-weight: 500; color: #a1a1a6">Задачі, навички й заміри — на всіх пристроях.</span>
+<div style="position: relative; margin-top: 22px; max-width: 520px; display: flex; align-items: center; justify-content: space-between">
+<span style="position: absolute; left: 36px; right: 36px; top: 36px; height: 2px; background: repeating-linear-gradient(90deg, #3a3a3c 0 8px, transparent 8px 14px)"></span>
+<span class="flow" style="position: absolute; left: 36px; top: 36px; height: 2px; width: {{flowW}}; background: #13f287; transition: width .6s cubic-bezier(.2,.8,.2,1)"></span>
+<sc-for list="{{devices}}" as="d" hint-placeholder-count="3">
+<span style="position: relative; display: flex; flex-direction: column; align-items: center; gap: 10px">
+<span style="width: 72px; height: 72px; border-radius: 36px; background: {{d.bg}}; color: {{d.ink}}; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 6px #090a0a"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{d.icon}}"></path></svg></span>
+<span style="font-size: 14px; font-weight: 700; color: {{d.label_ink}}">{{d.label}}</span>
+</span>
+</sc-for>
+</div>
+</div>
+
+<section aria-live="polite" style="flex: 1 1 520px; min-width: 0; box-sizing: border-box; min-height: 520px; padding: 32px; border-radius: 48px; background: #1f1f1f; display: flex; flex-direction: column">
+
+<sc-if value="{{isSignin}}" hint-placeholder-val="{{true}}">
+<div class="swap" style="flex: 1; display: flex; flex-direction: column; gap: 14px">
+<span style="font-size: 26px; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 10px">Увійдіть, щоб синхронізувати</span>
+<button type="button" onClick="{{startSignin}}" style="height: 72px; border: none; border-radius: 36px; padding: 0 10px 0 28px; background: #f4f4f2; color: #090a0a; font-size: 18px; font-weight: 800; display: flex; align-items: center; justify-content: space-between; cursor: pointer">Увійти через Google<span style="width: 52px; height: 52px; border-radius: 26px; background: #090a0a; color: #ffffff; display: flex; align-items: center; justify-content: center"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg></span></button>
+<span style="padding: 0 8px; font-size: 13px; font-weight: 600; color: #8e8e93">Вхід відкриється у вашому браузері</span>
+<div style="flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0">
+<sc-for list="{{what}}" as="w" hint-placeholder-count="4">
+<div class="tile" style="position: relative; overflow: hidden; min-height: 96px; border-radius: 30px; background: {{w.bg}}; color: {{w.ink}}; padding: 18px 20px; box-sizing: border-box; display: flex; flex-direction: column; justify-content: space-between">
+<sc-if value="{{w.hatch}}" hint-placeholder-val="{{false}}"><svg width="100%" height="100%" style="position: absolute; inset: 0; opacity: 0.16" aria-hidden="true"><defs><pattern id="hw" width="9" height="40" patternUnits="userSpaceOnUse" patternTransform="rotate(10)"><line x1="1.5" y1="-10" x2="1.5" y2="50" stroke="#090a0a" stroke-width="2"></line></pattern></defs><rect width="100%" height="100%" fill="url(#hw)"></rect></svg></sc-if>
+<svg style="position: relative" width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{w.icon}}"></path></svg>
+<span style="position: relative; font-size: 14px; font-weight: 700; opacity: 0.8">{{w.label}}</span>
+</div>
+</sc-for>
+</div>
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 16px 16px 24px; border-radius: 32px; background: #090a0a">
+<span style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 16px; font-weight: 700">Без акаунта</span><span style="font-size: 13px; font-weight: 600; color: #8e8e93">Дані лишаться на цьому комп'ютері</span></span>
+<a href="Today.dc.html" data-first="1" style="text-decoration: none; height: 48px; box-sizing: border-box; padding: 0 20px; border-radius: 24px; background: #3a3a3c; color: #ffffff; font-size: 14px; font-weight: 700; display: flex; align-items: center">Продовжити</a>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{isBrowser}}" hint-placeholder-val="{{false}}">
+<div class="swap" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px; text-align: center">
+<span class="pulse" style="width: 112px; height: 112px; border-radius: 56px; background: #13f287; color: #090a0a; display: flex; align-items: center; justify-content: center"><svg width="44" height="46" viewBox="240 210 600 660" aria-hidden="true"><path d="{{k}}" fill="currentColor"></path></svg></span>
+<span style="display: flex; flex-direction: column; gap: 8px"><span style="font-size: 26px; font-weight: 800; letter-spacing: -0.02em">Завершіть вхід у браузері</span><span style="font-size: 15px; font-weight: 500; color: #a1a1a6">Вхід як Melychyn Ivan · повернемося сюди автоматично</span></span>
+<div style="display: flex; gap: 8px">
+<button type="button" onClick="{{reopen}}" style="height: 52px; border: none; border-radius: 26px; padding: 0 22px; background: #f4f4f2; color: #090a0a; font-size: 15px; font-weight: 800; cursor: pointer">Відкрити ще раз</button>
+<button type="button" onClick="{{cancel}}" style="height: 52px; border: none; border-radius: 26px; padding: 0 22px; background: #3a3a3c; color: #ffffff; font-size: 15px; font-weight: 700; cursor: pointer">Скасувати</button>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{isMerge}}" hint-placeholder-val="{{false}}">
+<div class="swap" style="flex: 1; display: flex; flex-direction: column; gap: 14px">
+<span style="display: flex; align-items: center; gap: 14px; margin-bottom: 8px"><span style="width: 52px; height: 52px; border-radius: 26px; background: #f4f4f2; color: #090a0a; font-size: 18px; font-weight: 800; display: flex; align-items: center; justify-content: center">MI</span><span style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 20px; font-weight: 800">Melychyn Ivan</span><span style="font-size: 13px; font-weight: 600; color: #8e8e93">Увійшли через Google</span></span></span>
+<span style="font-size: 26px; font-weight: 800; letter-spacing: -0.02em">На цьому комп'ютері вже є дані</span>
+<div role="radiogroup" aria-label="Що зробити з локальними даними" style="display: flex; flex-direction: column; gap: 8px">
+<sc-for list="{{merge}}" as="m" hint-placeholder-count="2">
+<button type="button" role="radio" aria-checked="{{m.sel}}" onClick="{{m.pick}}" style="text-align: left; border: none; border-radius: 30px; padding: 18px 22px; background: {{m.bg}}; color: {{m.ink}}; display: flex; align-items: center; gap: 14px; cursor: pointer">
+<span style="flex-shrink: 0; width: 24px; height: 24px; border-radius: 12px; box-shadow: inset 0 0 0 2px {{m.ring}}; background: {{m.fill}}"></span>
+<span style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 16px; font-weight: 800">{{m.label}}</span><span style="font-size: 13px; font-weight: 600; opacity: 0.7">{{m.sub}}</span></span>
+</button>
+</sc-for>
+</div>
+<span style="flex: 1"></span>
+<button type="button" onClick="{{startSync}}" style="height: 60px; border: none; border-radius: 30px; background: #f4f4f2; color: #090a0a; font-size: 16px; font-weight: 800; cursor: pointer">Синхронізувати</button>
+</div>
+</sc-if>
+
+<sc-if value="{{isSync}}" hint-placeholder-val="{{false}}">
+<div class="swap" style="flex: 1; display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; justify-content: space-between; align-items: baseline; gap: 12px">
+<span style="font-size: 26px; font-weight: 800; letter-spacing: -0.02em">{{syncTitle}}</span>
+<span style="font-size: 44px; font-weight: 800; letter-spacing: -0.04em; line-height: 1; color: {{pctInk}}">{{pct}}</span>
+</div>
+<div style="position: relative; height: 64px; border-radius: 32px; background: #090a0a; overflow: hidden">
+<div class="bar" style="position: absolute; left: 0; top: 0; bottom: 0; width: {{pct}}; border-radius: 32px; background: #13f287; overflow: hidden"><svg width="100%" height="100%" style="display: block; opacity: 0.18"><defs><pattern id="hsync" width="9" height="40" patternUnits="userSpaceOnUse" patternTransform="rotate(10)"><line x1="1.5" y1="-10" x2="1.5" y2="50" stroke="#090a0a" stroke-width="2"></line></pattern></defs><rect width="100%" height="100%" fill="url(#hsync)"></rect></svg></div>
+</div>
+<div style="display: flex; flex-direction: column; gap: 6px; margin-top: 6px">
+<sc-for list="{{items}}" as="it" hint-placeholder-count="4">
+<div style="display: flex; align-items: center; gap: 14px; min-height: 52px; padding: 0 16px 0 20px; border-radius: 26px; background: #090a0a">
+<span style="flex: 1; font-size: 16px; font-weight: 700">{{it.label}}</span>
+<span style="font-size: 14px; font-weight: 600; color: #8e8e93">{{it.count}}</span>
+<sc-if value="{{it.done}}" hint-placeholder-val="{{true}}"><span class="pop" style="width: 28px; height: 28px; border-radius: 14px; background: #13f287; color: #090a0a; display: flex; align-items: center; justify-content: center"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span></sc-if>
+<sc-if value="{{it.wait}}" hint-placeholder-val="{{false}}"><span class="spin" style="width: 24px; height: 24px; margin: 2px; border-radius: 12px; box-shadow: inset 0 0 0 3px #3a3a3c; border-top: 3px solid #13f287; box-sizing: border-box"></span></sc-if>
+</div>
+</sc-for>
+</div>
+<span style="flex: 1"></span>
+<sc-if value="{{done}}" hint-placeholder-val="{{false}}">
+<a href="Main.dc.html" class="pop" style="text-decoration: none; height: 60px; box-sizing: border-box; border-radius: 30px; background: #f4f4f2; color: #090a0a; font-size: 16px; font-weight: 800; display: flex; align-items: center; justify-content: center">Перейти до Росту</a>
+</sc-if>
+</div>
+</sc-if>
+
+</section>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { step: 'signin', merge: 'join', progress: 0 };
+  }
+  componentDidMount() {
+    var r = document.documentElement.style;
+    r.colorScheme = 'dark'; r.background = '#090a0a';
+    r.scrollbarWidth = 'thin'; r.scrollbarColor = '#3a3a3c #090a0a';
+    this.onFirst = function (e) {
+      var path = e.composedPath ? e.composedPath() : [e.target];
+      for (var i = 0; i < path.length; i++) {
+        if (path[i].getAttribute && path[i].getAttribute('data-first')) { try { window.localStorage.setItem('karkas.firstRun', String(Date.now())); } catch (err) {} return; }
+      }
+    };
+    document.addEventListener('click', this.onFirst, true);
+  }
+  componentWillUnmount() {
+    document.removeEventListener('click', this.onFirst, true);
+    if (this.t) clearTimeout(this.t);
+    if (this.iv) clearInterval(this.iv);
+  }
+  renderVals() {
+    var self = this;
+    var st = this.state.step;
+    var go = function (step) { if (self.t) clearTimeout(self.t); self.setState({ step: step }); };
+    var order = ['signin', 'browser', 'merge', 'sync'];
+    var idx = order.indexOf(st);
+    var stepIdx = idx <= 0 ? 0 : (idx === 1 ? 1 : 2);
+    var steps = ['Вхід', 'Браузер', 'Синхронізація'].map(function (label, i) {
+      var cur = i === stepIdx, past = i < stepIdx;
+      return { label: label, cur: cur ? 'step' : 'false', bg: cur ? '#f4f4f2' : 'transparent', ink: cur ? '#090a0a' : '#d1d1d6',
+        w: cur ? '800' : '700', dot: past ? '#13f287' : (cur ? '#090a0a' : '#3a3a3c') };
+    });
+    var p = this.state.progress;
+    var thresholds = [25, 50, 75, 100];
+    var items = [
+      { label: 'Задачі', count: '42' }, { label: 'Навички й заміри', count: '3 · 14' },
+      { label: 'Висновки й нотатки', count: '23' }, { label: 'Налаштування', count: '—' }
+    ].map(function (it, i) {
+      var done = p >= thresholds[i];
+      return { label: it.label, count: it.count, done: done, wait: !done };
+    });
+    var titles = {
+      signin: ['Вхід', 'у Karkas'], browser: ['Майже', 'готово'], merge: ['Привіт', 'знову'], sync: p >= 100 ? ['Усе', 'на місці'] : ['Синхро-', 'нізація']
+    }[st];
+    return {
+      k: 'M271.942 219.415L404.957 219.433C422.53 219.359 443.586 218.322 461.004 219.748C464.585 220.026 470.468 224.229 471.281 227.599C474.687 241.912 473.545 264.483 473.642 279.259L474.648 368.86C474.881 385.654 475.074 402.486 475.906 419.243C476.603 433.371 493.847 432.426 495.434 419.502C496.672 412.669 495.55 405.541 495.763 398.69C496.307 381.359 493.572 360.175 495.469 342.556C495.846 339.054 497.151 335.607 499.67 333.145C502.607 330.275 506.619 328.821 510.714 328.511C530.128 327.042 553.065 329.442 572.653 328.457C595.781 327.291 607.064 334.864 607.296 305.608C607.45 288.551 606.576 269.837 606.675 252.054C606.747 239.199 610.007 222.176 622.856 221.785C634.042 221.452 645.267 221.6 656.453 221.6L718.209 221.637L775.592 221.489C786.507 221.452 798.177 221.137 808.996 221.84C814.337 222.174 818.846 222.47 821.924 226.655C823.859 229.265 825.33 232.321 825.485 235.561C826.239 252.744 825.949 270.779 826.162 287.981C826.452 309.922 826.607 331.846 826.627 353.788C826.646 365.064 826.956 377.192 825.969 388.413C825.096 397.996 812.065 399.708 802.443 399.738C776.916 399.818 733.402 398.781 725.622 402.652C721.19 404.837 719.138 409.448 718.209 413.892C714.281 432.723 722.08 474.255 716.448 490.845C715.268 494.345 713.178 497.437 709.655 499.122C693.224 506.955 623.94 495.66 608.109 504.27C605.225 505.825 603.464 507.917 602.67 510.991C600.541 519.175 600.677 568.577 604.954 574.298C607.605 577.854 611.999 578.909 616.295 579.576C623.398 580.649 630.945 580.131 638.106 580.094C659.472 580.001 684.709 577.928 705.63 581.038C706.484 581.172 707.301 581.488 708.01 581.983C709.2 582.816 710.087 583.504 710.88 584.207C714.001 586.973 715.705 591.007 716.058 595.162C716.67 602.39 716.562 610.44 716.681 617.164C716.874 634.421 717.358 651.826 716.777 669.083C716.119 688.007 735.627 686.637 749.852 686.544C766.747 686.415 783.682 686.304 800.596 686.155C802.526 686.169 804.536 686.217 806.569 686.282C813.468 686.501 821.591 687.518 824.788 693.636C826.801 697.487 827.381 702.302 827.672 706.56C828.62 721.151 827.207 736.335 827.265 751C827.381 780.718 828.581 810.789 827.11 840.47C826.936 843.97 826.781 848.562 825.175 851.71C823.762 854.524 819.775 857.431 816.64 858.209C805.686 860.931 761.774 859.45 747.801 859.468C707.314 859.468 666.014 860.949 625.604 858.968C622.604 858.82 617.476 858.876 615.037 857.135C611.399 854.524 609.192 851.025 608.128 846.821C606.58 840.6 607.218 833.286 607.218 826.879C607.18 809.289 609.038 786.403 606.348 769.608C605.651 765.183 604.509 760.758 600.483 758.054C585.62 748.074 514.226 762.183 500.311 751.222C496.982 748.574 495.86 744.482 495.26 740.538C494.156 733.52 494.795 725.836 494.853 718.744C494.989 701.987 495.976 683.378 493.75 666.861C493.169 662.603 491.873 657.048 487.692 654.641C482.514 651.662 476.554 657.022 475.145 662.827C471.803 676.598 473.487 701.586 473.487 711.504L473.448 810.048C473.448 821.861 474.184 835.545 472.868 847.173C472.287 852.321 467.991 855.098 463.791 857.857C463.032 858.354 462.151 858.633 461.244 858.663C413.027 860.236 363.524 857.83 315.235 858.857C299.017 859.209 282.277 859.227 266.097 858.524C259.885 858.246 253.227 849.747 253.963 843.822C253.711 810.789 253.673 777.719 253.44 744.667L252.937 519.546L252.744 322.014C252.686 294.35 252.453 266.724 252.008 239.061C251.757 224.062 257.272 219.859 271.942 219.415Z',
+      titleA: titles[0], titleB: titles[1], steps: steps,
+      what: [
+        { icon: 'M9 11l3 3 8-8M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9', label: 'Задачі', bg: '#090a0a', ink: '#ffffff', hatch: false },
+        { icon: 'M3 17l6-6 4 4 8-8M15 7h6v6', label: 'Навички', bg: '#13f287', ink: '#090a0a', hatch: true },
+        { icon: 'M3 3v18h18M7 15v2M12 10v7M17 6v11', label: 'Заміри', bg: '#6408fa', ink: '#ffffff', hatch: false },
+        { icon: 'M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M8 13h8M8 17h5', label: 'Нотатки', bg: '#f4f4f2', ink: '#090a0a', hatch: false }
+      ],
+      flowW: (function () {
+        var f = st === 'signin' ? 0 : st === 'browser' ? 0.25 : st === 'merge' ? 0.5 : 0.5 + 0.5 * p / 100;
+        return 'calc((100% - 72px) * ' + f + ')';
+      })(),
+      devices: (function () {
+        var on = st === 'sync' && p >= 100;
+        return [
+          { label: 'Цей ПК', icon: 'M3 5h18v11H3zM8 20h8M12 16v4', on: true },
+          { label: 'Хмара', icon: 'M17.5 19a4.5 4.5 0 1 0-1.4-8.8A6 6 0 0 0 4.5 13 3 3 0 0 0 6 19z', on: st === 'merge' || st === 'sync' },
+          { label: 'Ноутбук', icon: 'M5 6h14v9H5zM2 18h20', on: on }
+        ].map(function (d) {
+          return { label: d.label, icon: d.icon, bg: d.on ? '#13f287' : '#1f1f1f', ink: d.on ? '#090a0a' : '#8e8e93', label_ink: d.on ? '#ffffff' : '#8e8e93' };
+        });
+      })(),
+      isSignin: st === 'signin', isBrowser: st === 'browser', isMerge: st === 'merge', isSync: st === 'sync',
+      startSignin: function () {
+        go('browser');
+        self.t = setTimeout(function () { self.setState({ step: 'merge' }); }, 2600);
+      },
+      reopen: function () {},
+      cancel: function () { go('signin'); },
+      merge: [
+        { id: 'join', label: 'Об’єднати', sub: 'Локальні й хмарні дані разом' },
+        { id: 'cloud', label: 'Лише з хмари', sub: 'Локальні дані збережемо в резервну копію' }
+      ].map(function (m) {
+        var on = self.state.merge === m.id;
+        return { label: m.label, sub: m.sub, sel: on ? 'true' : 'false', bg: on ? '#f4f4f2' : '#090a0a', ink: on ? '#090a0a' : '#ffffff',
+          ring: on ? '#090a0a' : '#3a3a3c', fill: on ? '#13f287' : 'transparent',
+          pick: function () { self.setState({ merge: m.id }); } };
+      }),
+      startSync: function () {
+        self.setState({ step: 'sync', progress: 0 });
+        if (self.iv) clearInterval(self.iv);
+        self.iv = setInterval(function () {
+          var n = Math.min(100, self.state.progress + 5);
+          self.setState({ progress: n });
+          if (n >= 100) { clearInterval(self.iv); self.iv = null; }
+        }, 120);
+      },
+      pct: p + '%', pctInk: p >= 100 ? '#13f287' : '#ffffff',
+      syncTitle: p >= 100 ? 'Синхронізовано' : 'Синхронізуємо…',
+      items: items, done: p >= 100
+    };
+  }
+}
+</script>
+</body>
+</html>

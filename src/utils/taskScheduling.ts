@@ -135,6 +135,8 @@ export function materializeScheduledWorkspace(records: PSTask[], deletedIds: Ite
     if (!Number.isFinite(Date.parse(nextStartAt))) continue;
     const task: NewTaskInput = {
       title: record.title, phase: record.phase, priority: record.priority, steps: record.steps,
+      ...(record.skillId !== undefined ? { skillId: record.skillId } : {}),
+      ...(record.subskillId !== undefined ? { subskillId: record.subskillId } : {}),
       ...(record.stepList ? { stepList: record.stepList.map(step => ({ ...step, done: false })) } : {}),
       ...(record.note !== undefined ? { note: record.note } : {}),
       ...(record.plannedDate !== undefined ? { plannedDate: record.plannedDate } : {}),

@@ -1,5 +1,6 @@
 import type { NotepadNote } from '../types';
 import { canonical } from './canonical';
+import { isNoteDoc } from './noteDoc';
 
 type NoteStorage = Pick<Storage, 'getItem' | 'setItem'>;
 
@@ -45,7 +46,9 @@ const isNote = (value: unknown): value is NotepadNote => {
     && isTimestamp(note.createdAt)
     && (note.updatedAt === undefined || isTimestamp(note.updatedAt))
     && (note.color === undefined || typeof note.color === 'string')
-    && (note.pinned === undefined || typeof note.pinned === 'boolean');
+    && (note.pinned === undefined || typeof note.pinned === 'boolean')
+    && (note.kind === undefined || note.kind === 'lesson' || note.kind === 'idea')
+    && (note.doc === undefined || isNoteDoc(note.doc));
 };
 
 // Keep each distinct damaged value, including across repeated recovery attempts.

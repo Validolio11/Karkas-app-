@@ -1,0 +1,189 @@
+{
+  "passed": true,
+  "version": "1.24.0",
+  "packagedFileCount": 41,
+  "verifiedFiles": [
+    {
+      "file": "dist/assets/app--mLjR7_W.css",
+      "sha256": "93468a5c3bc91550640c30c31f990daf75982a349dbfb40251da65528b213c99"
+    },
+    {
+      "file": "dist/assets/app-DfUJvpk4.js",
+      "sha256": "cd5ac1205b115b7dff219cf79debb4edbd84bd7bbeeed00b7ceeeee4c2369857"
+    },
+    {
+      "file": "dist/assets/desktopAuth-D5lMz7pB.js",
+      "sha256": "a528d3a2cf77196f34788d71d03ce3132bed8af3dc3fcc79e02f6bd2832be692"
+    },
+    {
+      "file": "dist/assets/index-Cu4uXSQM.css",
+      "sha256": "75e3c5c0a5965e73bd984b52fa7d7c43ddf0f4d4397931070495a913e818f126"
+    },
+    {
+      "file": "dist/assets/index-DF60IJAb.js",
+      "sha256": "551a663275c2d384227d45a92257219560092207f9fbd18a0e9fdecd51c1d4bb"
+    },
+    {
+      "file": "dist/assets/InterVariable-DiVDrmQJ.woff2",
+      "sha256": "693b77d4f32ee9b8bfc995589b5fad5e99adf2832738661f5402f9978429a8e3"
+    },
+    {
+      "file": "dist/assets/manrope-cyrillic-wght-normal-Dvxsihut.woff2",
+      "sha256": "c268b459a9329e59fecf39a17618efd44c71735532048d60b12aab76a8c14914"
+    },
+    {
+      "file": "dist/assets/manrope-latin-ext-wght-normal-Ch3YOpNY.woff2",
+      "sha256": "3911b66d9f2e005a4b989223405d0e5032619c668597ba467cc76a23c8fffcfb"
+    },
+    {
+      "file": "dist/assets/manrope-latin-wght-normal-DHIcAJRg.woff2",
+      "sha256": "a30ddcd349703aff7464c34bef3fffdff405ee50c113440d7c8693c02d210972"
+    },
+    {
+      "file": "dist/desktop-auth.html",
+      "sha256": "3ed760adc0548b6a1c2777edc763326e253c9d9190cdc32a748718426dd7fe88"
+    },
+    {
+      "file": "dist/icon.png",
+      "sha256": "3534e012918d1bb5b214f3c7294490d84da2a19340508272001256a177f42a38"
+    },
+    {
+      "file": "dist/icon.svg",
+      "sha256": "5279880f50fe3ce6e54c4d3d99d0b748102dc36cd294a74349ced385666b24b5"
+    },
+    {
+      "file": "dist/icons-ai.png",
+      "sha256": "6cbdb0c52588d0788c137a8ab05923be78be3910f94dc6098fe49ca8964217b3"
+    },
+    {
+      "file": "dist/icons-ai.svg",
+      "sha256": "78f4a196500f3ac0fd81d80cd98a8d5361aa846bb3d80b4a25c0b7bf8ad35ef2"
+    },
+    {
+      "file": "dist/index.html",
+      "sha256": "b85c6c73467e50dfcec8030043564259f33b21d9cd67ea0a2035f360ad4fa1f7"
+    },
+    {
+      "file": "dist/licenses/Inter-OFL.txt",
+      "sha256": "b3195af0fb14368d1b3b10fb9d3fe503b7163ea083859d2ee553bc74da07c320"
+    },
+    {
+      "file": "dist/licenses/Manrope-OFL.txt",
+      "sha256": "d826ab6583b12c26807d8716a545bdbbb672df04f48608a364ba9efdbe501c30"
+    },
+    {
+      "file": "dist/server.cjs",
+      "sha256": "32b8e52980a980557b78a53e06fb3ecbdc38536a4d9f2c731c24aff008d2a847"
+    },
+    {
+      "file": "dist/server.cjs.map",
+      "sha256": "c79a0eba8770ba441b78b5066c8ce3098b9dbf0ef09d21c16a5f9b9a27091f17"
+    },
+    {
+      "file": "dist/voice-capture.js",
+      "sha256": "3a3022bc94b7ad36343dca1393e43c53eca6fb3ddb62638001798312a34ba3c8"
+    },
+    {
+      "file": "electron/app-icons.cjs",
+      "sha256": "6d4edc9c0116e877a95869b5b3093334c593eb485aa046b1ae6f765f1685bd79"
+    },
+    {
+      "file": "electron/app-icons.test.cjs",
+      "sha256": "e58d71e0bbb7f654c6c19d341d91f30f17f3aaa50625cdd0d76145b197ea83e3"
+    },
+    {
+      "file": "electron/browser-auth.cjs",
+      "sha256": "11c263db9b35e11dbb5425afe57c341f1bbda354af348c0f683d8b294e4c70dd"
+    },
+    {
+      "file": "electron/browser-auth.test.cjs",
+      "sha256": "4b3602737b1496b1546325a14e8470db626e864531d56a11871252962dc5f366"
+    },
+    {
+      "file": "electron/main.cjs",
+      "sha256": "658f669e47bf9f64b4167f6e598bb1afb2c8547aadbfe0da70248648a833a1e4"
+    },
+    {
+      "file": "electron/notification-preload.test.cjs",
+      "sha256": "37213e0c3bd0a3dd19c9b548b4c5c2c9e136a982ee476744f77bc59298cb2aec"
+    },
+    {
+      "file": "electron/preload.cjs",
+      "sha256": "3162c988c9cf7a43a026c3a029a15a531209fc3870e4cbc0aaf39e1aa7d29d52"
+    },
+    {
+      "file": "electron/preload.test.cjs",
+      "sha256": "870275ef8bd0dc3014e6f4739f86f05a469bf00543409c0bf5ef9bcfe10dfbb5"
+    },
+    {
+      "file": "electron/presence.cjs",
+      "sha256": "3ce108fab81912ecb620d50f82644138d0f6dd085a56baabfa2f70f9f3e52ee2"
+    },
+    {
+      "file": "electron/presence.test.cjs",
+      "sha256": "aff13491ba787f0ff792504df973217807a6be240d514b79566bbc5cd86aa990"
+    },
+    {
+      "file": "electron/secrets.cjs",
+      "sha256": "3035e7faf532990d25dd448ac8c43934cfb3b6a1a3277c46e3a84dfb03ef7b55"
+    },
+    {
+      "file": "electron/secrets.test.cjs",
+      "sha256": "f325992967db83cfb2c6ad881600b4f65b91ea54db0fa3bf9634c8f9e2f737a9"
+    },
+    {
+      "file": "electron/server-runtime.test.cjs",
+      "sha256": "c3fbad14f6064a7287df510598f95a93979d17383719e310ff557b0ffa2cd3c0"
+    },
+    {
+      "file": "electron/storage.cjs",
+      "sha256": "bc7153439d14b06b1e931dde91dd59b4c9c3ead3c9902c2b6dd24db354fbd9ba"
+    },
+    {
+      "file": "electron/storage.test.cjs",
+      "sha256": "be91662454b4064c51186607ecbf88c5111b584820d7e2341e76c1cf9a69fe6d"
+    },
+    {
+      "file": "electron/update-download.cjs",
+      "sha256": "0d3fdd83832a5ab7e79acfd3bcbfc1c9e9b16134493cbe2fcc1789966aa59194"
+    },
+    {
+      "file": "electron/update-installer.cjs",
+      "sha256": "9424f7c18bc50aead25a2863b49ac8285274c5c5acb988915162add2f8f1f587"
+    },
+    {
+      "file": "electron/update-installer.test.cjs",
+      "sha256": "5ccc7b24aaed62d3627e922e512ced556e86e6e07d4fcba0177fb1f83acf2bbe"
+    },
+    {
+      "file": "electron/update-trust.cjs",
+      "sha256": "4ecc0d9e035707c770e0ccb49b879d7550b48093f5f96430c1a8fbbf52957295"
+    },
+    {
+      "file": "electron/update-trust.test.cjs",
+      "sha256": "2aa83f994264cb7c5dec85cf43a214f8df2491a33321d56b43d1f9991cc7f6c3"
+    },
+    {
+      "file": "electron/workspace-validation.mjs",
+      "sha256": "0235d5fd2ae2bbf748d644d315b99c2190492a101e2542b64818f5ca541e74a8"
+    }
+  ],
+  "assets": [
+    {
+      "name": "Karkas-Setup-1.24.0.exe",
+      "size": 139697107,
+      "sha256": "be960a6c8891384a7d594897c6fcc852514d18067429481f76fc3ee8d9591e59"
+    },
+    {
+      "name": "Karkas-Setup-1.24.0.exe.blockmap",
+      "size": 146732,
+      "sha256": "c3069e43f691c88f5dee2fb113bfa9e54d310a7de1d34fc9dedf084a21953cad"
+    },
+    {
+      "name": "latest.yml",
+      "size": 344,
+      "sha256": "90077510eac2baa6fa2c3dafd08fa04806b90de0ba34c52b80478b561dfb40b6"
+    }
+  ],
+  "installerSha512": "WcJXoij8eXVy4p+X27z9MGim3k3/xb5sJ+o4KF6iGztnzx62VfZ34/fzUxNrEpirHnrrvV1wPVH51ZNusK2Kgw=="
+}

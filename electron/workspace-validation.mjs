@@ -89,7 +89,9 @@ function validTask(value, deleted) {
   }
   if (!optional(value, 'scheduledDurationSeconds', v => integer(v) && v >= 1 && v <= 86400)) return false;
   if (!optional(value, 'plannedDate', validDate) || !optional(value, 'deadlineDate', validDate)) return false;
-  for (const key of ['skillId', 'subskillId']) if (!optional(value, key, id)) return false;
+  for (const key of ['skillId', 'subskillId', 'sourceNoteId', 'sourceNoteKey']) if (!optional(value, key, id)) return false;
+  if (!optional(value, 'sourceNoteText', text) || !optional(value, 'sourceNotePage', integer) ||
+      !optional(value, 'measurementMode', v => typeof v === 'boolean')) return false;
   for (const key of ['note', 'timerStepId', 'timerSessionId', 'schedulePlanId', 'scheduleNextStartAt']) if (!optional(value, key, text)) return false;
   if (value.timeSessions !== undefined && (!object(value.timeSessions) || Object.entries(value.timeSessions).some(([key, session]) =>
     !id(key) || ['__proto__', 'constructor', 'prototype'].includes(key) || !object(session) || !number(session.seconds) || !optional(session, 'stepId', id)))) return false;
@@ -116,24 +118,30 @@ const finite = value => typeof value === 'number' && Number.isFinite(value);
 
 /** @param {string} kind @param {unknown} value */
 export function validGrowthEntity(kind, value) {
-  if (!object(value) || !id(value.id) || !optional(value, 'deletedAt', number)) return false;
+  if (!object(value) || !id(value.id) || !optional(value, 'deletedAt', number) || !optional(value, 'updatedAt', number)) return false;
   if (kind === 'skill') {
     if (!text(value.title) || !number(value.createdAt) || !optional(value, 'updatedAt', number) ||
         !optional(value, 'archivedAt', number) || !optional(value, 'sourceGoalId', id) ||
         !optional(value, 'needsSetup', v => typeof v === 'boolean') || !Array.isArray(value.subskills) ||
         value.subskills.length > 1000 || value.subskills.some(sub => !object(sub) || !id(sub.id) || !text(sub.title)) ||
         new Set(value.subskills.map(sub => sub.id)).size !== value.subskills.length) return false;
+    for (const key of ['goalVersion', 'goalAcknowledgedVersion']) if (!optional(value, key, id)) return false;
+    for (const key of ['goalReachedAt', 'completedAt']) if (!optional(value, key, number)) return false;
+    if (!optional(value, 'goalState', v => typeof v === 'string' && ['active', 'achieved', 'maintaining', 'completed'].includes(v))) return false;
+    if (value.goalHistory !== undefined && (!Array.isArray(value.goalHistory) || value.goalHistory.some(entry =>
+      !object(entry) || !id(entry.version) || !finite(entry.value) || !number(entry.reachedAt) ||
+      !text(entry.metricLabel) || !text(entry.unit) || typeof entry.direction !== 'string' || !['up', 'down'].includes(entry.direction)))) return false;
     if (value.needsSetup === true && ['metric', 'start', 'goal', 'measure'].every(key => value[key] === undefined)) return true;
     return object(value.metric) && text(value.metric.label) && text(value.metric.unit) &&
       (value.metric.direction === 'up' || value.metric.direction === 'down') && object(value.start) && finite(value.start.value) && validDate(value.start.date) &&
-      object(value.goal) && finite(value.goal.value) && validDate(value.goal.date) && optional(value.goal, 'label', text) &&
-      object(value.measure) && integer(value.measure.weekday) && value.measure.weekday <= 6 &&
+      object(value.goal) && finite(value.goal.value) && optional(value.goal, 'date', validDate) && optional(value.goal, 'label', text) &&
+      (value.measure === undefined || object(value.measure) && integer(value.measure.weekday) && value.measure.weekday <= 6 &&
       number(value.measure.minutes) && optional(value.measure, 'how', text) &&
-      optional(value.measure, 'time', v => typeof v === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(v));
+      optional(value.measure, 'time', v => typeof v === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(v)));
   }
   if (!id(value.skillId) || !number(value.at)) return false;
   if (kind === 'measurement') return finite(value.value) && optional(value, 'note', text) && optional(value, 'sessionId', id);
-  if (kind !== 'practiceSession' || (value.difficulty !== 'easy' && value.difficulty !== 'edge' && value.difficulty !== 'hard') ||
+  if (kind !== 'practiceSession' || !optional(value, 'difficulty', v => typeof v === 'string' && ['easy', 'edge', 'hard'].includes(v)) ||
       !optional(value, 'durationSeconds', number) || !optional(value, 'lesson', text)) return false;
   for (const key of ['subskillId', 'taskId', 'measurementId']) if (!optional(value, key, id)) return false;
   return value.result === undefined || object(value.result) && number(value.result.done) &&
@@ -177,5 +185,9 @@ export function parseWorkspace(value) {
   const settings = value.settings;
   if (!object(settings) || typeof settings.soundEnabled !== 'boolean' || typeof settings.fireEnabled !== 'boolean' ||
       !text(settings.lang) || !['uk', 'en'].includes(settings.lang) || !text(settings.aiIconVariant)) fail('Workspace settings are invalid');
+  if (settings.completionLedger !== undefined && (!object(settings.completionLedger) ||
+      Object.entries(settings.completionLedger).some(([key, receipt]) => !id(key) || !object(receipt) ||
+        !number(receipt.completedAt) || !number(receipt.updatedAt) || typeof receipt.counted !== 'boolean' ||
+        !optional(receipt, 'retiredAt', number)))) fail('Workspace completion ledger is invalid');
   return value;
 }

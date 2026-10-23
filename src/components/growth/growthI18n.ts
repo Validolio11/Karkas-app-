@@ -19,7 +19,7 @@ export const GROWTH_STRINGS = {
     noWeekSkills: 'Цього тижня ще немає навичок', weeklyTitle: (grown: number, same: number, down: number) =>
       grown ? [(grown === 1 ? 'Одна зросла' : (UK_COUNT[grown] ?? grown) + ' зросли') + ',', down ? (UK_COUNT_LOWER[down] ?? down) + ' потребують уваги' : same === 1 ? 'одна стоїть' : same ? (UK_COUNT_LOWER[same] ?? same) + ' стоять' : 'рухаємось далі'] : ['Тиждень', down ? 'час змінити підхід' : 'твого росту'],
     growth: 'Ріст', noChange: 'Без змін', decline: 'Потрібна увага', plateau: (weeks: number) => 'Плато ' + weeks + ' тиж',
-    statuses: { ahead: 'Випереджаєш', on_track: 'На шляху', behind: 'Відстаєш', no_data: 'Немає замірів' },
+    statuses: { ahead: 'Випереджаєш', on_track: 'На шляху', behind: 'Відстаєш', no_data: 'Немає замірів', no_deadline: 'Без терміну' },
     noWeakest: 'Знайдемо твій наступний крок', noWeakestDetail: 'Три практики з результатом допоможуть визначити найслабшу ланку.',
   },
   en: {
@@ -37,7 +37,7 @@ export const GROWTH_STRINGS = {
     noWeekSkills: 'No skills for this week yet', weeklyTitle: (grown: number, same: number, down: number) =>
       grown ? [grown + (grown === 1 ? ' skill grew,' : ' skills grew,'), down ? down + ' need attention' : same ? same + ' held steady' : 'keep moving'] : ['A week', down ? 'to change approach' : 'of your growth'],
     growth: 'Growth', noChange: 'No change', decline: 'Needs attention', plateau: (weeks: number) => 'Plateau ' + weeks + ' wk',
-    statuses: { ahead: 'Ahead', on_track: 'On track', behind: 'Behind', no_data: 'No measurements' },
+    statuses: { ahead: 'Ahead', on_track: 'On track', behind: 'Behind', no_data: 'No measurements', no_deadline: 'No deadline' },
     noWeakest: 'Find your next step', noWeakestDetail: 'Three scored practices will help identify your weakest link.',
   },
 } as const;

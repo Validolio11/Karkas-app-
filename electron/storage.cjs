@@ -100,7 +100,7 @@ function assertSyncOperations(value, label) {
       if (typeof operation.id !== 'string' || operation.id.length === 0 || operation.id.length > 512) {
         throw new DesktopStorageError('INVALID_DATA', `${label} contains an invalid entity id`);
       }
-      const lifecycles = operation.kind === 'task' ? ['active', 'deleted', 'purged'] : ['active', 'deleted'];
+      const lifecycles = ['task', 'skill', 'measurement', 'practiceSession'].includes(operation.kind) ? ['active', 'deleted', 'purged'] : ['active', 'deleted'];
       if (operation.lifecycle !== undefined && !lifecycles.includes(operation.lifecycle)) {
         throw new DesktopStorageError('INVALID_DATA', `${label} contains an invalid lifecycle`);
       }
@@ -263,6 +263,8 @@ function normalizeLegacyWorkspace(legacy) {
       fireEnabled: bool(legacy.karkas_fire_enabled, true),
       lang: legacy.todo_app_lang === 'en' ? 'en' : 'uk',
       aiIconVariant: typeof legacy.karkas_ai_icon_variant === 'string' ? legacy.karkas_ai_icon_variant : 'quantum',
+      ...(legacy.karkas_completion_ledger_v1 !== undefined
+        ? { completionLedger: parseLegacyJson(legacy.karkas_completion_ledger_v1, {}) } : {}),
     },
   };
 }

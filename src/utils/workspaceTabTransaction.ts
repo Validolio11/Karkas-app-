@@ -3,6 +3,7 @@ import type { WorkspaceState } from './syncState';
 import { canonical } from './canonical';
 import { intactStoredStrategy, strategyOwnerKey, type StrategyStorage } from './personalStrategy';
 import { parseWorkspace } from './workspaceValidation';
+import { applyNotepadBatch, isNotepadBatchOperation, type NoteBatchOperation } from './notepadStorage';
 
 export interface WorkspaceTabTransaction {
   version: 1;
@@ -11,6 +12,7 @@ export interface WorkspaceTabTransaction {
   afterWorkspace: WorkspaceState;
   beforeProfile: PersonalStrategyProfile;
   afterProfile: PersonalStrategyProfile;
+  notesOperation?: NoteBatchOperation;
 }
 export const workspaceTabTransactionKey = (owner: string | null) =>
   `karkas.workspace-tab-transaction.v1:${encodeURIComponent(strategyOwnerKey(owner))}`;
@@ -26,7 +28,8 @@ function parseJournal(raw: string, owner: string | null): WorkspaceTabTransactio
   try {
     const value = JSON.parse(raw) as WorkspaceTabTransaction;
     if (!value || value.version !== 1 || value.ownerId !== owner
-      || !fullProfile(value.beforeProfile) || !fullProfile(value.afterProfile)) return null;
+      || !fullProfile(value.beforeProfile) || !fullProfile(value.afterProfile)
+      || value.notesOperation !== undefined && !isNotepadBatchOperation(value.notesOperation)) return null;
     // Recovery must retain the exact staged state, never silently normalize it.
     for (const workspace of [value.beforeWorkspace, value.afterWorkspace]) {
       if (canonical(parseWorkspace(workspace)) !== canonical(workspace)) return null;
@@ -38,11 +41,12 @@ function parseJournal(raw: string, owner: string | null): WorkspaceTabTransactio
 /** A retained transaction (including malformed/conflicted data) is never overwritten. */
 export function stageWorkspaceTabTransaction(storage: StrategyStorage, owner: string | null,
   beforeWorkspace: WorkspaceState, afterWorkspace: WorkspaceState,
-  beforeProfile: PersonalStrategyProfile, afterProfile: PersonalStrategyProfile): boolean {
+  beforeProfile: PersonalStrategyProfile, afterProfile: PersonalStrategyProfile, notesOperation?: NoteBatchOperation): boolean {
   try {
     const key = workspaceTabTransactionKey(owner);
     if (storage.getItem(key) !== null) return false;
-    const journal: WorkspaceTabTransaction = { version: 1, ownerId: owner, beforeWorkspace, afterWorkspace, beforeProfile, afterProfile };
+    const journal: WorkspaceTabTransaction = { version: 1, ownerId: owner, beforeWorkspace, afterWorkspace, beforeProfile, afterProfile,
+      ...(notesOperation ? { notesOperation } : {}) };
     const raw = JSON.stringify(journal);
     if (!parseJournal(raw, owner)) return false;
     storage.setItem(key, raw);
@@ -69,11 +73,12 @@ export function recoverWorkspaceTabTransaction(storage: StrategyStorage, owner: 
     const matches = (current: unknown, before: unknown, after: unknown) =>
       canonical(current) === canonical(before) || canonical(current) === canonical(after);
     const conflictParts: string[] = [];
-    for (const part of ['tasks', 'tabs', 'deletedTasks', 'settings'] as const) {
+    for (const part of ['tasks', 'tabs', 'deletedTasks', 'settings', 'skills', 'measurements', 'practiceSessions'] as const) {
       if (!matches(currentWorkspace[part], journal.beforeWorkspace[part], journal.afterWorkspace[part])) conflictParts.push(part);
     }
     if (!matches(currentProfile, journal.beforeProfile, journal.afterProfile)) conflictParts.push('profile');
     if (conflictParts.length) return unchanged('conflict', conflictParts);
+    if (journal.notesOperation && !applyNotepadBatch(storage as StrategyStorage & Pick<Storage, 'key' | 'length'>, owner, journal.notesOperation)) return unchanged('conflict', ['notes']);
     return { status: 'recovered', workspace: structuredClone(journal.afterWorkspace), profile: structuredClone(journal.afterProfile), conflictParts: [] };
   } catch { return unchanged('invalid'); }
 }
@@ -84,7 +89,9 @@ export async function completeWorkspaceTabTransaction(storage: StrategyStorage, 
   try {
     const key = workspaceTabTransactionKey(owner);
     if (!await workspaceSaved || expectedJournal === null || !isCurrent()
-      || storage.getItem(key) !== expectedJournal || !parseJournal(expectedJournal, owner)) return false;
+      || storage.getItem(key) !== expectedJournal) return false;
+    const journal = parseJournal(expectedJournal, owner);
+    if (!journal || journal.notesOperation && !applyNotepadBatch(storage as StrategyStorage & Pick<Storage, 'key' | 'length'>, owner, journal.notesOperation)) return false;
     storage.removeItem(key);
     return storage.getItem(key) === null;
   } catch { return false; }

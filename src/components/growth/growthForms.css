@@ -55,6 +55,12 @@
 .gf-value-line { position: relative; display: flex; align-items: baseline; gap: 8px; }
 .gf-value-line input { min-width: 1.3ch; max-width: 100%; font-size: 64px; font-weight: 800; letter-spacing: -0.045em; line-height: 1; }
 .gf-value-line > span { font-size: 18px; font-weight: 300; }
+.gf-value-line { min-width: 0; flex-wrap: wrap; }
+.gf-value-line input { flex: 1 1 65%; width: 0; min-width: 0; }
+.gf-value-line > span { max-width: 100%; overflow-wrap: anywhere; }
+.gf-metric-input { height: auto; min-height: 76px; flex-wrap: wrap; padding-top: 10px; padding-bottom: 10px; }
+.gf-metric-input #growth-metric { flex-basis: 150px; }
+.growth-setup .gf-unit { max-width: 100%; box-sizing: border-box; }
 .gf-start { background: #1f1f1f; }
 .gf-start .gf-value-head > span:first-child, .gf-start .gf-value-line > span { color: #a1a1a6; }
 .gf-start .gf-pill { color: #d1d1d6; font-weight: 700; }
@@ -178,3 +184,30 @@
 .gf-deadline:focus-within { box-shadow: inset 0 0 0 2px #6408fa; }
 .growth-setup .gf-start input::placeholder { color: #3a3a3c; }
 .gf-deadline[data-open] { box-shadow: inset 0 0 0 2px #6408fa; }
+
+/* The existing Pulse form surfaces also host optional goals and inline result editing. */
+.gf-goal-toggle { display:flex; align-items:center; gap:12px; padding:18px 24px; border-radius:28px; background:#1f1f1f; color:#fff; font-weight:700; cursor:pointer; }
+.gf-goal-toggle input { width:20px; height:20px; flex:none; accent-color:#13f287; }
+.gf-hint { margin:0; font-size:14px; line-height:1.55; color:#8e8e93; overflow-wrap:anywhere; }
+.gf-result-panel { width:100%; max-width:none; box-sizing:border-box; animation:none; }
+.gf-result-panel > * { animation:none; }
+.gf-practice-head h2 { margin:0; font-size:28px; line-height:1.15; font-weight:800; letter-spacing:-.03em; }
+.gf-result-panel .gf-goal-toggle { background:#fff; color:#090a0a; }
+.gf-result-panel .gf-goal-toggle input { accent-color:#6408fa; }
+.gf-result-fields { display:flex; flex-wrap:wrap; gap:12px; padding:20px 24px; border-radius:28px; background:#fff; }
+.gf-result-fields label, .gf-result-date, .gf-new-goal label { display:flex; flex:1; min-width:0; flex-direction:column; gap:10px; font-size:14px; font-weight:700; }
+.gf-result-fields input { width:100%; min-width:0; font-size:30px; font-weight:800; }
+.gf-result-fields output { flex-basis:100%; font-size:14px; color:#6e6e73; }
+.gf-result-date, .gf-new-goal label { padding:18px 24px; border-radius:28px; background:#fff; }
+.gf-result-date input, .gf-new-goal input { min-width:0; width:100%; font-size:16px; }
+.gf-result-panel .gf-difficulty button[aria-pressed="true"] { background:#6408fa; color:#fff; }
+.gf-practice-actions { flex-wrap:wrap; }
+.gf-result-panel .gf-hint, .gf-goal-achievement .gf-hint { color:#6e6e73; }
+.gf-result-panel { scroll-margin-top:calc(var(--pulse-header-height, 96px) + 20px); }
+.gf-new-goal { display:flex; flex-direction:column; gap:12px; }
+.gf-achievement-value { margin:0; font-size:clamp(28px,6vw,48px); font-weight:800; letter-spacing:-.03em; overflow-wrap:anywhere; }
+.gf-undo-notice { position:fixed; z-index:75; left:50%; bottom:24px; transform:translateX(-50%); display:flex; align-items:center; gap:12px; max-width:calc(100vw - 32px); box-sizing:border-box; padding:12px 16px 12px 22px; border-radius:28px; background:#fff; color:#090a0a; box-shadow:0 8px 40px #0004; font-size:14px; }
+.gf-undo-notice button { border:0; border-radius:20px; padding:10px 14px; background:#090a0a; color:#fff; font-family:inherit; font-size:14px; font-weight:700; cursor:pointer; }
+.gf-undo-notice button:focus-visible { outline:2px solid #6408fa; outline-offset:3px; }
+@media(max-width:639px) { .gf-result-panel { padding:22px 16px; border-radius:28px; } .gf-result-fields label { flex-basis:100%; } .gf-undo-notice { bottom:12px; flex-wrap:wrap; width:max-content; } }
+@media(prefers-reduced-motion:reduce) { .gf-result-panel, .gf-result-panel * { animation:none!important; transition:none!important; } }

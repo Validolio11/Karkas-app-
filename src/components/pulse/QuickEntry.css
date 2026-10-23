@@ -31,7 +31,7 @@
 .pulse-picker-card:hover{background:#3a3a3c}
 .pulse-now{min-width:0;margin-bottom:24px}
 .pulse-now-card{position:relative;isolation:isolate;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:20px;min-height:196px;padding:28px 28px 28px 36px;border-radius:48px;background:#13f287;color:#090a0a;overflow:hidden}
-.pulse-now-card:before{content:'';position:absolute;z-index:-1;inset:0 38% 0 0;opacity:.16;background:repeating-linear-gradient(100deg,transparent 0,transparent 7px,#090a0a 7px,#090a0a 9px)}
+.pulse-now-hatch{position:absolute;z-index:-1;inset:0;pointer-events:none}
 .pulse-now-copy{display:flex;flex:1 1 230px;flex-direction:column;align-items:flex-start;gap:10px;min-width:0}
 .pulse-now-eyebrow{font-size:14px;font-weight:700}
 .pulse-now .pulse-now-title{padding:0;text-align:left;background:transparent;color:inherit;font-size:32px;font-weight:800;line-height:1.05;letter-spacing:-.03em;overflow-wrap:anywhere}
@@ -51,7 +51,7 @@
 .pulse-day-state h2,.pulse-now-copy h2{margin:0;font-size:36px;font-weight:800;line-height:1.05;letter-spacing:-.035em}
 .pulse-day-state p{margin:0;font-size:14px;color:#a1a1a6}.pulse-day-state .pulse-now-primary{margin-top:4px;background:#f4f4f2;color:#090a0a}.pulse-day-state .pulse-now-primary:hover{background:#d1d1d6}
 .pulse-day-state--morning{background:#1f1f1f}.pulse-day-state-top{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%}.pulse-day-state .pulse-now-eyebrow{color:#13f287}.pulse-day-state .pulse-now-icon{width:36px;height:36px;background:#3a3a3c;color:#f4f4f2}.pulse-day-state .pulse-recap-note{font-style:italic;color:#f4f4f2}
-.pulse-now-card--empty:before{display:none}.pulse-now-card--empty h2{font-size:40px}
+.pulse-now-card--empty h2{font-size:40px}
 .pulse-now-overdue-list{list-style:none;margin:8px 0 0;padding:8px 18px;border-radius:24px;background:#1f1f1f}.pulse-now-overdue-list li{display:flex;flex-wrap:wrap;align-items:center;gap:4px 16px;padding:6px 0}.pulse-now-overdue-list li>div:first-child{display:flex;flex:1 1 200px;flex-direction:column;min-width:0}.pulse-now-overdue-list button{min-height:36px;padding:0;text-align:left;background:transparent;color:#f4f4f2;font-size:13px;overflow-wrap:anywhere}.pulse-now-overdue-list span{font-size:11px;color:#8e8e93}.pulse-overdue-actions{display:flex;flex-wrap:wrap;gap:12px}.pulse-overdue-actions button{color:#a1a1a6}
 @media(max-width:640px){.pulse-quick-add-line{padding-left:22px}.pulse-quick-add-line input{font-size:16px}.pulse-now-card,.pulse-day-state{padding:26px;border-radius:36px}.pulse-now .pulse-now-title{font-size:28px}.pulse-now-time{font-size:60px}.pulse-now-clock{flex:1 1 100%;flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px}.pulse-now-actions{gap:6px}.pulse-now .pulse-now-primary{padding:0 18px}.pulse-day-state h2,.pulse-now-card--empty h2{font-size:32px}}
 @media(prefers-reduced-motion:reduce){.pulse-quick-add button,.pulse-now button,.pulse-quick-chip>svg:last-child{transition:none}}
@@ -61,7 +61,6 @@
 .pulse-quick-skill{display:inline-flex;align-items:center;min-height:40px;max-width:100%;padding:0 14px;border-radius:20px;background:#6408fa;color:#fff;font-size:14px;font-weight:800;overflow-wrap:anywhere}
 
 /* 1:1 with docs/design-pulse/Today.dc.html: no footer under the card, paper morning card, hatch at 20% */
-.pulse-now-card:before{opacity:.2}
 .pulse-now-footer{display:none}
 .pulse-now{margin-bottom:0}
 .pulse-day-state{padding:28px 28px 28px 36px;gap:10px;justify-content:center}
@@ -102,9 +101,3 @@
 @keyframes pulseQuickUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 @media (max-width:639px){.pulse-quick-panel{margin-top:88px;border-radius:36px}.pulse-quick-add--dialog .pulse-quick-add-mark{display:none}.pulse-quick-add--dialog .pulse-quick-add-line{padding-left:22px}}
 @media (prefers-reduced-motion:reduce){.pulse-quick-overlay,.pulse-quick-panel,.pulse-quick-added-row{animation:none}}
-/* Hatch motion shared with the growth tiles: the band fills in, then its strokes keep running one pitch per loop.
-   A 100° stroke every 9px repeats every 9.139px along x, so a tile that wide runs seamlessly. */
-.pulse-now-card:before{background-size:9.139px 100%;animation:pulseHatchFill 1.6s cubic-bezier(.4,0,.2,1) .5s backwards,pulseHatchRun .35s linear infinite}
-@keyframes pulseHatchFill{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
-@keyframes pulseHatchRun{from{background-position:0 0}to{background-position:9.139px 0}}
-@media (prefers-reduced-motion:reduce){.pulse-now-card:before{animation:none}}

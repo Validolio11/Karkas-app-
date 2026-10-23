@@ -1,4 +1,4 @@
-import type { DeletedTask, PSTask } from '../types';
+import type { DeletedTask, PSTask, TaskCompletionLedger } from '../types';
 import { isCompletedArchivedTask, selectArchivedTasks } from './taskArchive';
 import { isTaskDate, localTaskDate } from './taskDates';
 import { getTaskSessionSeconds } from './taskTimer';
@@ -9,11 +9,16 @@ export interface DaySummary {
   focusSeconds: number;
   sessions: number;
   completed: { id: string; title: string }[];
+  /** Includes retained completion receipts whose full task details are no longer available. */
+  completedCount?: number;
   startedCount: number;
 }
 
+export const dayCompletedCount = (summary: DaySummary): number => summary.completedCount ?? summary.completed.length;
+
 export interface DayLog {
   closed: Record<string, { closedAt: number; focusSeconds: number; sessions: number; completed: number; note?: string }>;
+  resumed?: Record<string, number>;
   recapDismissed?: string;
 }
 
@@ -88,7 +93,7 @@ function recordedIntervals(task: PSTask, now: number, today: boolean): Interval[
 }
 
 /** Missing dates and cumulative totals never become invented daily work. */
-export function summarizeDay(tasks: readonly PSTask[], deletedTasks: readonly DeletedTask[], date: string, now: number): DaySummary {
+export function summarizeDay(tasks: readonly PSTask[], deletedTasks: readonly DeletedTask[], date: string, now: number, completionLedger?: TaskCompletionLedger): DaySummary {
   const summary: DaySummary = { date, focusSeconds: 0, sessions: 0, completed: [], startedCount: 0 };
   const bounds = dayBounds(date);
   if (!bounds || !validTime(now)) return summary;
@@ -102,7 +107,9 @@ export function summarizeDay(tasks: readonly PSTask[], deletedTasks: readonly De
     const events = task.activityTrail ?? [];
     if (inDay(task.startedAt) || events.some(event => event.kind === 'started' && inDay(event.at)) ||
       (task.timerRunning && inDay(task.timerStartedAt))) summary.startedCount++;
-    if ((task.done && inDay(task.completedAt)) || events.some(event => event.kind === 'completed' && inDay(event.at))) {
+    const receipt = completionLedger && Object.hasOwn(completionLedger, task.id) ? completionLedger[task.id] : undefined;
+    if (receipt ? receipt.counted && inDay(receipt.completedAt)
+      : (task.done && inDay(task.completedAt)) || events.some(event => event.kind === 'completed' && inDay(event.at))) {
       summary.completed.push({ id: task.id, title: task.title });
     }
     const intervals = recordedIntervals(task, now, date === localTaskDate(now));
@@ -122,6 +129,11 @@ export function summarizeDay(tasks: readonly PSTask[], deletedTasks: readonly De
       coveredUntil = Math.max(coveredUntil, interval.end);
     }
   }
+  // Receipts retain only completion evidence. They cannot supply a title, timer or session.
+  const knownIds = new Set([...tasks, ...deletedTasks].map(task => task.id));
+  const additional = Object.entries(completionLedger ?? {}).filter(([id, receipt]) =>
+    !knownIds.has(id) && receipt.counted && inDay(receipt.completedAt)).length;
+  if (additional > 0) summary.completedCount = summary.completed.length + additional;
   return summary;
 }
 
@@ -145,16 +157,18 @@ export function shouldOfferDayClose({ now, closeHour, summary, closedDates }: {
   if (!validTime(now) || !Number.isFinite(closeHour) || summary.date !== localTaskDate(now)) return false;
   const closed = Array.isArray(closedDates) ? closedDates.includes(summary.date)
     : closedDates instanceof Set ? closedDates.has(summary.date) : Object.prototype.hasOwnProperty.call(closedDates, summary.date);
-  return !closed && new Date(now).getHours() >= closeHour && (summary.focusSeconds >= 60 || summary.completed.length > 0);
+  return !closed && new Date(now).getHours() >= closeHour && (summary.focusSeconds >= 60 || dayCompletedCount(summary) > 0);
 }
 
 export function morningRecap(summary: DaySummary): {
   date: string; focusSeconds: number; completedTitle?: string; remainingCompleted: number; completedCount: number;
 } | null {
-  if (summary.focusSeconds <= 0 && !summary.completed.length) return null;
+  const completedCount = dayCompletedCount(summary);
+  if (summary.focusSeconds <= 0 && completedCount <= 0) return null;
+  const completedTitle = summary.completed[0]?.title;
   return { date: summary.date, focusSeconds: summary.focusSeconds,
-    ...(summary.completed.length ? { completedTitle: summary.completed[0].title } : {}),
-    remainingCompleted: Math.max(0, summary.completed.length - 1), completedCount: summary.completed.length };
+    ...(completedTitle ? { completedTitle } : {}),
+    remainingCompleted: Math.max(0, completedCount - (completedTitle ? 1 : 0)), completedCount };
 }
 
 export function pluralUk(count: number, one: string, few: string, many: string): string {
@@ -191,5 +205,8 @@ export function normalizeDayLog(value: unknown): DayLog {
     }
   }
   if (isTaskDate(source.recapDismissed)) result.recapDismissed = source.recapDismissed;
+  if (source.resumed && typeof source.resumed === 'object' && !Array.isArray(source.resumed)) {
+    result.resumed = Object.fromEntries(Object.entries(source.resumed).filter(([date, at]) => isTaskDate(date) && validTime(at)).sort(([a], [b]) => b.localeCompare(a)).slice(0, 60)) as Record<string, number>;
+  }
   return result;
 }

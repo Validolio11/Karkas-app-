@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { DeletedTask, PSTask, TaskActivityEvent } from '../types';
+import type { DeletedTask, PSTask, TaskActivityEvent, TaskCompletionLedger } from '../types';
 import { localTaskDate } from './taskDates';
+import { normalizeCompletedTaskHistory } from './taskArchive';
 import {
-  carryOverCandidates, dayCloseHour, formatDayFocus, formatDaySessions, morningRecap,
+  carryOverCandidates, dayCloseHour, dayCompletedCount, formatDayFocus, formatDaySessions, morningRecap,
   normalizeDayLog, pluralUk, shouldOfferDayClose, summarizeDay,
 } from './dayRecap';
 
@@ -111,6 +112,70 @@ test('duplicate rows and duplicate completion events acknowledge each task once'
   assert.equal(summarize([closed, closed]).completed.length, 1);
   assert.equal(summarize([closed, closed]).focusSeconds, 600);
   assert.equal(summarize([task({ activityTrail: [event('completed', at(12)), event('reopened', at(13))] })]).completed.length, 1);
+});
+
+test('completion Undo and exclusions override historical events when a receipt is present', () => {
+  const undone = task({ activityTrail: [event('completed', at(12))] });
+  const excluded = task({ ...undone, done: true, completedAt: at(12) });
+  const receipt = { one: { completedAt: at(12), updatedAt: at(13), counted: false } };
+  assert.equal(summarizeDay([undone], [], date, now, receipt).completed.length, 0);
+  assert.equal(summarizeDay([excluded], [], date, now, receipt).completed.length, 0);
+});
+
+test('a corrected completion date takes precedence over the old activity date', () => {
+  const tomorrow = new Date(2026, 9, 21, 12).getTime();
+  const completed = task({ done: true, completedAt: at(12), activityTrail: [event('completed', at(12))] });
+  const receipt = { one: { completedAt: tomorrow, updatedAt: tomorrow, counted: true } };
+  assert.equal(summarizeDay([completed], [], date, tomorrow + 60000, receipt).completed.length, 0);
+  assert.equal(summarizeDay([completed], [], localTaskDate(tomorrow), tomorrow + 60000, receipt).completed.length, 1);
+});
+
+test('daily results count all 51 completions after full history retention keeps only 50 real titles', () => {
+  const tasks = Array.from({ length: 51 }, (_, index) => task({ id: 'done-' + index, title: 'Known ' + index,
+    done: true, completedAt: at(12) + index * 1000, updatedAt: at(12) + index * 1000 }));
+  const retained = normalizeCompletedTaskHistory({ tasks, deletedTasks: [], tabs: [{ id: 'focus', name: 'Work' }],
+    settings: { soundEnabled: true, fireEnabled: false, lang: 'uk', aiIconVariant: 'quantum' } }, now);
+  const result = summarizeDay(retained.tasks, retained.deletedTasks, date, now, retained.settings.completionLedger);
+  assert.equal(result.completed.length, 50);
+  assert.equal(result.completedCount, 51);
+  assert.equal(dayCompletedCount(result), 51);
+  assert.deepEqual(result.completed.map(item => item.title), tasks.slice(1).map(item => item.title));
+  assert.equal(result.focusSeconds, 0);
+  assert.equal(result.sessions, 0);
+  const recap = morningRecap(result)!;
+  assert.equal(recap.completedTitle, 'Known 1');
+  assert.equal(recap.completedCount, 51);
+  assert.equal(recap.remainingCompleted, 50);
+});
+
+test('receipts alone can offer day close and morning recap without inventing titles or measured work', () => {
+  const receipts: TaskCompletionLedger = {
+    one: { completedAt: at(10), updatedAt: at(11), retiredAt: at(11), counted: true },
+    two: { completedAt: at(12), updatedAt: at(13), retiredAt: at(13), counted: true },
+  };
+  const result = summarizeDay([], [], date, now, receipts);
+  assert.deepEqual(result, { date, focusSeconds: 0, sessions: 0, completed: [], completedCount: 2, startedCount: 0 });
+  assert.equal(shouldOfferDayClose({ now, closeHour: 18, summary: result, closedDates: [] }), true);
+  assert.deepEqual(morningRecap(result), { date, focusSeconds: 0, remainingCompleted: 2, completedCount: 2 });
+  assert.equal(dayCompletedCount(summarize([])), 0);
+});
+
+test('daily receipt extras exclude false credits, other dates, future timestamps and identities still present in full records', () => {
+  const known = task({ id: 'known', title: 'Known task', done: true, completedAt: at(11) });
+  const undone = task({ id: 'undone', activityTrail: [event('completed', at(12))] });
+  const pending = task({ id: 'pending', done: true, scheduledPending: true, completedAt: at(12) });
+  const accidental: DeletedTask = { ...task({ id: 'accidental', done: true, completedAt: at(12) }), deletedAt: at(13), deletionReason: 'accidental' };
+  const receipt = (completedAt: number, counted = true) => ({ completedAt, updatedAt: now, counted });
+  const receipts: TaskCompletionLedger = { known: receipt(at(11)), undone: receipt(at(12), false), pending: receipt(at(12)),
+    accidental: receipt(at(12)), excluded: receipt(at(12), false), retired: receipt(at(13)),
+    yesterday: receipt(new Date(2026, 9, 19, 12).getTime()), tomorrow: receipt(new Date(2026, 9, 21, 12).getTime()), future: receipt(at(21)) };
+  const result = summarizeDay([known, undone, pending], [accidental], date, now, receipts);
+  assert.deepEqual(result.completed, [{ id: known.id, title: known.title }]);
+  assert.equal(dayCompletedCount(result), 2);
+  assert.equal(morningRecap(result)!.remainingCompleted, 1);
+  const withoutExtra = summarizeDay([known, undone], [], date, now, { known: receipts.known, undone: receipts.undone });
+  assert.equal(withoutExtra.completedCount, undefined);
+  assert.equal(dayCompletedCount(withoutExtra), 1);
 });
 
 test('recorded attempts count their credited duration and overlapping explicit credits are counted once', () => {

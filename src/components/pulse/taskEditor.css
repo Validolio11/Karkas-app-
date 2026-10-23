@@ -1,0 +1,15 @@
+.pulse-task-editor-overlay{position:fixed;inset:0;z-index:1500;background:#090a0acc;display:grid;place-items:center;padding:24px;overflow:auto;backdrop-filter:blur(8px)}
+.pulse-task-editor{width:min(680px,100%);max-height:calc(100dvh - 48px);overflow:auto;border-radius:32px;background:#202020;color:#f5f5f3;padding:28px;font-family:Manrope,Arial,sans-serif;color-scheme:dark}
+.pulse-task-editor header,.pulse-task-editor footer{display:flex;align-items:center;justify-content:space-between;gap:16px}.pulse-task-editor h2{font-size:24px;font-weight:800;margin:0}
+.pulse-task-editor button{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:0;border-radius:28px;padding:12px 18px;background:#383838;color:inherit;font:inherit;font-weight:750;min-height:44px;cursor:pointer}
+.pulse-task-editor header button{padding:12px}.pulse-task-editor form{display:grid;gap:18px;margin-top:22px}
+.pulse-task-editor label{display:grid;gap:8px;min-width:0;color:#bcbcbc;font-size:13px;font-weight:700}
+.pulse-task-editor input,.pulse-task-editor textarea,.pulse-task-editor select{width:100%;box-sizing:border-box;background:#090a0a;color:#f5f5f3;border:1px solid transparent;border-radius:18px;padding:13px 16px;min-height:48px;font:inherit;font-size:15px;resize:vertical}
+.pulse-task-editor :is(input,textarea,select,button):focus-visible{outline:2px solid #00ed85;outline-offset:2px}.pulse-task-editor input[placeholder]{font-size:20px;font-weight:750}.pulse-task-fields{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.pulse-task-editor summary{cursor:pointer;font-size:14px;font-weight:750;padding:6px 0 14px}.pulse-task-editor details[open]{display:grid;gap:14px}.pulse-task-editor .pulse-task-create{background:#f5f5f3;color:#090a0a}.pulse-task-editor button:disabled{opacity:.4;cursor:default}
+.pulse-task-editor footer span{font-size:12px;color:#ababab}.pulse-task-error{color:#ffb3a9;font-size:13px}.pulse-task-error button{margin-left:8px}
+.pulse-task-editor .pulse-task-checkbox{display:flex;align-items:center;gap:10px;cursor:pointer}.pulse-task-editor .pulse-task-checkbox input{width:20px;min-height:20px;height:20px;padding:0;accent-color:#00ed85;flex:none}
+.pulse-task-hint{font-size:12px;color:#ababab;line-height:1.5;margin:0 0 12px}.pulse-task-error p{margin:0 0 10px}.pulse-task-error-actions{display:flex;flex-wrap:wrap;gap:8px}.pulse-task-error-actions button{margin:0;font-size:12px}
+.pulse-task-schedule-fields{border:0;padding:0;margin:0;min-width:0;display:grid;gap:14px}.pulse-task-schedule-fields:disabled{opacity:.6}
+.pulse-task-editor-actions{display:flex;flex-wrap:wrap;gap:10px}.pulse-task-editor-actions button{font-size:13px}
+@media(max-width:600px){.pulse-task-editor-overlay{padding:12px}.pulse-task-editor{padding:20px;border-radius:24px;max-height:calc(100dvh - 24px)}.pulse-task-fields{grid-template-columns:1fr}.pulse-task-editor footer{flex-wrap:wrap}}

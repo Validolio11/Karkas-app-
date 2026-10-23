@@ -2,6 +2,7 @@ import { canonical } from './canonical';
 import type { UserCloudState } from '../services/firebase';
 import { applyWorkspaceMutation, diffWorkspaceMutation } from './syncOperations';
 import { migrateSystemCategories } from './systemViews';
+import { mergeCompletionLedgers } from './taskArchive';
 
 export type WorkspaceState = Pick<UserCloudState, 'tasks' | 'tabs' | 'deletedTasks' | 'settings' | 'skills' | 'measurements' | 'practiceSessions'>;
 
@@ -98,5 +99,10 @@ export function mergeWorkspace(
     settings: options.preferRemoteSettingsOnFirstSync ? local.settings : remote.settings,
   };
   const mutation = diffWorkspaceMutation(baseline, local, { clientId: 'merge-local', sequence: 1 }, 0);
-  return applyWorkspaceMutation(remote, mutation);
+  // Completion receipts are account data, even when first-sync UI defaults are ignored.
+  const completionLedger = remote.settings.completionLedger !== undefined || local.settings.completionLedger !== undefined
+    ? mergeCompletionLedgers(remote.settings.completionLedger, local.settings.completionLedger) : undefined;
+  return applyWorkspaceMutation({ ...remote, settings: { ...remote.settings,
+    ...(completionLedger !== undefined ? { completionLedger } : {}),
+  } }, mutation);
 }

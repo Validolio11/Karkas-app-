@@ -14,11 +14,14 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { PSTask, DeletedTask, TaskTab, FilterMode, WorkflowStats, TaskStepItem, AdaptiveProfile, AITaskUpdate, AITimerSettings, AIDeletedTaskRef, NotepadNote, NewTaskInput } from './types';
 import { isTaskDate, localTaskDate, taskDateEnd } from './utils/taskDates';
 import { annotateTaskChanges } from './utils/taskActivity';
-import { isCompletedArchivedTask, selectRelevantArchivedTasks } from './utils/taskArchive';
+import { isCompletedArchivedTask, selectRelevantArchivedTasks, normalizeCompletedTaskHistory, retireCompletedTask, countCompletedTasks, mergeCompletionLedgers } from './utils/taskArchive';
 import { TaskCard } from './components/TaskCard';
 import { DashboardView } from './components/DashboardView';
 import { NotepadView } from './components/NotepadView';
 import { useAccountNotes } from './hooks/useAccountNotes';
+import type { NotepadTaskCandidate, NotepadTaskConfig, NotepadTaskResult } from './utils/noteTaskConversion';
+import { noteSourceHash } from './utils/noteTaskConversion';
+import { applyNotepadBatch, prepareNotepadReplacement, notesOperationPrefix } from './utils/notepadStorage';
 import { useAccountAvatar } from './hooks/useAccountAvatar';
 import { growthStateFrom, useGrowth, type GrowthState } from './hooks/useGrowth';
 import { normalizeQuickAddCategory } from './utils/quickAddParse';
@@ -26,6 +29,7 @@ import { useDialogKeyboard } from './components/useDialogKeyboard';
 import { GrowthView } from './components/growth/GrowthView';
 import { SkillSetup } from './components/growth/SkillSetup';
 import { PracticeFinishDialog } from './components/growth/PracticeFinishDialog';
+import { GrowthFeedback } from './components/growth/GrowthFeedback';
 import { GROWTH_INTEGRATION_STRINGS } from './components/growth/growthIntegrationI18n';
 import { isConfiguredSkill } from './utils/growth';
 import type { GrowthSkill, Skill } from './types';
@@ -38,13 +42,18 @@ import { QuickAddDialog } from './components/pulse/QuickAddDialog';
 import { SettingsView } from './components/pulse/SettingsView';
 import { AccountView } from './components/pulse/AccountView';
 import { TodayTaskRow } from './components/pulse/TodayTaskRow';
-import { QuickAddDrawer, type QuickAddPrefill } from './components/QuickAddDrawer';
+import { TaskCompletionNotice } from './components/pulse/TaskCompletionNotice';
+import { CompletedTaskDeleteDialog } from './components/pulse/CompletedTaskDeleteDialog';
+import type { TaskCompletionLedger } from './types';
+import type { QuickAddPrefill } from './components/QuickAddDrawer';
+import { TaskEditor, type TaskEditPatch } from './components/pulse/TaskEditor';
+import { ArchiveView, type ArchiveItem } from './components/pulse/ArchiveView';
 import { QuickAddLine } from './components/QuickAddLine';
 import { NowStrip } from './components/NowStrip';
 import { DayCloseDialog } from './components/DayCloseDialog';
 import { OnboardingChecklist } from './components/OnboardingChecklist';
 import { readOnboarding, writeOnboarding, shouldOfferOnboarding, type OnboardingState } from './utils/onboarding';
-import { summarizeDay, carryOverCandidates, dayCloseHour, shouldOfferDayClose, morningRecap, formatDayFocus, normalizeDayLog, type DayLog } from './utils/dayRecap';
+import { summarizeDay, dayCompletedCount, carryOverCandidates, dayCloseHour, shouldOfferDayClose, morningRecap, formatDayFocus, normalizeDayLog, type DayLog } from './utils/dayRecap';
 import { AIAssistantSheet } from './components/AIAssistantSheet';
 import { ManageTabsModal } from './components/ManageTabsModal';
 import { sound } from './utils/audio';
@@ -56,7 +65,7 @@ import {
   TRANSLATIONS,
   getRandomTabColor,
 } from './utils/i18n';
-import { Trash, Plus, CheckCircle, Search, X, AlertTriangle, Sparkles } from 'lucide-react';
+import { Trash, Plus, Search, X, AlertTriangle, Sparkles } from 'lucide-react';
 import { motion, AnimatePresence, MotionConfig } from 'motion/react';
 import { AIIconId, getSavedAIIconId } from './components/AIIconTemplates';
 import { 
@@ -106,6 +115,7 @@ import { workspaceTabTransactionKey, stageWorkspaceTabTransaction, recoverWorksp
 
 const STORAGE_KEY = 'life_todo_tasks_v2';
 const DELETED_STORAGE_KEY = 'karkas_deleted_tasks_v2';
+const COMPLETION_LEDGER_KEY = 'karkas_completion_ledger_v1';
 const TABS_KEY = 'life_todo_tabs_v2';
 
 const INITIAL_NOTES_UK: NotepadNote[] = [
@@ -205,7 +215,7 @@ export default function App() {
   });
 
   const [initialWorkspace] = useState(() => readLocalWorkspace(localStorage,
-    { tasks: STORAGE_KEY, tabs: TABS_KEY, deletedTasks: DELETED_STORAGE_KEY,
+    { tasks: STORAGE_KEY, tabs: TABS_KEY, deletedTasks: DELETED_STORAGE_KEY, completionLedger: COMPLETION_LEDGER_KEY,
       skills: GROWTH_SKILLS_KEY, measurements: GROWTH_MEASUREMENTS_KEY, practiceSessions: GROWTH_SESSIONS_KEY },
     { soundEnabled: true, fireEnabled: true, lang, aiIconVariant: 'quantum' }));
   const [growthSetup, setGrowthSetup] = useState<{ skillId?: string; initialTitle?: string } | null>(null);
@@ -228,6 +238,7 @@ export default function App() {
   const [dayShiftNotice, setDayShiftNotice] = useState<{ ownerId: string | null; text: string; undoToken?: string } | null>(null);
   const dayShiftBusyRef = React.useRef(false);
   const [completedNoticeId, setCompletedNoticeId] = useState<string | null>(null);
+  const [completedTaskToDelete, setCompletedTaskToDelete] = useState<string | null>(null);
   const breakdownRequestRef = React.useRef<AbortController | null>(null);
   useEffect(() => { document.documentElement.lang = lang; }, [lang]);
   useEffect(() => () => breakdownRequestRef.current?.abort(), []);
@@ -248,6 +259,7 @@ export default function App() {
   const timerNoticeScopeRef = React.useRef(0);
   const timerWorkspaceReadyRef = React.useRef(false);
   const [workspaceReady, setWorkspaceReady] = useState(false);
+  const shownDeletedRef = React.useRef(new Set<string>());
   const previousSessionTasksRef = React.useRef<{ tasks: PSTask[]; ownerId: string | null; ready: boolean } | null>(null);
   const [sessionSummary, setSessionSummary] = useState<{ session: EndedSession; task: PSTask; ownerId: string | null; shownAt: number } | null>(null);
   const dismissSessionSummary = React.useCallback(() => setSessionSummary(null), []);
@@ -337,17 +349,34 @@ export default function App() {
       if (hash === '#dashboard') return 'DASHBOARD';
       if (hash === '#strategy' || hash === '#growth') return 'STRATEGY';
       if (hash === '#notes' || hash === '#notepad') return 'NOTES';
-      if (hash === '#history') return 'HISTORY';
+      if (hash === '#history' || hash === '#archive') return 'ALL';
     }
     return 'ALL';
   });
 
-  const { notes, notesOwner, storageError: notesStorageError, switchOwner: switchNotesOwner,
+  const { notes, deletedNotes, notesOwner, storageError: notesStorageError, switchOwner: switchNotesOwner,
     addNote: handleAddNote, updateNote: handleUpdateNote, deleteNote: handleDeleteNote,
-    restoreNote: handleRestoreNote, getNotes: getCurrentNotes, replaceNotes: replaceAgentNotes } = useAccountNotes(localStorage.getItem('karkas_workspace_owner'),
+    restoreNote: handleRestoreNote, purgeNote: handlePurgeNote, getNotes: getCurrentNotes, getDeletedNotes: getCurrentDeletedNotes, replaceNotes: replaceAgentNotes, refreshNotes } = useAccountNotes(localStorage.getItem('karkas_workspace_owner'),
       lang === 'uk' ? INITIAL_NOTES_UK : INITIAL_NOTES_EN);
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [quickAddPrefill, setQuickAddPrefill] = useState<QuickAddPrefill>();
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [revealNoteId, setRevealNoteId] = useState<string | null>(null);
+  const [revealGrowthSkillId, setRevealGrowthSkillId] = useState<string | null>(null);
+  const [taskUndo, setTaskUndo] = useState<{ ownerId: string | null; expiresAt: number; before: PSTask; after: PSTask; keys: (keyof PSTask)[]; label: string;
+    prunedTasks: PSTask[]; prunedDeleted: DeletedTask[]; prunedReceipts: TaskCompletionLedger; retiredTargetReceipt?: TaskCompletionLedger[string] } | null>(null);
+  useEffect(() => {
+    if (!taskUndo) return;
+    const timer = window.setTimeout(() => setTaskUndo(null), Math.max(0, taskUndo.expiresAt - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [taskUndo]);
+  useEffect(() => {
+    if (editingTaskId && workspaceReady && !tasks.some(task => task.id === editingTaskId)) {
+      setEditingTaskId(null);
+      setActionNotice(lang === 'uk' ? 'Завдання більше не доступне для редагування. Перевірте Архів.' : 'This task is no longer available for editing. Check Archive.');
+    }
+  }, [editingTaskId, tasks, workspaceReady]);
   const [isQuickAddOpen, setIsQuickAddOpen] = useState(false);
   const [motionEnabled, setMotionEnabled] = useState(() => { try { return localStorage.getItem('karkas_motion') !== 'off'; } catch { return true; } });
   useEffect(() => {
@@ -360,6 +389,10 @@ export default function App() {
   const [isAccountOpen, setIsAccountOpen] = useState(false);
   const [isUpdateOpen, setIsUpdateOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  useEffect(() => { if (selectedPhase === 'HISTORY') { setSelectedPhase('ALL'); setIsSettingsOpen(true); setArchiveOpen(true); } }, [selectedPhase]);
+  useEffect(() => {
+    if (window.location.hash === '#history' || window.location.hash === '#archive') { setIsSettingsOpen(true); setArchiveOpen(true); }
+  }, []);
   const [launchAtStartup, setLaunchAtStartup] = useState<boolean | null>(null);
   const [startupPending, setStartupPending] = useState(() => Boolean(window.karkasDesktop));
   const [startupError, setStartupError] = useState<'read' | 'write' | 'unchanged' | null>(null);
@@ -524,10 +557,21 @@ export default function App() {
   const [isWindowMinimized, setIsWindowMinimized] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [noteSearchQuery, setNoteSearchQuery] = useState('');
   const [searchVisible, setSearchVisible] = useState(false);
+  const [searchFocusToken, setSearchFocusToken] = useState(0);
   const [tabToDeleteConfirm, setTabToDeleteConfirm] = useState<TaskTab | null>(null);
   useDialogKeyboard(!!tabToDeleteConfirm, () => setTabToDeleteConfirm(null), 'tab-delete-confirm-dialog');
   const searchInputRef = React.useRef<HTMLInputElement | null>(null);
+  const openHeaderSearch = () => {
+    setIsSettingsOpen(false); setIsAccountOpen(false);
+    if (selectedPhase !== 'NOTES') setSelectedPhase('ALL');
+    setSearchVisible(true);
+    setSearchFocusToken(value => value + 1);
+  };
+  const closeHeaderSearch = () => {
+    setSearchVisible(false); setSearchQuery(''); setNoteSearchQuery('');
+  };
   const quickAddInputRef = React.useRef<HTMLInputElement | null>(null);
   const quickAddVisible = workspaceReady && activeFilter !== 'DONE'
     && !['DASHBOARD', 'STRATEGY', 'NOTES', 'HISTORY'].includes(selectedPhase);
@@ -560,7 +604,7 @@ export default function App() {
         else if (isSettingsOpen) setIsSettingsOpen(false);
         else if (isAddOpen) setIsAddOpen(false);
         else if (isWindowMinimized) setIsWindowMinimized(false);
-        else if (searchQuery || searchVisible) { setSearchQuery(''); setSearchVisible(false); }
+        else if (searchQuery || noteSearchQuery || searchVisible) closeHeaderSearch();
         return;
       }
 
@@ -581,12 +625,7 @@ export default function App() {
       if (((e.ctrlKey || e.metaKey) && (shortcut === 'KeyF' || e.key.toLowerCase() === 'f') && !e.shiftKey) || e.key === '/' && !isInputFocused) {
         if (isAIOpen || isAccountOpen || isSettingsOpen || isUpdateOpen || isManageTabsOpen || isAddOpen || isQuickAddOpen) return;
         e.preventDefault();
-        if (selectedPhase === 'NOTES') {
-          document.querySelector<HTMLInputElement>('[data-pulse-notes] input')?.focus();
-        } else {
-          setSelectedPhase('ALL'); setSearchVisible(true);
-          requestAnimationFrame(() => searchInputRef.current?.focus());
-        }
+        openHeaderSearch();
         return;
       }
 
@@ -609,7 +648,7 @@ export default function App() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isAIOpen, isAccountOpen, isManageTabsOpen, isUpdateOpen, isSettingsOpen, isAddOpen, isQuickAddOpen, isWindowMinimized, searchQuery, searchVisible, quickAddVisible, selectedPhase]);
+  }, [isAIOpen, isAccountOpen, isManageTabsOpen, isUpdateOpen, isSettingsOpen, isAddOpen, isQuickAddOpen, isWindowMinimized, searchQuery, noteSearchQuery, searchVisible, quickAddVisible, selectedPhase]);
 
   const handleToggleFullscreen = () => {
     sound.tick(500);
@@ -749,12 +788,14 @@ export default function App() {
   }, [soundEnabled]);
   const [recentlyDeleted, setRecentlyDeleted] = useState<PSTask | null>(null);
 
-  // Auto-dismiss "Task deleted" undo toast after 10 seconds
+  // The durable deletedAt deadline survives reload; it never blocks subsequent work.
   useEffect(() => {
     if (!recentlyDeleted) return;
+    const archived = deletedTasks.find(task => task.id === recentlyDeleted.id);
+    const remaining = (archived?.deletedAt ?? Date.now()) + 8000 - Date.now();
     const timer = setTimeout(() => {
       setRecentlyDeleted(null);
-    }, 10000);
+    }, Math.max(0, remaining));
     return () => clearTimeout(timer);
   }, [recentlyDeleted]);
 
@@ -762,6 +803,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [accountAvatarUrl, setAccountAvatarUrl] = useAccountAvatar(currentUser?.uid ?? null, currentUser?.photoURL);
   const strategyOwner = currentUser?.uid ?? null;
+  useEffect(() => { setTaskUndo(null); setEditingTaskId(null); setArchiveOpen(false); setRevealNoteId(null); setRevealGrowthSkillId(null); setRecentlyDeleted(null); }, [strategyOwner]);
   const [personalProfile, setPersonalProfile] = useState(() => readPersonalStrategy(localStorage, localStorage.getItem('karkas_workspace_owner')));
   const [profileOwner, setProfileOwner] = useState<string | null>(() => localStorage.getItem('karkas_workspace_owner'));
   const personalProfileRef = React.useRef(personalProfile);
@@ -832,6 +874,17 @@ export default function App() {
 
   // Deleted tasks archive state
   const [deletedTasks, setDeletedTasks] = useState<DeletedTask[]>(initialWorkspace.workspace.deletedTasks);
+  const [completionLedger, setCompletionLedger] = useState<TaskCompletionLedger | undefined>(initialWorkspace.workspace.settings.completionLedger);
+  useEffect(() => {
+    if (!workspaceReady || workspaceOwnerRef.current !== strategyOwner) return;
+    const pending = deletedTasks.filter(task => task.deletedAt + 8000 > Date.now()).sort((a, b) => b.deletedAt - a.deletedAt)[0];
+    if (!pending) return;
+    const key = (strategyOwner ?? 'guest') + ':' + pending.id + ':' + pending.deletedAt;
+    if (!shownDeletedRef.current.has(key)) { shownDeletedRef.current.add(key); setRecentlyDeleted(pending); }
+  }, [deletedTasks, workspaceReady, strategyOwner]);
+  const currentCompletionLedgerRef = React.useRef(completionLedger);
+  currentCompletionLedgerRef.current = completionLedger;
+  const completionLedgerOwnerRef = React.useRef(localStorage.getItem('karkas_workspace_owner'));
 
   // Track state values inside refs to avoid re-subscribing Firestore listener unnecessarily
   const currentTasksRef = React.useRef(tasks);
@@ -916,7 +969,7 @@ export default function App() {
       else if (hash === '#dashboard') setSelectedPhase('DASHBOARD');
       else if (hash === '#strategy' || hash === '#growth') setSelectedPhase('STRATEGY');
       else if (hash === '#notes' || hash === '#notepad') setSelectedPhase('NOTES');
-      else if (hash === '#history') setSelectedPhase('HISTORY');
+      else if (hash === '#history' || hash === '#archive') { setIsSettingsOpen(true); setArchiveOpen(true); }
       else if (isSystemView(selectedPhase) && selectedPhase !== 'ALL') setSelectedPhase('ALL');
     };
     window.addEventListener('hashchange', handleHashChange);
@@ -947,11 +1000,11 @@ export default function App() {
       return;
     }
     setSessionSummary({ session: ended, task, ownerId, shownAt: now });
-    if (ended.reason === 'completed') setCompletedNoticeId(id => id === ended.taskId ? null : id);
     sound.sessionComplete();
   }, [tasks, workspaceReady, currentUser?.uid]);
 
   const desktopWorkspaceReadyRef = React.useRef(!window.karkasDesktop);
+  const desktopMirrorSequenceRef = React.useRef(new Map<string | null, number>());
   const baseWorkspaceRef = React.useRef<(WorkspaceState & { revision?: number }) | null>(undefined);
   if (baseWorkspaceRef.current === undefined) {
     try {
@@ -979,37 +1032,72 @@ export default function App() {
       fireEnabled: currentFireEnabledRef.current,
       lang: currentLangRef.current,
       aiIconVariant: currentAiIconVariantRef.current,
+      ...(currentCompletionLedgerRef.current !== undefined ? { completionLedger: currentCompletionLedgerRef.current } : {}),
     },
   });
   const persistWorkspace = (): Promise<boolean> => {
     if (!canPersistWorkspaceRef.current) return Promise.resolve(false);
     const ownerId = workspaceOwnerRef.current;
+    const mirrorSequence = (desktopMirrorSequenceRef.current.get(ownerId) ?? 0) + 1;
+    desktopMirrorSequenceRef.current.set(ownerId, mirrorSequence);
     const record = {
       workspace: readWorkspace(),
       base: baseWorkspaceRef.current,
       lastSyncTime: lastSyncTimeRef.current,
+      desktopMirrorPending: !!window.karkasDesktop,
     };
     const serialized = JSON.stringify(record);
     writeRecoverableJson(localStorage, accountKey(ownerId), serialized);
     if (!window.karkasDesktop) return Promise.resolve(true);
     if (!desktopWorkspaceReadyRef.current) return Promise.resolve(false);
     // Capture an immutable record: refs and base can change while IPC is pending.
-    const capturedRecord = JSON.parse(serialized);
+    const { desktopMirrorPending: _pendingMirror, ...capturedRecord } = JSON.parse(serialized);
     try {
       return window.karkasDesktop.workspace.saveAccount({ ownerId, record: capturedRecord })
-        .then(result => result.ok).catch(() => false);
+        .then(result => {
+          if (result.ok) {
+            try {
+              // Clear only this exact acknowledged snapshot; a newer commit keeps its own pending marker.
+              if (desktopMirrorSequenceRef.current.get(ownerId) === mirrorSequence && localStorage.getItem(accountKey(ownerId)) === serialized) writeRecoverableJson(localStorage, accountKey(ownerId),
+                JSON.stringify({ ...record, desktopMirrorPending: false }));
+            } catch { /* Keeping the marker simply replays the same authoritative local snapshot on reload. */ }
+          }
+          return result.ok;
+        }).catch(() => false);
     } catch { return Promise.resolve(false); }
   };
   const applyWorkspace = (input: WorkspaceState, localSessionChange = false) => {
     if (!canPersistWorkspaceRef.current) throw new Error('Recovery backup failed; workspace writes are blocked');
     // Missing legacy fields are unknown, not deletions of an acknowledged record.
-    const hydrated = { ...input };
+    const hydrated = { ...input, settings: { ...input.settings } };
+    // Legacy copies of this account cannot erase credits for retired history.
+    // A different account must start from its own ledger.
+    if (completionLedgerOwnerRef.current === workspaceOwnerRef.current && currentCompletionLedgerRef.current !== undefined) {
+      hydrated.settings.completionLedger = mergeCompletionLedgers(currentCompletionLedgerRef.current, input.settings.completionLedger);
+    }
     for (const key of growthFields) {
       if (hydrated[key] === undefined && baseWorkspaceRef.current?.[key] !== undefined) {
         Object.assign(hydrated, { [key]: baseWorkspaceRef.current[key] });
       }
     }
-    const value = migrateSystemCategories(parseWorkspace(hydrated));
+    const value = normalizeCompletedTaskHistory(migrateSystemCategories(parseWorkspace(hydrated)));
+    // Persist the owned authoritative snapshot before publishing success to the UI.
+    writeRecoverableJson(localStorage, accountKey(workspaceOwnerRef.current), JSON.stringify({
+      workspace: value, base: baseWorkspaceRef.current, lastSyncTime: lastSyncTimeRef.current,
+      desktopMirrorPending: !!window.karkasDesktop,
+    }));
+    // Store compact completion credits before dropping any full history records.
+    // The owned account above is the commit point. Optional compatibility mirrors
+    // must never turn an already committed create into a failed, retryable create.
+    let mirrorFailed = false;
+    const mirror = (key: string, data: unknown) => {
+      try { writeRecoverableJson(localStorage, key, JSON.stringify(data)); }
+      catch { mirrorFailed = true; }
+    };
+    mirror(COMPLETION_LEDGER_KEY, value.settings.completionLedger ?? {});
+    currentCompletionLedgerRef.current = value.settings.completionLedger;
+    completionLedgerOwnerRef.current = workspaceOwnerRef.current;
+    setCompletionLedger(value.settings.completionLedger);
     // A loaded or merged snapshot becomes the baseline, never a local session ending.
     if (!localSessionChange) previousSessionTasksRef.current = { tasks: value.tasks, ownerId: workspaceOwnerRef.current, ready: timerWorkspaceReadyRef.current };
     ++timerNoticeScopeRef.current;
@@ -1034,23 +1122,111 @@ export default function App() {
     setFireEnabled(value.settings.fireEnabled);
     setLang(value.settings.lang as Language);
     setAiIconVariant(value.settings.aiIconVariant as AIIconId);
-    writeRecoverableJson(localStorage, STORAGE_KEY, JSON.stringify(value.tasks));
-    writeRecoverableJson(localStorage, TABS_KEY, JSON.stringify(value.tabs));
-    writeRecoverableJson(localStorage, DELETED_STORAGE_KEY, JSON.stringify(value.deletedTasks));
-    writeRecoverableJson(localStorage, GROWTH_SKILLS_KEY, JSON.stringify(growthRef.current.skills));
-    writeRecoverableJson(localStorage, GROWTH_MEASUREMENTS_KEY, JSON.stringify(growthRef.current.measurements));
-    writeRecoverableJson(localStorage, GROWTH_SESSIONS_KEY, JSON.stringify(growthRef.current.practiceSessions));
-    localStorage.setItem(AI_ICON_KEY, value.settings.aiIconVariant);
+    mirror(STORAGE_KEY, value.tasks);
+    mirror(TABS_KEY, value.tabs);
+    mirror(DELETED_STORAGE_KEY, value.deletedTasks);
+    mirror(GROWTH_SKILLS_KEY, growthRef.current.skills);
+    mirror(GROWTH_MEASUREMENTS_KEY, growthRef.current.measurements);
+    mirror(GROWTH_SESSIONS_KEY, growthRef.current.practiceSessions);
+    try { localStorage.setItem(AI_ICON_KEY, value.settings.aiIconVariant); } catch { mirrorFailed = true; }
     const owner = workspaceOwnerRef.current;
-    void persistWorkspace().then(saved => {
-      if (owner === workspaceOwnerRef.current) setWorkspaceStorageError(!saved || localStorage.getItem(workspaceTabTransactionKey(owner)) !== null);
-    });
+    try {
+      void persistWorkspace().then(saved => {
+        if (owner === workspaceOwnerRef.current) {
+          if (!saved || mirrorFailed) setActionNotice(lang === 'uk' ? 'Зміни збережено локально. Додаткову резервну копію поки не оновлено.' : 'Changes are saved locally. The additional backup has not been updated yet.');
+          setWorkspaceStorageError(false);
+        }
+      });
+    } catch {
+      setActionNotice(lang === 'uk' ? 'Зміни збережено локально. Додаткову резервну копію поки не оновлено.' : 'Changes are saved locally. The additional backup has not been updated yet.');
+    }
   };
 
+  const commitTaskChange = (before: PSTask, after: PSTask, label: string): boolean => {
+    if (!timerWorkspaceReadyRef.current || !canPersistWorkspaceRef.current || workspaceOwnerRef.current !== strategyOwner
+      || (auth.currentUser?.uid ?? null) !== strategyOwner || tabMigrationBusyRef.current) return false;
+    const live = latestTasksRef.current.find(task => task.id === before.id);
+    if (!live) return false;
+    const now = Math.max(Date.now(), (live.updatedAt ?? 0) + 1);
+    const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter(key =>
+      key !== 'updatedAt' && key !== 'activityTrail' && canonical(before[key as keyof PSTask]) !== canonical(after[key as keyof PSTask])) as (keyof PSTask)[];
+    if (!keys.length) return true;
+    if (keys.some(key => canonical(live[key]) !== canonical(before[key]))) return false;
+    const next = annotateTaskChanges([live], [{ ...live, ...Object.fromEntries(keys.map(key => [key, after[key]])), updatedAt: now }], now)[0];
+    const workspace = readWorkspace();
+    try {
+      applyWorkspace(normalizeWorkspaceForStorage({ ...workspace, tasks: workspace.tasks.map(task => task.id === live.id ? next : task) }), true);
+      const retained = new Set([...currentTasksRef.current, ...currentDeletedTasksRef.current].map(task => task.id));
+      const prunedTasks = workspace.tasks.filter(task => task.id !== live.id && !retained.has(task.id));
+      const prunedDeleted = workspace.deletedTasks.filter(task => task.id !== live.id && !retained.has(task.id));
+      const prunedReceipts: TaskCompletionLedger = Object.create(null);
+      for (const task of [...prunedTasks, ...prunedDeleted]) {
+        const receipt = currentCompletionLedgerRef.current?.[task.id];
+        if (receipt) prunedReceipts[task.id] = receipt;
+      }
+      const retiredTargetReceipt = !retained.has(live.id) ? currentCompletionLedgerRef.current?.[live.id] : undefined;
+      setTaskUndo({ ownerId: strategyOwner, expiresAt: Date.now() + 8000, before: before.timerRunning ? pauseTaskTimer(before, before.done !== after.done ? after.completedAt ?? Date.now() : Date.now()) : before, after: next, keys, label,
+        prunedTasks, prunedDeleted, prunedReceipts, retiredTargetReceipt });
+      setCompletedNoticeId(null);
+      return true;
+    } catch { setWorkspaceStorageError(true); return false; }
+  };
+  const handleUndoTaskChange = (): boolean => {
+    if (!taskUndo || taskUndo.ownerId !== strategyOwner || Date.now() >= taskUndo.expiresAt || !timerWorkspaceReadyRef.current
+      || workspaceOwnerRef.current !== strategyOwner || (auth.currentUser?.uid ?? null) !== strategyOwner) return false;
+    const workspace = readWorkspace();
+    // A backdated 51st completion can itself fall outside retained history.
+    // Its exact receipt is sufficient only when this action retired it.
+    const retiredTarget = !!taskUndo.retiredTargetReceipt
+      && !workspace.tasks.some(task => task.id === taskUndo.after.id)
+      && !workspace.deletedTasks.some(task => task.id === taskUndo.after.id)
+      && canonical(workspace.settings.completionLedger?.[taskUndo.after.id]) === canonical(taskUndo.retiredTargetReceipt);
+    const live = workspace.tasks.find(task => task.id === taskUndo.after.id) ?? (retiredTarget ? taskUndo.after : undefined);
+    if (!live || taskUndo.keys.some(key => canonical(live[key]) !== canonical(taskUndo.after[key]))) {
+      setActionNotice(lang === 'uk' ? 'Запис уже змінився. Скасування не перезапише нові правки.' : 'The record changed. Undo will not overwrite newer edits.'); return false;
+    }
+    if ([...taskUndo.prunedTasks, ...taskUndo.prunedDeleted].some(task => workspace.tasks.some(value => value.id === task.id)
+      || workspace.deletedTasks.some(value => value.id === task.id)
+      || canonical(workspace.settings.completionLedger?.[task.id]) !== canonical(taskUndo.prunedReceipts[task.id]))) {
+      setActionNotice(lang === 'uk' ? 'Архів уже змінився. Скасування не перезапише нові дані.' : 'Archive changed. Undo will not overwrite newer data.'); return false;
+    }
+    const now = Math.max(Date.now(), (live.updatedAt ?? 0) + 1, (workspace.settings.completionLedger?.[live.id]?.updatedAt ?? 0) + 1,
+      (workspace.settings.completionLedger?.[live.id]?.retiredAt ?? 0) + 1);
+    const restored: PSTask = { ...live, ...Object.fromEntries(taskUndo.keys.map(key => [key, taskUndo.before[key]])), updatedAt: now };
+    // Undo never restarts a timer. Banking preserves actual work measured up to the original action.
+    const changesTimer = taskUndo.keys.some(key => ['done', 'timerRunning', 'timerStartedAt', 'timerMode', 'countdownRemainingSeconds', 'timeSpentSeconds'].includes(key));
+    const paused = changesTimer ? pauseTaskTimer(restored, Date.now()) : restored;
+    const ledger = { ...workspace.settings.completionLedger };
+    if (live.done !== paused.done || live.completedAt !== paused.completedAt) ledger[live.id] = {
+      completedAt: paused.completedAt ?? ledger[live.id]?.completedAt ?? paused.createdAt, updatedAt: now,
+      counted: paused.done && !paused.scheduledPending,
+    };
+    const restoreRetained = <T extends PSTask>(task: T): T => ({ ...task, updatedAt: Math.max(now, (ledger[task.id]?.retiredAt ?? 0) + 1, (ledger[task.id]?.updatedAt ?? 0) + 1) });
+    try {
+      applyWorkspace(normalizeWorkspaceForStorage({ ...workspace, tasks: [...workspace.tasks.map(task => task.id === live.id ? paused : task), ...(retiredTarget ? [paused] : []), ...taskUndo.prunedTasks.map(restoreRetained)],
+        deletedTasks: [...workspace.deletedTasks, ...taskUndo.prunedDeleted.map(restoreRetained)],
+        settings: { ...workspace.settings, completionLedger: ledger } }), true);
+      setTaskUndo(null); setCompletedNoticeId(null); return true;
+    } catch { setWorkspaceStorageError(true); return false; }
+  };
+
+  React.useLayoutEffect(() => {
+    if (!workspaceReady || !canPersistWorkspaceRef.current || !timerWorkspaceReadyRef.current
+      || tabMigrationBusyRef.current || workspaceOwnerRef.current !== (auth.currentUser?.uid ?? null)) return;
+    const current = readWorkspace();
+    const normalized = normalizeCompletedTaskHistory(current);
+    if (sameWorkspace(current, normalized)) return;
+    try { applyWorkspace(normalized, true); }
+    catch (error) {
+      console.error('Could not retain completion history:', error);
+      setWorkspaceStorageError(true);
+    }
+  }, [tasks, deletedTasks, completionLedger, workspaceReady]);
+
   const recoveryCandidate = useMemo(() => {
-    if (tasks.length || tabs.length || deletedTasks.length || growthState.skills.length || growthState.measurements.length || growthState.practiceSessions.length) return null;
+    if (tasks.length || tabs.length || deletedTasks.length || Object.keys(completionLedger ?? {}).length || growthState.skills.length || growthState.measurements.length || growthState.practiceSessions.length) return null;
     try { return readAccountRecovery(localStorage, accountKey(strategyOwner)); } catch { return null; }
-  }, [strategyOwner, workspaceReady, tasks.length, tabs.length, deletedTasks.length, growthState]);
+  }, [strategyOwner, workspaceReady, tasks.length, tabs.length, deletedTasks.length, completionLedger, growthState]);
   const restoreRetainedWorkspace = () => {
     if (!recoveryCandidate || workspaceOwnerRef.current !== strategyOwner || (auth.currentUser?.uid ?? null) !== strategyOwner
       || currentTasksRef.current.length || currentTabsRef.current.length || currentDeletedTasksRef.current.length
@@ -1088,7 +1264,7 @@ export default function App() {
       setWorkspaceStorageError(true);
     }
     return () => { cancelled = true; };
-  }, [tasks, tabs, deletedTasks, growthState, soundEnabled, fireEnabled, lang, aiIconVariant]);
+  }, [tasks, tabs, deletedTasks, growthState, soundEnabled, fireEnabled, lang, aiIconVariant, completionLedger]);
 
   useEffect(() => {
     if (!workspaceStorageError) return;
@@ -1131,11 +1307,16 @@ export default function App() {
 
   const recoverTabMigration = (owner: string | null, workspace: WorkspaceState, profile: PersonalStrategyProfile) => {
     const recovery = recoverWorkspaceTabTransaction(localStorage, owner, workspace, profile);
+    if (recovery.status === 'recovered') refreshNotes(owner);
     if (recovery.status !== 'conflict' || !recovery.conflictParts.includes('profile')) return recovery;
     // Hydration trims user text; the stored raw profile can still match the exact journal.
     try {
       const raw: unknown = JSON.parse(localStorage.getItem(personalStrategyKey(owner)) || 'null');
-      if (intactStoredStrategy(raw)) return recoverWorkspaceTabTransaction(localStorage, owner, workspace, raw as PersonalStrategyProfile);
+      if (intactStoredStrategy(raw)) {
+        const retried = recoverWorkspaceTabTransaction(localStorage, owner, workspace, raw as PersonalStrategyProfile);
+        if (retried.status === 'recovered') refreshNotes(owner);
+        return retried;
+      }
     } catch { /* Retain the original conflict without discarding any data. */ }
     return recovery;
   };
@@ -1156,10 +1337,14 @@ export default function App() {
       setIsAddOpen(false);
       setIsManageTabsOpen(false);
       setTabToDeleteConfirm(null);
+      setCompletedTaskToDelete(null);
+      setCompletedNoticeId(null);
+      setSearchVisible(false); setSearchQuery(''); setNoteSearchQuery('');
       savingRef.current = null;
       queuedRemoteRef.current = null;
       const uid = user?.uid || null;
       let localAccountLoaded = false;
+      window.dispatchEvent(new Event('karkas:flush-notepad'));
       switchNotesOwner(uid);
       cloudSyncReadyRef.current = false;
       setIsCloudSyncReady(false);
@@ -1185,9 +1370,15 @@ export default function App() {
               desktopCached.value[field] = parsed;
             }
             // A pending paired commit makes its local snapshot authoritative until recovery finishes.
-            const recoverLocal = cached?.workspace && (readStrategyTransaction(localStorage, uid)
+            const recoverLocal = cached?.workspace && (cached.desktopMirrorPending === true || readStrategyTransaction(localStorage, uid)
               || localStorage.getItem(workspaceTabTransactionKey(uid)) !== null);
-            cached = recoverLocal ? { ...desktopCached.value, ...cached } : desktopCached.value;
+            if (recoverLocal && !sameWorkspace(cached.workspace, desktopCached.value.workspace)) {
+              preserveRawStorage(localStorage, accountKey(uid) + ':desktop-mirror', original);
+            }
+            // An unacknowledged local commit outranks an older device mirror. Keep
+            // the desktop-owned queue metadata while restoring its paired local baseline.
+            cached = recoverLocal ? { ...desktopCached.value, workspace: cached.workspace, base: cached.base ?? null,
+              lastSyncTime: cached.lastSyncTime ?? null, desktopMirrorPending: true } : desktopCached.value;
           }
           const activeOwner = await window.karkasDesktop.workspace.setActiveOwner(uid);
           if ('error' in activeOwner) throw new Error(activeOwner.error.message);
@@ -1226,6 +1417,7 @@ export default function App() {
             settings: { soundEnabled: true, fireEnabled: true, lang: 'uk', aiIconVariant: 'quantum' },
           });
         } else {
+          completionLedgerOwnerRef.current = uid;
           persistWorkspace();
         }
         const tabRecovery = recoverTabMigration(uid, readWorkspace(), readPersonalStrategy(localStorage, uid));
@@ -1515,7 +1707,7 @@ export default function App() {
       setSyncStatus('error');
     });
   }, [currentUser, autoSyncEnabled, isCloudSyncReady, tasks, tabs, deletedTasks, growthState,
-      soundEnabled, fireEnabled, lang, aiIconVariant]);
+      soundEnabled, fireEnabled, lang, aiIconVariant, completionLedger]);
 
   useEffect(() => {
     if (!currentUser || !autoSyncEnabled || !isCloudSyncReady || !nextSyncRetryAt || !navigator.onLine) return;
@@ -1533,7 +1725,7 @@ export default function App() {
     }, 800);
     return () => clearTimeout(timer);
   }, [currentUser, autoSyncEnabled, isCloudSyncReady, tasks, tabs, deletedTasks, growthState,
-      soundEnabled, fireEnabled, lang, aiIconVariant, cloudData, performAutoSave]);
+      soundEnabled, fireEnabled, lang, aiIconVariant, completionLedger, cloudData, performAutoSave]);
 
   useEffect(() => {
     const flushLocal = () => {
@@ -1659,11 +1851,11 @@ export default function App() {
   }, () => growthGeneration === authGenerationRef.current && strategyReady && timerWorkspaceReadyRef.current && workspaceOwnerRef.current === strategyOwner && (auth.currentUser?.uid ?? null) === strategyOwner
     && canPersistWorkspaceRef.current && !tabMigrationBusyRef.current
     && localStorage.getItem(workspaceTabTransactionKey(strategyOwner)) === null
-    && localStorage.getItem(strategyTransactionKey(strategyOwner)) === null);
+    && localStorage.getItem(strategyTransactionKey(strategyOwner)) === null, JSON.stringify([strategyOwner, growthGeneration]));
   useEffect(() => {
     if (!practiceFinish) return;
-    const skill = growthState.skills.find(value => value.id === practiceFinish.skillId && value.deletedAt === undefined && value.archivedAt === undefined && isConfiguredSkill(value));
-    const task = practiceFinish.taskId ? tasks.find(value => value.id === practiceFinish.taskId && !value.done && value.skillId === practiceFinish.skillId) : undefined;
+    const skill = growthState.skills.find(value => value.id === practiceFinish.skillId && value.deletedAt === undefined && value.archivedAt === undefined);
+    const task = practiceFinish.taskId ? tasks.find(value => value.id === practiceFinish.taskId && value.skillId === practiceFinish.skillId) : undefined;
     if (practiceFinish.ownerId !== strategyOwner || practiceFinish.generation !== authGenerationRef.current || !skill || practiceFinish.taskId && !task) {
       practiceFinishRef.current = null;
       setPracticeFinish(null);
@@ -1916,11 +2108,18 @@ export default function App() {
   }, [operationalTasks, deletedTasks]);
 
   const completedHistoryCount = useMemo(() => {
-    return new Set([
-      ...operationalTasks.filter(task => task.done).map(task => task.id),
-      ...selectRelevantArchivedTasks(operationalTasks, deletedTasks).filter(isCompletedArchivedTask).map(task => task.id),
-    ]).size;
-  }, [operationalTasks, deletedTasks]);
+    return countCompletedTasks(readWorkspace());
+  }, [tasks, deletedTasks, completionLedger]);
+  const retainedCompletedTasks = useMemo(() => [
+    ...operationalTasks.filter(task => task.done),
+    ...selectRelevantArchivedTasks(operationalTasks, deletedTasks).filter(isCompletedArchivedTask),
+  ].sort((a, b) => (b.completedAt ?? b.createdAt) - (a.completedAt ?? a.createdAt)).slice(0, 50), [operationalTasks, deletedTasks]);
+  const visibleCompletedTasks = useMemo(() => retainedCompletedTasks.filter(task => {
+    if (selectedPhase !== 'ALL' && task.phase !== selectedPhase) return false;
+    const query = searchQuery.trim().toLocaleLowerCase();
+    return !query || [task.title, task.note ?? '', ...(task.stepList?.map(step => step.title) ?? [])]
+      .some(text => text.toLocaleLowerCase().includes(query));
+  }), [retainedCompletedTasks, selectedPhase, searchQuery]);
 
   // Today's timed tasks only change place when the calendar day changes, not on every clock tick.
   const listTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Kyiv';
@@ -1942,9 +2141,9 @@ export default function App() {
     const now = Math.max(insightNow, Date.now());
     const yesterday = new Date(now);
     yesterday.setDate(yesterday.getDate() - 1);
-    return { today: summarizeDay(tasks, deletedTasks, localTaskDate(now), now),
-      yesterday: summarizeDay(tasks, deletedTasks, localTaskDate(yesterday.getTime()), now) };
-  }, [tasks, deletedTasks, listDayKey, insightNow]);
+    return { today: summarizeDay(tasks, deletedTasks, localTaskDate(now), now, completionLedger),
+      yesterday: summarizeDay(tasks, deletedTasks, localTaskDate(yesterday.getTime()), now, completionLedger) };
+  }, [tasks, deletedTasks, completionLedger, listDayKey, insightNow]);
   const closeHour = useMemo(() => dayCloseHour(workInsights.workingPattern), [workInsights.workingPattern]);
   const offerDayClose = useMemo(() => dayRecapReady && shouldOfferDayClose({ now: insightNow, closeHour,
     summary: daySummaries.today, closedDates: dayLogState.value.closed }), [dayRecapReady, insightNow, closeHour, daySummaries.today, dayLogState.value]);
@@ -1961,6 +2160,12 @@ export default function App() {
     setDayLogState({ owner: strategyOwner, value: next });
     return true;
   };
+  const isDayClosed = dayRecapReady && !!dayLogState.value.closed[daySummaries.today.date]
+    && (dayLogState.value.resumed?.[daySummaries.today.date] ?? 0) <= dayLogState.value.closed[daySummaries.today.date].closedAt;
+  const continueDayIfClosed = (): boolean => {
+    if (!isDayClosed) return true;
+    return saveDayLog({ ...dayLogState.value, resumed: { ...dayLogState.value.resumed, [daySummaries.today.date]: Date.now() } });
+  };
   useEffect(() => {
     if (!dayRecapReady || !workReminders.enabled || !offerDayClose || dayClose || !window.karkasDesktop) return;
     const now = Date.now();
@@ -1968,8 +2173,8 @@ export default function App() {
       || latestTasksRef.current.some(task => !task.done && !task.scheduledPending && task.timerRunning)) return;
     if (!claimPlanningNotice(localStorage, strategyOwner, 'day-close:' + daySummaries.today.date, now)) return;
     const title = lang === 'uk' ? 'Karkas · Закрити день?' : 'Karkas · Close the day?';
-    const body = lang === 'uk' ? 'Сьогодні: ' + formatDayFocus(daySummaries.today.focusSeconds, lang) + ', закрито ' + daySummaries.today.completed.length + '. Підсумок займе пів хвилини.'
-      : 'Today: ' + formatDayFocus(daySummaries.today.focusSeconds, lang) + ', completed ' + daySummaries.today.completed.length + '. A recap takes half a minute.';
+    const body = lang === 'uk' ? 'Сьогодні: ' + formatDayFocus(daySummaries.today.focusSeconds, lang) + ', закрито ' + dayCompletedCount(daySummaries.today) + '. Підсумок займе пів хвилини.'
+      : 'Today: ' + formatDayFocus(daySummaries.today.focusSeconds, lang) + ', completed ' + dayCompletedCount(daySummaries.today) + '. A recap takes half a minute.';
     void window.karkasDesktop.system.showNotification({ title, body }).catch(() => { /* The in-app action remains available. */ });
   }, [dayRecapReady, workReminders.enabled, offerDayClose, dayClose, daySummaries.today, closeHour, strategyOwner, lang]);
 
@@ -2076,26 +2281,57 @@ export default function App() {
     const patch = { ...(titleChanged ? { title: updatedTitle.trim() } : {}), ...(noteChanged ? { note: updatedNote.trim() || undefined } : {}), ...(plannedChanged ? { plannedDate: dates?.plannedDate } : {}), ...(deadlineChanged ? { deadlineDate: dates?.deadlineDate } : {}) };
     const datesInOrder = (task: PSTask) => { const candidate = { ...task, ...patch }; return !candidate.plannedDate || !candidate.deadlineDate || candidate.plannedDate <= candidate.deadlineDate; };
     if (!datesInOrder(current)) return false;
-    sound.activate();
-    setTasks((prev) =>
-      prev.map((t) =>
-        t.id === id && (!titleChanged || t.title === expected.title) && (!noteChanged || (t.note || '') === expected.note) && datesMatch(t) && datesInOrder(t) ? { ...t, ...patch } : t
-      )
-    );
-    return true;
+    return commitTaskChange(current, { ...current, ...patch }, lang === 'uk' ? 'Зміни збережено' : 'Changes saved');
+  };
+
+  const handlePatchTask = (id: string, patch: TaskEditPatch, expected: TaskEditPatch): PSTask | false => {
+    const current = latestTasksRef.current.find(task => task.id === id);
+    if (!current || (Object.keys(patch) as (keyof TaskEditPatch)[]).some(key => canonical(current[key]) !== canonical(expected[key]))) return false;
+    if (patch.title !== undefined && !patch.title.trim() || patch.phase !== undefined && !tabs.some(tab => tab.id === patch.phase)) return false;
+    const candidate = { ...current, ...patch };
+    if (candidate.plannedDate && !isTaskDate(candidate.plannedDate) || candidate.deadlineDate && !isTaskDate(candidate.deadlineDate)
+      || candidate.plannedDate && candidate.deadlineDate && candidate.plannedDate > candidate.deadlineDate) return false;
+    let next = patch.stepList !== undefined ? setTaskSteps(candidate, patch.stepList, Date.now()) : candidate;
+    if (patch.timerMode !== undefined || Object.hasOwn(patch, 'countdownDurationSeconds')) {
+      next = next.timerMode === 'countdown' ? configureTaskCountdown(next, next.countdownDurationSeconds ?? 1500, Date.now())
+        : { ...pauseTaskTimer(next, Date.now()), countdownDurationSeconds: undefined, countdownRemainingSeconds: undefined, countdownExpiredAt: undefined };
+    }
+    if (Object.hasOwn(patch, 'schedule')) {
+      if (current.done && patch.schedule !== undefined) return false;
+      const schedule = patch.schedule === undefined ? undefined : normalizeTaskSchedule(patch.schedule);
+      if (schedule === null) return false;
+      const pending = !!schedule && (current.scheduledPending || !current.startedAt && !current.done);
+      next = { ...next, schedule, scheduledPending: pending || undefined,
+        scheduleNextStartAt: pending ? schedule?.startAt : undefined,
+        scheduledFor: schedule && !pending ? Date.parse(schedule.startAt) : undefined,
+        ...(schedule ? {} : { schedulePlanId: undefined, scheduledDurationSeconds: undefined }) };
+    }
+    return commitTaskChange(current, next, lang === 'uk' ? 'Зміни збережено' : 'Changes saved') ? latestTasksRef.current.find(task => task.id === id) ?? false : false;
   };
 
   // Tab management handlers
   const handleAddTab = (name: string, customColor?: string) => {
-    if (!strategyReady || tabMigrationBusyRef.current || localStorage.getItem(workspaceTabTransactionKey(strategyOwner)) !== null) return;
+    if (!strategyReady || tabMigrationBusyRef.current || localStorage.getItem(workspaceTabTransactionKey(strategyOwner)) !== null) return false;
     const trimmed = name.trim();
-    if (!trimmed) return;
+    if (!trimmed) return false;
     const baseId = trimmed.toLowerCase().replace(/[^a-zа-яіїєґ0-9]+/gi, '_');
     const id = baseId.length > 0 ? `${baseId}_${Date.now().toString(36).slice(-3)}` : `tab_${Date.now()}`;
     const color = customColor || getRandomTabColor(tabs);
     const newTab: TaskTab = { id, name: trimmed, color };
-    setTabs((prev) => [...prev, newTab]);
+    const workspace = readWorkspace();
+    try { applyWorkspace({ ...workspace, tabs: [...workspace.tabs, newTab] }, true); }
+    catch { setWorkspaceStorageError(true); return false; }
     setSelectedPhase(id);
+    return true;
+  };
+  const handleRenameTab = (id: string, name: string): boolean => {
+    const title = name.trim();
+    if (!title || !strategyReady || tabMigrationBusyRef.current || workspaceOwnerRef.current !== strategyOwner
+      || tabs.some(tab => tab.id !== id && tab.name.toLocaleLowerCase() === title.toLocaleLowerCase())) return false;
+    const workspace = readWorkspace();
+    if (!workspace.tabs.some(tab => tab.id === id)) return false;
+    try { applyWorkspace({ ...workspace, tabs: workspace.tabs.map(tab => tab.id === id ? { ...tab, name: title } : tab) }, true); return true; }
+    catch { setWorkspaceStorageError(true); return false; }
   };
 
   const handleDeleteTab = (tabId: string) => {
@@ -2128,7 +2364,7 @@ export default function App() {
   };
 
   const applyTabSet = async (nextTabs: TaskTab[], moveTo: Record<string, string> = {}, agentCommit?: {
-    workspace: AgentWorkspace; beforeNotes: NotepadNote[]; isCurrent: () => boolean; profile?: PersonalStrategyProfile;
+    workspace: AgentWorkspace; beforeNotes: NotepadNote[]; isCurrent: () => boolean; profile?: PersonalStrategyProfile; expectedRestores?: Record<string, NotepadNote>;
   }): Promise<boolean> => {
     if (!strategyReady || tabMigrationBusyRef.current || savingRef.current !== null
       || localStorage.getItem(strategyTransactionKey(strategyOwner)) !== null
@@ -2152,6 +2388,7 @@ export default function App() {
       onboardingStatus: discovery.phase === 'ready' ? 'complete' : remapped.profile.onboardingStatus === 'new' ? 'new' : 'in_progress' };
     const now = Date.now();
     if (!agentCommit) remapped.workspace.tasks = annotateTaskChanges(currentTasksRef.current, remapped.workspace.tasks, now);
+    remapped.workspace = normalizeCompletedTaskHistory(normalizeWorkspaceForStorage(remapped.workspace), now);
     tabMigrationBusyRef.current = true;
     timerWorkspaceReadyRef.current = false;
     setWorkspaceReady(false);
@@ -2165,21 +2402,27 @@ export default function App() {
         const liveNotes = getCurrentNotes();
         if (!liveNotes || canonical(liveNotes) !== canonical(agentCommit.beforeNotes)) return false;
       }
-      // Retain the complete paired state before changing any of its individual storage slots.
-      if (!stageWorkspaceTabTransaction(localStorage, owner, beforeWorkspace, remapped.workspace, beforeProfile, remapped.profile)) {
+      // Retain the exact notes operation with the workspace, so interrupted paired edits can resume together.
+      const notesOperation = agentCommit
+        ? prepareNotepadReplacement(localStorage, owner, agentCommit.beforeNotes, agentCommit.workspace.notes, agentCommit.expectedRestores) ?? undefined
+        : undefined;
+      if (!stageWorkspaceTabTransaction(localStorage, owner, beforeWorkspace, remapped.workspace, beforeProfile, remapped.profile, notesOperation)) {
         setActionNotice(lang === 'uk' ? 'Не вдалося зберегти перенесення вкладок або попереднє перенесення ще не завершено. Вкладки не змінено.' : 'Could not save the tab migration or an earlier migration is still pending. Tabs were not changed.');
         return false;
       }
       staged = true;
       const journal = localStorage.getItem(workspaceTabTransactionKey(owner));
       if (!savePersonalStrategy(localStorage, owner, remapped.profile)) throw new Error('Goal links could not be saved');
-      if (agentCommit && !replaceAgentNotes(agentCommit.beforeNotes, agentCommit.workspace.notes)) {
-        if (savePersonalStrategy(localStorage, owner, beforeProfile) && localStorage.getItem(workspaceTabTransactionKey(owner)) === journal) {
+      if (notesOperation && !applyNotepadBatch(localStorage, owner, notesOperation)) {
+        // Once the note operation exists, retain the paired journal even if a later read failed.
+        if (localStorage.getItem(notesOperationPrefix(owner) + notesOperation.id) === null
+          && savePersonalStrategy(localStorage, owner, beforeProfile) && localStorage.getItem(workspaceTabTransactionKey(owner)) === journal) {
           localStorage.removeItem(workspaceTabTransactionKey(owner));
           staged = false;
         }
         throw new Error('Notes could not be saved');
       }
+      if (notesOperation) refreshNotes(owner);
       personalProfileRef.current = remapped.profile;
       setPersonalProfile(remapped.profile);
       applyWorkspace(remapped.workspace);
@@ -2210,7 +2453,7 @@ export default function App() {
 
   const agentAppliedTurnsRef = React.useRef(new Map<string, Promise<AgentApplyResult>>());
   const agentUndoTurnsRef = React.useRef(new Map<string, {
-    ownerId: string | null; undo: AgentUndoSnapshot; used: boolean;
+    ownerId: string | null; undo: AgentUndoSnapshot; used: boolean; noteTombstones: Record<string, NotepadNote>;
     goalLinks: { id: string; before: string[]; after: string[] }[];
   }>());
   const agentOwnerIsCurrent = (owner: string | null) => workspaceOwnerRef.current === owner
@@ -2225,15 +2468,15 @@ export default function App() {
       tabs: currentTabsRef.current, notes: liveNotes } : null;
   };
   const commitAgentWorkspace = async (before: AgentWorkspace, after: AgentWorkspace, isCurrent: () => boolean,
-    profile?: PersonalStrategyProfile): Promise<boolean> => {
+    profile?: PersonalStrategyProfile, expectedRestores?: Record<string, NotepadNote>): Promise<boolean> => {
     if (!isCurrent()) return false;
     // Deleting a category also migrates historical records and strategy goal links.
-    if (before.tabs.some(tab => !after.tabs.some(next => next.id === tab.id)) || profile) {
-      return applyTabSet(after.tabs, {}, { workspace: after, beforeNotes: before.notes, isCurrent, profile });
+    if (before.tabs.some(tab => !after.tabs.some(next => next.id === tab.id)) || profile || canonical(before.notes) !== canonical(after.notes)) {
+      return applyTabSet(after.tabs, {}, { workspace: after, beforeNotes: before.notes, isCurrent, profile, expectedRestores });
     }
     const workspace = migrateSystemCategories(parseWorkspace({ ...readWorkspace(), tasks: after.tasks,
       deletedTasks: after.deletedTasks, tabs: after.tabs }));
-    if (!isCurrent() || !replaceAgentNotes(before.notes, after.notes)) return false;
+    if (!isCurrent() || !replaceAgentNotes(before.notes, after.notes, expectedRestores)) return false;
     // applyWorkspace synchronously commits every live ref, setter and existing persistence slot.
     try {
       applyWorkspace(workspace, true);
@@ -2246,6 +2489,7 @@ export default function App() {
   };
   const applyAgentView = (view: AgentView) => {
     if (view.type === 'reveal_task') { handleRevealTask(view.taskId); return; }
+    if (view.view === 'history') { setIsSettingsOpen(true); setArchiveOpen(true); return; }
     const phases = { dashboard: 'DASHBOARD', strategy: 'STRATEGY', notes: 'NOTES', history: 'HISTORY', tasks: 'ALL' };
     setSelectedPhase(phases[view.view]);
   };
@@ -2287,7 +2531,8 @@ export default function App() {
             ? [{ id: goal.id, before: goal.categoryIds, after: afterGoal.categoryIds }] : [];
         });
         agentUndoTurnsRef.current.set(undoToken, { ownerId: input.ownerId,
-          undo: captureAgentUndo(before, workspace), used: false, goalLinks });
+          undo: captureAgentUndo(before, workspace), used: false, goalLinks,
+          noteTombstones: Object.fromEntries((getCurrentDeletedNotes() ?? []).filter(note => before.notes.some(value => value.id === note.id) && !workspace.notes.some(value => value.id === note.id)).map(note => [note.id, note])) });
       }
       if (agentOwnerIsCurrent(input.ownerId)) {
         for (const view of views) applyAgentView(view);
@@ -2303,21 +2548,22 @@ export default function App() {
     if (!turn || turn.used || !agentOwnerIsCurrent(turn.ownerId)) return { undone: false, conflicts: ['workspace'] };
     turn.used = true;
     const before = handleGetAgentWorkspace();
-    if (!before) return { undone: false, conflicts: ['workspace'] };
+    if (!before) { turn.used = false; return { undone: false, conflicts: ['workspace'] }; }
     const result = undoAgentTurn(before, turn.undo);
-    if (!result.undone) return { undone: false, conflicts: result.conflicts.map(conflict => conflict.collection + ':' + conflict.id) };
+    if (!result.undone) { turn.used = false; return { undone: false, conflicts: result.conflicts.map(conflict => conflict.collection + ':' + conflict.id) }; }
     let profile: PersonalStrategyProfile | undefined;
     if (turn.goalLinks.length) {
       const currentProfile = personalProfileRef.current;
       const conflicts = turn.goalLinks.filter(link => canonical(currentProfile.goals.find(goal => goal.id === link.id)?.categoryIds)
         !== canonical(link.after)).map(link => 'strategy:' + link.id);
-      if (conflicts.length) return { undone: false, conflicts };
+      if (conflicts.length) { turn.used = false; return { undone: false, conflicts }; }
       profile = { ...currentProfile, goals: currentProfile.goals.map(goal => {
         const link = turn.goalLinks.find(item => item.id === goal.id);
         return link ? { ...goal, categoryIds: link.before } : goal;
       }) };
     }
-    const undone = await commitAgentWorkspace(before, result.workspace, () => agentOwnerIsCurrent(turn.ownerId), profile);
+    const undone = await commitAgentWorkspace(before, result.workspace, () => agentOwnerIsCurrent(turn.ownerId), profile, turn.noteTombstones);
+    if (!undone) turn.used = false;
     return { undone, conflicts: undone ? [] : ['workspace'] };
   };
 
@@ -2370,12 +2616,11 @@ export default function App() {
     const now = Date.now();
     const current = latestTasksRef.current.find(task => task.id === id);
     if (!current) return;
-    if (!current.done && openPracticeFinish(current, true)) return;
     const shouldComplete = !current.done;
-    setTasks(prev => prev.map(task => task.id === id
-      ? shouldComplete ? completeTask(finishLimitedStart(task, now), now) : reopenTask(task, now)
-      : task));
+    const next = shouldComplete ? completeTask(finishLimitedStart(current, now), now) : reopenTask(current, now);
+    if (!commitTaskChange(current, next, lang === 'uk' ? (shouldComplete ? 'Завдання виконане' : 'Повернуто в роботу') : (shouldComplete ? 'Task completed' : 'Task reopened'))) return;
     setCompletedNoticeId(shouldComplete ? id : null);
+    if (shouldComplete && current.measurementMode) openPracticeFinish(next, false);
     if (!shouldComplete) {
       setSelectedPhase('ALL');
       setActiveFilter('ALL');
@@ -2383,13 +2628,23 @@ export default function App() {
     }
   };
 
-  const handleReopenCompletedTask = (id: string) => {
-    const now = Date.now();
-    setTasks(previous => previous.map(task => task.id === id ? reopenTask(task, now) : task));
+  const handleReopenCompletedTask = (id: string): boolean => {
+    const task = latestTasksRef.current.find(task => task.id === id)
+      ?? currentDeletedTasksRef.current.find(task => task.id === id && isCompletedArchivedTask(task));
+    if (!task || !timerWorkspaceReadyRef.current || workspaceOwnerRef.current !== strategyOwner || (auth.currentUser?.uid ?? null) !== strategyOwner) return false;
+    const receipt = currentCompletionLedgerRef.current?.[id];
+    const now = Math.max(Date.now(), (task.updatedAt ?? 0) + 1, (receipt?.updatedAt ?? 0) + 1, (receipt?.retiredAt ?? 0) + 1);
+    const { deletedAt, deletionReason, ...restored } = task as DeletedTask;
+    const reopened = { ...reopenTask(restored, now), updatedAt: now,
+      phase: tabs.some(tab => tab.id === restored.phase) ? restored.phase : tabs[0]?.id || 'focus' };
+    const workspace = readWorkspace();
+    try { applyWorkspace({ ...workspace, tasks: [...workspace.tasks.filter(task => task.id !== id), reopened], deletedTasks: workspace.deletedTasks.filter(task => task.id !== id) }, true); }
+    catch { setWorkspaceStorageError(true); return false; }
     setCompletedNoticeId(null);
     setSelectedPhase('ALL');
     setActiveFilter('ALL');
     setSearchQuery('');
+    return true;
   };
 
   const handlePlanTomorrow = (id: string) => {
@@ -2407,9 +2662,9 @@ export default function App() {
   const handleCloseDay = ({ moveTaskIds, note }: { moveTaskIds: string[]; note: string }) => {
     const now = Date.now(), date = localTaskDate(now);
     if (!dayClose || dayClose.owner !== strategyOwner || dayClose.date !== date || !dayRecapReady) return false;
-    const summary = summarizeDay(latestTasksRef.current, deletedTasks, date, now);
+    const summary = summarizeDay(latestTasksRef.current, deletedTasks, date, now, currentCompletionLedgerRef.current);
     if (!saveDayLog({ ...dayLogState.value, closed: { ...dayLogState.value.closed, [date]: {
-      closedAt: now, focusSeconds: summary.focusSeconds, sessions: summary.sessions, completed: summary.completed.length,
+      closedAt: now, focusSeconds: summary.focusSeconds, sessions: summary.sessions, completed: dayCompletedCount(summary),
       ...(note.trim() ? { note: note.trim() } : {}),
     } } })) return false;
     const tomorrow = new Date(now);
@@ -2452,9 +2707,16 @@ export default function App() {
     setTasks(previous => previous.map(task => task.id === id ? finishAfterExpiry(task, now, workedUntilNow ? now : undefined) : task));
     if (current && !current.done) openPracticeFinish(current, false);
   };
-  const handleStartTask = (id: string) => {
+  const handleStartTask = (id: string): boolean => {
+    if (!timerWorkspaceReadyRef.current || !canPersistWorkspaceRef.current || tabMigrationBusyRef.current
+      || workspaceOwnerRef.current !== strategyOwner || (auth.currentUser?.uid ?? null) !== strategyOwner) return false;
     const now = Date.now();
-    setTasks(prev => prev.map(task => task.id === id ? Number.isFinite(task.countdownExpiredAt) ? continueAfterExpiry(task, now) : startTaskWork(finishLimitedStart(task, now), now) : task));
+    const current = latestTasksRef.current.find(task => task.id === id);
+    if (!current || current.done || !continueDayIfClosed()) return false;
+    const next = Number.isFinite(current.countdownExpiredAt) ? continueAfterExpiry(current, now) : startTaskWork(finishLimitedStart(current, now), now);
+    const workspace = readWorkspace();
+    try { applyWorkspace({ ...workspace, tasks: annotateTaskChanges(workspace.tasks, workspace.tasks.map(task => task.id === id ? next : task), now) }, true); return true; }
+    catch { setWorkspaceStorageError(true); return false; }
   };
 
   const handleLimitedStart = (id: string, capSeconds: number, options?: { continued?: boolean }) => {
@@ -2539,7 +2801,8 @@ export default function App() {
   const handleToggleStepItem = (taskId: string, stepIndex: number) => {
     const now = Date.now();
     const label = lang === 'uk' ? 'Крок' : 'Step';
-    setTasks(prev => prev.map(task => task.id === taskId ? toggleTaskStep(task, stepIndex, now, label) : task));
+    const task = latestTasksRef.current.find(task => task.id === taskId);
+    if (task) commitTaskChange(task, toggleTaskStep(task, stepIndex, now, label), lang === 'uk' ? 'Підкрок оновлено' : 'Substep updated');
   };
 
   const handleAddStepItem = (taskId: string, stepTitle: string) => {
@@ -2593,33 +2856,44 @@ export default function App() {
   };
 
   const handleDelete = (id: string) => {
-    const taskToDelete = tasks.find((t) => t.id === id);
-    if (taskToDelete) {
+    const taskToDelete = latestTasksRef.current.find((t) => t.id === id)
+      ?? currentDeletedTasksRef.current.find(task => task.id === id && isCompletedArchivedTask(task));
+    if (taskToDelete && timerWorkspaceReadyRef.current && workspaceOwnerRef.current === strategyOwner && (auth.currentUser?.uid ?? null) === strategyOwner) {
       const now = Date.now();
       const sanitizedToDelete = annotateTaskChanges([taskToDelete], [pauseTaskTimer(taskToDelete, now)], now)[0];
-      setRecentlyDeleted(sanitizedToDelete);
       const deletedItem: DeletedTask = {
         ...sanitizedToDelete,
         deletedAt: now,
       };
-      setDeletedTasks((prev) => [deletedItem, ...prev.filter((d) => d.id !== id)]);
+      const workspace = readWorkspace();
+      try {
+        applyWorkspace({ ...workspace, tasks: workspace.tasks.filter(task => task.id !== id), deletedTasks: [deletedItem, ...workspace.deletedTasks.filter(task => task.id !== id)] }, true);
+        setRecentlyDeleted(sanitizedToDelete); setCompletedNoticeId(null); setTaskUndo(null);
+      } catch { setWorkspaceStorageError(true); }
     }
-    setTasks((prev) => prev.filter((t) => t.id !== id));
   };
 
   const handleUndoDelete = () => {
+    if (!timerWorkspaceReadyRef.current || workspaceOwnerRef.current !== strategyOwner || (auth.currentUser?.uid ?? null) !== strategyOwner) return;
     if (recentlyDeleted) {
       const currentArchived = currentDeletedTasksRef.current.find(task => task.id === recentlyDeleted.id);
       if (!currentArchived || latestTasksRef.current.some(task => task.id === recentlyDeleted.id)) {
         setRecentlyDeleted(null);
         return;
       }
+      if (Date.now() >= currentArchived.deletedAt + 8000) { setRecentlyDeleted(null); return; }
       const { deletedAt, deletionReason, ...restored } = currentArchived;
       sound.activate();
-      const safeTask = { ...restored, phase: tabs.some(tab => tab.id === restored.phase) ? restored.phase : tabs[0]?.id || 'focus' };
-      setTasks((prev) => [safeTask, ...prev.filter(task => task.id !== restored.id)]);
-      setDeletedTasks((prev) => prev.filter((d) => d.id !== recentlyDeleted.id));
-      setRecentlyDeleted(null);
+      const receipt = currentCompletionLedgerRef.current?.[restored.id];
+      const safeTask = { ...restored, updatedAt: Math.max(Date.now(), (restored.updatedAt ?? 0) + 1, (receipt?.updatedAt ?? 0) + 1, (receipt?.retiredAt ?? 0) + 1),
+        phase: tabs.some(tab => tab.id === restored.phase) ? restored.phase : tabs[0]?.id || 'focus' };
+      const workspace = readWorkspace();
+      try {
+        applyWorkspace({ ...workspace, tasks: [safeTask, ...workspace.tasks.filter(task => task.id !== restored.id)], deletedTasks: workspace.deletedTasks.filter(task => task.id !== restored.id),
+          settings: deletionReason === 'accidental' && receipt ? { ...workspace.settings, completionLedger: { ...workspace.settings.completionLedger,
+            [restored.id]: { ...receipt, counted: false, updatedAt: safeTask.updatedAt } } } : workspace.settings }, true);
+        setRecentlyDeleted(null);
+      } catch { setWorkspaceStorageError(true); }
     }
   };
 
@@ -2627,42 +2901,72 @@ export default function App() {
     setDeletedTasks(prev => prev.map(task => {
       if (task.id !== id) return task;
       const { deletionReason: previousReason, ...rest } = task;
-      return deletionReason ? { ...rest, deletionReason } : rest;
+      const updatedAt = Math.max(Date.now(), (task.updatedAt ?? 0) + 1, (currentCompletionLedgerRef.current?.[id]?.updatedAt ?? 0) + 1);
+      return deletionReason ? { ...rest, deletionReason, updatedAt } : { ...rest, updatedAt };
     }));
   };
 
   const handleRestoreDeletedTask = (task: DeletedTask) => {
+    if (!timerWorkspaceReadyRef.current || workspaceOwnerRef.current !== strategyOwner || (auth.currentUser?.uid ?? null) !== strategyOwner) return false;
     const currentArchived = currentDeletedTasksRef.current.find(item => item.id === task.id);
     if (!currentArchived || latestTasksRef.current.some(item => item.id === task.id)) {
       setRecentlyDeleted(prev => prev?.id === task.id ? null : prev);
-      return;
+      return false;
     }
     sound.activate();
     const { deletedAt, deletionReason, ...restTask } = currentArchived;
     const fallbackTab = tabs[0]?.id || 'focus';
-    const now = Date.now();
+    const receipt = currentCompletionLedgerRef.current?.[task.id];
+    const now = Math.max(Date.now(), (restTask.updatedAt ?? 0) + 1, (receipt?.updatedAt ?? 0) + 1, (receipt?.retiredAt ?? 0) + 1);
     const safeTask = annotateTaskChanges([restTask], [{
       ...restTask,
+      updatedAt: now,
       phase: tabs.some((tb) => tb.id === restTask.phase) ? restTask.phase : fallbackTab,
     }], now)[0];
-    setTasks((prev) => [safeTask, ...prev.filter(existing => existing.id !== task.id)]);
-    setDeletedTasks((prev) => prev.filter((d) => d.id !== task.id));
+    const workspace = readWorkspace();
+    try { applyWorkspace({ ...workspace, tasks: [safeTask, ...workspace.tasks.filter(existing => existing.id !== task.id)], deletedTasks: workspace.deletedTasks.filter(item => item.id !== task.id),
+      settings: deletionReason === 'accidental' && receipt ? { ...workspace.settings, completionLedger: { ...workspace.settings.completionLedger,
+        [task.id]: { ...receipt, counted: false, updatedAt: now } } } : workspace.settings }, true); }
+    catch { setWorkspaceStorageError(true); return false; }
     setRecentlyDeleted(prev => prev?.id === task.id ? null : prev);
     setSelectedPhase('ALL');
     setActiveFilter('ALL');
     setSearchQuery('');
+    setRevealTaskId(task.id);
+    if (safeTask.done) setEditingTaskId(task.id);
+    return true;
   };
 
   const handlePermanentDeleteTask = (id: string) => {
     const task = currentDeletedTasksRef.current.find(item => item.id === id);
     if (!task) return;
-    const confirmation = isCompletedArchivedTask(task)
-      ? (lang === 'uk' ? 'Назавжди видалити виконане завдання? Воно зникне з історії та статистики. Відновити його буде неможливо.' : 'Permanently delete this completed task? It will be removed from history and statistics and cannot be restored.')
-      : (lang === 'uk' ? 'Назавжди видалити це завдання з кошика? Відновити його буде неможливо.' : 'Permanently delete this task from trash? It cannot be restored.');
+    if (isCompletedArchivedTask(task)) { setCompletedTaskToDelete(id); return; }
+    const confirmation = lang === 'uk' ? 'Назавжди видалити це завдання з кошика? Відновити його буде неможливо.' : 'Permanently delete this task from trash? It cannot be restored.';
     if (!window.confirm(confirmation)) return;
     sound.tick(300);
+    if (task.done && !task.scheduledPending) {
+      applyWorkspace(retireCompletedTask(readWorkspace(), id, { accidental: task.deletionReason === 'accidental' }), true);
+      setRecentlyDeleted(prev => prev?.id === id ? null : prev);
+      return;
+    }
     setDeletedTasks((prev) => prev.filter((d) => d.id !== id));
     setRecentlyDeleted(prev => prev?.id === id ? null : prev);
+  };
+
+  const handleDeleteCompletedTask = (accidental: boolean) => {
+    const id = completedTaskToDelete;
+    if (!id || !timerWorkspaceReadyRef.current || workspaceOwnerRef.current !== (auth.currentUser?.uid ?? null)) return;
+    const workspace = readWorkspace();
+    const next = retireCompletedTask(workspace, id, { accidental });
+    try {
+      if (next !== workspace) applyWorkspace(next, true);
+      setCompletedTaskToDelete(null);
+      setCompletedNoticeId(previous => previous === id ? null : previous);
+      setRecentlyDeleted(previous => previous?.id === id ? null : previous);
+    } catch (error) {
+      console.error('Could not save completed task removal:', error);
+      setWorkspaceStorageError(true);
+    }
   };
 
   const handleClearDeletedHistory = () => {
@@ -2687,13 +2991,9 @@ export default function App() {
     const now = Date.now();
     const task = createTask({ ...newTask, phase: effectivePhase }, `task-${now}-${Math.random().toString(36).slice(2, 8)}`, now);
     if (!task) return false;
-    if (proposedTab) {
-      const nextTabs = [...currentTabsRef.current, proposedTab];
-      currentTabsRef.current = nextTabs;
-      setTabs(nextTabs);
-    }
-    setTasks(prev => [task, ...prev]);
-    setSelectedPhase('ALL');
+    const workspace = readWorkspace();
+    try { applyWorkspace({ ...workspace, tasks: annotateTaskChanges(workspace.tasks, [task, ...workspace.tasks], now), tabs: proposedTab ? [...workspace.tabs, proposedTab] : workspace.tabs }, true); }
+    catch { setWorkspaceStorageError(true); return false; }
     setActiveFilter('ALL');
     setSearchQuery('');
     setCompletedNoticeId(null);
@@ -2702,9 +3002,19 @@ export default function App() {
 
   const openPracticeFinish = (task: PSTask, finishTask: boolean): boolean => {
     const skill = growthRef.current.skills.find(value => value.id === task.skillId && value.deletedAt === undefined && value.archivedAt === undefined);
-    if (!strategyReady || !skill || !isConfiguredSkill(skill)) return false;
-    setTasks(previous => previous.map(value => value.id === task.id ? pauseTaskTimer(finishLimitedStart(value, Date.now()), Date.now()) : value));
-    const pending = { skillId: skill.id, taskId: task.id, completeTask: finishTask, ownerId: strategyOwner, generation: authGenerationRef.current };
+    if (!strategyReady || !skill) {
+      setActionNotice(lang === 'uk' ? 'Спершу відновіть навичку з Архіву, щоб записати новий результат.' : 'Restore the skill from Archive before recording a new result.');
+      return false;
+    }
+    const current = latestTasksRef.current.find(value => value.id === task.id);
+    if (!current) return false;
+    if (current.timerRunning || current.limitedStart) {
+      const now = Date.now(), workspace = readWorkspace();
+      const paused = pauseTaskTimer(finishLimitedStart(current, now), now);
+      try { applyWorkspace({ ...workspace, tasks: annotateTaskChanges(workspace.tasks, workspace.tasks.map(value => value.id === current.id ? paused : value), now) }, true); }
+      catch { setWorkspaceStorageError(true); return false; }
+    }
+    const pending = { skillId: skill.id, taskId: task.id, measurementMode: task.measurementMode, completeTask: finishTask, ownerId: strategyOwner, generation: authGenerationRef.current };
     practiceFinishRef.current = pending;
     setPracticeFinish(pending);
     setSessionSummary(null);
@@ -2716,7 +3026,8 @@ export default function App() {
     if (!pending || pending.ownerId !== workspaceOwnerRef.current || pending.generation !== authGenerationRef.current) return;
     if (pending.taskId && pending.completeTask) {
       const now = Date.now();
-      setTasks(previous => previous.map(task => task.id === pending.taskId ? completeTask(finishLimitedStart(task, now), now) : task));
+      const current = latestTasksRef.current.find(task => task.id === pending.taskId);
+      if (!current || !commitTaskChange(current, completeTask(finishLimitedStart(current, now), now), lang === 'uk' ? 'Завдання виконане' : 'Task completed')) return;
       setCompletedNoticeId(pending.taskId);
     }
     closePracticeFinish();
@@ -2729,21 +3040,22 @@ export default function App() {
     finishPracticeTask();
     return true;
   };
-  const handleGrowthPractice = (skill: Skill, subskillId?: string, title?: string, start = false): boolean => {
-    if (!strategyReady || !canPersistWorkspaceRef.current || tabMigrationBusyRef.current
+  const handleGrowthPractice = (skill: GrowthSkill, subskillId?: string, title?: string, start = false, measurementMode?: boolean): boolean => {
+    if (!strategyReady || !timerWorkspaceReadyRef.current || !canPersistWorkspaceRef.current || tabMigrationBusyRef.current
       || workspaceOwnerRef.current !== (auth.currentUser?.uid ?? null)
       || localStorage.getItem(workspaceTabTransactionKey(strategyOwner)) !== null
       || localStorage.getItem(strategyTransactionKey(strategyOwner)) !== null) return false;
     const active = growthRef.current.skills.find(value => value.id === skill.id && value.archivedAt === undefined && value.deletedAt === undefined);
-    if (!active || !isConfiguredSkill(active) || subskillId && !active.subskills.some(value => value.id === subskillId)) return false;
+    if (!active || subskillId && !active.subskills.some(value => value.id === subskillId)) return false;
+    if (start && !continueDayIfClosed()) return false;
     const now = Date.now(), today = localTaskDate(now);
     const existing = latestTasksRef.current.find(task => !task.done && !task.scheduledPending && task.skillId === skill.id
-      && task.subskillId === subskillId && (!task.plannedDate || task.plannedDate === today) && (!title || task.title === title));
+      && task.subskillId === subskillId && !!task.measurementMode === !!measurementMode && (!task.plannedDate || task.plannedDate === today) && (!title || task.title === title));
     let taskId = existing?.id;
-    if (existing) { if (start) handleStartTask(existing.id); }
+    if (existing) { if (start && !handleStartTask(existing.id)) return false; }
     else {
       const task = createTask({ title: title || active.subskills.find(value => value.id === subskillId)?.title || active.title,
-        phase: currentTabsRef.current[0]?.id || 'focus', priority: 2, steps: 0, skillId: active.id,
+        phase: currentTabsRef.current[0]?.id || 'focus', priority: 2, steps: 0, skillId: active.id, ...(measurementMode ? { measurementMode: true } : {}),
         ...(subskillId ? { subskillId } : {}), plannedDate: today, timerMode: 'stopwatch' }, 'task-' + crypto.randomUUID(), now);
       if (!task) return false;
       const before = readWorkspace();
@@ -2876,6 +3188,114 @@ export default function App() {
     setTasks((prev) => prev.filter((t) => !t.done));
   };
 
+  const handleCreateNoteTasks = (items: NotepadTaskCandidate[], config: NotepadTaskConfig): NotepadTaskResult[] => {
+    if (notesOwner !== strategyOwner || !strategyReady || !timerWorkspaceReadyRef.current || workspaceOwnerRef.current !== strategyOwner) {
+      return items.map(item => ({ id: item.id, status: 'error', error: lang === 'uk' ? 'Простір ще не готовий. Повторіть.' : 'Workspace is not ready. Retry.' }));
+    }
+    const workspace = readWorkspace();
+    const liveNotes = getCurrentNotes();
+    if (!liveNotes || !workspace.tabs.some(tab => tab.id === config.phase) || config.plannedDate && !isTaskDate(config.plannedDate)) {
+      return items.map(item => ({ id: item.id, status: 'error', error: lang === 'uk' ? 'Перевірте нотатку, категорію та дату.' : 'Check the note, category and date.' }));
+    }
+    const records = [...workspace.tasks], results: NotepadTaskResult[] = [];
+    const retained = [...workspace.tasks, ...workspace.deletedTasks];
+    for (const item of items) {
+      const existing = [...records, ...retained].find(task => task.sourceNoteKey === item.sourceKey);
+      if (existing) { results.push({ id: item.id, status: 'existing', taskId: existing.id }); continue; }
+      const source = liveNotes.find(note => note.id === item.noteId && note.deletedAt === undefined);
+      if (!source || noteSourceHash(source.content) !== item.sourceContentHash || !item.title.trim()) {
+        results.push({ id: item.id, status: 'error', error: lang === 'uk' ? 'Нотатка змінилася або назва порожня. Оновіть перегляд.' : 'The note changed or the title is empty. Refresh the preview.' }); continue;
+      }
+      const task = createTask({ title: item.title.trim(), phase: config.phase, priority: 2, steps: 0, timerMode: 'stopwatch',
+        plannedDate: config.plannedDate, note: item.sourceText, sourceNoteId: item.noteId, sourceNotePage: item.page,
+        sourceNoteText: item.sourceText, sourceNoteKey: item.sourceKey }, 'task-' + crypto.randomUUID(), Date.now());
+      if (!task) { results.push({ id: item.id, status: 'error', error: lang === 'uk' ? 'Не вдалося створити запис.' : 'Could not create the record.' }); continue; }
+      records.push(task); results.push({ id: item.id, status: 'created', taskId: task.id });
+    }
+    if (results.some(result => result.status === 'created')) try {
+      applyWorkspace({ ...workspace, tasks: annotateTaskChanges(workspace.tasks, records, Date.now()) }, true);
+    } catch {
+      setWorkspaceStorageError(true);
+      const addedIds = new Set(results.filter(result => result.status === 'created').map(result => result.taskId));
+      return results.map(result => result.status === 'created' || result.status === 'existing' && addedIds.has(result.taskId) ? { id: result.id, status: 'error', error: lang === 'uk' ? 'Не збережено. Повторіть без повторного введення.' : 'Not saved. Retry without retyping.' } : result);
+    }
+    return results;
+  };
+
+  const archiveItems: ArchiveItem[] = [
+    ...tasks.filter(task => task.done && !task.scheduledPending).map(task => ({ id: task.id, kind: 'task' as const, title: task.title,
+      at: task.completedAt ?? task.createdAt, status: 'completed' as const, restoreLabel: lang === 'uk' ? 'Відкрити' : 'Open',
+      countsAsCompleted: completionLedger?.[task.id]?.counted !== false, canDeletePermanently: true, detail: tabs.find(tab => tab.id === task.phase)?.name,
+      deleteImpact: lang === 'uk' ? 'Деталі завдання буде видалено. Загальний облік завершень можна зберегти.' : 'Full task details will be removed. The lifetime completion credit can be kept.' })),
+    ...deletedTasks.map(task => ({ id: task.id, kind: 'task' as const, title: task.title, at: task.deletedAt, status: 'deleted' as const,
+      countsAsCompleted: task.done && !task.scheduledPending && task.deletionReason !== 'accidental' && completionLedger?.[task.id]?.counted !== false, canDeletePermanently: true,
+      detail: task.done ? (lang === 'uk' ? 'Виконане завдання' : 'Completed task') : (lang === 'uk' ? 'Незавершене завдання' : 'Unfinished task'),
+      deleteImpact: lang === 'uk' ? 'Остаточно видалити деталі цього завдання. Відновлення стане недоступним.' : 'Permanently remove these task details. Restoration will be unavailable.' })),
+    ...(notesOwner === strategyOwner ? deletedNotes : []).map(note => ({ id: note.id, kind: 'note' as const, title: note.title || note.content.split('\n')[0] || (lang === 'uk' ? 'Без назви' : 'Untitled'),
+      at: note.deletedAt!, status: 'deleted' as const, undoUntil: note.undoUntil, canDeletePermanently: true,
+      deleteImpact: lang === 'uk' ? 'Нотатку та її сторінки буде остаточно видалено. Створені з неї завдання залишаться.' : 'The note and its pages will be permanently removed. Tasks created from it will remain.' })),
+    ...growth.skills.filter(skill => skill.archivedAt !== undefined || skill.deletedAt !== undefined).map(skill => ({ id: skill.id, kind: 'skill' as const, title: skill.title,
+      at: skill.deletedAt ?? skill.archivedAt!, status: skill.deletedAt !== undefined ? 'deleted' as const : 'archived' as const, canDeletePermanently: true,
+      deleteImpact: lang === 'uk' ? 'Навичку та всі її заміри й практики буде остаточно видалено. Завдання залишаться без прив’язки до навички.' : 'The skill and all its measurements and practices will be permanently removed. Tasks will remain without the skill link.' })),
+    ...growth.measurements.filter(item => item.deletedAt !== undefined).map(item => ({ id: item.id, kind: 'measurement' as const,
+      title: (growth.skills.find(skill => skill.id === item.skillId)?.title ?? (lang === 'uk' ? 'Замір' : 'Measurement')) + ' · ' + item.value,
+      at: item.deletedAt!, status: 'deleted' as const, canDeletePermanently: true,
+      deleteImpact: lang === 'uk' ? 'Замір буде остаточно видалено; пов’язана практика залишиться без цього заміру.' : 'The measurement will be permanently removed; its practice will remain without this measurement.' })),
+    ...growth.sessions.filter(item => item.deletedAt !== undefined).map(item => ({ id: item.id, kind: 'practice' as const,
+      title: growth.skills.find(skill => skill.id === item.skillId)?.title ?? (lang === 'uk' ? 'Практика' : 'Practice'),
+      at: item.deletedAt!, status: 'deleted' as const, canDeletePermanently: true,
+      deleteImpact: lang === 'uk' ? 'Запис практики й пов’язаний замір буде остаточно видалено. Облік виконаних завдань не зміниться.' : 'The practice record and its linked measurement will be permanently removed. Task completion counts will stay unchanged.' })),
+  ];
+  const closeArchive = () => { setArchiveOpen(false); setIsSettingsOpen(false); };
+  const handleRestoreArchive = (item: ArchiveItem): boolean => {
+    if (!strategyReady || workspaceOwnerRef.current !== strategyOwner || notesOwner !== strategyOwner) return false;
+    let restored = false;
+    if (item.kind === 'task') {
+      const deleted = currentDeletedTasksRef.current.find(task => task.id === item.id);
+      if (deleted) restored = handleRestoreDeletedTask(deleted);
+      else if (latestTasksRef.current.some(task => task.id === item.id)) { setSelectedPhase('ALL'); setActiveFilter('ALL'); setSearchQuery(''); setEditingTaskId(item.id); restored = true; }
+    } else if (item.kind === 'note') {
+      restored = handleRestoreNote(item.id);
+      if (restored) { setSelectedPhase('NOTES'); setNoteSearchQuery(''); setRevealNoteId(item.id); }
+    } else {
+      const skillId = item.kind === 'skill' ? item.id : (item.kind === 'measurement' ? growth.measurements : growth.sessions).find(record => record.id === item.id)?.skillId;
+      restored = item.kind === 'skill' ? growth.restoreSkill(item.id) : item.kind === 'measurement' ? growth.restoreMeasurement(item.id) : growth.restorePracticeSession(item.id);
+      if (restored) { setSelectedPhase('STRATEGY'); setGrowthSetup(null); setRevealGrowthSkillId(skillId ?? null); }
+    }
+    if (restored) closeArchive();
+    return restored;
+  };
+  const handlePurgeArchive = (item: ArchiveItem, options?: { accidental?: boolean }): boolean => {
+    if (!strategyReady || workspaceOwnerRef.current !== strategyOwner || (auth.currentUser?.uid ?? null) !== strategyOwner) return false;
+    if (item.kind === 'note') return notesOwner === strategyOwner && handlePurgeNote(item.id, item.at);
+    const workspace = readWorkspace();
+    let next = workspace;
+    if (item.kind === 'task') {
+      if (item.status === 'deleted' && !workspace.deletedTasks.some(task => task.id === item.id && task.deletedAt === item.at)) return false;
+      if (item.status === 'completed' && !workspace.tasks.some(task => task.id === item.id && task.done && (task.completedAt ?? task.createdAt) === item.at)) return false;
+      const task = workspace.tasks.find(task => task.id === item.id) ?? workspace.deletedTasks.find(task => task.id === item.id);
+      if (!task) return false;
+      next = task.done ? retireCompletedTask(workspace, item.id, options) : { ...workspace, deletedTasks: workspace.deletedTasks.filter(task => task.id !== item.id) };
+    } else if (item.kind === 'skill') {
+      const skill = workspace.skills?.find(skill => skill.id === item.id);
+      if (!skill || (skill.deletedAt ?? skill.archivedAt) !== item.at) return false;
+      const unlink = <T extends PSTask>(task: T): T => task.skillId === item.id ? { ...task, skillId: undefined, subskillId: undefined, measurementMode: undefined, updatedAt: Date.now() } : task;
+      next = { ...workspace, skills: workspace.skills?.filter(skill => skill.id !== item.id), measurements: workspace.measurements?.filter(record => record.skillId !== item.id),
+        practiceSessions: workspace.practiceSessions?.filter(record => record.skillId !== item.id), tasks: workspace.tasks.map(unlink), deletedTasks: workspace.deletedTasks.map(unlink) };
+    } else if (item.kind === 'measurement') {
+      if (!workspace.measurements?.some(record => record.id === item.id && record.deletedAt === item.at)) return false;
+      next = { ...workspace, measurements: workspace.measurements?.filter(record => record.id !== item.id),
+        practiceSessions: workspace.practiceSessions?.map(record => record.measurementId === item.id ? { ...record, measurementId: undefined, updatedAt: Date.now() } : record) };
+    } else {
+      const session = workspace.practiceSessions?.find(record => record.id === item.id);
+      if (!session || session.deletedAt !== item.at) return false;
+      next = { ...workspace, practiceSessions: workspace.practiceSessions?.filter(record => record.id !== item.id),
+        measurements: workspace.measurements?.filter(record => record.id !== session?.measurementId && record.sessionId !== item.id) };
+    }
+    try { applyWorkspace(normalizeWorkspaceForStorage(next), true); return true; }
+    catch { setWorkspaceStorageError(true); return false; }
+  };
+
   // «бачить 3 навички · 14 замірів»: what Karkas AI can see, shown under its name.
   const aiContextLine = useMemo(() => {
     const skills = growth.skills.filter(skill => skill.deletedAt === undefined && skill.archivedAt === undefined).length;
@@ -2912,7 +3332,7 @@ export default function App() {
 
   const isPracticeTask = (task: PSTask) => !!task.skillId;
   const todayFirstRun = operationalTasks.length === 0 && !growth.skills.some(skill => skill.deletedAt === undefined);
-  const pulseTasks = [...filteredTasks.filter(task => isPracticeTask(task) && !task.done), ...filteredTasks.filter(task => !isPracticeTask(task) && !task.done), ...filteredTasks.filter(task => task.done)];
+  const pulseTasks = [...filteredTasks.filter(task => isPracticeTask(task) && !task.done), ...filteredTasks.filter(task => !isPracticeTask(task) && !task.done)];
 
   const recentlyDeletedArchive = recentlyDeleted ? deletedTasks.find(task => task.id === recentlyDeleted.id) : undefined;
 
@@ -2921,11 +3341,17 @@ export default function App() {
 
       <PulseHeader
         lang={lang} activeTab={selectedPhase === 'STRATEGY' || selectedPhase === 'DASHBOARD' || selectedPhase === 'HISTORY' ? 'growth' : selectedPhase === 'NOTES' ? 'notes' : 'today'}
-        onTabChange={tab => { setIsSettingsOpen(false); setIsAccountOpen(false); setGrowthSetup(null); setSelectedPhase(tab === 'growth' ? 'STRATEGY' : tab === 'notes' ? 'NOTES' : 'ALL'); setSearchQuery(''); setSearchVisible(false); }}
-        onSearch={() => {
-          if (selectedPhase === 'NOTES') document.querySelector<HTMLInputElement>('[data-pulse-notes] input')?.focus();
-          else { setSelectedPhase('ALL'); setSearchVisible(true); requestAnimationFrame(() => searchInputRef.current?.focus()); }
+        onTabChange={tab => { setIsSettingsOpen(false); setIsAccountOpen(false); setGrowthSetup(null); setSelectedPhase(tab === 'growth' ? 'STRATEGY' : tab === 'notes' ? 'NOTES' : 'ALL'); closeHeaderSearch(); }}
+        onSearch={openHeaderSearch}
+        searchOpen={searchVisible}
+        searchValue={selectedPhase === 'NOTES' ? noteSearchQuery : searchQuery}
+        searchPlaceholder={selectedPhase === 'NOTES' ? (lang === 'uk' ? 'Пошук нотаток…' : 'Search notes…') : (lang === 'uk' ? 'Пошук завдань…' : 'Search tasks…')}
+        searchInputRef={searchInputRef} searchFocusToken={searchFocusToken}
+        onSearchChange={value => {
+          setIsSettingsOpen(false); setIsAccountOpen(false);
+          if (selectedPhase === 'NOTES') setNoteSearchQuery(value); else setSearchQuery(value);
         }}
+        onSearchClose={closeHeaderSearch}
         onSettings={() => { setIsAccountOpen(false); setIsSettingsOpen(true); }} onAdd={() => setIsQuickAddOpen(true)} onAccount={() => { setIsSettingsOpen(false); setIsAccountOpen(true); }}
         accountName={currentUser?.displayName || currentUser?.email || (lang === 'uk' ? 'Гість' : 'Guest')}
         accountAvatarUrl={accountAvatarUrl}
@@ -2942,13 +3368,18 @@ export default function App() {
         <button type="button" className="min-h-11 underline ml-3" onClick={() => void retryWorkspaceSave()}>{lang === 'uk' ? 'Повторити збереження' : 'Retry saving'}</button>
       </div>}
       {completedNoticeId && tasks.some(task => task.id === completedNoticeId && task.done) && (
-        <div role="status" className="relative z-20 w-full px-5 py-3 bg-emerald-950/30 border-b border-emerald-900 text-emerald-100 flex flex-wrap items-center justify-center gap-3 text-sm">
-          <span>{lang === 'uk' ? 'Завдання завершено й збережено в історії.' : 'Task completed and saved in history.'}</span>
-          <button type="button" onClick={() => setSelectedPhase('HISTORY')} className="min-h-11 underline">{GROWTH_INTEGRATION_STRINGS[lang].openWeek}</button>
-          <button type="button" onClick={() => handleReopenCompletedTask(completedNoticeId)} className="min-h-11 underline">{lang === 'uk' ? 'Повернути в роботу' : 'Reopen task'}</button>
-          <button type="button" onClick={() => setCompletedNoticeId(null)} className="min-h-11" aria-label={lang === 'uk' ? 'Закрити повідомлення' : 'Dismiss notice'}><X className="w-4 h-4" /></button>
-        </div>
+        <TaskCompletionNotice taskId={completedNoticeId} lang={lang}
+          canUndo={taskUndo?.after.id === completedNoticeId}
+          onReopen={() => { if (taskUndo?.after.id === completedNoticeId) handleUndoTaskChange(); }} onDismiss={() => { setCompletedNoticeId(null); setTaskUndo(null); }}
+          onRecordResult={tasks.find(task => task.id === completedNoticeId)?.skillId ? () => { const task = latestTasksRef.current.find(task => task.id === completedNoticeId); if (task) openPracticeFinish(task, false); } : undefined} />
       )}
+      {taskUndo && taskUndo.ownerId === strategyOwner && !completedNoticeId && <div className="pulse-task-change-toast" role="status">
+        <span>{taskUndo.label}</span><button type="button" onClick={() => { handleUndoTaskChange(); }}>{lang === 'uk' ? 'Скасувати' : 'Undo'}</button>
+        <button type="button" onClick={() => setTaskUndo(null)} aria-label={lang === 'uk' ? 'Закрити' : 'Dismiss'}><X size={17} /></button>
+      </div>}
+      {completedTaskToDelete && <CompletedTaskDeleteDialog lang={lang}
+        title={(tasks.find(task => task.id === completedTaskToDelete) ?? deletedTasks.find(task => task.id === completedTaskToDelete))?.title ?? ''}
+        onClose={() => setCompletedTaskToDelete(null)} onDelete={handleDeleteCompletedTask} />}
       {/* Minimized Window Taskbar Floating Notification */}
       {isWindowMinimized && (
         <div
@@ -2983,20 +3414,28 @@ export default function App() {
         onAdd={handleAddTask} onClose={() => setIsQuickAddOpen(false)}
         onMoreOptions={values => { setQuickAddPrefill({ ...values, key: ++quickAddPrefillKey.current }); setIsAddOpen(true); }} />}
 
-      {/* Detailed add drawer: reached through «more options» in the quick add line */}
-      <QuickAddDrawer
-        prefill={quickAddPrefill}
-        ownerId={currentUser?.uid ?? null}
-        isOpen={isAddOpen && timerWorkspaceReadyRef.current && workspaceOwnerRef.current === (currentUser?.uid ?? null)}
-        lang={lang}
-        tabs={tabs}
-        selectedPhase={selectedPhase}
-        onClose={() => setIsAddOpen(false)}
-        onAddTask={handleAddTask}
-      />
+      {(isAddOpen || editingTaskId && tasks.some(task => task.id === editingTaskId)) && timerWorkspaceReadyRef.current && workspaceOwnerRef.current === strategyOwner && <TaskEditor
+        key={(strategyOwner ?? 'guest') + ':' + (editingTaskId ?? 'new-' + (quickAddPrefill?.key ?? 0))}
+        ownerId={strategyOwner} task={editingTaskId ? tasks.find(task => task.id === editingTaskId) : undefined}
+        prefill={editingTaskId ? undefined : quickAddPrefill} tabs={tabs} skills={growth.skills} lang={lang}
+        onCreate={(input, category) => handleAddTask(input, category) ? latestTasksRef.current[0] ?? true : false} onPatch={handlePatchTask}
+        onReopenTask={id => { if (!handleReopenCompletedTask(id)) return false; setEditingTaskId(null); setIsAddOpen(false); return true; }}
+        onRecordResult={id => { const task = latestTasksRef.current.find(task => task.id === id); if (!task || !openPracticeFinish(task, false)) return false; setEditingTaskId(null); setIsAddOpen(false); return true; }}
+        onClose={() => { setIsAddOpen(false); setEditingTaskId(null); }} />}
 
       {/* Main Content Area */}
       <PageShell role="main" className="relative z-10 flex-1">
+        {practiceFinish && practiceFinish.ownerId === strategyOwner && practiceFinish.generation === authGenerationRef.current && strategyReady && (() => {
+          const skill = growth.skills.find(value => value.id === practiceFinish.skillId && value.deletedAt === undefined && value.archivedAt === undefined);
+          const task = practiceFinish.taskId ? tasks.find(value => value.id === practiceFinish.taskId) : undefined;
+          const session = task ? growth.sessions.filter(record => record.taskId === task.id && record.deletedAt === undefined).sort((a, b) => b.at - a.at)[0] : undefined;
+          const measurement = session?.measurementId ? growth.measurements.find(record => record.id === session.measurementId && record.deletedAt === undefined) : undefined;
+          return skill && (!practiceFinish.taskId || task) ? <div id="active-practice-result" className="pulse-inline-result"><PracticeFinishDialog
+            key={strategyOwner + ':' + skill.id + ':' + (task?.id ?? 'measurement')}
+            lang={lang} skill={skill} growth={growth} inline session={session} measurement={measurement}
+            measurements={growth.measurements} task={task} measurementMode={practiceFinish.measurementMode}
+            onSave={savePracticeResult} onClose={closePracticeFinish} onSkip={finishPracticeTask} /></div> : null;
+        })()}
         {recoveryCandidate && <div role="status" className="mb-5 border border-amber-800 bg-amber-950/20 p-3 text-sm text-amber-200">
           <p>{lang === 'uk' ? `Знайдено збережений простір: ${recoveryCandidate.workspace.tasks.length} завдань, ${recoveryCandidate.workspace.tabs.length} категорій, ${recoveryCandidate.workspace.deletedTasks.length} в архіві.` : `Retained workspace found: ${recoveryCandidate.workspace.tasks.length} tasks, ${recoveryCandidate.workspace.tabs.length} categories, ${recoveryCandidate.workspace.deletedTasks.length} archived.`}</p>
           <button type="button" onClick={restoreRetainedWorkspace} className="mt-3 min-h-11 border border-amber-800 px-3">{lang === 'uk' ? 'Відновити збережений простір' : 'Restore retained workspace'}</button>
@@ -3032,12 +3471,12 @@ export default function App() {
             key={strategyOwner + ':' + (growthSetup.skillId ?? 'new')}
             lang={lang} growth={growth} skill={growth.skills.find(skill => skill.id === growthSetup.skillId)}
             initialTitle={growthSetup.initialTitle} onClose={() => setGrowthSetup(null)}
-            onSaved={() => setGrowthSetup(null)} />
+            onSaved={id => { setGrowthSetup(null); if (id) setRevealGrowthSkillId(id); }} />
           : <GrowthView key={strategyOwner + ':' + selectedPhase} lang={lang} growth={growth}
-            tasks={[...tasks, ...deletedTasks]} initialTab={selectedPhase === 'HISTORY' ? 'week' : 'skills'}
-            onSetup={(skill, initialTitle) => setGrowthSetup({ skillId: skill?.id, initialTitle })}
-            onPractice={(skill, subskillId, title) => { if (!handleGrowthPractice(skill, subskillId, title, true)) setActionNotice(GROWTH_INTEGRATION_STRINGS[lang].planFailed); }}
-            onAddPractice={(skill, subskillId, title) => handleGrowthPractice(skill, subskillId, title, false)}
+            tasks={[...tasks, ...deletedTasks]} initialTab="skills" revealSkillId={revealGrowthSkillId}
+            onSetup={(skill, initialTitle) => { if (skill) setRevealGrowthSkillId(skill.id); setGrowthSetup({ skillId: skill?.id, initialTitle }); }}
+            onPractice={(skill, subskillId, title, measurementMode) => { if (!handleGrowthPractice(skill, subskillId, title, true, measurementMode)) setActionNotice(GROWTH_INTEGRATION_STRINGS[lang].planFailed); }}
+            onAddPractice={(skill, subskillId, title, measurementMode) => handleGrowthPractice(skill, subskillId, title, false, measurementMode)}
             onMeasure={skill => setPracticeFinish({ skillId: skill.id, measurementMode: true, ownerId: strategyOwner, generation: authGenerationRef.current })} />
           : <p role="status" className="text-sm text-neutral-400">{lang === 'uk' ? 'Завантажуємо ваш простір…' : 'Loading your workspace…'}</p>
         ) : selectedPhase === 'NOTES' ? (
@@ -3046,6 +3485,13 @@ export default function App() {
             key={notesOwner === null ? 'guest' : `account:${notesOwner}`}
             ownerId={notesOwner}
             notes={notesOwner === strategyOwner ? notes : []}
+            deletedNotes={notesOwner === strategyOwner ? deletedNotes : []}
+            revealNoteId={revealNoteId}
+            taskCategories={tabs}
+            existingTaskSources={[...tasks, ...deletedTasks].flatMap(task => task.sourceNoteKey ? [task.sourceNoteKey] : [])}
+            onCreateTasks={handleCreateNoteTasks}
+            onOpenTasks={ids => { const first = ids.find(id => latestTasksRef.current.some(task => task.id === id)); if (first) handleRevealTask(first); }}
+            searchQuery={noteSearchQuery} onSearchQueryChange={setNoteSearchQuery}
             onAddNote={handleAddNote}
             onUpdateNote={handleUpdateNote}
             onDeleteNote={handleDeleteNote}
@@ -3058,7 +3504,7 @@ export default function App() {
             <PageHead firstLine={new Date(insightNow).toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-GB', { weekday: 'long' })}
               secondLine={new Date(insightNow).toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-GB', { day: 'numeric', month: 'long' })}
               switcher={<CategorySwitcher tabs={tabs} lang={lang} selected={selectedPhase} total={listCounts.total} counts={listCounts.phaseCounts}
-                labelOf={tab => (t.phases as Record<string,string>)[tab.id] || tab.name} onSelect={setSelectedPhase} onAdd={name => handleAddTab(name)} onManage={() => setIsManageTabsOpen(true)} />}
+                labelOf={tab => tab.name || (t.phases as Record<string,string>)[tab.id]} onSelect={setSelectedPhase} onAdd={name => handleAddTab(name)} onManage={() => setIsManageTabsOpen(true)} />}
             />
             <PageGrid sidebarClassName="pulse-today-side" contentClassName="pulse-today-main" sidebar={<TodaySidebar tasks={operationalTasks} tabs={tabs} now={insightNow} lang={lang} summary={daySummaries.today}
               suggestion={strategyReady ? personalProfile.latestStrategy?.nextAction : undefined}
@@ -3073,7 +3519,8 @@ export default function App() {
                 tasks={operationalTasks}
                 lang={lang}
                 now={insightNow}
-                todaySummary={daySummaries.today} dayClosed={dayRecapReady && !!dayLogState.value.closed[daySummaries.today.date]} offerDayClose={offerDayClose} recap={yesterdayRecap}
+                todaySummary={daySummaries.today} dayClosed={isDayClosed} offerDayClose={offerDayClose} recap={yesterdayRecap}
+                onContinueDay={() => { if (continueDayIfClosed()) quickAddInputRef.current?.focus({ preventScroll: true }); }}
                 recapNote={dayRecapReady ? dayLogState.value.closed[daySummaries.yesterday.date]?.note : undefined}
                 onOpenDayClose={() => { if (dayRecapReady) setDayClose({ owner: strategyOwner, date: daySummaries.today.date }); }}
                 onDismissRecap={() => saveDayLog({ ...dayLogState.value, recapDismissed: daySummaries.today.date })}
@@ -3111,100 +3558,58 @@ export default function App() {
               </div>)}</div>
             </details>}
 
-            {/* Search opens from the header or Ctrl F. */}
-            {(searchVisible || !!searchQuery) && <div className="mb-3 flex items-center gap-3">
-              <div className="relative flex-1">
-                <Search className="w-3.5 h-3.5 text-neutral-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                <input
-                  ref={searchInputRef}
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  aria-label={lang === 'uk' ? 'Пошук завдань' : 'Search tasks'}
-                  placeholder={
-                    lang === 'uk'
-                      ? 'Пошук завдань…'
-                      : 'Search tasks…'
-                  }
-                  className="pulse-task-search"
-                />
-                {searchQuery && (
-                  <button
-                    type="button"
-                    aria-label={lang === 'uk' ? 'Очистити пошук' : 'Clear search'} onClick={() => setSearchQuery('')}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-neutral-500 hover:text-white p-0.5 cursor-pointer"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                )}
-              </div>
-            </div>}
-
             {/* Empty State */}
             {filteredTasks.length === 0 && !!searchQuery && (
               <div className="pulse-empty-state">
-                <div className="w-8 h-8 mx-auto mb-3 border border-neutral-700 flex items-center justify-center text-neutral-400">
-                  <CheckCircle className="w-4 h-4 text-neutral-400" />
+                <div className="pulse-empty-icon" aria-hidden="true">
+                  <Search size={28} aria-hidden="true" />
                 </div>
-                <h2 className="text-sm font-extrabold uppercase tracking-wider text-neutral-200 mb-1">
-                  {searchQuery
-                    ? (lang === 'uk' ? 'Завдань не знайдено' : 'No tasks found')
-                    : activeFilter === 'DONE'
-                    ? t.emptyDoneTitle
-                    : activeFilter === 'ACTIVE' && stats.total > 0 && stats.completed === stats.total
-                    ? t.emptyActiveTitle
-                    : t.emptyQueueTitle}
-                </h2>
-                <p className="text-xs text-neutral-400 font-sans max-w-sm mx-auto mb-4">
-                  {searchQuery
-                    ? (lang === 'uk' ? `За запитом "${searchQuery}" нічого не знайдено` : `No tasks matching "${searchQuery}"`)
-                    : activeFilter === 'DONE'
-                    ? t.emptyDoneDesc
-                    : activeFilter === 'ACTIVE' && stats.total > 0 && stats.completed === stats.total
-                    ? t.emptyActiveDesc
-                    : t.emptyQueueDesc}
-                </p>
-                <div className="flex items-center justify-center gap-2 flex-wrap">
-                  {searchQuery && (
-                    <button
-                      type="button"
-                      onClick={() => setSearchQuery('')}
-                      className="px-3.5 py-1.5 bg-neutral-800 border border-neutral-600 text-white font-bold text-xs font-sans tracking-wider hover:bg-neutral-700 transition-colors"
-                    >
-                      {lang === 'uk' ? 'Очистити пошук' : 'Clear search'}
-                    </button>
-                  )}
+                <div className="pulse-empty-copy">
+                  <h2>{lang === 'uk' ? 'Завдань не знайдено' : 'No tasks found'}</h2>
+                  <p>{lang === 'uk' ? `За запитом "${searchQuery}" нічого не знайдено` : `No tasks matching "${searchQuery}"`}</p>
+                </div>
+                <div className="pulse-empty-actions">
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="pulse-empty-button"
+                  >
+                    {lang === 'uk' ? 'Очистити пошук' : 'Clear search'}
+                  </button>
                   {activeFilter !== 'ALL' && (
                     <button
+                      type="button"
                       id="empty-show-all-filter-btn"
                       onClick={() => {
                         sound.tick(600);
                         setActiveFilter('ALL');
                       }}
-                      className="px-3.5 py-1.5 bg-neutral-800 border border-neutral-600 text-white font-bold text-xs font-sans tracking-wider hover:bg-neutral-700 transition-colors"
+                      className="pulse-empty-button"
                     >
-                      {t.showAllTasks}
+                      {lang === 'uk' ? 'Показати всі завдання' : 'Show all tasks'}
                     </button>
                   )}
                   {selectedPhase !== 'ALL' && (
                     <button
+                      type="button"
                       id="empty-show-all-phase-btn"
                       onClick={() => {
                         sound.tick(600);
                         setSelectedPhase('ALL');
                       }}
-                      className="px-3.5 py-1.5 bg-neutral-900 border border-neutral-700 text-neutral-300 font-bold text-xs font-sans tracking-wider hover:text-white hover:border-neutral-500 transition-colors"
+                      className="pulse-empty-button"
                     >
-                      {t.phases.ALL} ({stats.total})
+                      {lang === 'uk' ? 'Усі категорії' : 'All categories'} ({stats.total})
                     </button>
                   )}
                   <button
+                    type="button"
                     id="empty-add-btn"
                     onClick={() => setIsQuickAddOpen(true)}
-                    className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 bg-white text-black font-extrabold text-xs font-sans tracking-wider hover:bg-neutral-200 transition-colors"
+                    className="pulse-empty-button pulse-empty-button--primary"
                   >
                     <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>{t.injectNewOp}</span>
+                    <span>{lang === 'uk' ? 'Додати завдання' : 'Add task'}</span>
                   </button>
                 </div>
               </div>
@@ -3233,6 +3638,7 @@ export default function App() {
                 {pulseTasks.map((task, index) => (
                   <motion.div
                     key={task.id}
+                    id={'task-wrapper-' + task.id}
                     layout
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -3243,8 +3649,17 @@ export default function App() {
                     <TodayTaskRow task={task} tabs={tabs} lang={lang} now={insightNow}
                       skillName={task.skillId ? growth.skills.find(skill => skill.id === task.skillId)?.title : undefined}
                       onToggleDone={handleToggleDone} onStart={handleStartTask} onDelete={handleDelete}
+                      onPause={handleToggleTimer} onEdit={setEditingTaskId} onToggleStep={handleToggleStepItem}
+                      onRecordResult={id => { const record = latestTasksRef.current.find(task => task.id === id); if (record) openPracticeFinish(record, false); }}
+                      onOpenSource={id => { setRevealNoteId(id); setNoteSearchQuery(''); setSelectedPhase('NOTES'); }}
                       onRename={(id, title) => { const current = latestTasksRef.current.find(item => item.id === id); return !!current && handleEditTask(id, title, current.note || '', { title: current.title, note: current.note || '', plannedDate: current.plannedDate, deadlineDate: current.deadlineDate }); }}
                       onMove={(moved, date) => {
+                        if (!moved.scheduledFor) {
+                          if (!handlePatchTask(moved.id, { plannedDate: date }, { plannedDate: moved.plannedDate })) {
+                            setActionNotice(lang === 'uk' ? 'Дату не збережено. Перевірте дедлайн або новіші зміни завдання.' : 'Date not saved. Check the deadline or newer task changes.');
+                          }
+                          return;
+                        }
                         // A timed task keeps its clock time on the new day.
                         const at = moved.scheduledFor ? new Date(moved.scheduledFor) : null;
                         const startTime = at ? String(at.getHours()).padStart(2, '0') + ':' + String(at.getMinutes()).padStart(2, '0') : undefined;
@@ -3255,6 +3670,7 @@ export default function App() {
                 ))}
               </AnimatePresence>
             </div>
+            <div className="pulse-archive-shortcut"><button type="button" onClick={() => { setIsSettingsOpen(true); setArchiveOpen(true); }}>{lang === 'uk' ? 'Архів у налаштуваннях' : 'Archive in settings'} · {retainedCompletedTasks.length}</button></div>
             </PageGrid>
           </>
         )}
@@ -3266,20 +3682,11 @@ export default function App() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 20, transition: { duration: 0.15 } }}
-              className="fixed bottom-24 left-1/2 -translate-x-1/2 z-40 w-[calc(100%-2rem)] max-w-xl bg-neutral-900 border border-neutral-700 p-3 flex flex-col gap-2 shadow-2xl text-sm font-sans"
+              className="pulse-delete-toast"
             >
               <div className="flex items-start justify-between gap-3">
               <span className="text-neutral-300 break-words" role="status">
                 {t.opRemoved} "{recentlyDeleted.title.slice(0, 26)}{recentlyDeleted.title.length > 26 ? '...' : ''}"
-                <span className="block text-neutral-400 mt-1 text-xs">
-                  {recentlyDeletedArchive?.deletionReason === 'accidental'
-                    ? (lang === 'uk' ? 'Додано помилково. Не враховується у статистиці та AI.' : 'Added by mistake. Excluded from statistics and AI.')
-                    : recentlyDeletedArchive?.deletionReason === 'cancelled' && !recentlyDeleted.done
-                    ? (lang === 'uk' ? 'Позначено як скасоване, окремо від виконаних.' : 'Marked cancelled, separate from completed tasks.')
-                    : recentlyDeleted.done
-                    ? (lang === 'uk' ? 'Виконання збережено в історії.' : 'Completion is preserved in history.')
-                    : (lang === 'uk' ? 'Не враховується у статистиці та AI, доки причину не уточнено.' : 'Excluded from statistics and AI until the reason is specified.')}
-                </span>
               </span>
               <button
                 type="button"
@@ -3296,37 +3703,14 @@ export default function App() {
                 onClick={handleUndoDelete}
                 className="min-h-11 px-3 text-white font-bold underline hover:text-neutral-300 cursor-pointer"
               >
-                {lang === 'uk' ? 'Відновити' : 'Restore'}
+                {lang === 'uk' ? 'Скасувати' : 'Undo'}
               </button>
-              <button
-                type="button"
-                aria-pressed={recentlyDeletedArchive?.deletionReason === 'accidental'}
-                onClick={() => handleClassifyDeletedTask(recentlyDeleted.id, 'accidental')}
-                className="min-h-11 px-3 border border-neutral-700 text-neutral-300 hover:text-white hover:border-white cursor-pointer"
-              >
-                {lang === 'uk' ? 'Додано помилково' : 'Added by mistake'}
-              </button>
-              {!recentlyDeleted.done && <button
-                type="button"
-                aria-pressed={recentlyDeletedArchive?.deletionReason === 'cancelled'}
-                onClick={() => handleClassifyDeletedTask(recentlyDeleted.id, 'cancelled')}
-                className="min-h-11 px-3 border border-neutral-700 text-neutral-300 hover:text-white hover:border-white cursor-pointer"
-              >
-                {lang === 'uk' ? 'Скасовано' : 'Cancelled'}
-              </button>}
+              <span className="pulse-delete-hint">{lang === 'uk' ? 'Далі — Налаштування → Архів' : 'Then — Settings → Archive'}</span>
               </div>
             </motion.div>
           )}
         </AnimatePresence>
       </PageShell>
-      {practiceFinish && practiceFinish.ownerId === strategyOwner && practiceFinish.generation === authGenerationRef.current && strategyReady && (() => {
-        const skill = growth.skills.find(value => value.id === practiceFinish.skillId && value.deletedAt === undefined && value.archivedAt === undefined);
-        const task = practiceFinish.taskId ? tasks.find(value => value.id === practiceFinish.taskId) : undefined;
-        return skill && isConfiguredSkill(skill) && (!practiceFinish.taskId || task && !task.done) ? <PracticeFinishDialog
-          key={strategyOwner + ':' + skill.id + ':' + (task?.id ?? 'measurement')}
-          lang={lang} skill={skill} measurements={growth.measurements} task={task} measurementMode={practiceFinish.measurementMode}
-          onSave={savePracticeResult} onClose={closePracticeFinish} onSkip={finishPracticeTask} /> : null;
-      })()}
       {workPlanTask && timerWorkspaceReadyRef.current && workspaceOwnerRef.current === (currentUser?.uid || null) && <TaskWorkPlanDialog key={`${currentUser?.uid || 'guest'}:${workPlanTask.id}`} task={workPlanTask} lang={lang} onClose={() => setWorkPlanTaskId(null)} onSave={saveWorkPlan} />}
 
       {dayClose && dayRecapReady && dayClose.owner === strategyOwner && dayClose.date === daySummaries.today.date && <DayCloseDialog
@@ -3338,9 +3722,11 @@ export default function App() {
         session={sessionSummary.session} task={summaryTask} allTasks={tasks} now={sessionSummary.shownAt} lang={lang}
         onDismiss={dismissSessionSummary} onStart={handleStartTask} onResume={handleStartTask}
         onPlanTomorrow={handlePlanTomorrow} onFinishAfterExpiry={id => { setTimerNotice(null); handleFinishAfterExpiry(id); }}
-        onContinueTenMinutes={id => { setTimerNotice(null); handleContinueSummaryCountdown(id); }} onReopen={handleReopenCompletedTask} />}
+        onContinueTenMinutes={id => { setTimerNotice(null); handleContinueSummaryCountdown(id); }} onReopen={handleReopenCompletedTask} onComplete={handleToggleDone} />}
 
       <AIIsland lang={lang} isOpen={isAIOpen} onOpen={() => { sound.activate(); setAiPromptSeed(''); setIsAIOpen(true); }} />
+      {strategyReady && <GrowthFeedback key={strategyOwner ?? 'guest'} growth={growth} lang={lang}
+        onNewSkill={skill => { setSelectedPhase('STRATEGY'); setGrowthSetup({ initialTitle: skill.title }); }} />}
 
       {/* AI Assistant HUD Sheet */}
       <AIAssistantSheet
@@ -3378,6 +3764,7 @@ export default function App() {
         onDeleteTab={handleDeleteTab}
         onSetPresetTabs={handleSetPresetTabs}
         onUpdateTabColor={handleUpdateTabColor}
+        onRenameTab={handleRenameTab}
         tabCounts={stats.phaseCounts}
         aiContext={{
           goals: personalProfile.goals.map((goal) => goal.title).filter(Boolean),
@@ -3389,6 +3776,7 @@ export default function App() {
       {/* Google Account & Cloud Backup Modal */}
       {isAccountOpen && <div className="ac-overlay" role="region" aria-label={lang === 'uk' ? 'Акаунт' : 'Account'}>
         <AccountView key={currentUser?.uid ?? 'guest'} lang={lang}
+          completedTaskCount={completedHistoryCount}
           user={currentUser ? { id: currentUser.uid, name: currentUser.displayName || currentUser.email || (lang === 'uk' ? 'Акаунт' : 'Account'), email: currentUser.email, avatarUrl: accountAvatarUrl } : null}
           onAvatarChange={setAccountAvatarUrl}
           isSyncing={isSyncing} syncStatus={syncStatus} syncError={syncError} autoSyncEnabled={autoSyncEnabled}
@@ -3420,7 +3808,9 @@ export default function App() {
 
       {/* Device-local application settings */}
       {isSettingsOpen && <div className="st-overlay" role="region" aria-label={lang === 'uk' ? 'Налаштування' : 'Settings'}>
-        <SettingsView lang={lang} zoomPercent={appZoomPercent} minZoom={MIN_APP_ZOOM} maxZoom={MAX_APP_ZOOM} defaultZoom={DEFAULT_APP_ZOOM}
+        {archiveOpen ? <ArchiveView lang={lang} items={archiveItems} onBack={() => setArchiveOpen(false)} onRestore={handleRestoreArchive} onDeletePermanently={handlePurgeArchive} />
+        : <SettingsView lang={lang} zoomPercent={appZoomPercent} minZoom={MIN_APP_ZOOM} maxZoom={MAX_APP_ZOOM} defaultZoom={DEFAULT_APP_ZOOM}
+          onOpenArchive={() => setArchiveOpen(true)} archiveCount={archiveItems.filter(item => item.status !== 'deleted' || (item.undoUntil ?? item.at + 8000) <= insightNow).length}
           onZoomChange={value => setAppZoomPercent(normalizeAppZoom(value))}
           launchAtStartup={launchAtStartup} startupPending={startupPending} onLaunchAtStartupChange={handleLaunchAtStartupChange}
           soundEnabled={soundEnabled} onToggleSound={handleToggleSound} motionEnabled={motionEnabled} onToggleMotion={() => setMotionEnabled(value => !value)}
@@ -3440,8 +3830,7 @@ export default function App() {
             detail: [currentUser.email, lastSyncTime ? (lang === 'uk' ? 'синхронізовано ' : 'synced ') + formatSyncAgo(lastSyncTime, lang) : ''].filter(Boolean).join(' · ') } : null}
           onSync={() => { void handleSyncNow(); }} onLogout={() => { void handleLogout(); }}
           onLogin={() => { setIsSettingsOpen(false); setIsAccountOpen(true); }}
-          onClearCompleted={tasks.some(task => task.done) ? handleClearCompleted : undefined}
-          onClose={() => setIsSettingsOpen(false)} />
+          onClose={() => { setIsSettingsOpen(false); setArchiveOpen(false); }} />}
       </div>}
 
       {/* Automated Update Detection Prompt Banner */}

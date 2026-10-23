@@ -15,6 +15,9 @@ export function serializeTaskForCloud<T extends PSTask | DeletedTask>(task: T, n
   }
   if (task.skillId !== undefined) result.skillId = task.skillId;
   if (task.subskillId !== undefined) result.subskillId = task.subskillId;
+  for (const key of ['measurementMode', 'sourceNoteId', 'sourceNotePage', 'sourceNoteText', 'sourceNoteKey'] as const) {
+    if (task[key] !== undefined) result[key] = task[key];
+  }
   if (task.note != null) result.note = task.note;
   if (Number.isFinite(task.updatedAt) && task.updatedAt! >= 0) result.updatedAt = task.updatedAt;
   if (Array.isArray(task.activityTrail)) result.activityTrail = mergeTaskActivityTrail(undefined, task.activityTrail).map(event => ({ ...event }));

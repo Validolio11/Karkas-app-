@@ -44,7 +44,7 @@ function growthHints(skills: readonly GrowthSkill[], measurements: readonly Skil
     if (!stalled && status.kind !== 'behind') return [];
     const weak = weakestSubskill(skill, sessions);
     const subskill = skill.subskills.find(item => item.id === weak?.subskillId);
-    return [{ skill, subskillId: subskill?.id, title: subskill?.title || skill.measure.how || skill.metric.label,
+    return [{ skill, subskillId: subskill?.id, title: subskill?.title || skill.measure?.how || skill.metric.label,
       second: stalled ? (uk ? 'на плато' : 'on a plateau') : (uk ? 'відстає' : 'is behind') }];
   });
 }

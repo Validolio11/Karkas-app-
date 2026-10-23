@@ -1,4 +1,4 @@
-import { useId } from 'react';
+import { SoftHatch } from '../SoftHatch';
 import type { Language } from '../../utils/i18n';
 import type { GrowthStatus } from '../../utils/growth';
 import type { Skill } from '../../types';
@@ -39,17 +39,10 @@ export function growthWeekRange(start: number, end: number, lang: Language) {
   return lang === 'uk' ? a.getDate() + '–' + b.getDate() + ' ' + UK_MONTHS[b.getMonth()] : EN_MONTHS[b.getMonth()] + ' ' + a.getDate() + '–' + b.getDate();
 }
 
-const reducedMotion = () => typeof window !== 'undefined' && (document.documentElement.classList.contains('karkas-reduce-motion')
-  || !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
-
-/** Hatched progress band: 9px pitch, 10° tilt, 2px strokes. It fills in, then its strokes keep running one pitch per loop. */
+/** Keep each data fill's original width and semantic color; soften only its own endpoint. */
 export function GrowthHatch({ width, color, opacity }: { width: string; color: string; opacity?: number }) {
-  const id = useId().replace(/:/g, '');
-  return <div aria-hidden="true" className="gv-hatch" style={{ width, opacity }}>
-    <svg width="100%" height="100%" style={{ display: 'block' }}><defs><pattern id={id} x="0" width="9" height="40" patternUnits="userSpaceOnUse" patternTransform="rotate(10)">
-      {!reducedMotion() && <animate attributeName="x" from="0" to="9" dur="0.35s" repeatCount="indefinite" />}
-      <line x1="1.5" y1="-10" x2="1.5" y2="50" stroke={color} strokeWidth="2" />
-    </pattern></defs><rect width="100%" height="100%" fill={'url(#' + id + ')'} /></svg>
+  return <div aria-hidden="true" className="gv-hatch" style={{ width }}>
+    <SoftHatch color={color} opacity={opacity} />
   </div>;
 }
 

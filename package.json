@@ -1,7 +1,7 @@
 {
   "name": "karkas-app",
   "private": true,
-  "version": "1.24.0",
+  "version": "1.25.0",
   "description": "Karkas Application",
   "author": "Melychyn",
   "type": "module",
@@ -77,6 +77,8 @@
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "electron": "^44.2.0",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.25.0",

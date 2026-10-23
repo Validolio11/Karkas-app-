@@ -1,0 +1,29 @@
+.soft-hatch {
+  --soft-hatch-edge: min(var(--soft-hatch-edge-width, 108px), calc(var(--soft-hatch-end, 100%) * .45));
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.soft-hatch[data-empty="true"] { display: none; }
+.soft-hatch__layer { position: absolute; inset: 0; }
+.soft-hatch__layer--sharp {
+  mask-image: linear-gradient(to right, #000 calc(var(--soft-hatch-end, 100%) - var(--soft-hatch-edge)), transparent calc(var(--soft-hatch-end, 100%) - var(--soft-hatch-edge) * .25));
+}
+.soft-hatch__layer--blur {
+  mask-image: linear-gradient(to right, transparent calc(var(--soft-hatch-end, 100%) - var(--soft-hatch-edge)), #000 calc(var(--soft-hatch-end, 100%) - var(--soft-hatch-edge) * .58), transparent calc(var(--soft-hatch-end, 100%) + var(--soft-hatch-tail, 0px)));
+}
+.soft-hatch__pattern {
+  position: absolute;
+  left: -13.201px;
+  top: 0;
+  display: block;
+  width: calc(100% + 13.201px);
+  height: 100%;
+}
+.soft-hatch__layer--blur > .soft-hatch__pattern { filter: blur(2.4px); }
+.soft-hatch[data-motion="on"] .soft-hatch__pattern { animation: softHatchRun .35s linear infinite; }
+.soft-hatch[data-reveal="on"] { animation: softHatchReveal 1.6s cubic-bezier(.4, 0, .2, 1) .5s backwards; }
+@keyframes softHatchRun { from { transform: translateX(0); } to { transform: translateX(13.201px); } }
+@keyframes softHatchReveal { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+.karkas-reduce-motion .soft-hatch, .karkas-reduce-motion .soft-hatch__pattern { animation: none !important; }
+@media (prefers-reduced-motion: reduce) { .soft-hatch, .soft-hatch__pattern { animation: none !important; } }

@@ -1,7 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { PSTask } from '../types';
-import { formatDayFocus, formatDaySessions, type DaySummary } from '../utils/dayRecap';
+import { dayCompletedCount, formatDayFocus, formatDaySessions, type DaySummary } from '../utils/dayRecap';
 import { isTaskDate, localTaskDate } from '../utils/taskDates';
 import { useDialogKeyboard } from './useDialogKeyboard';
 
@@ -26,6 +26,9 @@ export const DayCloseDialog: React.FC<Props> = ({ summary, candidates, lang, onC
   const [saveFailed, setSaveFailed] = useState(false);
   const submitted = useRef(false);
   const squares = Math.min(32, Math.ceil(Math.max(0, summary.focusSeconds) / 900));
+  const completedCount = dayCompletedCount(summary);
+  const shownCompletions = summary.completed.slice(0, 5);
+  const remainingCompletions = Math.max(0, completedCount - shownCompletions.length);
   const dateLabel = date.toLocaleDateString(lang === 'uk' ? 'uk-UA' : 'en-US', { day: 'numeric', month: 'long' });
   useDialogKeyboard(true, onClose, 'day-close-dialog');
 
@@ -45,11 +48,11 @@ export const DayCloseDialog: React.FC<Props> = ({ summary, candidates, lang, onC
       </header>
       <div className="mt-4 flex flex-wrap gap-x-4 gap-y-2 text-sm tabular-nums">
         <span>{formatDayFocus(summary.focusSeconds, lang)}</span><span className="text-neutral-300">{formatDaySessions(summary.sessions, lang)}</span>
-        <span className="text-neutral-300">{lang === 'uk' ? 'Закрито' : 'Completed'} {summary.completed.length}</span>
+        <span className="text-neutral-300">{lang === 'uk' ? 'Закрито' : 'Completed'} {completedCount}</span>
       </div>
       {squares > 0 && <div aria-hidden="true" className="my-3 flex gap-1">{Array.from({ length: squares }, (_, index) => <span key={index} className="aspect-square min-w-0 max-w-2 flex-1 bg-emerald-400" />)}</div>}
-      {summary.completed.length > 0 && <ul className="mt-3 space-y-1 text-sm text-neutral-300">{summary.completed.slice(0, 5).map(task => <li key={task.id} className="flex items-start gap-2"><span aria-hidden="true" className="mt-1.5 h-1.5 w-1.5 shrink-0 bg-emerald-400" /><span className="min-w-0 break-words">{task.title}</span></li>)}
-        {summary.completed.length > 5 && <li className="pl-3.5 text-xs text-neutral-500">+{summary.completed.length - 5}</li>}
+      {completedCount > 0 && <ul className="mt-3 space-y-1 text-sm text-neutral-300">{shownCompletions.map(task => <li key={task.id} className="flex items-start gap-2"><span aria-hidden="true" className="mt-1.5 h-1.5 w-1.5 shrink-0 bg-emerald-400" /><span className="min-w-0 break-words">{task.title}</span></li>)}
+        {remainingCompletions > 0 && <li className="pl-3.5 text-xs text-neutral-500">{lang === 'uk' ? '+ ще ' : '+ '}{remainingCompletions}{lang === 'en' ? ' more' : ''}</li>}
       </ul>}
       <section className="mt-4 border-t border-neutral-800 pt-4" aria-labelledby="day-close-carry-title">
         <h3 id="day-close-carry-title" className="text-sm font-medium">{lang === 'uk' ? 'Що перенести на завтра?' : 'What should move to tomorrow?'}</h3>

@@ -60,8 +60,8 @@ export interface Skill {
   title: string;
   metric: { label: string; unit: string; direction: 'up' | 'down' };
   start: { value: number; date: string };
-  goal: { value: number; date: string; label?: string };
-  measure: { weekday: 0 | 1 | 2 | 3 | 4 | 5 | 6; minutes: number; how?: string; time?: string }; // time: local "HH:MM"
+  goal: { value: number; date?: string; label?: string };
+  measure?: { weekday: 0 | 1 | 2 | 3 | 4 | 5 | 6; minutes: number; how?: string; time?: string }; // time: local "HH:MM"
   subskills: { id: string; title: string }[];
   createdAt: number;
   updatedAt?: number;
@@ -69,10 +69,16 @@ export interface Skill {
   deletedAt?: number;
   sourceGoalId?: string;
   needsSetup?: boolean;
+  goalVersion?: string;
+  goalAcknowledgedVersion?: string;
+  goalReachedAt?: number;
+  goalState?: 'active' | 'achieved' | 'maintaining' | 'completed';
+  goalHistory?: { version: string; value: number; reachedAt: number; metricLabel: string; unit: string; direction: 'up' | 'down' }[];
+  completedAt?: number;
 }
 
 /** Migrated goals remain incomplete until the user chooses a real outcome metric. */
-export type SkillDraft = Pick<Skill, 'id' | 'title' | 'subskills' | 'createdAt' | 'updatedAt' | 'archivedAt' | 'deletedAt' | 'sourceGoalId'> & {
+export type SkillDraft = Pick<Skill, 'id' | 'title' | 'subskills' | 'createdAt' | 'updatedAt' | 'archivedAt' | 'deletedAt' | 'sourceGoalId' | 'goalVersion' | 'goalAcknowledgedVersion' | 'goalReachedAt' | 'goalState' | 'goalHistory' | 'completedAt'> & {
   needsSetup: true;
   metric?: never;
   start?: never;
@@ -89,6 +95,7 @@ export interface SkillMeasurement {
   note?: string;
   sessionId?: string;
   deletedAt?: number;
+  updatedAt?: number;
 }
 
 export interface PracticeSession {
@@ -98,11 +105,12 @@ export interface PracticeSession {
   taskId?: string;
   at: number;
   durationSeconds?: number;
-  difficulty: 'easy' | 'edge' | 'hard';
+  difficulty?: 'easy' | 'edge' | 'hard';
   result?: { done: number; of: number };
   lesson?: string;
   measurementId?: string;
   deletedAt?: number;
+  updatedAt?: number;
 }
 
 export interface PSTask {
@@ -111,6 +119,11 @@ export interface PSTask {
   phase: string; // Dynamic tab/category ID
   skillId?: string;
   subskillId?: string;
+  measurementMode?: boolean;
+  sourceNoteId?: string;
+  sourceNotePage?: number;
+  sourceNoteText?: string;
+  sourceNoteKey?: string;
   priority: 1 | 2 | 3; // 1: Urgent (Red), 2: Standard (Yellow), 3: Low (Green)
   steps: number; // Zero means the task has no subtasks
   currentStep: number; // 0 to steps
@@ -151,12 +164,23 @@ export interface PSTask {
 }
 
 export type NewTaskInput = Pick<PSTask, 'title' | 'phase' | 'priority' | 'steps'> &
-  Partial<Pick<PSTask, 'stepList' | 'note' | 'timerMode' | 'countdownDurationSeconds' | 'plannedDurationSeconds' | 'schedule' | 'plannedDate' | 'deadlineDate' | 'skillId' | 'subskillId'>>;
+  Partial<Pick<PSTask, 'stepList' | 'note' | 'timerMode' | 'countdownDurationSeconds' | 'plannedDurationSeconds' | 'schedule' | 'plannedDate' | 'deadlineDate' | 'skillId' | 'subskillId' | 'measurementMode' | 'sourceNoteId' | 'sourceNotePage' | 'sourceNoteText' | 'sourceNoteKey'>>;
 
 export interface DeletedTask extends PSTask {
   deletedAt: number;
   deletionReason?: 'accidental' | 'cancelled'; // Missing on legacy records: intent is unknown.
 }
+
+/** Compact completion receipt survives removal of the full task history. */
+export interface TaskCompletionReceipt {
+  completedAt: number;
+  updatedAt: number;
+  counted: boolean;
+  /** Suppress older offline copies of a removed task; newer explicit edits may restore it. */
+  retiredAt?: number;
+}
+
+export type TaskCompletionLedger = Record<string, TaskCompletionReceipt>;
 
 export interface NotepadNote {
   id: string;
@@ -168,6 +192,9 @@ export interface NotepadNote {
   pinned?: boolean;
   kind?: 'lesson' | 'idea'; // Missing on legacy notes: an idea.
   doc?: NoteDoc; // Rich pages; valid only while its plain text equals content.
+  deletedAt?: number;
+  undoUntil?: number;
+  deletedPages?: { id: string; index: number; segments: NoteSeg[]; deletedAt: number; undoUntil: number }[];
 }
 
 export interface NoteSegStyle { font?: string; size?: number; weight?: number }
@@ -422,7 +449,7 @@ declare global {
       skills?: GrowthSkill[];
       measurements?: SkillMeasurement[];
       practiceSessions?: PracticeSession[];
-      settings: { soundEnabled: boolean; fireEnabled: boolean; lang: string; aiIconVariant: string };
+      settings: { soundEnabled: boolean; fireEnabled: boolean; lang: string; aiIconVariant: string; completionLedger?: TaskCompletionLedger };
     };
     base?: DesktopAccountSnapshot['workspace'] | null;
     operations?: WorkspaceSyncOperation[];

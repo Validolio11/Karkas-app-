@@ -48,6 +48,12 @@ const isNote = (value: unknown): value is NotepadNote => {
     && (note.color === undefined || typeof note.color === 'string')
     && (note.pinned === undefined || typeof note.pinned === 'boolean')
     && (note.kind === undefined || note.kind === 'lesson' || note.kind === 'idea')
+    && (note.deletedAt === undefined || isTimestamp(note.deletedAt))
+    && (note.undoUntil === undefined || isTimestamp(note.undoUntil) && isTimestamp(note.deletedAt) && note.undoUntil >= note.deletedAt)
+    && (note.deletedPages === undefined || Array.isArray(note.deletedPages) && note.deletedPages.every(page =>
+      !!page && typeof page === 'object' && typeof page.id === 'string' && page.id.trim()
+      && Number.isSafeInteger(page.index) && page.index >= 0 && isTimestamp(page.deletedAt)
+      && isTimestamp(page.undoUntil) && page.undoUntil >= page.deletedAt && isNoteDoc({ pages: [page.segments] })))
     && (note.doc === undefined || isNoteDoc(note.doc));
 };
 
@@ -117,6 +123,13 @@ export const restoreNotepadNote = (notes: NotepadNote[], note: NotepadNote): Not
 export type NoteChange = { noteId: string; before: NotepadNote | null; after: NotepadNote | null };
 export type NoteOperation = { id: string; clock: number } & NoteChange;
 export type NoteBatchOperation = { id: string; clock: number; changes: NoteChange[] };
+export const isNotepadBatchOperation = (value: unknown): value is NoteBatchOperation => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const operation = value as NoteBatchOperation;
+  return typeof operation.id === 'string' && !!operation.id && Number.isSafeInteger(operation.clock) && operation.clock >= 0
+    && Array.isArray(operation.changes) && operation.changes.length > 0 && operation.changes.every(isNoteChange)
+    && new Set(operation.changes.map(change => change.noteId)).size === operation.changes.length;
+};
 const isNoteChange = (change: NoteChange): boolean => !!change && typeof change.noteId === 'string' && !!change.noteId
   && (change.before === null || isNote(change.before) && change.before.id === change.noteId)
   && (change.after === null || isNote(change.after) && change.after.id === change.noteId);
@@ -173,4 +186,41 @@ export function appendNotepadOperation(storage: JournalStorage, owner: string | 
   const raw = JSON.stringify(operation);
   storage.setItem(key, raw);
   if (storage.getItem(key) !== raw) throw new Error('Note operation could not be saved');
+}
+
+/** Capture the exact notes half of a paired task/category/notes commit before writing either half. */
+export function prepareNotepadReplacement(storage: JournalStorage, owner: string | null, before: NotepadNote[], after: NotepadNote[],
+  expectedRestores: Record<string, NotepadNote> = {}): NoteBatchOperation | null {
+  const latest = loadNotepadJournal(storage, owner, []);
+  if (!latest.canPersist) throw new Error('Notes cannot be safely saved');
+  const previous = new Map(before.map(note => [note.id, note])), next = new Map(after.map(note => [note.id, note]));
+  const changes = [...new Set([...previous.keys(), ...next.keys()])].flatMap(noteId => {
+    const oldNote = previous.get(noteId) ?? (next.has(noteId) ? expectedRestores[noteId] : undefined) ?? null;
+    const proposed = next.get(noteId) ?? null;
+    const at = Math.max(Date.now(), (oldNote?.updatedAt ?? 0) + 1);
+    const newNote = !proposed && oldNote ? { ...oldNote, deletedAt: at, undoUntil: at + 8000, updatedAt: at } : proposed;
+    return sameNote(oldNote, newNote) ? [] : [{ noteId, before: oldNote, after: newNote }];
+  });
+  if (changes.some(change => !sameNote(latest.notes.find(note => note.id === change.noteId), change.before))) throw new Error('Notes changed');
+  if (!changes.length) return null;
+  const operation = { id: crypto.randomUUID(), clock: latest.clock + 1, changes };
+  if (!isNotepadBatchOperation(operation)) throw new Error('Invalid notes replacement');
+  return operation;
+}
+
+/** Replay a staged batch idempotently; a newer edit remains a conflict, never a replacement. */
+export function applyNotepadBatch(storage: JournalStorage, owner: string | null, operation: NoteBatchOperation): boolean {
+  try {
+    if (!isNotepadBatchOperation(operation)) return false;
+    const latest = loadNotepadJournal(storage, owner, []);
+    if (!latest.canPersist || operation.changes.some(change => {
+      const current = latest.notes.find(note => note.id === change.noteId);
+      return !sameNote(current, change.before) && !sameNote(current, change.after);
+    })) return false;
+    const retained = storage.getItem(notesOperationPrefix(owner) + operation.id);
+    if (retained !== null && canonical(JSON.parse(retained)) !== canonical(operation)) return false;
+    if (retained === null) appendNotepadOperation(storage, owner, operation);
+    const saved = loadNotepadJournal(storage, owner, []);
+    return saved.canPersist && operation.changes.every(change => sameNote(saved.notes.find(note => note.id === change.noteId), change.after));
+  } catch { return false; }
 }

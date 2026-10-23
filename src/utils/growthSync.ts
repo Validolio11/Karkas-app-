@@ -10,7 +10,7 @@ export type GrowthEntity = GrowthSkill | SkillMeasurement | PracticeSession;
 export interface GrowthSyncOperation {
   kind: 'skill' | 'measurement' | 'practiceSession';
   id: string;
-  lifecycle?: 'active' | 'deleted';
+  lifecycle?: 'active' | 'deleted' | 'purged';
   patch?: Record<string, unknown>;
   unset?: string[];
 }
@@ -28,14 +28,12 @@ export function diffGrowthWorkspaceOperations(base: WorkspaceState, next: Worksp
       const oldValue = before.get(id);
       const value = after.get(id);
       if (!value) {
-        if (oldValue?.deletedAt === undefined && oldValue) {
-          const { id: _id, ...patch } = oldValue;
-          operations.push({ kind: GROWTH_KINDS[collection], id, lifecycle: 'deleted', patch });
-        }
+        if (oldValue) operations.push({ kind: GROWTH_KINDS[collection], id, lifecycle: 'purged' });
         continue;
       }
       // Tombstones survive imports and stale offline updates.
-      if (oldValue?.deletedAt !== undefined && value.deletedAt === undefined) continue;
+      if (oldValue?.deletedAt !== undefined && value.deletedAt === undefined &&
+          (value.updatedAt ?? 0) <= Math.max(oldValue.updatedAt ?? 0, oldValue.deletedAt)) continue;
       const patch: Record<string, unknown> = {};
       const unset: string[] = [];
       for (const key of [...new Set([...Object.keys(oldValue ?? {}), ...Object.keys(value)])].sort()) {
@@ -63,18 +61,22 @@ export function applyGrowthWorkspaceOperations(remote: WorkspaceState, operation
     const records = new Map<string, GrowthEntity>((remote[collection] ?? []).map((value: GrowthEntity) => [value.id, structuredClone(value)] as const));
     for (const operation of operations) {
       if (operation.kind !== GROWTH_KINDS[collection]) continue;
+      if (operation.lifecycle === 'purged') { records.delete(operation.id); continue; }
       const current = records.get(operation.id);
-      if (current?.deletedAt !== undefined) continue;
+      const restoring = current?.deletedAt !== undefined && operation.lifecycle === 'active' && operation.unset?.includes('deletedAt')
+        && typeof operation.patch?.updatedAt === 'number' && operation.patch.updatedAt > Math.max(current.updatedAt ?? 0, current.deletedAt);
+      if (current?.deletedAt !== undefined && !restoring) continue;
+      if (current && typeof operation.patch?.updatedAt === 'number' && operation.patch.updatedAt < (current.updatedAt ?? 0)) continue;
       // A deterministic goal migration from an offline device cannot overwrite a previously imported skill.
       if (operation.kind === 'skill' && operation.lifecycle === 'active' && operation.patch?.needsSetup === true &&
           current && 'sourceGoalId' in current && current.sourceGoalId) continue;
       if (!current && operation.lifecycle !== 'active' && operation.lifecycle !== 'deleted') continue;
       // Delete payloads retain a fallback for out-of-order creation, never overwrite newer remote fields.
       const patch = current && operation.lifecycle === 'deleted'
-        ? { deletedAt: operation.patch?.deletedAt ?? at } : operation.patch ?? {};
+        ? { deletedAt: operation.patch?.deletedAt ?? at, updatedAt: operation.patch?.updatedAt ?? at } : operation.patch ?? {};
       const value = { ...(current ?? { id: operation.id }), ...structuredClone(patch) } as unknown as Record<string, unknown>;
       for (const key of current && operation.lifecycle === 'deleted' ? [] : operation.unset ?? []) {
-        if (key !== 'id' && key !== 'deletedAt') delete value[key];
+        if (key !== 'id' && (key !== 'deletedAt' || restoring)) delete value[key];
       }
       if (operation.lifecycle === 'deleted') value.deletedAt ??= at;
       if (current && typeof value.updatedAt === 'number') value.updatedAt = Math.max('updatedAt' in current ? current.updatedAt ?? 0 : 0, value.updatedAt);

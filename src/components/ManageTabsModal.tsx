@@ -8,7 +8,7 @@ import {
   getRandomTabColor,
 } from '../utils/i18n';
 import { sound } from '../utils/audio';
-import { X, Plus, Trash2, Shuffle, LoaderCircle, RefreshCw } from 'lucide-react';
+import { X, Plus, Trash2, Shuffle, LoaderCircle, RefreshCw, Pencil } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useDialogKeyboard } from './useDialogKeyboard';
 import { AIIcon } from './AIIconTemplates';
@@ -22,7 +22,8 @@ interface ManageTabsModalProps {
   tabs: TaskTab[];
   lang: Language;
   onClose: () => void;
-  onAddTab: (name: string, color?: string) => void;
+  onAddTab: (name: string, color?: string) => void | boolean;
+  onRenameTab?: (id: string, name: string) => boolean;
   onDeleteTab: (id: string) => void;
   onSetPresetTabs: (preset: TaskTab[], moveTo?: Record<string, string>) => void;
   onUpdateTabColor?: (id: string, color: string) => void;
@@ -115,6 +116,7 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
   lang,
   onClose,
   onAddTab,
+  onRenameTab,
   onDeleteTab,
   onSetPresetTabs,
   onUpdateTabColor,
@@ -126,6 +128,11 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
   const phases = t.phases as Record<string, string>;
   const nextColor = () => TAB_PALETTE.find(color => !tabs.some(tab => tab.color?.toLowerCase() === color.hex))?.hex || getRandomTabColor();
   const [newTabName, setNewTabName] = useState('');
+  const [addError, setAddError] = useState(false);
+  const [rename, setRename] = useState<{ id: string; name: string; before: string } | null>(null);
+  const [renameError, setRenameError] = useState('');
+  const renameInput = useRef<HTMLInputElement>(null);
+  const closedRenameId = useRef<string | null>(null);
   const [activeColor, setActiveColor] = useState<string>(nextColor);
   const [recoloringId, setRecoloringId] = useState<string | null>(null);
   const [confirmUniversal, setConfirmUniversal] = useState(false);
@@ -136,6 +143,7 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
   const suggestRequest = useRef<AbortController | null>(null);
   useDialogKeyboard(isOpen && keyboardEnabled, onClose, 'manage-tabs-dialog');
   useEffect(() => () => suggestRequest.current?.abort(), []);
+  useEffect(() => { if (rename) { renameInput.current?.focus(); renameInput.current?.select(); } }, [rename?.id]);
 
   useEffect(() => {
     if (isOpen) {
@@ -144,6 +152,9 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
       setConfirmUniversal(false);
       setSuggestion(null);
       setSuggestError('');
+      setRename(null);
+      setRenameError('');
+      setAddError(false);
     } else {
       suggestRequest.current?.abort();
       setSuggesting(false);
@@ -158,14 +169,29 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
     const trimmed = newTabName.trim();
     if (!trimmed) return;
     sound.tick(600);
-    onAddTab(trimmed, activeColor);
+    try { if (onAddTab(trimmed, activeColor) === false) { setAddError(true); return; } }
+    catch { setAddError(true); return; }
+    setAddError(false);
     setNewTabName('');
     setActiveColor(TAB_PALETTE.find(color => color.hex !== activeColor && !tabs.some(tab => tab.color?.toLowerCase() === color.hex))?.hex || getRandomTabColor());
   };
 
   const universalTabs = uk ? DEFAULT_TABS_UK : DEFAULT_TABS_EN;
   const universalNames = universalTabs.map(tab => phases[tab.id] ? titleCase(phases[tab.id]) : tab.name);
-  const tabName = (id: string) => { const name = phases[id] || tabs.find(tab => tab.id === id)?.name || id; return name === name.toUpperCase() ? titleCase(name) : name; };
+  const tabName = (id: string) => tabs.find(tab => tab.id === id)?.name || phases[id] || id;
+  const saveRename = () => {
+    if (!rename || !onRenameTab || closedRenameId.current === rename.id) return;
+    const name = rename.name.trim();
+    if (!name) { setRenameError(uk ? 'Введіть назву категорії.' : 'Enter a category name.'); return; }
+    const current = tabs.find(tab => tab.id === rename.id);
+    if (!current || current.name !== rename.before) { setRenameError(uk ? 'Категорію вже змінено. Скасуйте редагування та відкрийте її ще раз.' : 'This category changed elsewhere. Cancel editing and open it again.'); return; }
+    if (tabs.some(tab => tab.id !== rename.id && tab.name.trim().toLocaleLowerCase(lang) === name.toLocaleLowerCase(lang))) { setRenameError(uk ? 'Категорія з цією назвою вже є.' : 'A category with this name already exists.'); return; }
+    try {
+      if (name !== current.name && !onRenameTab(rename.id, name)) { setRenameError(uk ? 'Назву не збережено. Введене залишилося — спробуйте ще раз.' : 'The name was not saved. Your text is retained; try again.'); return; }
+      closedRenameId.current = rename.id;
+      setRename(null); setRenameError('');
+    } catch { setRenameError(uk ? 'Назву не збережено. Спробуйте ще раз.' : 'The name was not saved. Try again.'); }
+  };
   const hasContext = !!activity.trim() || !!aiContext && (aiContext.goals.length > 0 || aiContext.facts.length > 0 || aiContext.taskTitles.length > 0);
 
   const requestSuggestion = async () => {
@@ -268,7 +294,9 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
                   <input
                     type="text"
                     value={newTabName}
-                    onChange={(e) => setNewTabName(e.target.value)}
+                    onChange={(e) => { setNewTabName(e.target.value); setAddError(false); }}
+                    aria-invalid={addError || undefined}
+                    aria-describedby={addError ? 'manage-tabs-add-error' : undefined}
                     placeholder={uk ? 'Назва, напр. Проєкти' : 'Name, e.g. Projects'}
                     aria-label={uk ? 'Назва нової вкладки' : 'New tab name'}
                     maxLength={24}
@@ -284,6 +312,7 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
                   {uk ? 'Додати' : 'Add'}
                 </button>
               </form>
+              {addError && <p id="manage-tabs-add-error" role="alert" className="text-xs text-red-300">{uk ? 'Не вдалося додати категорію. Назва й колір збережені — спробуйте ще раз.' : 'Could not add this category. Your name and color are retained; try again.'}</p>}
               <ColorPicker value={activeColor} lang={lang} label={uk ? 'Колір нової вкладки' : 'New tab color'} onChange={setActiveColor} />
             </section>
 
@@ -297,7 +326,7 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
                 {tabs.map((tab) => {
                   const count = tabCounts[tab.id] || 0;
                   const canDelete = tabs.length > 1;
-                  const name = phases[tab.id] || tab.name;
+                  const name = tab.name || phases[tab.id] || tab.id;
                   const color = tab.color || '#38bdf8';
                   const recoloring = recoloringId === tab.id;
                   return (
@@ -318,8 +347,15 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
                         ) : (
                           <span aria-hidden="true" className="ml-2.5 h-3 w-3 shrink-0" style={{ backgroundColor: color }} />
                         )}
-                        <span title={name} className="min-w-0 flex-1 truncate text-sm font-semibold uppercase tracking-wide text-neutral-100">{name}</span>
+                        {rename?.id === tab.id ? <input ref={renameInput} value={rename.name} maxLength={40} aria-label={uk ? 'Нова назва категорії' : 'New category name'} aria-invalid={!!renameError || undefined}
+                          onChange={event => { setRename({ ...rename, name: event.target.value }); setRenameError(''); }} onBlur={saveRename}
+                          onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); saveRename(); } else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closedRenameId.current = rename.id; setRename(null); setRenameError(''); } }}
+                          className="min-w-0 flex-1 border border-neutral-600 bg-neutral-950 px-2 py-2 text-sm text-white focus:border-white focus:outline-none" />
+                          : <span title={name} className="min-w-0 flex-1 truncate text-sm font-semibold tracking-wide text-neutral-100">{name}</span>}
                         <span className="shrink-0 whitespace-nowrap text-xs tabular-nums text-neutral-500">{taskCountLabel(count, lang)}</span>
+                        {onRenameTab && rename?.id !== tab.id && <button type="button" aria-label={`${uk ? 'Перейменувати категорію' : 'Rename category'}: ${name}`} title={uk ? 'Перейменувати' : 'Rename'}
+                          onClick={() => { closedRenameId.current = null; setRename({ id: tab.id, name, before: tab.name }); setRenameError(''); }} className="inline-flex h-10 w-10 shrink-0 items-center justify-center text-neutral-400 hover:text-white"><Pencil size={16} aria-hidden="true" /></button>}
+                        {rename?.id === tab.id && <button type="button" aria-label={uk ? 'Скасувати перейменування' : 'Cancel rename'} onMouseDown={event => event.preventDefault()} onClick={() => { closedRenameId.current = rename.id; setRename(null); setRenameError(''); }} className="inline-flex h-10 w-10 shrink-0 items-center justify-center text-neutral-400 hover:text-white"><X size={16} aria-hidden="true" /></button>}
                         <button
                           type="button"
                           disabled={!canDelete}
@@ -331,6 +367,7 @@ export const ManageTabsModal: React.FC<ManageTabsModalProps> = ({
                           <Trash2 className="h-4 w-4" aria-hidden="true" />
                         </button>
                       </div>
+                      {rename?.id === tab.id && renameError && <p role="alert" className="px-3 pb-3 text-xs text-red-300">{renameError}</p>}
                       {recoloring && onUpdateTabColor && (
                         <div id={`tab-recolor-${tab.id}`} className="px-3 pb-3 pt-1">
                           <ColorPicker value={color} lang={lang} label={`${uk ? 'Колір вкладки' : 'Tab color'}: ${name}`}

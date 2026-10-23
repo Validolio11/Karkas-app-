@@ -57,6 +57,32 @@
 .kai-composer .karkas-ai-command-list { bottom: calc(100% + 14px); border: none; border-radius: 22px; padding: 6px; background: #1f1f1f; box-shadow: 0 0 0 1px #2c2c2e, 0 18px 40px rgba(0, 0, 0, .5); }
 .kai-composer .karkas-ai-command-list button { border-radius: 16px; }
 .kai-composer .karkas-ai-command-list button:hover, .kai-composer .karkas-ai-command-list button:focus-visible { background: #3a3a3c; }
+
+/* Popup lists follow the same surfaces, type and selection roles as the chat. */
+.kai-island .karkas-ai-model-list, .kai-island .karkas-ai-command-list { box-sizing: border-box; border-radius: 24px; padding: 8px; font-family: inherit; color: #ffffff; background: #1f1f1f; border: none; box-shadow: 0 0 0 1px #3a3a3c, 0 18px 40px rgba(0, 0, 0, .5); scrollbar-color: #48484a transparent; }
+.kai-island .karkas-ai-model-option, .kai-island .karkas-ai-command-list button { box-sizing: border-box; min-height: 52px; padding: 12px 14px; gap: 12px; border-radius: 16px; font-family: inherit; font-size: 14px; line-height: 1.4; font-weight: 600; color: #d1d1d6; transition: background-color .16s ease, color .16s ease; }
+.kai-island .karkas-ai-model-name { font-size: 14px; font-weight: 700; }
+.kai-island .karkas-ai-model-option.is-active, .kai-island .karkas-ai-command-list button:hover, .kai-island .karkas-ai-command-list button:focus-visible { background: #3a3a3c; color: #ffffff; }
+.kai-island .karkas-ai-model-option[aria-selected="true"] { background: #f4f4f2; color: #090a0a; }
+.kai-island .karkas-ai-model-option[aria-selected="true"].is-active { box-shadow: inset 0 0 0 2px #13f287; }
+.kai-island .karkas-ai-model-option > svg { padding: 4px; box-sizing: content-box; border-radius: 50%; color: #090a0a; background: #13f287; }
+.kai-island .karkas-ai-model-option-body { gap: 7px; }
+.kai-island .karkas-ai-usage-text { font-family: inherit; font-size: 12px; line-height: 1.4; font-weight: 500; color: #a1a1a6; }
+.kai-island .karkas-ai-model-option[aria-selected="true"] .karkas-ai-usage-text { color: #48484a; }
+.kai-island .karkas-ai-usage-track, .kai-island .karkas-ai-usage-fill { border-radius: 3px; }
+.kai-island .karkas-ai-usage-fill { background: #13f287; }
+.kai-island .karkas-ai-usage.is-high .karkas-ai-usage-fill, .kai-island .karkas-ai-usage.is-limited .karkas-ai-usage-fill { background: #ffb340; }
+.kai-island .karkas-ai-usage.is-limited .karkas-ai-usage-text { color: #ffb340; }
+.kai-island .karkas-ai-usage.is-unavailable .karkas-ai-usage-text { color: #ff6b6d; }
+.kai-island .karkas-ai-model-option[aria-selected="true"] .karkas-ai-usage.is-limited .karkas-ai-usage-text { color: #805000; }
+.kai-island .karkas-ai-model-option[aria-selected="true"] .karkas-ai-usage.is-unavailable .karkas-ai-usage-text { color: #a82a30; }
+.kai-island .karkas-ai-command-list { max-height: min(360px, 45dvh); overflow-y: auto; overscroll-behavior: contain; }
+.kai-island .karkas-ai-command-list button { background: transparent; text-align: left; }
+.kai-island .karkas-ai-command-list button > span:first-child { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.kai-island .karkas-ai-command-list button > span:last-child { flex-shrink: 0; color: #8e8e93; font-size: 12px; font-weight: 500; }
+.kai-island .karkas-ai-model-trigger[aria-expanded="true"] { background: #3a3a3c; color: #ffffff; }
+.kai-island .karkas-ai-model-trigger[aria-expanded="true"] > svg { transform: rotate(180deg); }
+.kai-island .karkas-ai-model-trigger > svg { transition: transform .16s ease; }
 .kai-field { flex: 1; min-width: 0; max-height: 140px; border: none; outline: none; box-shadow: none; resize: none; background: transparent; color: #090a0a; font-family: inherit; font-size: 18px; font-weight: 700; line-height: 1.4; padding: 11px 6px; }
 .kai-field:focus, .kai-field:focus-visible { outline: none !important; box-shadow: none !important; }
 .kai-field::placeholder { color: #6e6e73; }

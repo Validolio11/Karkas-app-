@@ -1,5 +1,6 @@
 /* «Мої налаштування». Values from docs/design-pulse Settings.dc.html. */
-.st-overlay { position: fixed; inset: 76px 0 0; z-index: 40; overflow-y: auto; background: #090a0a; color: #ffffff; scrollbar-gutter: stable; }
+/* Page views cover main content (10), while the shared header and its tooltips stay above (30). */
+.st-overlay { position: fixed; inset: var(--pulse-header-height, 76px) 0 0; z-index: 20; overflow-y: auto; background: #090a0a; color: #ffffff; scrollbar-gutter: stable; }
 .st-view button { font-family: inherit; border: none; cursor: pointer; }
 .st-view button:disabled { cursor: default; opacity: .45; }
 .st-view .pulse-page-sidebar, .st-view .pulse-page-main { gap: 12px; }
@@ -8,7 +9,9 @@
 .st-tabs { align-self: flex-start; display: flex; gap: 4px; padding: 4px; border-radius: 26px; background: #1f1f1f; }
 .st-tabs button { height: 40px; border-radius: 20px; padding: 0 18px; background: transparent; color: #d1d1d6; font-size: 14px; font-weight: 700; transition: background-color .2s ease, color .2s ease; }
 .st-tabs button[aria-selected="true"] { background: #f4f4f2; color: #090a0a; font-weight: 800; }
-.st-head-actions { display: flex; gap: 8px; }
+.st-head-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.st-archive-link { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 48px; padding: 0 18px; border-radius: 26px; background: #f4f4f2; color: #090a0a; font-size: 15px; font-weight: 800; }
+.st-archive-link > span { padding: 3px 7px; border-radius: 14px; background: #e5e5e3; font-size: 12px; font-variant-numeric: tabular-nums; }
 .st-back { flex-shrink: 0; width: 56px; height: 56px; border-radius: 28px; background: #1f1f1f; color: #ffffff; display: flex; align-items: center; justify-content: center; padding: 0; }
 
 .st-card { box-sizing: border-box; padding: 24px 24px 24px 28px; border-radius: 44px; background: #1f1f1f; display: flex; flex-direction: column; gap: 16px; }
@@ -40,7 +43,7 @@
 .st-size-title { font-size: 22px; font-weight: 800; letter-spacing: -0.02em; }
 .st-size-pct { font-size: 44px; font-weight: 800; letter-spacing: -0.04em; line-height: 1; font-variant-numeric: tabular-nums; }
 .st-size-preview { position: relative; height: 150px; border-radius: 32px; background: rgba(9, 10, 10, 0.22); overflow: hidden; display: flex; align-items: center; justify-content: center; }
-.st-size-hatch { position: absolute; left: 0; top: 0; bottom: 0; opacity: 0.35; transition: width .3s cubic-bezier(.2, .8, .2, 1); }
+.st-size-hatch { position: absolute; left: 0; top: 0; bottom: 0; transition: width .3s cubic-bezier(.2, .8, .2, 1); }
 .st-size-sample { position: relative; display: flex; align-items: baseline; gap: 14px; }
 .st-size-sample span:first-child { font-weight: 800; letter-spacing: -0.04em; line-height: 1; transition: font-size .25s ease; }
 .st-size-sample span:last-child { font-weight: 500; opacity: 0.9; transition: font-size .25s ease; }
@@ -88,5 +91,5 @@
 .st-view .st-back, .st-view .st-small, .st-view .st-account button, .st-view .st-size-step, .st-view .st-size-reset { transition: transform .18s ease, background-color .2s ease, color .2s ease; }
 .st-view .st-back:hover, .st-view .st-small:hover:not(:disabled), .st-view .st-account button:hover, .st-view .st-size-step:hover:not(:disabled), .st-view .st-size-reset:hover:not(:disabled) { transform: translateY(-2px); }
 .st-view .st-back:active, .st-view .st-small:active, .st-view .st-account button:active, .st-view .st-size-step:active:not(:disabled) { transform: scale(.97); }
-@media (max-width: 639px) { .st-overlay { top: 64px; } .st-size-pct { font-size: 32px; } }
+@media (max-width: 639px) { .st-size-pct { font-size: 32px; } }
 @media (prefers-reduced-motion: reduce) { .st-view, .st-view * { animation: none !important; transition: none !important; } }

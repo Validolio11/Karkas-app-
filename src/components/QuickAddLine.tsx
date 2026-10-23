@@ -45,6 +45,7 @@ export const QuickAddLine: React.FC<QuickAddLineProps> = ({ tabs, skills = [], s
   const [pickedPhase, setPickedPhase] = useState<string>();
   const localInputRef = useRef<HTMLInputElement | null>(null);
   const composing = useRef(false);
+  const adding = useRef(false);
   const pickerId = useId();
   const uk = lang === 'uk';
   const locale = uk ? 'uk-UA' : 'en-GB';
@@ -53,7 +54,7 @@ export const QuickAddLine: React.FC<QuickAddLineProps> = ({ tabs, skills = [], s
     let skill: GrowthSkill | undefined;
     const remaining = timed.text.replace(/(?:^|\s)(#[^\s]+)/gu, (match, tag: string) => {
       const name = normalizeQuickAddCategory(tag.slice(1));
-      const candidate = skills.find(item => item.deletedAt === undefined && item.archivedAt === undefined && isConfiguredSkill(item)
+      const candidate = skills.find(item => item.deletedAt === undefined && item.archivedAt === undefined
         && normalizeQuickAddCategory(item.title) === name);
       if (!candidate) return match;
       skill = candidate;
@@ -85,13 +86,15 @@ export const QuickAddLine: React.FC<QuickAddLineProps> = ({ tabs, skills = [], s
     ...(time ? { schedule: schedule() } : {}),
   });
   const addTask = () => {
-    if (!canAdd || composing.current) { focusInput(); return; }
+    if (!canAdd || composing.current || adding.current) { focusInput(); return; }
     if (plannedDate && parsed.deadlineDate && plannedDate > parsed.deadlineDate) { setError(uk ? 'Дедлайн не може бути раніше дня роботи.' : 'The deadline cannot be before the planned day.'); setPicker('date'); return; }
     try {
+      adding.current = true;
       const accepted = onAdd({ ...prefill(), phase, priority: parsed.priority || DEFAULT_QUICK_ADD_PRIORITY, steps: 0, timerMode: 'stopwatch' }, proposedCategoryName);
       if (accepted === false) { setError(uk ? 'Не вдалося додати завдання. Спробуйте ще раз.' : 'Could not add the task. Try again.'); return; }
       reset(); focusInput();
     } catch { setError(uk ? 'Не вдалося додати завдання. Спробуйте ще раз.' : 'Could not add the task. Try again.'); }
+    finally { queueMicrotask(() => { adding.current = false; }); }
   };
   // The existing detailed drawer takes over this entry, including a chosen timed schedule.
   const openWizard = () => {
@@ -134,7 +137,7 @@ export const QuickAddLine: React.FC<QuickAddLineProps> = ({ tabs, skills = [], s
         onChange={event => { setText(event.target.value); setError(''); }} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }}
         onKeyDown={event => {
           if (composing.current || event.nativeEvent.isComposing || event.keyCode === 229) return;
-          if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); if (event.shiftKey) openWizard(); else addTask(); }
+          if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); if (event.repeat) return; if (event.shiftKey) openWizard(); else addTask(); }
           else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); if (picker) setPicker(null); else if (!text && onDismiss) onDismiss(); else reset(); }
         }} />
       <button type="button" aria-label={uk ? 'Додати задачу' : 'Add task'} data-tip={uk ? 'Додати задачу' : 'Add task'} className="pulse-quick-add-submit" onClick={addTask} disabled={!canAdd}><Plus size={22} aria-hidden="true" /></button>

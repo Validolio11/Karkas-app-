@@ -3,11 +3,28 @@ import { preserveRawStorage } from './recoverableLocalStorage';
 import type { WorkspaceState } from './syncState';
 
 type Store = Pick<Storage, 'getItem' | 'setItem'> & Partial<Pick<Storage, 'key' | 'length'>>;
-export function readLocalWorkspace(storage: Store, keys: { tasks: string; tabs: string; deletedTasks: string; skills?: string; measurements?: string; practiceSessions?: string }, settings: WorkspaceState['settings']) {
+export function readLocalWorkspace(storage: Store, keys: { tasks: string; tabs: string; deletedTasks: string; skills?: string; measurements?: string; practiceSessions?: string; completionLedger?: string }, settings: WorkspaceState['settings']) {
   const empty: WorkspaceState = { tasks: [], tabs: [], deletedTasks: [], settings };
   const raw = new Map<string, string>();
   try {
-    const value = { ...empty };
+    // New mutations commit the owner snapshot atomically. Compatibility mirrors
+    // may lag after a quota/IO error and must not become the source of truth at boot.
+    const owner = storage.getItem('karkas_workspace_owner');
+    const ownedKey = 'karkas_workspace:' + (owner || 'guest');
+    const owned = storage.getItem(ownedKey);
+    if (owned !== null) {
+      raw.set(ownedKey, owned);
+      const record = parseAccountRecord(owned, storage, ownedKey);
+      return { workspace: record.workspace as WorkspaceState, canPersist: true, recovered: false, backupPreserved: true };
+    }
+    const value = { ...empty, settings: { ...settings } };
+    if (keys.completionLedger) {
+      const ledgerText = storage.getItem(keys.completionLedger);
+      if (ledgerText !== null) {
+        raw.set(keys.completionLedger, ledgerText);
+        value.settings.completionLedger = JSON.parse(ledgerText);
+      }
+    }
     const fields = new Map<'tasks' | 'tabs' | 'deletedTasks' | 'skills' | 'measurements' | 'practiceSessions', string>();
     for (const field of ['tasks', 'tabs', 'deletedTasks', 'skills', 'measurements', 'practiceSessions'] as const) {
       let key = keys[field];
@@ -50,6 +67,7 @@ export function parseAccountRecord(raw: string, storage: Store, key: string) {
     }
     if (value.lastSyncTime !== undefined && value.lastSyncTime !== null
       && (typeof value.lastSyncTime !== 'number' || !Number.isFinite(value.lastSyncTime) || value.lastSyncTime < 0)) throw new Error('Invalid sync timestamp');
+    if (value.desktopMirrorPending !== undefined && typeof value.desktopMirrorPending !== 'boolean') throw new Error('Invalid device mirror status');
     for (const pending of [value.pendingSync, value.inFlightSync]) {
       if (pending === undefined || pending === null) continue;
       if (typeof pending !== 'object' || Array.isArray(pending)

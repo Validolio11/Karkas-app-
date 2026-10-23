@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { GrowthSkill, PracticeSession, PSTask, Skill, SkillMeasurement, StrategyGoal } from '../types';
+import { GROWTH_STRINGS } from '../components/growth/growthI18n';
 import {
-  currentValue, isConfiguredSkill, migrateStrategyGoals, nextMeasurementDate, plateau, plannedValueAt,
+  currentValue, goalVersionOf, isConfiguredSkill, isGoalReached, migrateStrategyGoals, nextMeasurementDate, plateau, plannedValueAt,
   progressShare, skillStatus, stretchShare, weakestSubskill, weekReview,
 } from './growth';
 
@@ -157,4 +158,49 @@ test('strategy migration preserves goals as setup drafts without invented metric
   assert.deepEqual(migrateStrategyGoals(goals), migrateStrategyGoals(goals));
   assert.ok(!migrateStrategyGoals([goal('source/goal')])[0].id.includes('/'));
   assert.equal(isConfiguredSkill(skill()), true);
+});
+
+test('a real metric goal works without a deadline or recurring measurement reminder', () => {
+  const value = skill({ goal: { value: 100 }, measure: undefined });
+  assert.equal(isConfiguredSkill(value), true);
+  assert.equal(nextMeasurementDate(value, [], at(23)), null);
+  assert.equal(plannedValueAt(value, '2026-10-23'), value.start.value);
+  assert.deepEqual(skillStatus(value, [measurement(40, 22)], at(23)), { kind: 'no_deadline' });
+  assert.equal(progressShare(value, currentValue(value, [measurement(40, 22)])), 0.4);
+  assert.equal(isGoalReached(value, 99), false);
+  assert.equal(isGoalReached(value, 100), true);
+  assert.equal(isGoalReached(down(), 0), true);
+  assert.equal(isGoalReached(down(), 1), false);
+});
+
+test('a measured goal without a deadline has truthful visible labels, including at 100 percent', () => {
+  const value = skill({ goal: { value: 100 }, measure: undefined });
+  const recorded = [measurement(100, 22)];
+  const status = skillStatus(value, recorded, at(23));
+  assert.deepEqual(status, { kind: 'no_deadline' });
+  assert.equal(GROWTH_STRINGS.uk.statuses[status.kind], 'Без терміну');
+  assert.equal(GROWTH_STRINGS.en.statuses[status.kind], 'No deadline');
+  assert.equal(progressShare(value, currentValue(value, recorded)), 1);
+  assert.equal(weekReview([value], recorded, [], [], '2026-10-19').skills[0].status.kind, 'no_deadline');
+  assert.deepEqual(skillStatus(value, [], at(23)), { kind: 'no_data' });
+  assert.deepEqual(skillStatus(value, [measurement(100, 22, { deletedAt: at(23) }), measurement(100, 24), measurement(100, 22, { skillId: 'other' })], at(23)), { kind: 'no_data' });
+});
+
+test('unrated practice never invents growth-zone scores, measured progress or completed tasks', () => {
+  const practice = [session('unrated', { difficulty: undefined, result: undefined, lesson: 'Змінив підхід' })];
+  assert.equal(stretchShare(practice), 0);
+  assert.equal(stretchShare([...practice, session('rated')]), 1);
+  const result = weekReview([skill()], [], practice, [], '2026-10-19');
+  assert.equal(result.skills[0].delta, 0);
+  assert.equal(result.skills[0].to, skill().start.value);
+  assert.deepEqual(result.skills[0].status, { kind: 'no_data' });
+  assert.deepEqual(result.completedTasks, []);
+});
+
+test('legacy goal versions are deterministic, bounded and change with the actual goal', () => {
+  const legacy = skill({ metric: { label: 'Довга назва'.repeat(100), unit: '%', direction: 'up' }, goal: { value: 100, label: 'Ціль'.repeat(300) } });
+  assert.equal(goalVersionOf(legacy), goalVersionOf(structuredClone(legacy)));
+  assert.ok(goalVersionOf(legacy).length < 512);
+  assert.notEqual(goalVersionOf(legacy), goalVersionOf({ ...legacy, goal: { ...legacy.goal, value: 101 } }));
+  assert.equal(goalVersionOf({ ...legacy, goalVersion: 'explicit-version' }), 'explicit-version');
 });

@@ -3,6 +3,7 @@ import { canonical } from './canonical';
 import type { DeletedTask, PSTask, TaskTab, TaskStepItem } from '../types';
 import type { SyncMutationIdentity, WorkspaceState } from './syncState';
 import { mergeTaskActivityTrail } from './taskActivity';
+import { captureTaskCompletionLedger, mergeCompletionLedgers, normalizeCompletedTaskHistory } from './taskArchive';
 
 type Lifecycle = 'active' | 'deleted' | 'purged';
 type Patch<T> = Partial<Omit<T, 'id'>>;
@@ -186,12 +187,21 @@ function applyPatch<T extends object>(current: T, patch?: object, unset?: string
 export function applyWorkspaceMutation(remote: WorkspaceState, mutation: WorkspaceMutation): WorkspaceState {
   const tasks = taskRecords(structuredClone(remote));
   const tabs = new Map((remote.tabs ?? []).map((tab) => [tab.id, structuredClone(tab)]));
-  let settings = structuredClone(remote.settings);
+  // Legacy peers can purge a completed record without knowing about receipts.
+  // Capture its credit before applying destructive lifecycle changes.
+  const capturedLedger = captureTaskCompletionLedger(remote.tasks, remote.deletedTasks, remote.settings.completionLedger);
+  let settings = structuredClone({ ...remote.settings,
+    ...(Object.keys(capturedLedger).length || remote.settings.completionLedger !== undefined
+      ? { completionLedger: capturedLedger } : {}),
+  });
 
   for (const operation of mutation.operations) {
     if (isGrowthOperation(operation)) continue;
     if (operation.kind === 'settings') {
+      const completionLedger = operation.patch?.completionLedger === undefined ? settings.completionLedger
+        : mergeCompletionLedgers(settings.completionLedger, operation.patch.completionLedger);
       settings = applyPatch(settings, operation.patch, operation.unset);
+      if (completionLedger !== undefined) settings.completionLedger = completionLedger;
       continue;
     }
     if (operation.kind === 'tab') {
@@ -289,11 +299,11 @@ export function applyWorkspaceMutation(remote: WorkspaceState, mutation: Workspa
       if (!categoryIds.has(record.value.phase)) record.value = { ...record.value, phase: fallbackId };
     }
   }
-  return {
+  return normalizeCompletedTaskHistory({
     tasks: [...tasks.values()].filter((item) => item.lifecycle === 'active').map((item) => item.value as PSTask),
     deletedTasks: [...tasks.values()].filter((item) => item.lifecycle === 'deleted').map((item) => item.value),
     tabs: [...tabs.values()],
     ...applyGrowthWorkspaceOperations(remote, mutation.operations.filter(isGrowthOperation), mutation.createdAt),
     settings,
-  };
+  }, mutation.createdAt);
 }

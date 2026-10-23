@@ -1,8 +1,9 @@
-import React, { useEffect, useId, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ArrowRight, Camera, Check, Cloud, LogOut, X } from 'lucide-react';
 import type { Language } from '../../utils/i18n';
 import { readAccountStorage, writeAccountStorage } from '../../utils/accountStorage';
 import { KarkasLogo } from './KarkasLogo';
+import { SoftHatch } from '../SoftHatch';
 import './account.css';
 
 type SyncStatus = 'idle' | 'pending' | 'syncing' | 'synced' | 'offline' | 'error';
@@ -17,6 +18,7 @@ export interface AccountViewProps {
   syncError: string | null;
   autoSyncEnabled: boolean;
   counts: { tasks: number; skills: number; measurements: number; notes: number };
+  completedTaskCount: number;
   onLogin: () => Promise<void>;
   onLogout: () => Promise<void>;
   onSyncNow: () => Promise<void>;
@@ -105,13 +107,6 @@ const TILE_ICONS = ['M9 11l3 3 8-8M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0
 const TILE_COLORS = [['#090a0a', '#ffffff'], ['#13f287', '#090a0a'], ['#6408fa', '#ffffff'], ['#f4f4f2', '#090a0a']];
 const DEVICE_ICONS = ['M3 5h18v11H3zM8 20h8M12 16v4', 'M17.5 19a4.5 4.5 0 1 0-1.4-8.8A6 6 0 0 0 4.5 13 3 3 0 0 0 6 19z', 'M5 6h14v9H5zM2 18h20'];
 
-function Hatch({ color }: { color: string }) {
-  const id = useId().replace(/:/g, '');
-  return <svg width="100%" height="100%" style={{ display: 'block' }} aria-hidden="true"><defs><pattern id={id} x="0" width="9" height="40" patternUnits="userSpaceOnUse" patternTransform="rotate(10)">
-    <animate attributeName="x" from="0" to="9" dur="0.35s" repeatCount="indefinite" />
-    <line x1="1.5" y1="-10" x2="1.5" y2="50" stroke={color} strokeWidth="2" />
-  </pattern></defs><rect width="100%" height="100%" fill={'url(#' + id + ')'} /></svg>;
-}
 const Icon = ({ d, size = 28 }: { d: string; size?: number }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>;
 
 /** Sign-in and sync as a page, as in Auth.dc.html. */
@@ -210,6 +205,13 @@ export function AccountView(props: AccountViewProps) {
   const initials = (user?.name || '').split(/\s+/).filter(Boolean).slice(0, 2).map(part => Array.from(part)[0]).join('').toLocaleUpperCase(lang) || 'K';
   const statusLine = syncStatus === 'offline' ? copy.offline : syncStatus === 'error' || props.syncError ? copy.failed : null;
   const avatarUrl = user?.avatarUrl && user.avatarUrl !== failedAvatar ? user.avatarUrl : null;
+  const completionStats = <section className="ac-completion-stats" aria-label={lang === 'uk' ? 'Статистика завдань' : 'Task statistics'}>
+    <Check size={20} aria-hidden="true" />
+    <div><span>{lang === 'uk' ? 'Завершено завдань' : 'Completed tasks'}</span>
+      <strong>{new Intl.NumberFormat(lang === 'uk' ? 'uk-UA' : 'en-US').format(props.completedTaskCount)}</strong>
+      <p>{lang === 'uk' ? 'Загальна кількість зберігається після очищення історії.' : 'The total is kept after clearing history.'}</p>
+    </div>
+  </section>;
 
   if (showProfile && user) return <div className="ac-view ac-view--profile">
     <button type="button" className="ac-close" aria-label={copy.close} onClick={props.onClose}><X size={20} aria-hidden="true" /></button>
@@ -221,6 +223,7 @@ export function AccountView(props: AccountViewProps) {
       <button type="button" className="ac-profile-sync-link" onClick={() => { setError(''); setShowProfile(false); }}><Cloud size={18} aria-hidden="true" />{profileCopy.manageSync}<ArrowRight size={16} aria-hidden="true" /></button>
     </div>
     <div className="ac-profile-column">
+      {completionStats}
       <section className="ac-profile-card ac-swap" aria-label={profileCopy.account}>
         <h2>{profileCopy.account}</h2>
         <div className="ac-profile-icon-row">
@@ -269,6 +272,7 @@ export function AccountView(props: AccountViewProps) {
     </div>
 
     <section className="ac-card" aria-live="polite" aria-label={copy.region}>
+      {completionStats}
       {!user && !signingIn && <div className="ac-swap" key="signin">
         <span className="ac-card-title">{copy.signinTitle}</span>
         <button type="button" className="ac-google" onClick={login}>{copy.google}<span><Icon d="M5 12h14M12 5l7 7-7 7" size={20} /></span></button>
@@ -276,7 +280,7 @@ export function AccountView(props: AccountViewProps) {
         {error && <span role="alert" className="ac-error">{error}</span>}
         <div className="ac-tiles">
           {copy.what.map((label, index) => <div key={label} className="ac-tile" style={{ background: TILE_COLORS[index][0], color: TILE_COLORS[index][1] }}>
-            {index === 1 && <div className="ac-tile-hatch"><Hatch color="#090a0a" /></div>}
+            {index === 1 && <div className="ac-tile-hatch"><SoftHatch color="#090a0a" /></div>}
             <Icon d={TILE_ICONS[index]} size={30} /><span>{label}</span>
           </div>)}
         </div>
@@ -304,7 +308,7 @@ export function AccountView(props: AccountViewProps) {
           <span>{synced ? copy.synced : copy.syncing}</span>
           <span style={{ color: synced ? '#13f287' : '#ffffff' }}>{pct}%</span>
         </div>
-        <div className="ac-bar"><div style={{ width: pct + '%' }}><Hatch color="#090a0a" /></div></div>
+        <div className="ac-bar"><div style={{ width: pct + '%' }}><SoftHatch color="#090a0a" /></div></div>
         <div className="ac-items">
           {copy.items.map((label, index) => {
             const done = pct >= thresholds[index];

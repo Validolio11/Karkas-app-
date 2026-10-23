@@ -1,6 +1,7 @@
-import React, { useEffect, useId, useRef, useState } from 'react';
-import { ChevronLeft } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Archive, ChevronLeft } from 'lucide-react';
 import type { Language } from '../../utils/i18n';
+import { SoftHatch } from '../SoftHatch';
 import './settings.css';
 
 type Tab = 'look' | 'account';
@@ -32,6 +33,8 @@ export interface SettingsViewProps {
   onLogin: () => void;
   onLogout: () => void;
   onClearCompleted?: () => void;
+  onOpenArchive?: () => void;
+  archiveCount?: number;
   onClose: () => void;
 }
 
@@ -62,13 +65,6 @@ const COPY = {
 const SIZES = [{ label: 'S', value: 90 }, { label: 'M', value: 100 }, { label: 'L', value: 115 }, { label: 'XL', value: 130 }];
 const ZOOM_STEP = 5;
 
-function Hatch({ color, run = false }: { color: string; run?: boolean }) {
-  const id = useId().replace(/:/g, '');
-  return <svg width="100%" height="100%" style={{ display: 'block' }}><defs><pattern id={id} x="0" width="9" height="40" patternUnits="userSpaceOnUse" patternTransform="rotate(10)">
-    {run && <animate attributeName="x" from="0" to="9" dur="0.35s" repeatCount="indefinite" />}
-    <line x1="1.5" y1="-10" x2="1.5" y2="50" stroke={color} strokeWidth="2" />
-  </pattern></defs><rect width="100%" height="100%" fill={'url(#' + id + ')'} /></svg>;
-}
 
 function Switch({ label, on, disabled, onToggle }: { label: string; on: boolean; disabled?: boolean; onToggle: () => void }) {
   return <div className="st-row">
@@ -120,7 +116,10 @@ export function SettingsView(props: SettingsViewProps) {
           {(['look', 'account'] as Tab[]).map(value => <button key={value} type="button" role="tab" aria-selected={tab === value} onClick={() => setTab(value)}>{copy.tabs[value]}</button>)}
         </div>
       </div>
-      <div className="st-head-actions"><button type="button" className="st-back" aria-label={copy.back} onClick={props.onClose}><ChevronLeft size={20} aria-hidden="true" /></button></div>
+      <div className="st-head-actions">
+        {props.onOpenArchive && <button type="button" className="st-archive-link" onClick={props.onOpenArchive}><Archive size={19} aria-hidden="true" />{lang === 'uk' ? 'Архів' : 'Archive'}{props.archiveCount !== undefined && <span>{props.archiveCount}</span>}</button>}
+        <button type="button" className="st-back" aria-label={copy.back} onClick={props.onClose}><ChevronLeft size={20} aria-hidden="true" /></button>
+      </div>
     </div>
 
     {tab === 'look' && <div className="pulse-page-grid st-grid" key="look">
@@ -135,14 +134,13 @@ export function SettingsView(props: SettingsViewProps) {
           <Switch label={copy.sound} on={props.soundEnabled} onToggle={props.onToggleSound} />
           <Switch label={copy.motion} on={props.motionEnabled} onToggle={props.onToggleMotion} />
           {props.launchAtStartup !== null && <Switch label={copy.startup} on={props.launchAtStartup} disabled={props.startupPending} onToggle={() => props.onLaunchAtStartupChange(!props.launchAtStartup)} />}
-          {props.onClearCompleted && <div className="st-row"><span className="st-row-label">{copy.completed}</span><button type="button" className="st-small" onClick={props.onClearCompleted}>{copy.clear}</button></div>}
         </section>
       </aside>
       <div className="pulse-page-main">
         <section className="st-size" aria-label={copy.size}>
           <div className="st-size-head"><span className="st-size-title">{copy.size}</span><span className="st-size-pct">{zoomPercent}%</span></div>
           <div className="st-size-preview">
-            <div aria-hidden="true" className="st-size-hatch" style={{ width: fill + '%' }}><Hatch color="#ffffff" run={props.motionEnabled} /></div>
+            <div aria-hidden="true" className="st-size-hatch" style={{ width: fill + '%' }}><SoftHatch color="#ffffff" motion={props.motionEnabled} /></div>
             <span className="st-size-sample"><span style={{ fontSize: Math.round(56 * scale) }}>Аа</span><span style={{ fontSize: Math.round(16 * scale) }}>{copy.sample}</span></span>
           </div>
           <div className="st-size-controls">
@@ -160,7 +158,7 @@ export function SettingsView(props: SettingsViewProps) {
     {tab === 'account' && <div className="pulse-page-grid st-grid" key="account">
       <aside className="pulse-page-sidebar">
         <section className="st-update" aria-label={copy.version} aria-busy={update === 'checking'}>
-          {update === 'checking' && <div className="st-update-hatch" aria-hidden="true"><Hatch color="#13f287" run={props.motionEnabled} /></div>}
+          {update === 'checking' && <div className="st-update-hatch" aria-hidden="true"><SoftHatch color="#13f287" motion={props.motionEnabled} /></div>}
           <span className="st-update-copy">
             <span className="st-update-version">{copy.version} {props.appVersion}</span>
             <span className="st-update-status" key={update} aria-live="polite" data-state={update}>

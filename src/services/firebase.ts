@@ -16,9 +16,9 @@ import {
   onSnapshot,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { PSTask, TaskTab, DeletedTask, type GrowthSkill, type SkillMeasurement, type PracticeSession } from '../types';
+import { PSTask, TaskTab, DeletedTask, type GrowthSkill, type SkillMeasurement, type PracticeSession, type TaskCompletionLedger } from '../types';
 import { GROWTH_COLLECTIONS } from '../utils/growthSync';
-import { emptyGrowthShadowWrites, type GrowthShadowStoredDocuments } from '../utils/growthCloudShadow';
+import { emptyGrowthShadowWrites, suppressPurgedGrowth, type GrowthShadowStoredDocuments } from '../utils/growthCloudShadow';
 import { serializeTaskForCloud } from '../utils/cloudTaskSerialization';
 import { parseWorkspace } from '../utils/workspaceValidation';
 import { assertCloudPayloadWithinLimit, isSyncMutationApplied, mergeWorkspace, recordSyncMutation, sameWorkspace, type SyncMutationIdentity, type WorkspaceState } from '../utils/syncState';
@@ -69,6 +69,7 @@ export interface UserCloudState {
     fireEnabled: boolean;
     lang: string;
     aiIconVariant: string;
+    completionLedger?: TaskCompletionLedger;
   };
   updatedAt: number;
   revision?: number;
@@ -332,9 +333,9 @@ export async function saveUserCloudData(
   const previousShadowManifest = shadowManifestSnapshot.exists()
     ? shadowManifestSnapshot.data() as CloudShadowManifest
     : null;
-  const merged = snapshot.exists()
+  const merged = suppressPurgedGrowth(snapshot.exists()
     ? mergeWorkspace(base, data, existing!)
-    : data;
+    : data, previousShadowManifest);
   parseWorkspace(merged);
   const syncClients = mutation
     ? recordSyncMutation(existing?.syncClients, mutation)
@@ -363,6 +364,7 @@ export async function saveUserCloudData(
       fireEnabled: Boolean(merged.settings?.fireEnabled),
       lang: merged.settings?.lang || 'uk',
       aiIconVariant: merged.settings?.aiIconVariant || 'quantum',
+      ...(merged.settings?.completionLedger ? { completionLedger: merged.settings.completionLedger } : {}),
     },
     updatedAt: Date.now(),
     revision: nextRevision,

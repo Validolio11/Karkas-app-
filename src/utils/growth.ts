@@ -2,7 +2,7 @@ import type { GrowthSkill, PracticeSession, PSTask, Skill, SkillDraft, SkillMeas
 import { isTaskDate, localTaskDate } from './taskDates';
 
 export interface GrowthStatus {
-  kind: 'ahead' | 'on_track' | 'behind' | 'no_data';
+  kind: 'ahead' | 'on_track' | 'behind' | 'no_data' | 'no_deadline';
   gapPercent?: number;
 }
 
@@ -24,7 +24,18 @@ const clamp = (value: number) => Math.max(0, Math.min(1, value));
 const live = (record: { deletedAt?: number }) => record.deletedAt === undefined;
 
 export function isConfiguredSkill(skill: GrowthSkill): skill is Skill {
-  return !skill.needsSetup && !!skill.metric && !!skill.start && !!skill.goal && !!skill.measure;
+  return !skill.needsSetup && !!skill.metric && !!skill.start && !!skill.goal;
+}
+
+export function goalVersionOf(skill: Skill): string {
+  if (skill.goalVersion) return skill.goalVersion;
+  const source = JSON.stringify([skill.metric, skill.start, skill.goal]);
+  let first = 2166136261, second = 5381;
+  for (let i = 0; i < source.length; i++) { first = Math.imul(first ^ source.charCodeAt(i), 16777619); second = Math.imul(second, 33) ^ source.charCodeAt(i); }
+  return `legacy-goal-${(first >>> 0).toString(36)}-${(second >>> 0).toString(36)}`;
+}
+export function isGoalReached(skill: Skill, value: number): boolean {
+  return Number.isFinite(value) && (value - skill.goal.value) * (skill.metric.direction === 'down' ? -1 : 1) >= 0;
 }
 
 function calendarDay(value: GrowthDate): number | null {
@@ -67,6 +78,7 @@ export function progressShare(skill: Skill, value: number): number {
 
 /** Calendar-day interpolation stays stable through local daylight-saving changes. */
 export function plannedValueAt(skill: Skill, date: GrowthDate): number {
+  if (!skill.goal.date) return skill.start.value;
   const start = calendarDay(skill.start.date);
   const goal = calendarDay(skill.goal.date);
   const at = calendarDay(date);
@@ -80,6 +92,7 @@ export function skillStatus(skill: GrowthSkill, measurements: readonly SkillMeas
   if (!isConfiguredSkill(skill) || !Number.isFinite(now)) return { kind: 'no_data' };
   const observed = measurementsFor(skill, measurements, now);
   if (!observed.length) return { kind: 'no_data' };
+  if (!skill.goal.date) return { kind: 'no_deadline' };
   const planned = plannedValueAt(skill, now);
   const direction = skill.metric.direction === 'down' ? -1 : 1;
   const distance = Math.abs(planned - skill.start.value) || Math.abs(skill.goal.value - skill.start.value);
@@ -158,13 +171,13 @@ export function reviewTrendCounts(skills: readonly Skill[], rows: readonly Skill
 }
 
 export function stretchShare(sessions: readonly PracticeSession[]): number {
-  const observed = sessions.filter(session => live(session) && ['easy', 'edge', 'hard'].includes(session.difficulty));
+  const observed = sessions.filter(session => live(session) && ['easy', 'edge', 'hard'].includes(session.difficulty ?? ''));
   return observed.length ? observed.filter(session => session.difficulty === 'edge').length / observed.length : 0;
 }
 
 /** The weekly weekday is fixed; minutes describes the measurement's duration. */
 export function nextMeasurementDate(skill: GrowthSkill, measurements: readonly SkillMeasurement[], now: number): string | null {
-  if (!isConfiguredSkill(skill) || !live(skill) || skill.archivedAt !== undefined || !Number.isFinite(now)
+  if (!isConfiguredSkill(skill) || !skill.measure || !live(skill) || skill.archivedAt !== undefined || !Number.isFinite(now)
     || !Number.isInteger(skill.measure.weekday) || skill.measure.weekday < 0 || skill.measure.weekday > 6) return null;
   const start = localMidnight(skill.start.date);
   const today = localMidnight(now);

@@ -1,16 +1,21 @@
 import React, { useRef, useState, type FormEvent } from 'react';
 import { createPortal } from 'react-dom';
-import type { PSTask, Skill, SkillMeasurement, PracticeSession } from '../../types';
+import type { PSTask, Skill, GrowthSkill, SkillMeasurement, PracticeSession } from '../../types';
 import type { useGrowth } from '../../hooks/useGrowth';
 import type { Language } from '../../utils/i18n';
-import { currentValue, practiceResultPreview } from '../../utils/growth';
+import { currentValue, practiceResultPreview, isConfiguredSkill } from '../../utils/growth';
+import { PracticeResultPanel } from './PracticeResultPanel';
 import { useDialogKeyboard } from '../useDialogKeyboard';
 import { growthFormsCopy } from './growthFormsI18n';
 import { formatGrowthNumber } from './growthUi';
 import './growthForms.css';
 
 export interface PracticeFinishDialogProps {
-  skill: Skill;
+  skill: GrowthSkill;
+  growth?: ReturnType<typeof useGrowth>;
+  inline?: boolean;
+  session?: PracticeSession;
+  measurement?: SkillMeasurement;
   measurements: SkillMeasurement[];
   task?: PSTask;
   measurementMode?: boolean;
@@ -23,7 +28,7 @@ export interface PracticeFinishDialogProps {
 const StepIcon = ({ plus = false }: { plus?: boolean }) => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden="true">{plus ? <path d="M12 5v14M5 12h14" /> : <path d="M5 12h14" />}</svg>;
 const fit = (value: string, min = 1) => Math.max(min, value.length) + 0.3 + 'ch';
 
-export const PracticeFinishDialog: React.FC<PracticeFinishDialogProps> = ({ skill, measurements, task, measurementMode = false, lang, onSave, onClose, onSkip }: PracticeFinishDialogProps) => {
+const LegacyPracticeFinishDialog = ({ skill, measurements, task, measurementMode = false, lang, onSave, onClose, onSkip }: Omit<PracticeFinishDialogProps, 'skill'> & { skill: Skill }) => {
   const t = growthFormsCopy(lang);
   const isPercent = skill.metric.unit.trim() === '%';
   const current = currentValue(skill, measurements);
@@ -58,7 +63,7 @@ export const PracticeFinishDialog: React.FC<PracticeFinishDialogProps> = ({ skil
   return createPortal(<div className="gf-practice-overlay app-no-drag" onClick={event => event.stopPropagation()}>
     <form id="growth-practice-dialog" className="gf-practice-dialog" role="dialog" aria-modal="true" aria-labelledby="growth-practice-title" onSubmit={submit}>
       <div className="gf-practice-head">
-        <div><span>{skill.title}{minutes ? ' · ' + minutes + ' ' + t.min : ''}</span><h1 id="growth-practice-title">{task?.title ?? (measurementMode ? skill.measure.how?.trim() || t.measurement : t.finish)}</h1></div>
+        <div><span>{skill.title}{minutes ? ' · ' + minutes + ' ' + t.min : ''}</span><h1 id="growth-practice-title">{task?.title ?? (measurementMode ? skill.measure?.how?.trim() || t.measurement : t.finish)}</h1></div>
         <button type="button" className="gf-close" onClick={onClose} aria-label={t.close}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg></button>
       </div>
 
@@ -98,3 +103,7 @@ export const PracticeFinishDialog: React.FC<PracticeFinishDialogProps> = ({ skil
     </form>
   </div>, document.body);
 };
+
+export function PracticeFinishDialog(props: PracticeFinishDialogProps) {
+  return props.growth || !isConfiguredSkill(props.skill) ? <PracticeResultPanel {...props} /> : <LegacyPracticeFinishDialog {...props} skill={props.skill} />;
+}

@@ -18,11 +18,12 @@ interface SessionSummaryCardProps {
   onFinishAfterExpiry: (id: string) => void;
   onContinueTenMinutes: (id: string) => void;
   onReopen: (id: string) => void;
+  onComplete?: (id: string) => void;
 }
 
 const action = 'min-h-9 [@media(pointer:coarse)]:min-h-11 focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2';
 
-export const SessionSummaryCard: React.FC<SessionSummaryCardProps> = ({ session, task, allTasks, now, lang, onDismiss, onStart, onResume, onPlanTomorrow, onFinishAfterExpiry, onContinueTenMinutes, onReopen }) => {
+export const SessionSummaryCard: React.FC<SessionSummaryCardProps> = ({ session, task, allTasks, now, lang, onDismiss, onStart, onResume, onPlanTomorrow, onFinishAfterExpiry, onContinueTenMinutes, onReopen, onComplete }) => {
   const reducedMotion = useReducedMotion();
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
@@ -79,6 +80,7 @@ export const SessionSummaryCard: React.FC<SessionSummaryCardProps> = ({ session,
         <div className="flex flex-wrap items-center gap-2">
           <button type="button" className={action + ' bg-white px-3 text-sm font-semibold text-black hover:bg-neutral-200'} onClick={() => act(onFinishAfterExpiry)}>{lang === 'uk' ? 'Завершити сесію' : 'Finish session'}</button>
           <button type="button" className={action + ' px-3 text-sm text-neutral-300 hover:text-white'} onClick={() => act(onContinueTenMinutes)}>{lang === 'uk' ? 'Ще 10 хв' : '10 more min'}</button>
+          {onComplete && <button type="button" className={action + ' px-3 text-sm text-emerald-300'} onClick={() => act(onComplete)}>{lang === 'uk' ? 'Завдання виконано' : 'Task completed'}</button>}
         </div>
       </div> : <div className="mt-4 flex flex-wrap items-center gap-2">
         {(!task.done || next) && <button type="button" className={action + ' min-w-0 max-w-full bg-white px-3 py-2 text-left text-sm font-semibold text-black hover:bg-neutral-200'} onClick={() => next ? act(onStart, next.id) : act(onResume)}>

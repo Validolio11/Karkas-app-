@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { CalendarDays, Check, ChevronDown, Pencil, Play, Trash2 } from 'lucide-react';
+import { CalendarDays, Check, ChevronDown, MoreHorizontal, Pencil, Play, Pause, Trash2 } from 'lucide-react';
+import { materializeStepList } from '../../utils/taskOperations';
 import type { PSTask, TaskTab } from '../../types';
 import { formatTaskDate, localTaskDate } from '../../utils/taskDates';
 import { PulseCalendar } from './PulseCalendar';
@@ -13,6 +14,11 @@ interface TodayTaskRowProps {
   now: number;
   onToggleDone: (id: string) => void;
   onStart: (id: string) => void;
+  onPause?: (id: string) => void;
+  onEdit?: (id: string) => void;
+  onToggleStep?: (id: string, index: number) => void;
+  onRecordResult?: (id: string) => void;
+  onOpenSource?: (noteId: string) => void;
   /** Returns false when the title changed elsewhere meanwhile. */
   onRename?: (id: string, title: string) => boolean;
   onDelete?: (id: string) => void;
@@ -28,7 +34,7 @@ function minutesLabel(seconds: number | undefined, lang: 'uk' | 'en') {
 const dayAfter = (now: number, days: number) => { const date = new Date(now); date.setDate(date.getDate() + days); return localTaskDate(date.getTime()); };
 
 /** The row the mockup shows; right click (or the menu key) opens edit, move and delete. */
-export function TodayTaskRow({ task, tabs, skillName, lang, now, onToggleDone, onStart, onRename, onDelete, onMove }: TodayTaskRowProps) {
+export function TodayTaskRow({ task, tabs, skillName, lang, now, onToggleDone, onStart, onPause, onEdit, onToggleStep, onRecordResult, onOpenSource, onRename, onDelete, onMove }: TodayTaskRowProps) {
   const uk = lang === 'uk';
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [moveOpen, setMoveOpen] = useState(false);
@@ -38,7 +44,7 @@ export function TodayTaskRow({ task, tabs, skillName, lang, now, onToggleDone, o
   const menuRef = useRef<HTMLDivElement>(null);
   const rowRef = useRef<HTMLDivElement>(null);
   const [calendarOpen, setCalendarOpen] = useState(false);
-  const hasMenu = !!(onRename || onDelete || onMove);
+  const hasMenu = !!(onEdit || onRename || onDelete || onMove);
 
   const close = (focusRow = false) => { setMenu(null); setMoveOpen(false); if (focusRow) rowRef.current?.querySelector<HTMLElement>('button')?.focus(); };
   useEffect(() => {
@@ -53,7 +59,7 @@ export function TodayTaskRow({ task, tabs, skillName, lang, now, onToggleDone, o
     return () => { document.removeEventListener('mousedown', onDown, true); document.removeEventListener('keydown', onKey, true); window.removeEventListener('scroll', onScroll, true); };
   }, [menu]);
   // Keep the menu inside the window.
-  const open = (x: number, y: number) => setMenu({ x: Math.min(x, window.innerWidth - 256), y: Math.min(y, window.innerHeight - 300) });
+  const open = (x: number, y: number) => setMenu({ x: Math.max(8, Math.min(x, window.innerWidth - 256)), y: Math.max(8, Math.min(y, window.innerHeight - 300)) });
   const onContextMenu = (event: React.MouseEvent) => { if (!hasMenu || editing) return; event.preventDefault(); open(event.clientX, event.clientY); };
   const onKeyDown = (event: React.KeyboardEvent) => {
     if (!hasMenu || editing || !(event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10')) return;
@@ -61,7 +67,7 @@ export function TodayTaskRow({ task, tabs, skillName, lang, now, onToggleDone, o
     const rect = rowRef.current!.getBoundingClientRect();
     open(rect.left + 24, rect.bottom + 6);
   };
-  const startEdit = () => { close(); setDraft(task.title); setConflict(false); setEditing(true); };
+  const startEdit = () => { close(); if (onEdit) { onEdit(task.id); return; } setDraft(task.title); setConflict(false); setEditing(true); };
   const saveEdit = () => {
     const title = draft.trim();
     if (!title || title === task.title) { setEditing(false); return; }
@@ -87,26 +93,40 @@ export function TodayTaskRow({ task, tabs, skillName, lang, now, onToggleDone, o
   const time = task.scheduledFor ? new Date(task.scheduledFor).toLocaleTimeString(uk ? 'uk-UA' : 'en-GB', { hour: '2-digit', minute: '2-digit' }) : '';
   const deadline = task.deadlineDate && task.deadlineDate !== localTaskDate(now) ? (uk ? 'до ' : 'by ') + formatTaskDate(task.deadlineDate, lang, now).toLowerCase() : '';
   const meta = task.done ? '' : time || deadline || duration || (tabs.find(tab => tab.id === task.phase)?.name ?? '');
+  const actions = <span className="pulse-row-actions">
+    {onDelete && <button type="button" className="pulse-row-action pulse-row-action--delete" aria-label={(uk ? 'Видалити: ' : 'Delete: ') + task.title} onClick={() => { close(); onDelete(task.id); }}><Trash2 size={17} aria-hidden="true" /></button>}
+    {(onEdit || onRename || onMove) && <button type="button" className="pulse-row-action" aria-haspopup="menu" aria-expanded={!!menu} aria-label={(uk ? 'Дії із задачею: ' : 'Task actions: ') + task.title}
+      onClick={event => { if (menu) close(); else { const rect = event.currentTarget.getBoundingClientRect(); open(rect.right - 240, rect.bottom + 6); } }}><MoreHorizontal size={19} aria-hidden="true" /></button>}
+  </span>;
 
   return <div className="pulse-row-wrap" ref={rowRef} onContextMenu={onContextMenu} onKeyDown={onKeyDown} data-menu-open={!!menu || calendarOpen || undefined}>
-    {task.skillId ? <div className="pulse-practice-row">
+    {task.skillId && !task.done ? <div className="pulse-practice-row">
+      <button type="button" className="pulse-chore-check" aria-label={(uk ? 'Завершити: ' : 'Complete: ') + task.title} onClick={() => onToggleDone(task.id)}><Check size={17} aria-hidden="true" /></button>
       <span className="pulse-row-open">
-        {title ?? <span className="pulse-practice-title">{task.title}</span>}
+        {title ?? <button type="button" className="pulse-practice-title pulse-row-title-button" onClick={startEdit}>{task.title}</button>}
         {skillName && <span className="pulse-practice-skill">{skillName}</span>}
       </span>
       {duration && <span className="pulse-practice-time">{duration}</span>}
-      <button type="button" className="pulse-practice-play" aria-label={(uk ? 'Почати: ' : 'Start: ') + task.title} data-tip={uk ? 'Почати' : 'Start'} onClick={() => onStart(task.id)}><Play size={18} fill="currentColor" aria-hidden="true" /></button>
+      <button type="button" className="pulse-practice-play" aria-label={(task.timerRunning ? (uk ? 'Пауза: ' : 'Pause: ') : (uk ? 'Почати: ' : 'Start: ')) + task.title} data-tip={task.timerRunning ? (uk ? 'Пауза' : 'Pause') : (uk ? 'Почати' : 'Start')} onClick={() => task.timerRunning ? onPause?.(task.id) : onStart(task.id)}>{task.timerRunning ? <Pause size={18} fill="currentColor" aria-hidden="true" /> : <Play size={18} fill="currentColor" aria-hidden="true" />}</button>
+      {actions}
     </div> : <div className="pulse-chore-row" data-done={task.done}>
       <button type="button" role="checkbox" aria-checked={task.done} aria-label={(uk ? 'Виконано: ' : 'Done: ') + task.title} className="pulse-chore-check" onClick={() => onToggleDone(task.id)}>{task.done && <Check size={14} strokeWidth={3} aria-hidden="true" />}</button>
-      {title ?? <span className="pulse-row-open pulse-chore-title">{task.title}</span>}
+      {title ?? <button type="button" className="pulse-row-open pulse-chore-title pulse-row-title-button" onClick={startEdit}>{task.title}</button>}
       {meta && !editing && <span className="pulse-chore-meta">{meta}</span>}
+      {!task.done && task.timerMode !== 'none' && <button type="button" className="pulse-row-action" aria-label={(task.timerRunning ? (uk ? 'Пауза: ' : 'Pause: ') : (uk ? 'Почати: ' : 'Start: ')) + task.title} onClick={() => task.timerRunning ? onPause?.(task.id) : onStart(task.id)}>{task.timerRunning ? <Pause size={17} /> : <Play size={17} />}</button>}
+      {actions}
+    </div>}
+    {(task.steps > 0 || task.skillId || task.sourceNoteId) && <div className="pulse-row-extras">
+      {task.steps > 0 && <details><summary>{uk ? 'Підкроки' : 'Substeps'} · {task.currentStep}/{task.steps}</summary><ul>{materializeStepList(task, uk ? 'Крок' : 'Step').map((step, index) => <li key={step.id}><label><input type="checkbox" checked={step.done} disabled={!onToggleStep} onChange={() => onToggleStep?.(task.id, index)} />{step.title}</label></li>)}</ul></details>}
+      {task.skillId && onRecordResult && <button type="button" onClick={() => onRecordResult(task.id)}>{task.measurementMode ? (uk ? 'Внести замір' : 'Record measurement') : (uk ? 'Записати результат' : 'Record result')}</button>}
+      {task.sourceNoteId && onOpenSource && <button type="button" onClick={() => onOpenSource(task.sourceNoteId!)}>{uk ? 'Відкрити нотатку' : 'Open source note'}</button>}
     </div>}
     {calendarOpen && rowRef.current && <PulseCalendar lang={lang} value={task.plannedDate ?? ''} min={today} anchor={rowRef.current}
       onChange={date => { if (date !== task.plannedDate) onMove?.(task, date); }} onClose={() => setCalendarOpen(false)} />}
     {conflict && <p role="alert" className="pulse-row-conflict">{uk ? 'Назву вже змінено в іншому місці. Скасуйте й спробуйте ще раз.' : 'The title changed elsewhere. Cancel and try again.'}</p>}
 
     {menu && <div ref={menuRef} className="pulse-row-menu" role="menu" aria-label={uk ? 'Дії із задачею' : 'Task actions'} style={{ left: menu.x, top: menu.y }}>
-      {onRename && <button type="button" role="menuitem" onClick={startEdit}><Pencil size={18} aria-hidden="true" />{uk ? 'Редагувати' : 'Edit'}</button>}
+      {(onEdit || onRename) && <button type="button" role="menuitem" onClick={startEdit}><Pencil size={18} aria-hidden="true" />{uk ? 'Редагувати' : 'Edit'}</button>}
       {onMove && <button type="button" role="menuitem" aria-expanded={moveOpen} onClick={() => setMoveOpen(value => !value)}>
         <CalendarDays size={18} aria-hidden="true" />{uk ? 'Перенести' : 'Move'}<ChevronDown size={14} aria-hidden="true" className="pulse-row-menu-chevron" />
       </button>}

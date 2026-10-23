@@ -42,7 +42,8 @@
 .nv-title-input { display: block; width: 100%; box-sizing: border-box; margin: 0; padding: 0; border: none; outline: none; background: transparent; color: #090a0a; caret-color: #6408fa; font-size: 40px; line-height: 1.05; font-weight: 800; letter-spacing: -0.035em; animation: nvCaret .25s ease both; }
 .nv-title-input::placeholder { color: #c7c7cc; }
 .nv-editor { font-size: 18px; line-height: 1.7; font-weight: 400; color: #3a3a3c; white-space: pre-wrap; overflow-wrap: anywhere; animation: nvPage .32s cubic-bezier(.2, .8, .2, 1) both; }
-.nv-editor ::selection { background: #13f287; color: #090a0a; }
+.nv-editor, .nv-editor [data-seg], .nv-editor [data-chip], .nv-title, .nv-title-input, .nv-append { -webkit-user-select: text; user-select: text; }
+.nv-editor ::selection, .nv-append::selection { background: #13f287; color: #090a0a; }
 .nv-editor [data-seg] { transition: font-size .28s cubic-bezier(.2, .8, .2, 1), font-weight .28s ease, color .25s ease, letter-spacing .28s ease; }
 .nv-br { display: block; height: 10px; }
 .nv-num { display: inline-block; min-width: 30px; font-weight: 800; color: #6408fa; font-variant-numeric: tabular-nums; animation: nvNum .4s cubic-bezier(.2, .9, .3, 1.2) backwards; }
@@ -52,11 +53,11 @@
 .nv-chip button:hover { transform: scale(1.08); }
 .nv-chip button:active { transform: scale(.85); }
 .nv-empty-page { font-size: 18px; font-weight: 500; color: #aeaeb2; }
-.nv-append { display: block; width: 100%; box-sizing: border-box; padding: 0; border: none; outline: none; resize: none; overflow: hidden; background: transparent; color: #3a3a3c; caret-color: #6408fa; font-size: 18px; line-height: 1.7; font-weight: 400; animation: nvCaret .25s ease both; }
+.nv-append { display: block; width: 100%; min-height: 120px; box-sizing: border-box; padding: 0; border: none; outline: none; resize: none; overflow: hidden; background: transparent; color: #3a3a3c; caret-color: #6408fa; font-size: 18px; line-height: 1.7; font-weight: 400; animation: nvCaret .25s ease both; }
 .nv-append::placeholder { color: #c7c7cc; }
 
 /* Selection menu */
-.nv-menu { position: absolute; z-index: 20; width: 280px; box-sizing: border-box; padding: 6px; border-radius: 24px; background: #090a0a; box-shadow: 0 18px 44px rgba(9, 10, 10, 0.35); display: flex; flex-direction: column; gap: 2px; transform-origin: top left; animation: nvMenuIn .32s cubic-bezier(.2, .9, .25, 1.1) both; will-change: transform, opacity; }
+.nv-menu { position: absolute; z-index: 20; width: 280px; max-width: calc(100% - 32px); box-sizing: border-box; padding: 6px; border-radius: 24px; background: #090a0a; box-shadow: 0 18px 44px rgba(9, 10, 10, 0.35); display: flex; flex-direction: column; gap: 2px; transform-origin: top left; animation: nvMenuIn .32s cubic-bezier(.2, .9, .25, 1.1) both; will-change: transform, opacity; }
 .nv-menu [role="menuitem"] { height: 44px; border-radius: 18px; padding: 0 14px; background: transparent; font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 12px; text-align: left; animation: nvItem .28s cubic-bezier(.2, .8, .2, 1) backwards; transition: background-color .15s ease, color .15s ease; }
 .nv-menu [role="menuitem"]:hover { background: #1f1f1f; }
 .nv-menu [role="menuitem"] svg { transition: transform .2s cubic-bezier(.2, .8, .2, 1); }
@@ -147,4 +148,61 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .notes-view, .notes-view *, .notes-view *::before, .notes-view *::after { animation: none !important; transition: none !important; }
+}
+
+/* Editing is always available; state and recovery actions share the existing notebook palette. */
+.nv-save-state { margin-left: auto; color: #6e6e73; font-size: 12px; font-weight: 700; }
+.nv-toast { min-height: 44px; height: auto; max-width: calc(100% - 32px); padding-top: 8px; padding-bottom: 8px; }
+.nv-paper[data-revealed] { box-shadow: 0 0 0 2px #6408fa; }
+.nv-orphan-drafts { padding: 14px; border-radius: 18px; background: #1f1f1f; font-size: 12px; }
+.nv-orphan-drafts summary { cursor: pointer; color: #d1d1d6; }
+.nv-orphan-drafts > div { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 12px; }
+.nv-orphan-drafts button { padding: 8px 12px; border-radius: 14px; background: #3a3a3c; color: #ffffff; }
+.nv-save-state[data-state="error"] { color: #b42028; }
+.nv-save-state[data-state="pending"] { color: #6408fa; }
+.nv-save-error { padding: 14px 16px; border: 1px solid #b42028; border-radius: 18px; color: #b42028; }
+.nv-save-error p { margin: 0 0 10px; }
+.nv-text-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.nv-text-actions button, .nv-page-options button, .nv-pending-delete button, .nv-search-empty button { min-height: 36px; padding: 8px 13px; border-radius: 18px; background: #e5e5e3; color: #090a0a; font-size: 12px; font-weight: 700; }
+.notes-view button:disabled { cursor: default; opacity: .45; transform: none; }
+.nv-selection-menu { position: relative; inset: auto; width: 100%; max-width: 100%; margin: 0; padding: 12px; }
+.nv-selection-menu > button { min-height: 36px; padding: 8px 14px; border-radius: 18px; background: #1f1f1f; color: #ffffff; text-align: left; }
+.nv-selection-menu select { min-height: 36px; padding: 6px 12px; border: none; border-radius: 14px; background: #1f1f1f; color: #ffffff; font: inherit; }
+.nv-selection-menu .nv-format-row { align-items: center; color: #ffffff; }
+.nv-selection-menu .nv-format-row label { display: flex; align-items: center; gap: 8px; margin-right: auto; font-size: 12px; }
+.nv-selection-menu .nv-format-row input { width: 64px; min-height: 34px; padding: 4px 8px; border: none; border-radius: 12px; background: #1f1f1f; color: #ffffff; }
+.nv-selection-menu .nv-format-row button { padding: 8px; border-radius: 12px; background: #1f1f1f; color: #ffffff; }
+.nv-formatted-preview { padding: 16px 0; border-top: 1px solid #c7c7cc; }
+.nv-page-options { font-size: 13px; }
+.nv-page-options summary { cursor: pointer; color: #6e6e73; padding: 8px 0; }
+.nv-page-options > div { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 0; overflow-wrap: anywhere; }
+.nv-page-options > div > span { flex: 1; min-width: 120px; }
+.nv-pending-delete { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 12px 18px; margin-bottom: 12px; border-radius: 22px; background: #1f1f1f; color: #ffffff; font-size: 13px; }
+.nv-pending-delete > span { flex: 1; }
+.nv-task-preview { box-sizing: border-box; padding: 28px 32px; border-radius: 32px; background: #1f1f1f; color: #ffffff; font-size: 14px; }
+.nv-preview-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.nv-preview-head h2 { margin: 0; font-size: 24px; line-height: 1.15; font-weight: 800; }
+.nv-preview-head button { min-height: 36px; padding: 8px 12px; border-radius: 18px; background: #3a3a3c; color: #ffffff; }
+.nv-task-preview > p, .nv-ai-optional > p { color: #a1a1a6; line-height: 1.6; }
+.nv-task-preview label { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.nv-task-preview select, .nv-task-preview input:not([type="checkbox"]) { box-sizing: border-box; min-width: 0; min-height: 40px; padding: 8px 12px; border: 1px solid #48484a; border-radius: 14px; background: #090a0a; color: #ffffff; font: inherit; }
+.nv-preview-common { display: flex; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
+.nv-preview-row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 10px; margin: 12px 0; align-items: center; }
+.nv-preview-row input[type="checkbox"] { accent-color: #13f287; width: 20px; height: 20px; }
+.nv-preview-row > span, .nv-preview-row > button { grid-column: 2; font-size: 12px; }
+.nv-preview-row[data-state="created"] > span, .nv-preview-row[data-state="existing"] > span { color: #13f287; }
+.nv-preview-row[data-state="error"] > span { color: #ff6b6d; }
+.nv-preview-row > button { justify-self: start; padding: 8px 12px; border-radius: 14px; background: #3a3a3c; color: #ffffff; }
+.nv-task-preview .nv-text-actions { margin-top: 18px; }
+.nv-task-preview .nv-text-actions button { background: #f4f4f2; }
+.nv-ai-optional { margin-top: 20px; border-top: 1px solid #48484a; padding-top: 16px; }
+.nv-ai-optional summary { cursor: pointer; color: #d1d1d6; }
+.nv-ai-optional pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; padding: 12px; border-radius: 14px; background: #090a0a; font-family: inherit; }
+.nv-ai-optional button { min-height: 40px; padding: 10px 14px; border-radius: 20px; background: #13f287; color: #090a0a; font-weight: 700; }
+.nv-search-empty { display: flex; flex-direction: column; gap: 12px; padding: 16px; color: #a1a1a6; font-size: 13px; }
+@media (max-width: 639px) {
+  .nv-task-preview { padding: 24px 20px; }
+  .nv-footer { align-items: flex-start; }
+  .nv-pages { max-width: 100%; flex-wrap: wrap; }
+  .nv-save-state { width: 100%; margin-left: 3px; }
 }

@@ -1,5 +1,6 @@
 /* Sign-in and sync. Values from docs/design-pulse Auth.dc.html. */
-.ac-overlay { position: fixed; inset: 76px 0 0; z-index: 40; overflow-y: auto; background: #090a0a; color: #ffffff; }
+/* Page views cover main content (10), while the shared header and its tooltips stay above (30). */
+.ac-overlay { position: fixed; inset: var(--pulse-header-height, 76px) 0 0; z-index: 20; overflow-y: auto; background: #090a0a; color: #ffffff; }
 .ac-view { position: relative; width: 100%; max-width: 1280px; min-height: 100%; margin: 0 auto; box-sizing: border-box; padding: 40px 32px 64px; display: flex; flex-wrap: wrap; align-items: center; gap: 48px; }
 .ac-view button { font-family: inherit; border: none; cursor: pointer; }
 .ac-view button:disabled { cursor: default; opacity: .45; }
@@ -35,7 +36,7 @@
 .ac-tile { position: relative; overflow: hidden; min-height: 96px; border-radius: 30px; padding: 18px 20px; box-sizing: border-box; display: flex; flex-direction: column; justify-content: space-between; }
 .ac-tile > svg, .ac-tile > span { position: relative; }
 .ac-tile > span { font-size: 14px; font-weight: 700; opacity: 0.8; }
-.ac-tile-hatch { position: absolute; inset: 0; opacity: 0.16; }
+.ac-tile-hatch { position: absolute; inset: 0; }
 .ac-guest { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 16px 16px 24px; border-radius: 32px; background: #090a0a; }
 .ac-guest > span { display: flex; flex-direction: column; gap: 2px; }
 .ac-guest > span > span:first-child { font-size: 16px; font-weight: 700; }
@@ -61,7 +62,6 @@
 .ac-sync-head > span:last-child { font-size: 44px; font-weight: 800; letter-spacing: -0.04em; line-height: 1; font-variant-numeric: tabular-nums; }
 .ac-bar { position: relative; height: 64px; border-radius: 32px; background: #090a0a; overflow: hidden; }
 .ac-bar > div { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 32px; background: #13f287; overflow: hidden; transition: width .3s ease; }
-.ac-bar > div > svg { opacity: 0.18; }
 .ac-items { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
 .ac-item { display: flex; align-items: center; gap: 14px; min-height: 52px; padding: 0 16px 0 20px; border-radius: 26px; background: #090a0a; }
 .ac-item > span:first-child { flex: 1; font-size: 16px; font-weight: 700; }
@@ -120,6 +120,13 @@
 .ac-profile-error { color: #a82a30; }
 .ac-profile-notice { color: #48484a; }
 .ac-profile-card button:focus-visible { outline-color: #6408fa; }
+.ac-completion-stats { display: flex; align-items: flex-start; gap: 16px; padding: 24px 28px; border-radius: 32px; background: #1f1f1f; color: #ffffff; }
+.ac-card > .ac-completion-stats { padding: 0 0 24px; margin-bottom: 24px; border-bottom: 1px solid #3a3a3c; border-radius: 0; }
+.ac-completion-stats > svg { flex-shrink: 0; box-sizing: content-box; padding: 8px; border-radius: 50%; background: #090a0a; color: #13f287; }
+.ac-completion-stats > div { display: flex; flex-direction: column; min-width: 0; gap: 8px; }
+.ac-completion-stats span { font-size: 14px; font-weight: 700; }
+.ac-completion-stats strong { font-size: clamp(36px, 5vw, 48px); line-height: 1.1; font-weight: 800; letter-spacing: -.04em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.ac-completion-stats p { margin: 0; font-size: 12px; line-height: 1.5; color: #a1a1a6; }
 .ac-profile-upload, .ac-profile-continue { transition: background-color .18s ease; }
 .ac-profile-upload:hover:not(:disabled), .ac-profile-continue:hover { background: #3a3a3c; }
 @media (max-width: 1055px) {
@@ -146,5 +153,5 @@
 .ac-card { animation-delay: .12s; }
 .ac-view .ac-google, .ac-view .ac-steel, .ac-view .ac-paper, .ac-view .ac-guest button, .ac-view .ac-done, .ac-close { transition: transform .18s ease, background-color .2s ease; }
 .ac-view .ac-google:hover, .ac-view .ac-steel:hover:not(:disabled), .ac-view .ac-paper:hover, .ac-view .ac-guest button:hover, .ac-view .ac-done:hover, .ac-close:hover { transform: translateY(-2px); }
-@media (max-width: 639px) { .ac-overlay { top: 64px; } .ac-view { padding: 24px 16px 64px; } .ac-close { top: 16px; right: 16px; } }
+@media (max-width: 639px) { .ac-view { padding: 24px 16px 64px; } .ac-close { top: 16px; right: 16px; } }
 @media (prefers-reduced-motion: reduce) { .ac-view, .ac-view * { animation: none !important; transition: none !important; } }

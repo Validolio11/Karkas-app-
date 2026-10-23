@@ -35,6 +35,27 @@ export function pageText(segs: readonly NoteSeg[]): string {
 }
 
 export const docText = (doc: NoteDoc) => doc.pages.map(pageText).join(PAGE_BREAK);
+export const noteDisplayTitle = (note: Pick<NotepadNote, 'title' | 'content'>, fallback = 'Без назви') =>
+  note.title.trim() || note.content.split(/[\n\f]/).find(line => line.trim())?.trim().slice(0, 120) || fallback;
+
+/** Exact range replacement/formatting, including runs, repeated words and paragraphs. */
+export function transformNoteRange(segs: readonly NoteSeg[], start: number, end: number,
+  transform: (selected: NoteSeg[]) => NoteSeg[]): NoteSeg[] {
+  const labels = numberLabels(segs);
+  const before: NoteSeg[] = [], selected: NoteSeg[] = [], after: NoteSeg[] = [];
+  let offset = 0;
+  const push = (target: NoteSeg[], seg: NoteSeg, left: number, right: number, value: string) => {
+    if (left >= right) return;
+    target.push(left === 0 && right === value.length ? seg : { t: 'text', v: value.slice(left, right), s: seg.s });
+  };
+  segs.forEach((seg, index) => {
+    const value = seg.t === 'br' ? '\n' : seg.t === 'num' ? (labels.get(index) ?? '') + ' ' : seg.v;
+    const a = Math.max(0, Math.min(value.length, start - offset)), b = Math.max(a, Math.min(value.length, end - offset));
+    push(before, seg, 0, a, value); push(selected, seg, a, b, value); push(after, seg, b, value.length, value);
+    offset += value.length;
+  });
+  return tidySegs([...before, ...transform(selected), ...after]);
+}
 
 export function pageFromText(text: string): NoteSeg[] {
   const segs: NoteSeg[] = [];
@@ -45,6 +66,43 @@ export function pageFromText(text: string): NoteSeg[] {
     if (line) segs.push({ t: 'text', v: line });
   });
   return segs;
+}
+
+/** Apply a plain-text edit without discarding formatting outside the changed range. */
+export function editPageText(segs: readonly NoteSeg[], text: string): NoteSeg[] {
+  const before = pageText(segs);
+  if (before === text) return [...segs];
+  let start = 0;
+  while (start < before.length && start < text.length && before[start] === text[start]) start++;
+  if (start && /[\uDC00-\uDFFF]/.test(before[start] ?? '')) start--;
+  let end = before.length, nextEnd = text.length;
+  while (end > start && nextEnd > start && before[end - 1] === text[nextEnd - 1]) { end--; nextEnd--; }
+  if (/[\uDC00-\uDFFF]/.test(before[end] ?? '')) { end++; nextEnd++; }
+  const labels = numberLabels(segs);
+  const originalNumbers = new Map(segs.flatMap((seg, index) => seg.t === 'num' ? [[seg, labels.get(index) + ' '] as const] : []));
+  const slice = (from: number, to: number): NoteSeg[] => {
+    let offset = 0;
+    return segs.flatMap((seg, index) => {
+      const value = seg.t === 'br' ? '\n' : seg.t === 'num' ? labels.get(index) + ' ' : seg.v;
+      const left = Math.max(from - offset, 0), right = Math.min(to - offset, value.length);
+      offset += value.length;
+      if (left >= right) return [];
+      return left === 0 && right === value.length ? [seg] : [{ t: 'text' as const, v: value.slice(left, right), s: seg.s }];
+    });
+  };
+  const prefix = slice(0, start), suffix = slice(end, before.length);
+  const inheritedStyle = [...prefix].reverse().find(seg => seg.t === 'text')?.s
+    ?? suffix.find(seg => seg.t === 'text')?.s;
+  const inserted: NoteSeg[] = [];
+  text.slice(start, nextEnd).split('\n').forEach((line, index) => {
+    if (index) inserted.push({ t: 'br', v: '' });
+    if (line) inserted.push({ t: 'text', v: line, s: inheritedStyle });
+  });
+  const next = tidySegs([...prefix, ...inserted, ...suffix]);
+  // Removing a list item must keep the literal text the user is editing, even if
+  // the remaining automatic markers would otherwise renumber themselves.
+  return pageText(next) === text ? next : tidySegs([...prefix, ...inserted, ...suffix].map<NoteSeg>(seg =>
+    seg.t === 'num' ? { t: 'text', v: originalNumbers.get(seg) ?? '', s: seg.s } : seg));
 }
 
 export const docFromContent = (content: string): NoteDoc => ({ pages: (content ? content.split(PAGE_BREAK) : ['']).map(pageFromText) });

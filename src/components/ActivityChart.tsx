@@ -1,5 +1,6 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { TrendingUp } from 'lucide-react';
+import { SoftHatchSvg } from './SoftHatchSvg';
 
 interface ActivityPoint {
   label: string;
@@ -60,6 +61,7 @@ export const ActivityChart: React.FC<ActivityChartProps> = ({ data, title, perio
   const tooltipWidth = Math.min(270, width);
   const tooltipX = activeIndex === null ? 0 : Math.min(width - tooltipWidth, Math.max(0, x(activeIndex) - tooltipWidth / 2));
   const workedSummary = (point: ActivityPoint) => `≈ ${Math.round((point.worked ?? 0) * 10) / 10} ${workedUnitLabel ?? workedLabel ?? ''} · ${point.delivered} ${completedLabel.toLowerCase()}`;
+  const deliveredArea = data.length > 1 ? `M ${x(0)} ${bottom} ${data.map((point, index) => `L ${x(index)} ${y(point.delivered)}`).join(' ')} L ${x(data.length - 1)} ${bottom} Z` : undefined;
 
   return (
     <section className="min-w-0 border border-neutral-800/80 bg-[#08080a]/60 p-5 sm:p-6" aria-labelledby={`${id}-title`}>
@@ -92,6 +94,21 @@ export const ActivityChart: React.FC<ActivityChartProps> = ({ data, title, perio
               <stop offset="100%" stopColor="currentColor" stopOpacity="0.01" className="text-emerald-400" />
             </linearGradient>
           </defs>
+          {deliveredArea && <>
+            {!hasWorked && <path d={deliveredArea} fill={`url(#${id}-fill)`} />}
+            <SoftHatchSvg x={left} y={top} width={right - left} height={bottom - top} color="var(--color-emerald-400, #34d399)">
+              <path d={deliveredArea} />
+            </SoftHatchSvg>
+          </>}
+          {hasWorked && data.map((point, index) => {
+            const barWidth = Math.max(2, Math.min(28, (right - left) / Math.max(1, data.length) * 0.7));
+            const barTop = workedY(point.worked ?? 0);
+            const bounds = { x: x(index) - barWidth / 2, y: barTop, width: barWidth, height: bottom - barTop };
+            return <g key={index}>
+              <rect {...bounds} className="fill-emerald-400/30" />
+              <SoftHatchSvg {...bounds} color="var(--color-emerald-400, #34d399)"><rect {...bounds} /></SoftHatchSvg>
+            </g>;
+          })}
           {[0, 1, 2, 3, 4].map(tick => (
             <g key={tick}>
               <line x1={left} x2={right} y1={y(tick * step)} y2={y(tick * step)} className="stroke-neutral-800/70" vectorEffect="non-scaling-stroke" />
@@ -99,11 +116,6 @@ export const ActivityChart: React.FC<ActivityChartProps> = ({ data, title, perio
               {hasWorked && <text x={right + 8} y={y(tick * step) + 4} className="fill-neutral-400 text-[11px]">{tick * workedStep}</text>}
             </g>
           ))}
-          {hasWorked && data.map((point, index) => {
-            const barWidth = Math.max(2, Math.min(28, (right - left) / Math.max(1, data.length) * 0.7));
-            return <rect key={index} x={x(index) - barWidth / 2} y={workedY(point.worked ?? 0)} width={barWidth} height={bottom - workedY(point.worked ?? 0)} className="fill-emerald-400/30" />;
-          })}
-          {!hasWorked && data.length > 1 && <path d={`M ${x(0)} ${bottom} ${data.map((point, index) => `L ${x(index)} ${y(point.delivered)}`).join(' ')} L ${x(data.length - 1)} ${bottom} Z`} fill={`url(#${id}-fill)`} />}
           {SERIES.map(series => (
             <g key={series.key} className={series.color}>
               <path d={data.map((point, index) => `${index === 0 ? 'M' : 'L'} ${x(index)} ${y(point[series.key])}`).join(' ')} fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray={series.dash} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />

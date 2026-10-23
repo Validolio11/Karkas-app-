@@ -28,7 +28,6 @@
 .pulse-first-card { min-height:196px; display:flex; flex-direction:column; justify-content:center; gap:10px; padding:28px 36px; border-radius:48px; background:var(--pulse-growth); color:var(--pulse-canvas); }
 .pulse-first-card>span { font-size:14px; font-weight:700; }
 .pulse-first-card h2 { font-size:40px; line-height:1.02; letter-spacing:-.035em; font-weight:800; margin:0; }
-.pulse-task-search { width:100%; min-height:52px; padding:12px 36px; border-radius:26px; background:var(--pulse-tile); color:var(--pulse-paper); }
 .pulse-list-title { margin:20px 8px 14px; font-size:22px; font-weight:800; letter-spacing:-.02em; }
 .pulse-task-card { border-radius:32px; background:var(--pulse-tile); }
 .pulse-task-card[data-compact="true"] { border-radius:30px; background:transparent; }
@@ -45,9 +44,22 @@
 .pulse-task-card.task-timer-glow::before { border-radius:inherit; }
 
 .pulse-today-main > .pulse-now, .pulse-today-main > .pulse-quick-add { margin-bottom:0; }
-.pulse-scheduled-plans, .pulse-empty-state, .pulse-delay-card { padding:24px; border-radius:32px; background:var(--pulse-tile); }
-.pulse-empty-state { text-align:center; padding-block:48px; border:1px solid var(--pulse-steel); }
-.pulse-empty-state button, .pulse-scheduled-plans button, .pulse-delay-card button { border-radius:24px; }
+.pulse-scheduled-plans, .pulse-delay-card { padding:24px; border-radius:32px; background:var(--pulse-tile); }
+.pulse-scheduled-plans button, .pulse-delay-card button { border-radius:24px; }
+.pulse-empty-state { display:flex; flex-direction:column; align-items:center; gap:24px; min-width:0; box-sizing:border-box; padding:40px 28px; border:0; border-radius:44px; background:var(--pulse-tile); color:var(--pulse-paper); text-align:center; }
+.pulse-empty-icon { display:grid; place-items:center; flex-shrink:0; width:64px; height:64px; border-radius:50%; background:var(--pulse-canvas); color:var(--pulse-grey); }
+.pulse-empty-icon svg { width:28px; height:28px; }
+.pulse-empty-copy { min-width:0; width:100%; max-width:520px; }
+.pulse-empty-copy h2 { margin:0; font-size:28px; line-height:1.15; font-weight:800; letter-spacing:-.02em; text-transform:none; overflow-wrap:anywhere; }
+.pulse-empty-copy p { margin:10px 0 0; color:var(--pulse-grey); font-size:16px; line-height:1.5; font-weight:500; letter-spacing:0; overflow-wrap:anywhere; }
+.pulse-empty-actions { display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:8px; max-width:100%; }
+.pulse-empty-button { display:inline-flex; align-items:center; justify-content:center; gap:8px; min-height:48px; max-width:100%; box-sizing:border-box; padding:12px 20px; border:0; border-radius:24px; background:var(--pulse-steel); color:var(--pulse-paper); font-family:inherit; font-size:15px; line-height:1.4; font-weight:800; letter-spacing:0; text-transform:none; overflow-wrap:anywhere; cursor:pointer; transition:background-color .15s ease, color .15s ease; }
+.pulse-empty-button > svg { width:18px; height:18px; flex-shrink:0; }
+.pulse-empty-button:hover { background:var(--pulse-grey); color:var(--pulse-canvas); }
+.pulse-empty-button--primary { background:var(--pulse-paper); color:var(--pulse-canvas); }
+.pulse-empty-button--primary:hover { background:#fff; }
+.pulse-empty-button:focus-visible { outline:2px solid var(--pulse-growth); outline-offset:3px; }
+@media(max-width:600px) { .pulse-empty-state { padding:28px 20px; border-radius:32px; } .pulse-empty-copy h2 { font-size:24px; } .pulse-empty-actions { width:100%; } .pulse-empty-button { flex:1 1 180px; } }
 .pulse-delay-card { border:1px solid var(--pulse-behind); }
 .pulse-delay-card > p { color:var(--pulse-behind); }
 
@@ -81,10 +93,19 @@
 
 /* Today lists, 1:1 with docs/design-pulse/Today.dc.html */
 .pulse-row-wrap { display:flex; flex-direction:column; gap:8px; }
+.pulse-row-actions { display:flex; align-items:center; flex-shrink:0; gap:2px; }
+.pulse-row-action { width:36px; min-height:44px; display:grid; place-items:center; padding:0; border:0; border-radius:22px; background:transparent; color:#8e8e93; cursor:pointer; }
+.pulse-row-action:hover { color:var(--pulse-paper); background:var(--pulse-tile); }
+.pulse-row-action--delete:hover { color:#ff6b6d; }
+.pulse-row-action:focus-visible { outline:2px solid var(--pulse-growth); outline-offset:2px; }
+.pulse-completed-history { margin-top:20px; border-top:1px solid var(--pulse-steel); padding-top:16px; }
+.pulse-completed-history > summary { min-height:44px; padding:8px; box-sizing:border-box; font-size:18px; font-weight:800; cursor:pointer; }
+.pulse-completed-history > p { margin:4px 8px 16px; color:#8e8e93; font-size:13px; line-height:1.5; }
+.pulse-completed-history-list { display:flex; flex-direction:column; gap:8px; }
 .pulse-row-open { min-width:0; padding:0; border:0; background:transparent; color:inherit; font:inherit; text-align:left; cursor:default; }
 .pulse-practice-row { display:flex; align-items:center; gap:16px; box-sizing:border-box; padding:18px 14px 18px 28px; border-radius:40px; background:var(--pulse-tile); }
 .pulse-practice-row .pulse-row-open { flex:1; display:flex; flex-direction:column; align-items:flex-start; gap:8px; }
-.pulse-practice-title { font-size:18px; font-weight:700; letter-spacing:-.02em; }
+.pulse-practice-title { font-size:18px; font-weight:700; letter-spacing:-.02em; overflow-wrap:anywhere; }
 .pulse-practice-skill { height:28px; box-sizing:border-box; padding:0 12px; border-radius:14px; background:var(--pulse-data); color:#fff; font-size:12px; font-weight:800; display:inline-flex; align-items:center; }
 .pulse-practice-time { flex-shrink:0; font-size:18px; font-weight:300; color:#d1d1d6; }
 .pulse-practice-play { flex-shrink:0; width:56px; height:56px; padding:0; border:0; border-radius:28px; background:var(--pulse-paper); color:var(--pulse-canvas); display:flex; align-items:center; justify-content:center; cursor:pointer; transition:transform .15s ease; }
@@ -92,15 +113,21 @@
 .pulse-chore-row { display:flex; align-items:center; gap:14px; min-height:60px; box-sizing:border-box; padding:0 24px 0 16px; border-radius:30px; box-shadow:inset 0 0 0 1px var(--pulse-tile); }
 .pulse-chore-check { flex-shrink:0; width:32px; height:32px; padding:0; border:0; border-radius:16px; background:transparent; box-shadow:inset 0 0 0 2px var(--pulse-steel); color:var(--pulse-canvas); display:flex; align-items:center; justify-content:center; cursor:pointer; transition:background-color .2s ease, box-shadow .2s ease; }
 .pulse-chore-row[data-done="true"] .pulse-chore-check { background:var(--pulse-paper); box-shadow:none; }
-.pulse-chore-title { flex:1; font-size:15px; font-weight:600; color:#fff; }
+.pulse-chore-title { flex:1; font-size:15px; font-weight:600; color:#fff; overflow-wrap:anywhere; padding-block:12px; }
 .pulse-chore-row[data-done="true"] .pulse-chore-title { color:#8e8e93; text-decoration:line-through; text-decoration-color:#8442ff; text-decoration-thickness:2px; }
 .pulse-chore-meta { flex-shrink:0; font-size:13px; font-weight:600; color:#8e8e93; }
 .pulse-row-detail { animation:pulseSideUp .3s cubic-bezier(.2,.8,.2,1) both; }
 .pulse-list-title { margin:16px 0 4px 8px; font-size:22px; font-weight:800; letter-spacing:-.02em; }
 /* New category typed in place (Today.dc.html). */
-.pulse-category-switcher .pulse-category-add { width:40px; padding:0; color:#a1a1a6; }
-.pulse-category-new { height:40px; box-sizing:border-box; display:flex; align-items:center; gap:4px; padding:0 4px 0 16px; border-radius:20px; background:var(--pulse-canvas); box-shadow:inset 0 0 0 2px var(--pulse-growth); animation:pulseCategoryIn .35s cubic-bezier(.2,.8,.2,1) both; }
-.pulse-category-new input { width:150px; border:none; outline:none; background:transparent; color:#fff; caret-color:var(--pulse-growth); font:inherit; font-size:14px; font-weight:700; padding:0; }
+.pulse-category-switcher { max-width:100%; box-sizing:border-box; }
+.pulse-category-entry { position:relative; display:block; flex-shrink:0; width:40px; max-width:100%; height:40px; transition:width .32s cubic-bezier(.2,.8,.2,1); }
+.pulse-category-entry[data-open="true"] { width:304px; }
+.pulse-category-switcher .pulse-category-add { position:absolute; top:0; left:0; width:40px; padding:0; color:#a1a1a6; opacity:1; visibility:visible; transition:opacity .12s ease,visibility 0s; }
+.pulse-category-entry[data-open="true"] .pulse-category-add { opacity:0; visibility:hidden; pointer-events:none; }
+.pulse-category-new { width:100%; height:40px; box-sizing:border-box; display:flex; align-items:center; gap:4px; padding:0 4px 0 16px; overflow:hidden; border-radius:20px; background:var(--pulse-canvas); box-shadow:inset 0 0 0 2px var(--pulse-growth); opacity:0; visibility:hidden; transition:opacity .12s ease,visibility 0s .32s; }
+.pulse-category-entry[data-open="true"] .pulse-category-new { opacity:1; visibility:visible; transition:opacity .18s ease .06s,visibility 0s; }
+.pulse-category-new > * { flex-shrink:0; }
+.pulse-category-new input { flex:1 1 0; min-width:0; width:150px; border:none; outline:none; background:transparent; color:#fff; caret-color:var(--pulse-growth); font:inherit; font-size:14px; font-weight:700; padding:0; }
 .pulse-category-new input:focus-visible { outline:none; box-shadow:none; }
 .pulse-category-new input::placeholder { color:#6e6e73; }
 .pulse-category-switcher .pulse-category-create { min-height:32px; height:32px; padding:0 14px; border-radius:16px; background:var(--pulse-steel); color:#a1a1a6; font-size:13px; font-weight:800; }
@@ -108,8 +135,7 @@
 .pulse-category-switcher .pulse-category-create:disabled { cursor:default; }
 .pulse-category-switcher .pulse-category-cancel { min-height:32px; width:32px; height:32px; padding:0; border-radius:16px; color:#a1a1a6; }
 .pulse-category-switcher .pulse-category-create:hover, .pulse-category-switcher .pulse-category-cancel:hover { box-shadow:none; }
-@keyframes pulseCategoryIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:none; } }
-@media (prefers-reduced-motion: reduce) { .pulse-category-new { animation:none; } }
+@media (prefers-reduced-motion: reduce) { .pulse-category-entry,.pulse-category-new,.pulse-category-switcher .pulse-category-add { transition:none; } }
 
 /* Expanded task card in Pulse terms: pill chips, Inter, no caps or square frames. */
 .pulse-chip { display:inline-flex; align-items:center; gap:6px; height:30px; box-sizing:border-box; padding:0 12px; border-radius:15px; background:var(--pulse-canvas); color:#d1d1d6; font-size:12px; font-weight:800; letter-spacing:0; text-transform:none; white-space:nowrap; }
@@ -187,3 +213,27 @@
 .pulse-today-side > *:nth-child(4), .pulse-today-main > *:nth-child(4) { animation-delay:.24s; }
 .pulse-today-side > *:nth-child(5), .pulse-today-main > *:nth-child(5) { animation-delay:.32s; }
 @media (prefers-reduced-motion:reduce) { [role="main"] > .pulse-page-head, [role="main"] > .pulse-page-grid, .pulse-today-side > *, .pulse-today-main > * { animation:none; } }
+@media(max-width:600px) {
+  .pulse-practice-row { gap:10px; padding:16px; }
+  .pulse-practice-play { width:44px; height:44px; }
+  .pulse-practice-time { font-size:14px; }
+  .pulse-row-action { width:32px; }
+  .pulse-chore-row { gap:8px; padding:0 10px; }
+  .pulse-chore-meta { max-width:25%; white-space:normal; overflow-wrap:anywhere; font-size:11px; }
+}
+/* Task actions stay next to their data; expanding steps never starts or completes the parent. */
+.pulse-row-title-button{border:0;background:none;color:inherit;font:inherit;text-align:left;padding:0;cursor:pointer;min-width:0;overflow-wrap:anywhere}
+.pulse-row-title-button:focus-visible{outline:2px solid var(--pulse-growth,#00ed85);outline-offset:5px;border-radius:4px}
+.pulse-row-extras{display:flex;align-items:flex-start;flex-wrap:wrap;gap:14px;padding:0 28px 18px;font-size:13px;color:var(--pulse-muted,#aaa)}
+.pulse-row-extras button{background:none;border:0;color:inherit;text-decoration:underline;font:inherit;min-height:36px;cursor:pointer}
+.pulse-row-extras summary{cursor:pointer;min-height:36px;display:flex;align-items:center}.pulse-row-extras ul{list-style:none;padding:0;margin:6px 0;display:grid;gap:10px}.pulse-row-extras label{display:flex;gap:10px;align-items:center;color:var(--pulse-paper,#f5f5f3);cursor:pointer}.pulse-row-extras input{accent-color:var(--pulse-growth,#00ed85);width:18px;height:18px}
+.pulse-archive-shortcut{padding:22px 4px}.pulse-archive-shortcut button{color:var(--pulse-muted,#aaa);font:inherit;font-size:13px;background:none;border:0;min-height:44px;cursor:pointer}.pulse-task-change-toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);z-index:1700;background:#202020;color:#f5f5f3;box-shadow:0 12px 48px #0006;border-radius:28px;padding:14px 20px;display:flex;align-items:center;gap:18px;max-width:calc(100vw - 32px);font-size:14px}.pulse-task-change-toast button{background:none;color:inherit;border:0;min-height:36px;font:inherit;font-weight:800;cursor:pointer}.pulse-task-change-toast button:first-of-type{color:#00ed85}
+.pulse-inline-result{margin:20px auto 28px;max-width:1120px;scroll-margin-top:calc(var(--pulse-header-height,96px) + 20px)}
+.pulse-delete-toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);z-index:1700;display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;width:max-content;max-width:calc(100vw - 32px);box-sizing:border-box;padding:12px 20px;border-radius:28px;background:var(--pulse-tile,#202020);color:var(--pulse-paper,#f5f5f3);box-shadow:0 12px 48px #0006;font-size:14px}.pulse-delete-toast>div{align-items:center}.pulse-delete-hint{font-size:12px;color:var(--pulse-muted,#aaa)}
+@media(pointer:coarse){.pulse-row-extras label,.pulse-row-extras button{min-height:44px}}
+/* Keep Undo actions visible when a task and its practice result are saved together. */
+.pulse-delete-toast { translate:-50% 0; transform:none; }
+.pulse-app:has(.pulse-task-change-toast, .pulse-completion-notice) .pulse-delete-toast { bottom:116px; }
+.pulse-app:has(.pulse-task-change-toast, .pulse-completion-notice) .gf-undo-notice { bottom:116px; }
+.pulse-app:has(.pulse-delete-toast) .gf-undo-notice { bottom:184px; }
+.pulse-app:has(.pulse-task-change-toast, .pulse-completion-notice):has(.pulse-delete-toast) .gf-undo-notice { bottom:276px; }
